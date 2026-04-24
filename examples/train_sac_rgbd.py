@@ -44,6 +44,8 @@ class Args:
     encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
     encoder_features_dim: int = 256
     pretrained_weights: Optional[str] = None
+    freeze_resnet_encoder: bool = False
+    freeze_resnet_backbone: bool = False
     log_dir: str = "runs"
     exp_name: Optional[str] = None
     control_mode: str = "pd_joint_delta_pos"
@@ -52,13 +54,26 @@ class Args:
     num_eval_steps: int = 50
 
 
-def _image_factory(name: str, features_dim: int, pretrained_weights: Optional[str]):
+def _image_factory(
+    name: str,
+    features_dim: int,
+    pretrained_weights: Optional[str],
+    freeze_resnet_encoder: bool,
+    freeze_resnet_backbone: bool,
+):
     if name == "plain_conv":
-        if pretrained_weights is not None:
-            raise ValueError("--pretrained_weights is only supported for resnet encoders.")
+        if pretrained_weights is not None or freeze_resnet_encoder or freeze_resnet_backbone:
+            raise ValueError(
+                "--pretrained_weights, --freeze_resnet_encoder, and "
+                "--freeze_resnet_backbone are only supported for resnet encoders."
+            )
         return default_image_encoder_factory(features_dim=features_dim)
     return resnet_encoder_factory(
-        name=name, features_dim=features_dim, pretrained_weights=pretrained_weights
+        name=name,
+        features_dim=features_dim,
+        pretrained_weights=pretrained_weights,
+        freeze_resnet_encoder=freeze_resnet_encoder,
+        freeze_resnet_backbone=freeze_resnet_backbone,
     )
 
 
@@ -92,7 +107,13 @@ def main() -> None:
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
 
-    factory = _image_factory(args.encoder, args.encoder_features_dim, args.pretrained_weights)
+    factory = _image_factory(
+        args.encoder,
+        args.encoder_features_dim,
+        args.pretrained_weights,
+        args.freeze_resnet_encoder,
+        args.freeze_resnet_backbone,
+    )
     image_keys = ("rgb",) if args.obs_mode == "rgb" else ("rgb", "depth")
 
     agent = RGBDSAC(

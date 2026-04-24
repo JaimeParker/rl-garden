@@ -92,6 +92,28 @@ RGB SAC (`ResNet10`):
 python examples/train_sac_rgbd.py --env_id PickCube-v1 --obs_mode rgb --encoder resnet10
 ```
 
+Freeze a pretrained ResNet encoder:
+
+```bash
+python examples/train_sac_rgbd.py \
+  --env_id PickCube-v1 \
+  --obs_mode rgb \
+  --encoder resnet10 \
+  --pretrained_weights resnet10-imagenet \
+  --freeze_resnet_encoder
+```
+
+Freeze only the pretrained ResNet backbone:
+
+```bash
+python examples/train_sac_rgbd.py \
+  --env_id PickCube-v1 \
+  --obs_mode rgb \
+  --encoder resnet10 \
+  --pretrained_weights resnet10-imagenet \
+  --freeze_resnet_backbone
+```
+
 Shell launchers:
 
 ```bash

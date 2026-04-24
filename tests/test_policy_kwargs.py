@@ -168,3 +168,12 @@ def test_unknown_policy_kwargs_raise_clear_error():
             **_agent_kwargs(),
             policy_kwargs={"unknown_key": 1},
         )
+
+
+def test_rgbdsac_rejects_actor_encoder_updates():
+    with pytest.raises(ValueError, match="trained only by critic loss"):
+        RGBDSAC(
+            env=_rgbd_env(),
+            **_agent_kwargs(),
+            detach_encoder_on_actor=False,
+        )

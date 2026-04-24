@@ -39,12 +39,16 @@ class RGBDSAC(SAC):
         policy_kwargs: Optional[dict[str, Any]] = None,
         **kwargs,
     ) -> None:
+        if not detach_encoder_on_actor:
+            raise ValueError(
+                "RGBDSAC requires detach_encoder_on_actor=True so the image encoder "
+                "is trained only by critic loss."
+            )
         self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
         self._image_keys = image_keys
         self._state_key = state_key
         self._use_proprio = use_proprio
         self._proprio_latent_dim = proprio_latent_dim
-        self.detach_encoder_on_actor = detach_encoder_on_actor
         # RGBD defaults to smaller batch / utd (matches sac_rgbd.py).
         kwargs.setdefault("batch_size", batch_size)
         kwargs.setdefault("utd", utd)
@@ -77,13 +81,11 @@ class RGBDSAC(SAC):
         )
 
     def _actor_loss(self, obs):
-        # Override to detach encoder on the actor path.
+        # The RGB image encoder is trained only through critic loss.
         import torch
 
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(
-            obs, detach_encoder=self.detach_encoder_on_actor
-        )
+        action, log_prob, features = self.policy.actor_action_log_prob(obs, detach_encoder=True)
         q_values = self.policy.q_values(features, action, target=False)
         min_q = torch.min(torch.stack(q_values, dim=0), dim=0).values
         return (alpha * log_prob - min_q).mean(), log_prob.detach()

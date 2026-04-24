@@ -85,6 +85,69 @@ def test_pretrained_weights_load(tmp_path, monkeypatch):
         assert torch.allclose(v_s, v_t), f"mismatch at {k}"
 
 
+def test_pretrained_weights_can_freeze_full_encoder(tmp_path, monkeypatch):
+    monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
+    space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
+    source = ResNetEncoder(space)
+    torch.save(source.state_dict(), tmp_path / "frozen-weights.pt")
+
+    target = ResNetEncoder(
+        space,
+        pretrained_weights="frozen-weights",
+        freeze_resnet_encoder=True,
+    )
+    assert all(not p.requires_grad for p in target.parameters())
+
+
+def test_pretrained_weights_can_freeze_only_backbone(tmp_path, monkeypatch):
+    monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
+    space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
+    source = ResNetEncoder(space)
+    torch.save(source.state_dict(), tmp_path / "backbone-weights.pt")
+
+    target = ResNetEncoder(
+        space,
+        pretrained_weights="backbone-weights",
+        freeze_resnet_backbone=True,
+    )
+    backbone_modules = (target.stem_conv, target.stem_norm, target.blocks)
+    assert all(not p.requires_grad for module in backbone_modules for p in module.parameters())
+    assert all(p.requires_grad for p in target.pool.parameters())
+    assert all(p.requires_grad for p in target.bottleneck.parameters())
+
+
+def test_full_encoder_freeze_takes_precedence_over_backbone_freeze(tmp_path, monkeypatch):
+    monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
+    space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
+    source = ResNetEncoder(space)
+    torch.save(source.state_dict(), tmp_path / "precedence-weights.pt")
+
+    target = ResNetEncoder(
+        space,
+        pretrained_weights="precedence-weights",
+        freeze_resnet_encoder=True,
+        freeze_resnet_backbone=True,
+    )
+    assert all(not p.requires_grad for p in target.parameters())
+
+
+def test_resnet_factory_propagates_freeze_options(tmp_path, monkeypatch):
+    monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
+    img_space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
+    source = ResNetEncoder(img_space)
+    torch.save(source.state_dict(), tmp_path / "factory-weights.pt")
+
+    factory = resnet_encoder_factory(
+        "resnet10",
+        features_dim=256,
+        pretrained_weights="factory-weights",
+        freeze_resnet_backbone=True,
+    )
+    encoder = factory(img_space)
+    assert all(not p.requires_grad for p in encoder.blocks.parameters())
+    assert all(p.requires_grad for p in encoder.bottleneck.parameters())
+
+
 def test_pretrained_weights_missing_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
     space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)

@@ -79,6 +79,8 @@ class ResNetEncoder(BaseFeaturesExtractor):
         num_spatial_blocks: int = 8,
         bottleneck_dim: int = 256,
         pretrained_weights: Optional[str] = None,
+        freeze_resnet_encoder: bool = False,
+        freeze_resnet_backbone: bool = False,
     ) -> None:
         # observation_space is channels-first (C, H, W) — CombinedExtractor
         # produces this before calling us.
@@ -171,6 +173,10 @@ class ResNetEncoder(BaseFeaturesExtractor):
 
         if pretrained_weights is not None:
             self.load_pretrained(pretrained_weights)
+            if freeze_resnet_encoder:
+                self.freeze()
+            elif freeze_resnet_backbone:
+                self.freeze_backbone()
 
     # --- pretrained weight loading ---
 
@@ -207,6 +213,15 @@ class ResNetEncoder(BaseFeaturesExtractor):
             state = state["state_dict"]
         missing, unexpected = self.load_state_dict(state, strict=strict)
         return list(missing) + list(unexpected)
+
+    def freeze(self) -> None:
+        for param in self.parameters():
+            param.requires_grad_(False)
+
+    def freeze_backbone(self) -> None:
+        for module in (self.stem_conv, self.stem_norm, self.blocks):
+            for param in module.parameters():
+                param.requires_grad_(False)
 
     def _init_weights(self) -> None:
         for m in self.modules():
@@ -254,12 +269,21 @@ def resnet_encoder_factory(
     pooling_method: PoolingMethod = "spatial_softmax",
     num_filters: int = 64,
     pretrained_weights: Optional[str] = None,
+    freeze_resnet_encoder: bool = False,
+    freeze_resnet_backbone: bool = False,
 ):
     """Return an image-encoder factory suitable for ``CombinedExtractor``.
 
     ``pretrained_weights`` (optional): checkpoint name looked up via
     :py:meth:`ResNetEncoder.pretrained_dir`. E.g. ``"resnet10-imagenet"``
     loads ``pretrained_models/resnet10-imagenet.pt``.
+
+    ``freeze_resnet_encoder``: when True and ``pretrained_weights`` is
+    provided, freeze the full ResNet encoder after loading.
+
+    ``freeze_resnet_backbone``: when True and ``pretrained_weights`` is
+    provided, freeze only the ResNet backbone (stem + residual blocks) after
+    loading. ``freeze_resnet_encoder`` takes precedence when both are True.
     """
     if name not in _RESNET_STAGES:
         raise ValueError(f"unknown resnet config {name!r}; one of {list(_RESNET_STAGES)}")
@@ -274,6 +298,8 @@ def resnet_encoder_factory(
             num_spatial_blocks=num_spatial_blocks,
             bottleneck_dim=features_dim,
             pretrained_weights=pretrained_weights,
+            freeze_resnet_encoder=freeze_resnet_encoder,
+            freeze_resnet_backbone=freeze_resnet_backbone,
         )
 
     return _factory
