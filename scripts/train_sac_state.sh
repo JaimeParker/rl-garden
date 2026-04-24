@@ -4,7 +4,11 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/home/hazyparker/Applications/anaconda3/envs/residual_rl/bin/python}"
+PYTHON_BIN="$(command -v python || command -v python3 || true)"
+if [[ -z "$PYTHON_BIN" ]]; then
+    echo "Error: python interpreter not found in PATH (tried: python, python3)." >&2
+    exit 1
+fi
 
 exec "$PYTHON_BIN" "$REPO_DIR/examples/train_sac_state.py" \
     --env_id PickCube-v1 \

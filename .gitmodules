@@ -1,0 +1,9 @@
+[submodule "3rd_party/ManiSkill"]
+	path = 3rd_party/ManiSkill
+	url = git@github.com:haosulab/ManiSkill.git
+[submodule "3rd_party/hil-serl"]
+	path = 3rd_party/hil-serl
+	url = git@github.com:rail-berkeley/hil-serl.git
+[submodule "3rd_party/stable-baselines3"]
+	path = 3rd_party/stable-baselines3
+	url = git@github.com:DLR-RM/stable-baselines3.git
