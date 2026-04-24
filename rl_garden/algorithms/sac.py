@@ -28,6 +28,8 @@ from rl_garden.policies.sac_policy import SACPolicy
 
 
 class SAC(OffPolicyAlgorithm):
+    _SUPPORTED_POLICY_KWARGS = frozenset({"features_extractor_class", "features_extractor_kwargs"})
+
     def __init__(
         self,
         env: Any,
@@ -50,6 +52,7 @@ class SAC(OffPolicyAlgorithm):
         actor_hidden_dims: Sequence[int] = (256, 256, 256),
         critic_hidden_dims: Sequence[int] = (256, 256, 256),
         n_critics: int = 2,
+        policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -85,17 +88,82 @@ class SAC(OffPolicyAlgorithm):
         self.actor_hidden_dims = actor_hidden_dims
         self.critic_hidden_dims = critic_hidden_dims
         self.n_critics = n_critics
+        self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
         self._setup_model()
 
-    # --- construction hooks (overridden by RGBDSAC) ---
+    # --- construction hooks (RGBDSAC overrides defaults only) ---
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
         assert isinstance(self.env.single_observation_space, spaces.Box), (
             "SAC base class expects a flat Box observation space; "
             "use RGBDSAC for dict observations."
         )
-        return FlattenExtractor(self.env.single_observation_space)
+        return FlattenExtractor
+
+    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _normalize_policy_kwargs(
+        self, policy_kwargs: Optional[dict[str, Any]]
+    ) -> dict[str, Any]:
+        normalized = dict(policy_kwargs or {})
+        unknown_keys = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unknown_keys:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unknown_keys)
+                + ". Supported keys are: features_extractor_class, "
+                + "features_extractor_kwargs."
+            )
+
+        features_extractor_kwargs = normalized.get("features_extractor_kwargs", {})
+        if features_extractor_kwargs is None:
+            features_extractor_kwargs = {}
+        if not isinstance(features_extractor_kwargs, dict):
+            raise TypeError("policy_kwargs['features_extractor_kwargs'] must be a dict.")
+
+        normalized["features_extractor_kwargs"] = dict(features_extractor_kwargs)
+        return normalized
+
+    def _resolve_policy_kwargs(self) -> dict[str, Any]:
+        default_features_extractor_class = self._default_features_extractor_class()
+        default_features_extractor_kwargs = dict(self._default_features_extractor_kwargs())
+        resolved = {
+            "features_extractor_class": default_features_extractor_class,
+            "features_extractor_kwargs": default_features_extractor_kwargs,
+        }
+
+        if "features_extractor_class" in self.policy_kwargs:
+            resolved["features_extractor_class"] = self.policy_kwargs["features_extractor_class"]
+            if resolved["features_extractor_class"] is not default_features_extractor_class:
+                resolved["features_extractor_kwargs"] = {}
+        if "features_extractor_kwargs" in self.policy_kwargs:
+            if resolved["features_extractor_class"] is default_features_extractor_class:
+                resolved["features_extractor_kwargs"] = {
+                    **resolved["features_extractor_kwargs"],
+                    **self.policy_kwargs["features_extractor_kwargs"],
+                }
+            else:
+                resolved["features_extractor_kwargs"] = dict(
+                    self.policy_kwargs["features_extractor_kwargs"]
+                )
+        return resolved
+
+    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+        resolved = self._resolve_policy_kwargs()
+        features_extractor_class = resolved["features_extractor_class"]
+        if not isinstance(features_extractor_class, type) or not issubclass(
+            features_extractor_class, BaseFeaturesExtractor
+        ):
+            raise TypeError(
+                "policy_kwargs['features_extractor_class'] must be a "
+                "BaseFeaturesExtractor subclass."
+            )
+        return features_extractor_class(
+            observation_space=self.env.single_observation_space,
+            **resolved["features_extractor_kwargs"],
+        )
 
     def _build_replay_buffer(self):
         return TensorReplayBuffer(

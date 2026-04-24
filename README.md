@@ -99,6 +99,24 @@ scripts/train_sac_state.sh
 scripts/train_sac_rgbd.sh --encoder resnet10
 ```
 
+Python-side extractor injection:
+
+```python
+from rl_garden.algorithms import RGBDSAC
+from rl_garden.encoders import CombinedExtractor, resnet_encoder_factory
+
+agent = RGBDSAC(
+    env=env,
+    policy_kwargs={
+        "features_extractor_class": CombinedExtractor,
+        "features_extractor_kwargs": {
+            "image_keys": ("rgb",),
+            "image_encoder_factory": resnet_encoder_factory("resnet10"),
+        },
+    },
+)
+```
+
 ## Core Design Constraints
 
 - Rollout path is GPU-native: no `action.cpu().numpy()` or numpy replay handoff in training hot path.
@@ -142,4 +160,3 @@ pytest tests/test_sac_smoke.py
 - [ ] Add Flax-vs-Torch parity validation for ResNet as a stretch goal.
 - [ ] Expand augmentation pipeline integration in training loop.
 - [ ] Add checkpoint/load examples and a lightweight benchmark script.
-

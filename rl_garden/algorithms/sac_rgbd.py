@@ -1,23 +1,22 @@
 """RGBD SAC: subclass of ``SAC`` that adds visual observations.
 
-Only two overrides differ from the base class:
-  1. ``_build_features_extractor`` — use ``CombinedExtractor`` (image + state)
-  2. ``_build_replay_buffer``       — use ``DictReplayBuffer``
+This subclass keeps the base ``SAC`` training loop and only contributes:
+  1. RGBD-specific default extractor settings (``CombinedExtractor``)
+  2. Dict replay buffer construction
+  3. Encoder detachment on the actor path
 
-The ``SAC.train`` loop is reused unchanged. One RGBD-specific optimization
-from sac_rgbd.py L696-L723 matters: for the actor update, detach the encoder
-so gradients don't flow from policy loss into the (expensive) CNN/ResNet.
-We bake that into ``_actor_loss`` via ``detach_encoder=True``.
+One RGBD-specific optimization from sac_rgbd.py L696-L723 matters: for the
+actor update, detach the encoder so gradients don't flow from policy loss
+into the (expensive) CNN/ResNet.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Any, Optional
 
 from gymnasium import spaces
 
 from rl_garden.algorithms.sac import SAC
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
     ImageEncoderFactory,
@@ -37,6 +36,7 @@ class RGBDSAC(SAC):
         detach_encoder_on_actor: bool = True,
         batch_size: int = 512,
         utd: float = 0.25,
+        policy_kwargs: Optional[dict[str, Any]] = None,
         **kwargs,
     ) -> None:
         self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
@@ -48,21 +48,23 @@ class RGBDSAC(SAC):
         # RGBD defaults to smaller batch / utd (matches sac_rgbd.py).
         kwargs.setdefault("batch_size", batch_size)
         kwargs.setdefault("utd", utd)
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, policy_kwargs=policy_kwargs, **kwargs)
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+    def _default_features_extractor_class(self):
         obs_space = self.env.single_observation_space
         assert isinstance(obs_space, spaces.Dict), (
             "RGBDSAC expects a Dict observation space; got " + str(type(obs_space))
         )
-        return CombinedExtractor(
-            observation_space=obs_space,
-            image_keys=self._image_keys,
-            state_key=self._state_key,
-            image_encoder_factory=self._image_encoder_factory,
-            proprio_latent_dim=self._proprio_latent_dim,
-            use_proprio=self._use_proprio,
-        )
+        return CombinedExtractor
+
+    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        return {
+            "image_keys": self._image_keys,
+            "state_key": self._state_key,
+            "image_encoder_factory": self._image_encoder_factory,
+            "proprio_latent_dim": self._proprio_latent_dim,
+            "use_proprio": self._use_proprio,
+        }
 
     def _build_replay_buffer(self):
         return DictReplayBuffer(
