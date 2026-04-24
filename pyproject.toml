@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rl_garden"
+version = "0.0.1"
+description = "SB3-style, GPU-parallel SAC framework built for ManiSkill, with hil-serl ResNet encoders."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "gymnasium>=0.29",
+    "numpy",
+    "einops",
+    "tyro",
+    "tensorboard",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+maniskill = ["mani_skill"]
+wandb = ["wandb"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["rl_garden*"]
+exclude = ["3rd_party*", "tests*", "examples*"]
