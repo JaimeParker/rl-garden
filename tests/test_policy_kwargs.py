@@ -79,6 +79,39 @@ def test_sac_uses_flatten_extractor_by_default():
     assert isinstance(agent.policy.features_extractor, FlattenExtractor)
 
 
+def test_rollout_obs_on_policy_device_is_noop_for_tensor_obs():
+    agent = SAC(env=_state_env(), **_agent_kwargs())
+    obs = torch.randn(2, 5)
+    moved = agent._obs_to_policy_device(obs)
+    assert moved is obs
+    assert moved.device == agent.device
+
+
+def test_rollout_obs_on_policy_device_is_noop_for_dict_obs():
+    agent = RGBDSAC(
+        env=_rgbd_env(),
+        **_agent_kwargs(),
+        image_keys=("rgb",),
+    )
+    obs = {
+        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "state": torch.randn(2, 5),
+    }
+    moved = agent._obs_to_policy_device(obs)
+    assert moved["rgb"] is obs["rgb"]
+    assert moved["state"] is obs["state"]
+    assert all(v.device == agent.device for v in moved.values())
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_rollout_cpu_obs_moves_to_cuda_policy_device_when_needed():
+    agent = SAC(env=_state_env(), **{**_agent_kwargs(), "device": "cuda"})
+    obs = torch.randn(2, 5, device="cpu")
+    moved = agent._obs_to_policy_device(obs)
+    assert moved.device.type == "cuda"
+    assert obs.device.type == "cpu"
+
+
 def test_sac_policy_kwargs_can_build_custom_extractor():
     agent = SAC(
         env=_state_env(),

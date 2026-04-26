@@ -10,7 +10,7 @@ the only env shape the rest of ``rl_garden`` targets.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import gymnasium as gym
@@ -25,6 +25,12 @@ class ManiSkillEnvConfig:
     control_mode: Optional[str] = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
     sim_backend: str = "gpu"
+    render_backend: str = "gpu"
+    reward_mode: Optional[str] = None
+    robot_uids: Optional[str] = None
+    fix_peg_pose: Optional[bool] = None
+    fix_box: Optional[bool] = None
+    env_kwargs: dict[str, Any] = field(default_factory=dict)
     reconfiguration_freq: Optional[int] = None
     camera_width: Optional[int] = None
     camera_height: Optional[int] = None
@@ -52,6 +58,7 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
     """
     # Lazy imports so the package doesn't hard-depend on mani_skill being installed.
     import mani_skill.envs  # noqa: F401  (registers envs)
+    from rl_garden.envs import register_custom_envs
     from mani_skill.utils.wrappers.flatten import (
         FlattenActionSpaceWrapper,
         FlattenRGBDObservationWrapper,
@@ -63,16 +70,27 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
         obs_mode=cfg.obs_mode,
         render_mode=cfg.render_mode,
         sim_backend=cfg.sim_backend,
+        render_backend=cfg.render_backend,
         sensor_configs=dict(),
     )
+    register_custom_envs()
     if cfg.control_mode is not None:
         env_kwargs["control_mode"] = cfg.control_mode
+    if cfg.reward_mode is not None:
+        env_kwargs["reward_mode"] = cfg.reward_mode
+    if cfg.robot_uids is not None:
+        env_kwargs["robot_uids"] = cfg.robot_uids
+    if cfg.fix_peg_pose is not None:
+        env_kwargs["fix_peg_pose"] = cfg.fix_peg_pose
+    if cfg.fix_box is not None:
+        env_kwargs["fix_box"] = cfg.fix_box
     if cfg.camera_width is not None:
         env_kwargs["sensor_configs"]["width"] = cfg.camera_width
     if cfg.camera_height is not None:
         env_kwargs["sensor_configs"]["height"] = cfg.camera_height
     if cfg.human_render_camera_configs is not None:
         env_kwargs["human_render_camera_configs"] = cfg.human_render_camera_configs
+    env_kwargs.update(cfg.env_kwargs)
 
     env = gym.make(
         cfg.env_id,

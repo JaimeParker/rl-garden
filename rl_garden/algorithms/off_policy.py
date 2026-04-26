@@ -3,8 +3,9 @@
 Structurally based on ``examples/baselines/sac/sac.py``'s ``while`` loop
 (L388-L552), rewritten as an abstract base that SAC subclasses fill in by
 implementing ``train(gradient_steps)``. Unlike SB3's ``OffPolicyAlgorithm``,
-this loop never touches numpy in the hot path: rollouts, buffer, and updates
-all stay on CUDA tensors.
+this loop never touches numpy in the hot path. The primary path is ManiSkill
+GPU training where rollouts, buffer, and updates stay on CUDA tensors; CPU
+observations are only supported as a compatibility fallback for CPU-backed envs.
 """
 from __future__ import annotations
 
@@ -79,11 +80,15 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
     def _policy_action(self, obs) -> torch.Tensor:
         with torch.no_grad():
-            return self.policy.predict(obs, deterministic=False).detach()
+            return self.policy.predict(
+                self._obs_to_policy_device(obs), deterministic=False
+            ).detach()
 
     def _eval_action(self, obs) -> torch.Tensor:
         with torch.no_grad():
-            return self.policy.predict(obs, deterministic=True)
+            return self.policy.predict(
+                self._obs_to_policy_device(obs), deterministic=True
+            )
 
     # --- bootstrap bookkeeping ---
 
@@ -106,6 +111,22 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         if isinstance(obs, dict):
             return {k: v.clone() for k, v in obs.items()}
         return obs.clone()
+
+    def _obs_to_policy_device(self, obs):
+        """Move CPU-backed env observations to the policy device for inference.
+
+        GPU ManiSkill envs already return tensors on ``self.device`` and this is
+        a no-op. This fallback exists for CPU simulator backends such as
+        ``physx_cpu``; model training and replay sampling remain CUDA-first.
+        """
+        if isinstance(obs, dict):
+            return {
+                k: v if v.device == self.device else v.to(self.device)
+                for k, v in obs.items()
+            }
+        if obs.device == self.device:
+            return obs
+        return obs.to(self.device)
 
     @staticmethod
     def _write_final_obs(real_next_obs, infos, need_final_obs):

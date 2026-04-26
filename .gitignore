@@ -22,3 +22,10 @@ PKG-INFO
 mutagen.yml.lock
 .codex
 .pytest_cache
+runs/
+run/
+logs/
+log/
+output/
+results/
+outputs/
