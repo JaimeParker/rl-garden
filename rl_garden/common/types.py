@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Union
+from typing import Callable, Dict, Optional, Union
 
 import torch
 
@@ -25,3 +25,10 @@ class ReplayBufferSample:
     actions: torch.Tensor
     rewards: torch.Tensor
     dones: torch.Tensor
+
+
+@dataclass
+class MCReplayBufferSample(ReplayBufferSample):
+    """Replay buffer sample with Monte Carlo returns for Cal-QL."""
+
+    mc_returns: Optional[torch.Tensor] = None
