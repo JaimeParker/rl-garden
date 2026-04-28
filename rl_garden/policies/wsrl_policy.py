@@ -1,16 +1,10 @@
 """WSRL actor/critic policy with Q-ensemble (REDQ) and CQL support.
 
-Extends SACPolicy to support:
+Extends SACPolicy-style interfaces to support:
   - Variable n_critics (2-10+) for REDQ ensemble
   - Critic subsampling for efficient target computation
   - Optional CQL alpha Lagrange multiplier for auto-tuning
   - Batch Q-value evaluation for CQL loss computation
-
-Key differences from SACPolicy:
-  - ContinuousCritic supports n_critics > 2
-  - Added q_values_subsampled() for REDQ target computation
-  - Added cql_alpha_lagrange network (optional)
-  - Actor and critic use same interface as SACPolicy for compatibility
 """
 from __future__ import annotations
 
@@ -24,146 +18,15 @@ from gymnasium import spaces
 
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.networks import EnsembleQCritic, SquashedGaussianActor, get_actor_critic_arch
 from rl_garden.policies.base import BasePolicy
 
 LOG_STD_MAX = 2.0
 LOG_STD_MIN = -20.0
 
 
-def _mlp(
-    in_dim: int,
-    hidden: Sequence[int],
-    out_dim: int,
-    *,
-    use_layer_norm: bool = False,
-) -> nn.Sequential:
-    layers: list[nn.Module] = []
-    c = in_dim
-    for h in hidden:
-        layers.append(nn.Linear(c, h))
-        if use_layer_norm:
-            layers.append(nn.LayerNorm(h))
-        layers.append(nn.ReLU())
-        c = h
-    layers.append(nn.Linear(c, out_dim))
-    return nn.Sequential(*layers)
-
-
 def _softplus_inverse(x: float) -> float:
     return float(np.log(np.expm1(x)))
-
-
-class Actor(nn.Module):
-    """Policy network with tanh-squashed Gaussian output."""
-
-    def __init__(
-        self,
-        features_dim: int,
-        action_space: spaces.Box,
-        hidden_dims: Sequence[int] = (256, 256),
-        use_layer_norm: bool = False,
-        std_parameterization: Literal["exp", "uniform"] = "exp",
-    ) -> None:
-        super().__init__()
-        if std_parameterization not in ("exp", "uniform"):
-            raise ValueError(
-                "std_parameterization must be 'exp' or 'uniform', "
-                f"got {std_parameterization!r}"
-            )
-        self.std_parameterization = std_parameterization
-        act_dim = int(np.prod(action_space.shape))
-        layers: list[nn.Module] = []
-        c = features_dim
-        for h in hidden_dims:
-            layers.append(nn.Linear(c, h))
-            if use_layer_norm:
-                layers.append(nn.LayerNorm(h))
-            layers.append(nn.ReLU())
-            c = h
-        self.trunk = nn.Sequential(*layers)
-        self.fc_mean = nn.Linear(c, act_dim)
-        if std_parameterization == "exp":
-            self.fc_logstd = nn.Linear(c, act_dim)
-            self.log_stds = None
-        else:
-            self.fc_logstd = None
-            self.log_stds = nn.Parameter(torch.zeros(act_dim))
-
-        high = torch.as_tensor(action_space.high, dtype=torch.float32)
-        low = torch.as_tensor(action_space.low, dtype=torch.float32)
-        self.register_buffer("action_scale", (high - low) / 2.0)
-        self.register_buffer("action_bias", (high + low) / 2.0)
-
-    def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x = self.trunk(features)
-        mean = self.fc_mean(x)
-        if self.std_parameterization == "exp":
-            assert self.fc_logstd is not None
-            log_std = self.fc_logstd(x)
-        else:
-            assert self.log_stds is not None
-            log_std = self.log_stds.expand_as(mean)
-        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
-        return mean, log_std
-
-    def action_log_prob(
-        self, features: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        mean, log_std = self(features)
-        std = log_std.exp()
-        normal = torch.distributions.Normal(mean, std)
-        x_t = normal.rsample()
-        y_t = torch.tanh(x_t)
-        action = y_t * self.action_scale + self.action_bias
-        log_prob = normal.log_prob(x_t)
-        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
-        log_prob = log_prob.sum(-1, keepdim=True)
-        return action, log_prob
-
-    def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
-        mean, _ = self(features)
-        return torch.tanh(mean) * self.action_scale + self.action_bias
-
-
-class ContinuousCritic(nn.Module):
-    """Ensemble of Q(s, a) MLPs with support for variable ensemble size (REDQ)."""
-
-    def __init__(
-        self,
-        features_dim: int,
-        action_space: spaces.Box,
-        hidden_dims: Sequence[int] = (256, 256, 256),
-        n_critics: int = 10,
-        use_layer_norm: bool = False,
-    ) -> None:
-        super().__init__()
-        self.n_critics = n_critics
-        act_dim = int(np.prod(action_space.shape))
-        self.q_nets = nn.ModuleList(
-            [
-                _mlp(
-                    features_dim + act_dim,
-                    hidden_dims,
-                    out_dim=1,
-                    use_layer_norm=use_layer_norm,
-                )
-                for _ in range(n_critics)
-            ]
-        )
-
-    def forward(
-        self, features: torch.Tensor, actions: torch.Tensor
-    ) -> tuple[torch.Tensor, ...]:
-        """Returns tuple of Q-values from each critic."""
-        x = torch.cat([features, actions], dim=-1)
-        return tuple(q(x) for q in self.q_nets)
-
-    def forward_all(
-        self, features: torch.Tensor, actions: torch.Tensor
-    ) -> torch.Tensor:
-        """Returns stacked Q-values as tensor of shape (n_critics, batch_size, 1)."""
-        q_values = self.forward(features, actions)
-        return torch.stack(q_values, dim=0)
 
 
 class CQLAlphaLagrange(nn.Module):
@@ -197,22 +60,14 @@ class TemperatureLagrange(nn.Module):
 
 
 class WSRLPolicy(BasePolicy):
-    """WSRL policy with Q-ensemble (REDQ) and optional CQL alpha Lagrange multiplier.
-
-    Key features:
-    - Variable n_critics (default 10 for REDQ)
-    - Critic subsampling for efficient target computation
-    - Optional CQL alpha auto-tuning via Lagrange multiplier
-    - Compatible with SACPolicy interface
-    """
+    """WSRL policy with Q-ensemble and optional CQL alpha Lagrange multiplier."""
 
     def __init__(
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
         features_extractor: BaseFeaturesExtractor,
-        actor_hidden_dims: Sequence[int] = (256, 256),
-        critic_hidden_dims: Sequence[int] = (256, 256, 256),
+        net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256),
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
         use_cql_alpha_lagrange: bool = False,
@@ -220,6 +75,8 @@ class WSRLPolicy(BasePolicy):
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        actor_hidden_dims: Optional[Sequence[int]] = None,
+        critic_hidden_dims: Optional[Sequence[int]] = None,
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "WSRL requires a Box action space."
@@ -235,26 +92,35 @@ class WSRLPolicy(BasePolicy):
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
 
+        if actor_hidden_dims is not None or critic_hidden_dims is not None:
+            actor_arch = list(actor_hidden_dims if actor_hidden_dims is not None else ())
+            critic_arch = list(critic_hidden_dims if critic_hidden_dims is not None else actor_arch)
+        else:
+            actor_arch, critic_arch = get_actor_critic_arch(net_arch)
+
         fd = features_extractor.features_dim
-        self.actor = Actor(
+        self.actor = SquashedGaussianActor(
             fd,
             action_space,
-            hidden_dims=actor_hidden_dims,
+            hidden_dims=actor_arch,
             use_layer_norm=actor_use_layer_norm,
             std_parameterization=std_parameterization,
+            log_std_mode="clamp",
+            log_std_min=LOG_STD_MIN,
+            log_std_max=LOG_STD_MAX,
         )
-        self.critic = ContinuousCritic(
+        self.critic = EnsembleQCritic(
             fd,
             action_space,
-            hidden_dims=critic_hidden_dims,
+            hidden_dims=critic_arch,
             n_critics=n_critics,
             use_layer_norm=critic_use_layer_norm,
         )
         # Separate target critic
-        self.critic_target = ContinuousCritic(
+        self.critic_target = EnsembleQCritic(
             fd,
             action_space,
-            hidden_dims=critic_hidden_dims,
+            hidden_dims=critic_arch,
             n_critics=n_critics,
             use_layer_norm=critic_use_layer_norm,
         )

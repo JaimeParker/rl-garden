@@ -203,6 +203,40 @@ def test_unknown_policy_kwargs_raise_clear_error():
         )
 
 
+def test_sac_net_arch_dict_splits_actor_and_critic():
+    agent = SAC(
+        env=_state_env(),
+        **_agent_kwargs(),
+        net_arch={"pi": [7], "qf": [9, 8]},
+    )
+    actor_first_linear = next(m for m in agent.policy.actor.trunk.modules() if isinstance(m, torch.nn.Linear))
+    critic_first_linear = next(
+        m for m in agent.policy.critic.q_nets[0].modules() if isinstance(m, torch.nn.Linear)
+    )
+    assert actor_first_linear.out_features == 7
+    assert critic_first_linear.out_features == 9
+
+
+def test_sac_deprecated_hidden_dims_still_work_with_warning():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        agent = SAC(
+            env=_state_env(),
+            **_agent_kwargs(),
+            actor_hidden_dims=(13, 11),
+            critic_hidden_dims=(17, 15),
+        )
+    assert agent.net_arch == {"pi": [13, 11], "qf": [17, 15]}
+
+
+def test_sac_net_arch_missing_keys_raises():
+    with pytest.raises(ValueError, match="both 'pi' and 'qf'"):
+        SAC(
+            env=_state_env(),
+            **_agent_kwargs(),
+            net_arch={"pi": [32, 32]},
+        )
+
+
 def test_rgbdsac_rejects_actor_encoder_updates():
     with pytest.raises(ValueError, match="trained only by critic loss"):
         RGBDSAC(

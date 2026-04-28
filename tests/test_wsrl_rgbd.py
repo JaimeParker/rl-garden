@@ -31,8 +31,7 @@ def wsrlrgbd_agent(rgbd_env):
         batch_size=4,
         gamma=0.99,
         # Small networks for fast testing
-        actor_hidden_dims=(32, 32),
-        critic_hidden_dims=(32, 32),
+        net_arch={"pi": [32, 32], "qf": [32, 32]},
         n_critics=4,
         critic_subsample_size=2,
         # CQL parameters

@@ -11,6 +11,7 @@ RGBD SAC subclasses this and only overrides:
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -49,8 +50,9 @@ class SAC(OffPolicyAlgorithm):
         target_network_frequency: int = 1,
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
-        actor_hidden_dims: Sequence[int] = (256, 256, 256),
-        critic_hidden_dims: Sequence[int] = (256, 256, 256),
+        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
+        actor_hidden_dims: Optional[Sequence[int]] = None,
+        critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
@@ -85,8 +87,11 @@ class SAC(OffPolicyAlgorithm):
         self.target_network_frequency = target_network_frequency
         self.ent_coef_init = ent_coef
         self.target_entropy_arg = target_entropy
-        self.actor_hidden_dims = actor_hidden_dims
-        self.critic_hidden_dims = critic_hidden_dims
+        self.net_arch = self._resolve_net_arch(
+            net_arch=net_arch,
+            actor_hidden_dims=actor_hidden_dims,
+            critic_hidden_dims=critic_hidden_dims,
+        )
         self.n_critics = n_critics
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
@@ -175,14 +180,49 @@ class SAC(OffPolicyAlgorithm):
             sample_device=self.device,
         )
 
+    @staticmethod
+    def _resolve_net_arch(
+        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]],
+        actor_hidden_dims: Optional[Sequence[int]],
+        critic_hidden_dims: Optional[Sequence[int]],
+    ) -> Sequence[int] | dict[str, list[int]]:
+        if net_arch is not None:
+            if actor_hidden_dims is not None or critic_hidden_dims is not None:
+                warnings.warn(
+                    "actor_hidden_dims/critic_hidden_dims are deprecated and ignored "
+                    "when net_arch is provided. Use net_arch only.",
+                    DeprecationWarning,
+                    stacklevel=3,
+                )
+            if isinstance(net_arch, dict):
+                if "pi" not in net_arch or "qf" not in net_arch:
+                    raise ValueError("net_arch dict must contain both 'pi' and 'qf' keys.")
+                return {
+                    "pi": list(net_arch["pi"]),
+                    "qf": list(net_arch["qf"]),
+                }
+            return list(net_arch)
+
+        if actor_hidden_dims is not None or critic_hidden_dims is not None:
+            warnings.warn(
+                "actor_hidden_dims/critic_hidden_dims are deprecated. "
+                "Use net_arch=list[...] or net_arch={'pi': [...], 'qf': [...]} instead.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            pi_arch = list(actor_hidden_dims) if actor_hidden_dims is not None else [256, 256, 256]
+            qf_arch = list(critic_hidden_dims) if critic_hidden_dims is not None else list(pi_arch)
+            return {"pi": pi_arch, "qf": qf_arch}
+
+        return [256, 256, 256]
+
     def _setup_model(self) -> None:
         features_extractor = self._build_features_extractor()
         self.policy = SACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             features_extractor=features_extractor,
-            actor_hidden_dims=self.actor_hidden_dims,
-            critic_hidden_dims=self.critic_hidden_dims,
+            net_arch=self.net_arch,
             n_critics=self.n_critics,
         ).to(self.device)
 

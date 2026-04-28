@@ -31,8 +31,7 @@ def wsrl_agent(simple_env):
         training_freq=4,
         utd=1.0,
         # Small networks for fast testing
-        actor_hidden_dims=(32, 32),
-        critic_hidden_dims=(32, 32),
+        net_arch={"pi": [32, 32], "qf": [32, 32]},
         n_critics=4,  # Smaller ensemble for testing
         critic_subsample_size=2,
         # CQL parameters
@@ -58,8 +57,7 @@ def wsrl_agent_with_autotune(simple_env):
         buffer_device="cpu",
         learning_starts=10,
         batch_size=8,
-        actor_hidden_dims=(32, 32),
-        critic_hidden_dims=(32, 32),
+        net_arch={"pi": [32, 32], "qf": [32, 32]},
         n_critics=4,
         critic_subsample_size=2,
         cql_autotune_alpha=True,
@@ -101,6 +99,20 @@ class TestWSRLCreation:
 
     def test_optimizers_with_autotune(self, wsrl_agent_with_autotune):
         assert wsrl_agent_with_autotune.cql_alpha_optimizer is not None
+
+    def test_deprecated_hidden_dims_still_work_with_warning(self, simple_env):
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            agent = WSRL(
+                env=simple_env,
+                buffer_size=100,
+                buffer_device="cpu",
+                batch_size=8,
+                actor_hidden_dims=(31, 29),
+                critic_hidden_dims=(37, 35),
+                n_critics=4,
+                device="cpu",
+            )
+        assert agent.net_arch == {"pi": [31, 29], "qf": [37, 35]}
 
 
 class TestWSRLHelperMethods:
@@ -221,8 +233,7 @@ class TestCQLLossComputation:
             buffer_size=100,
             buffer_device="cpu",
             batch_size=8,
-            actor_hidden_dims=(32, 32),
-            critic_hidden_dims=(32, 32),
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
             n_critics=4,
             critic_subsample_size=2,
             cql_importance_sample=False,  # non-IS branch
@@ -274,8 +285,7 @@ class TestCQLLossComputation:
             buffer_size=100,
             buffer_device="cpu",
             batch_size=8,
-            actor_hidden_dims=(32, 32),
-            critic_hidden_dims=(32, 32),
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
             n_critics=4,
             use_calql=False,  # Disable Cal-QL
             device="cpu",

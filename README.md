@@ -41,6 +41,7 @@ rl-garden/
 │   ├── common/
 │   ├── encoders/
 │   ├── envs/
+│   ├── networks/
 │   └── policies/
 ├── examples/
 ├── scripts/
@@ -139,6 +140,22 @@ agent = RGBDSAC(
 )
 ```
 
+Network architecture configuration (`net_arch`) for SAC/WSRL families:
+
+```python
+from rl_garden.algorithms import SAC, WSRL
+
+sac = SAC(env=env, net_arch=[256, 256, 256])  # same actor/critic MLP sizes
+
+wsrl = WSRL(
+    env=env,
+    net_arch={"pi": [256, 256], "qf": [256, 256]},  # separate actor/critic
+)
+```
+
+`actor_hidden_dims` / `critic_hidden_dims` are still accepted for backward
+compatibility, but they are deprecated in favor of `net_arch`.
+
 ## Core Design Constraints
 
 - Rollout path is GPU-native: no `action.cpu().numpy()` or numpy replay handoff in training hot path.
@@ -179,6 +196,7 @@ pytest tests/test_sac_smoke.py
 
 - [ ] Formalize `policy_kwargs` / `features_extractor_class`-style injection API.
 - [ ] Add stricter policy tests (optimizer parameter disjointness, numerical checks).
+- [ ] Expand `net_arch` docs/examples across all training entrypoints.
 - [ ] Add Flax-vs-Torch parity validation for ResNet as a stretch goal.
 - [ ] Expand augmentation pipeline integration in training loop.
 - [ ] Add checkpoint/load examples and a lightweight benchmark script.

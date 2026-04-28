@@ -8,26 +8,12 @@ Expected image sizes: 64x64 or 128x128.
 """
 from __future__ import annotations
 
-from typing import Sequence
-
 import torch
 import torch.nn as nn
 from gymnasium import spaces
 
 from rl_garden.encoders.base import BaseFeaturesExtractor
-
-
-def _make_mlp(
-    in_dim: int, hidden: Sequence[int], last_act: bool = True, act=nn.ReLU
-) -> nn.Sequential:
-    mods: list[nn.Module] = []
-    c = in_dim
-    for i, h in enumerate(hidden):
-        mods.append(nn.Linear(c, h))
-        if last_act or i < len(hidden) - 1:
-            mods.append(act())
-        c = h
-    return nn.Sequential(*mods)
+from rl_garden.networks import create_mlp
 
 
 class PlainConv(BaseFeaturesExtractor):
@@ -64,10 +50,22 @@ class PlainConv(BaseFeaturesExtractor):
 
         if pool_feature_map:
             self.pool: nn.Module = nn.AdaptiveMaxPool2d((1, 1))
-            self.fc = _make_mlp(128, [features_dim], last_act=last_act)
+            fc = create_mlp(
+                input_dim=128,
+                output_dim=features_dim,
+                net_arch=[],
+                squash_output=False,
+            )
+            self.fc = nn.Sequential(fc, nn.ReLU()) if last_act else fc
         else:
             self.pool = nn.Identity()
-            self.fc = _make_mlp(64 * 4 * 4, [features_dim], last_act=last_act)
+            fc = create_mlp(
+                input_dim=64 * 4 * 4,
+                output_dim=features_dim,
+                net_arch=[],
+                squash_output=False,
+            )
+            self.fc = nn.Sequential(fc, nn.ReLU()) if last_act else fc
 
         self._reset_parameters()
 

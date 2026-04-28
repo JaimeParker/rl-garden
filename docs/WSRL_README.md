@@ -79,6 +79,13 @@ python examples/train_wsrl_rgbd.py \
 - `--n_critics 10`: Number of Q-networks in ensemble (default: 10)
 - `--critic_subsample_size 2`: Number of critics to subsample for target (default: 2)
 
+### Network Architecture (`net_arch`)
+- `net_arch` is the primary network config interface for `SAC/RGBDSAC/WSRL/WSRLRGBD`.
+- Supported forms:
+  - `list[int]`: shared architecture for actor and critic, e.g. `[256, 256, 256]`
+  - `dict(pi=[...], qf=[...])`: separate actor/critic MLPs, e.g. `{"pi": [256, 256], "qf": [256, 256]}`
+- `actor_hidden_dims` / `critic_hidden_dims` remain available for backward compatibility but are deprecated.
+
 ### CQL Parameters
 - `--use_cql_loss`: Enable CQL regularization (default: True)
 - `--cql_alpha 5.0`: CQL regularization weight (default: 5.0)
@@ -129,6 +136,7 @@ env = make_maniskill_env(env_cfg)
 # Create WSRL agent
 agent = WSRL(
     env=env,
+    net_arch={"pi": [256, 256], "qf": [256, 256]},
     n_critics=10,  # REDQ ensemble
     critic_subsample_size=2,
     use_cql_loss=True,
@@ -167,6 +175,7 @@ env = make_maniskill_env(env_cfg)
 # Create WSRLRGBD agent
 agent = WSRLRGBD(
     env=env,
+    net_arch={"pi": [256, 256], "qf": [256, 256]},
     n_critics=10,
     use_calql=True,
     image_keys=("rgb",),
@@ -197,6 +206,7 @@ OffPolicyAlgorithm (base class)
    - Critic subsampling for REDQ
    - Optional CQL alpha Lagrange multiplier
    - Upstream-style layer norm and actor std parameterization options
+   - Uses shared network modules from `rl_garden/networks/`
 
 2. **MCReplayBuffer** (`rl_garden/buffers/mc_buffer.py`)
    - Cached vectorized Monte Carlo return computation
