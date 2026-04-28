@@ -31,7 +31,8 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.flatten import FlattenExtractor
-from rl_garden.policies.wsrl_policy import WSRLPolicy
+from rl_garden.policies.wsrl_policy import WSRLPolicy, TemperatureLagrange
+
 
 
 class WSRL(OffPolicyAlgorithm):
@@ -301,14 +302,15 @@ class WSRL(OffPolicyAlgorithm):
             init = 1.0
             if isinstance(self.ent_coef_init, str) and "_" in self.ent_coef_init:
                 init = float(self.ent_coef_init.split("_")[1])
-            self.log_alpha = torch.log(
-                torch.ones(1, device=self.device) * init
-            ).requires_grad_(True)
-            self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=self.alpha_lr)
+            self.temperature_lagrange = TemperatureLagrange(init_value=init).to(self.device)
+            self.alpha_optimizer = torch.optim.Adam(
+                list(self.temperature_lagrange.parameters()), lr=self.alpha_lr
+            )
         else:
-            self.log_alpha = None
+            self.temperature_lagrange = None
             self.alpha_optimizer = None
             self._fixed_alpha = torch.tensor(float(self.ent_coef_init), device=self.device)
+
 
         if self.target_entropy_arg == "auto":
             self.target_entropy = float(
@@ -323,7 +325,7 @@ class WSRL(OffPolicyAlgorithm):
 
     def _current_alpha(self) -> torch.Tensor:
         if self.autotune:
-            return self.log_alpha.exp()
+            return self.temperature_lagrange()
         return self._fixed_alpha
 
     def _current_cql_alpha(self) -> torch.Tensor:
@@ -676,7 +678,7 @@ class WSRL(OffPolicyAlgorithm):
             obs, detach_encoder=False
         )
         min_q = self.policy.min_q_value(
-            features, action, subsample_size=self.critic_subsample_size, target=False
+            features, action, subsample_size=None, target=False
         )
         actor_loss = (alpha * log_prob - min_q).mean()
         return actor_loss, log_prob.detach()
@@ -761,7 +763,7 @@ class WSRL(OffPolicyAlgorithm):
                 # Entropy coefficient update
                 if self.autotune:
                     alpha_loss = -(
-                        self.log_alpha.exp() * (log_prob_detached + self.target_entropy)
+                        self.temperature_lagrange() * (log_prob_detached + self.target_entropy)
                     ).mean()
                     self.alpha_optimizer.zero_grad()
                     alpha_loss.backward()
@@ -876,7 +878,7 @@ class WSRL(OffPolicyAlgorithm):
         alpha_loss_val = None
         if self.autotune:
             alpha_loss = -(
-                self.log_alpha.exp() * (log_prob_detached + self.target_entropy)
+                self.temperature_lagrange() * (log_prob_detached + self.target_entropy)
             ).mean()
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()

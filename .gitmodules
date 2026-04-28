@@ -7,3 +7,12 @@
 [submodule "3rd_party/stable-baselines3"]
 	path = 3rd_party/stable-baselines3
 	url = git@github.com:DLR-RM/stable-baselines3.git
+[submodule "3rd_party/rlpd"]
+	path = 3rd_party/rlpd
+	url = git@github.com:ikostrikov/rlpd.git
+[submodule "3rd_party/Cal-QL"]
+	path = 3rd_party/Cal-QL
+	url = git@github.com:nakamotoo/Cal-QL.git
+[submodule "3rd_party/wsrl"]
+	path = 3rd_party/wsrl
+	url = git@github.com:zhouzypaul/wsrl.git

@@ -147,6 +147,16 @@ class TestCriticSubsampling:
         )
         assert q_subsampled.shape == (2, 16, 1)
 
+    def test_none_subsample_uses_all_critics(self, wsrl_policy):
+        obs = torch.randn(16, 10)
+        actions = torch.randn(16, 3)
+        features = wsrl_policy.extract_features(obs)
+
+        q_values = wsrl_policy.q_values_subsampled(
+            features, actions, subsample_size=None, target=True
+        )
+        assert q_values.shape == (10, 16, 1)
+
     def test_subsampled_custom_size(self, wsrl_policy):
         obs = torch.randn(16, 10)
         actions = torch.randn(16, 3)

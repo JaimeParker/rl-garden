@@ -181,6 +181,21 @@ class CQLAlphaLagrange(nn.Module):
         return F.softplus(self.log_alpha)
 
 
+class TemperatureLagrange(nn.Module):
+    """SAC entropy coefficient via softplus (matches GeqLagrangeMultiplier)."""
+
+    def __init__(self, init_value: float = 1.0):
+        super().__init__()
+        if init_value <= 0:
+            raise ValueError("Temperature init value must be positive.")
+        self.log_alpha = nn.Parameter(
+            torch.tensor(_softplus_inverse(init_value), dtype=torch.float32)
+        )
+
+    def forward(self) -> torch.Tensor:
+        return F.softplus(self.log_alpha)
+
+
 class WSRLPolicy(BasePolicy):
     """WSRL policy with Q-ensemble (REDQ) and optional CQL alpha Lagrange multiplier.
 
@@ -310,15 +325,14 @@ class WSRLPolicy(BasePolicy):
         Args:
             features: State features
             actions: Actions to evaluate
-            subsample_size: Number of critics to subsample (default: self.critic_subsample_size)
+            subsample_size: Number of critics to subsample. ``None`` uses all
+                critics; callers that want REDQ subsampling should pass
+                ``self.critic_subsample_size`` explicitly.
             target: Use target network (default: True)
 
         Returns:
-            Tensor of shape (subsample_size, batch_size, 1)
+            Tensor of shape (critic_count, batch_size, 1)
         """
-        if subsample_size is None:
-            subsample_size = self.critic_subsample_size
-
         # Get all Q-values
         q_all = self.q_values_all(features, actions, target=target)  # (n_critics, batch, 1)
 
@@ -345,7 +359,7 @@ class WSRLPolicy(BasePolicy):
         Args:
             features: State features
             actions: Actions to evaluate
-            subsample_size: Number of critics to subsample (default: self.critic_subsample_size)
+            subsample_size: Number of critics to subsample. ``None`` uses all critics.
             target: Use target network (default: True)
 
         Returns:

@@ -111,6 +111,21 @@ class TestWSRLHelperMethods:
         assert alpha.numel() == 1  # Single scalar value
         assert alpha.item() > 0
 
+    def test_temperature_uses_softplus(self, wsrl_agent):
+        """Verify temperature uses softplus parameterization matching original."""
+        if not wsrl_agent.autotune:
+            pytest.skip("Only applies to auto-tuned temperature")
+
+        import torch.nn.functional as F
+        assert hasattr(wsrl_agent, "temperature_lagrange")
+        assert wsrl_agent.temperature_lagrange is not None
+
+        # Verify softplus is used
+        expected = F.softplus(wsrl_agent.temperature_lagrange.log_alpha)
+        actual = wsrl_agent._current_alpha()
+        assert torch.isclose(expected, actual)
+        assert actual.item() > 0
+
     def test_current_cql_alpha(self, wsrl_agent):
         cql_alpha = wsrl_agent._current_cql_alpha()
         assert cql_alpha.item() == 1.0  # Fixed value
@@ -363,6 +378,21 @@ class TestWSRLTraining:
 
         assert actor_loss.shape == ()
         assert log_prob.shape == (8, 1)
+
+    def test_actor_loss_uses_all_critics(self, wsrl_agent, monkeypatch):
+        obs = torch.randn(8, 4)
+        seen_subsample_sizes = []
+        original_min_q_value = wsrl_agent.policy.min_q_value
+
+        def wrapped_min_q_value(features, actions, subsample_size=None, target=True):
+            seen_subsample_sizes.append(subsample_size)
+            return original_min_q_value(
+                features, actions, subsample_size=subsample_size, target=target
+            )
+
+        monkeypatch.setattr(wsrl_agent.policy, "min_q_value", wrapped_min_q_value)
+        wsrl_agent._actor_loss(obs)
+        assert seen_subsample_sizes == [None]
 
     def test_train_step(self, wsrl_agent):
         # Add some data to replay buffer

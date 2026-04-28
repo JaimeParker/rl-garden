@@ -111,9 +111,9 @@ class WSRLRGBD(WSRL):
         alpha = self._current_alpha().detach()
         action, log_prob, features = self.policy.actor_action_log_prob(obs, detach_encoder=True)
 
-        # Use Q-ensemble subsampling for actor loss (REDQ)
+        # Actor loss uses all critics; REDQ subsampling is for target/CQL paths.
         min_q = self.policy.min_q_value(
-            features, action, subsample_size=self.critic_subsample_size, target=False
+            features, action, subsample_size=None, target=False
         )
 
         return (alpha * log_prob - min_q).mean(), log_prob.detach()
