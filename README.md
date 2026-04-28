@@ -122,6 +122,22 @@ scripts/train_sac_state.sh
 scripts/train_sac_rgbd.sh --encoder resnet10
 ```
 
+Logging backend selection:
+
+```bash
+# Default: tensorboard
+scripts/train_sac_state.sh --log_type tensorboard
+
+# Weights & Biases
+scripts/train_sac_state.sh \
+  --log_type wandb \
+  --wandb_project rl-garden \
+  --log_keywords debug,pickcube
+
+# Stdout only (no tensorboard/wandb artifacts)
+scripts/train_sac_state.sh --log_type none
+```
+
 Python-side extractor injection:
 
 ```python

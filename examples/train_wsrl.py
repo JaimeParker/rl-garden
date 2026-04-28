@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 import tyro
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
@@ -99,6 +98,11 @@ class Args:
     eval_freq: int = 25
     num_eval_steps: int = 50
     std_log: bool = True
+    log_type: Literal["tensorboard", "wandb", "none"] = "tensorboard"
+    log_keywords: Optional[str] = None
+    wandb_project: str = "rl-garden"
+    wandb_entity: Optional[str] = None
+    wandb_group: Optional[str] = None
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -106,6 +110,14 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_str(name: str, default: Optional[str]) -> Optional[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    return raw if raw else None
 
 
 def _offline_update_loop(
@@ -132,15 +144,30 @@ def _offline_update_loop(
 def main() -> None:
     args = tyro.cli(Args)
     args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
+    args.log_type = _env_str("RLG_LOG_TYPE", args.log_type) or args.log_type
+    args.log_keywords = _env_str("RLG_LOG_KEYWORDS", args.log_keywords)
+    args.wandb_project = _env_str("RLG_WANDB_PROJECT", args.wandb_project) or args.wandb_project
+    args.wandb_entity = _env_str("RLG_WANDB_ENTITY", args.wandb_entity)
+    args.wandb_group = _env_str("RLG_WANDB_GROUP", args.wandb_group)
     seed_everything(args.seed)
 
+    start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = args.exp_name or f"{args.env_id}__wsrl_state__{args.seed}__{int(time.time())}"
-    writer = SummaryWriter(os.path.join(args.log_dir, run_name))
-    writer.add_text(
+    logger = Logger.create(
+        log_type=args.log_type,
+        log_dir=args.log_dir,
+        run_name=run_name,
+        config=vars(args),
+        start_time=start_time,
+        log_keywords=args.log_keywords,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
+        wandb_group=args.wandb_group or args.env_id,
+    )
+    logger.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n" + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
-    logger = Logger(tensorboard=writer)
 
     env_cfg = ManiSkillEnvConfig(
         env_id=args.env_id, num_envs=args.num_envs, obs_mode="state",
