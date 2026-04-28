@@ -52,6 +52,14 @@ class Args:
     log_freq: int = 1_000
     eval_freq: int = 25
     num_eval_steps: int = 50
+    std_log: bool = True
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _image_factory(
@@ -79,6 +87,7 @@ def _image_factory(
 
 def main() -> None:
     args = tyro.cli(Args)
+    args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
     seed_everything(args.seed)
 
     run_name = (
@@ -124,6 +133,7 @@ def main() -> None:
         training_freq=args.training_freq, utd=args.utd,
         policy_lr=args.policy_lr, q_lr=args.q_lr,
         seed=args.seed, logger=logger,
+        std_log=args.std_log,
         log_freq=args.log_freq, eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
         image_keys=image_keys,

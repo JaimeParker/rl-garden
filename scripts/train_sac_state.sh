@@ -10,8 +10,24 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 1
 fi
 
-exec "$PYTHON_BIN" "$REPO_DIR/examples/train_sac_state.py" \
+STD_LOG="${RLG_STD_LOG:-1}"
+FORWARD_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --std_log|--std-log)
+            STD_LOG=1
+            ;;
+        --no_std_log|--no-std-log)
+            STD_LOG=0
+            ;;
+        *)
+            FORWARD_ARGS+=("$arg")
+            ;;
+    esac
+done
+
+exec env RLG_STD_LOG="$STD_LOG" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_sac_state.py" \
     --env_id PickCube-v1 \
     --num_envs 16 \
     --total_timesteps 1000000 \
-    "$@"
+    "${FORWARD_ARGS[@]}"

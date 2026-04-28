@@ -41,6 +41,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
+        std_log: bool = True,
         log_freq: int = 1_000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
@@ -56,6 +57,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.utd = utd
         assert bootstrap_at_done in ("always", "never", "truncated"), bootstrap_at_done
         self.bootstrap_at_done = bootstrap_at_done
+        self.std_log = std_log
         self.log_freq = log_freq
         self.eval_freq = eval_freq
         self.num_eval_steps = num_eval_steps
@@ -139,6 +141,17 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         else:
             real_next_obs[need_final_obs] = final[need_final_obs]
 
+    @staticmethod
+    def _first_metric(metrics: dict[str, float], keys: tuple[str, ...]) -> float:
+        for key in keys:
+            if key in metrics:
+                return float(metrics[key])
+        return float("nan")
+
+    @staticmethod
+    def _fmt_metric(value: float) -> str:
+        return "nan" if value != value else f"{value:.4f}"
+
     # --- evaluation ---
 
     def _evaluate(self) -> dict[str, float]:
@@ -165,6 +178,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         obs, _ = self.env.reset(seed=self.seed)
         learning_has_started = False
         cumulative = defaultdict(float)
+        global_steps_per_iteration = self.num_envs * self.steps_per_env
 
         while self._global_step < total_timesteps:
             # Eval at iteration boundary.
@@ -181,9 +195,24 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     self.logger.add_scalar(
                         "time/eval_time", time.perf_counter() - stime, self._global_step
                     )
+                if self.std_log:
+                    eval_return = self._first_metric(eval_metrics, ("return",))
+                    eval_success = self._first_metric(
+                        eval_metrics, ("success_at_end", "success_once")
+                    )
+                    print(
+                        "[eval] "
+                        f"step={self._global_step}/{total_timesteps} "
+                        f"return={self._fmt_metric(eval_return)} "
+                        f"success_at_end={self._fmt_metric(eval_success)}",
+                        flush=True,
+                    )
 
             # Rollout.
             rollout_t = time.perf_counter()
+            rollout_reward_sum = 0.0
+            rollout_reward_count = 0
+            rollout_episode_metrics: dict[str, list[float]] = defaultdict(list)
             for _ in range(self.steps_per_env):
                 self._global_step += self.num_envs
                 if not learning_has_started:
@@ -192,6 +221,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     actions = self._policy_action(obs)
 
                 next_obs, rewards, terminations, truncations, infos = self.env.step(actions)
+                rollout_reward_sum += float(rewards.float().sum().item())
+                rollout_reward_count += int(rewards.numel())
                 real_next_obs = self._clone_obs(next_obs)
                 need_final_obs, stop_bootstrap = self._compute_done_masks(
                     terminations, truncations
@@ -202,32 +233,102 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     fi = infos["final_info"]
                     done_mask = infos["_final_info"]
                     for k, v in fi["episode"].items():
+                        done_values = v[done_mask]
+                        if done_values.numel() == 0:
+                            continue
+                        mean_value = float(done_values.float().mean().item())
                         self.logger.add_scalar(
                             f"train/{k}",
-                            float(v[done_mask].float().mean().item()),
+                            mean_value,
                             self._global_step,
+                        )
+                        rollout_episode_metrics[k].append(mean_value)
+                elif "final_info" in infos:
+                    fi = infos["final_info"]
+                    done_mask = infos["_final_info"]
+                    for k, v in fi["episode"].items():
+                        done_values = v[done_mask]
+                        if done_values.numel() == 0:
+                            continue
+                        rollout_episode_metrics[k].append(
+                            float(done_values.float().mean().item())
                         )
 
                 self.replay_buffer.add(obs, real_next_obs, actions, rewards, stop_bootstrap)
                 obs = next_obs
-            cumulative["rollout_time"] += time.perf_counter() - rollout_t
+            rollout_time = time.perf_counter() - rollout_t
+            cumulative["rollout_time"] += rollout_time
+            rollout_reward_mean = (
+                rollout_reward_sum / rollout_reward_count
+                if rollout_reward_count > 0
+                else float("nan")
+            )
+            episode_means = {
+                k: float(sum(v) / len(v))
+                for k, v in rollout_episode_metrics.items()
+                if len(v) > 0
+            }
+            rollout_return = self._first_metric(episode_means, ("return",))
+            rollout_success = self._first_metric(
+                episode_means, ("success_at_end", "success_once")
+            )
+            should_log = (
+                self.log_freq > 0
+                and (self._global_step - self.training_freq) // self.log_freq
+                < self._global_step // self.log_freq
+            )
+            rollout_fps = (
+                global_steps_per_iteration / rollout_time
+                if rollout_time > 0
+                else float("nan")
+            )
 
             if self._global_step < self.learning_starts:
+                if self.std_log and should_log:
+                    progress = 100.0 * self._global_step / total_timesteps
+                    print(
+                        "[train] "
+                        f"step={self._global_step}/{total_timesteps} ({progress:.2f}%) "
+                        "phase=warmup "
+                        f"reward={self._fmt_metric(rollout_reward_mean)} "
+                        f"return={self._fmt_metric(rollout_return)} "
+                        f"success_at_end={self._fmt_metric(rollout_success)} "
+                        f"fps={self._fmt_metric(rollout_fps)}",
+                        flush=True,
+                    )
                 continue
             learning_has_started = True
 
             # Update.
             update_t = time.perf_counter()
             losses = self.train(self.grad_steps_per_iteration)
-            cumulative["update_time"] += time.perf_counter() - update_t
+            update_time = time.perf_counter() - update_t
+            cumulative["update_time"] += update_time
 
-            if self.logger is not None and (
-                (self._global_step - self.training_freq) // self.log_freq
-                < self._global_step // self.log_freq
-            ):
-                for k, v in losses.items():
-                    self.logger.add_scalar(f"losses/{k}", v, self._global_step)
-                for k, v in cumulative.items():
-                    self.logger.add_scalar(f"time/total_{k}", v, self._global_step)
+            if should_log:
+                if self.logger is not None:
+                    for k, v in losses.items():
+                        self.logger.add_scalar(f"losses/{k}", v, self._global_step)
+                    self.logger.add_scalar("time/update_time", update_time, self._global_step)
+                    self.logger.add_scalar("time/rollout_time", rollout_time, self._global_step)
+                    self.logger.add_scalar("time/rollout_fps", rollout_fps, self._global_step)
+                    for k, v in cumulative.items():
+                        self.logger.add_scalar(f"time/total_{k}", v, self._global_step)
+                    self.logger.add_scalar(
+                        "time/total_rollout+update_time",
+                        cumulative["rollout_time"] + cumulative["update_time"],
+                        self._global_step,
+                    )
+                if self.std_log:
+                    progress = 100.0 * self._global_step / total_timesteps
+                    print(
+                        "[train] "
+                        f"step={self._global_step}/{total_timesteps} ({progress:.2f}%) "
+                        f"reward={self._fmt_metric(rollout_reward_mean)} "
+                        f"return={self._fmt_metric(rollout_return)} "
+                        f"success_at_end={self._fmt_metric(rollout_success)} "
+                        f"fps={self._fmt_metric(rollout_fps)}",
+                        flush=True,
+                    )
 
         return self

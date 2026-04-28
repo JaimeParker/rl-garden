@@ -111,6 +111,7 @@ class Args:
     log_freq: int = 1_000
     eval_freq: int = 25
     num_eval_steps: int = 50
+    std_log: bool = True
 
 
 def _image_factory(
@@ -136,17 +137,37 @@ def _image_factory(
     )
 
 
-def _offline_update_loop(agent: WSRLRGBD, steps: int, logger: Logger, log_freq: int) -> None:
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _offline_update_loop(
+    agent: WSRLRGBD, steps: int, logger: Logger, log_freq: int, std_log: bool
+) -> None:
     gradient_steps = int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
     for step in trange(steps, desc="offline"):
         losses = agent.train(gradient_steps)
         if log_freq > 0 and (step + 1) % log_freq == 0:
             for key, value in losses.items():
                 logger.add_scalar(f"offline_losses/{key}", value, step + 1)
+            if std_log:
+                progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
+                loss_summary = " ".join(
+                    f"{k}={v:.4f}" for k, v in losses.items() if isinstance(v, (int, float))
+                )
+                print(
+                    "[offline] "
+                    f"step={step + 1}/{steps} ({progress:.2f}%) {loss_summary}",
+                    flush=True,
+                )
 
 
 def main() -> None:
     args = tyro.cli(Args)
+    args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
     seed_everything(args.seed)
 
     run_name = (
@@ -215,6 +236,7 @@ def main() -> None:
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
         seed=args.seed, logger=logger,
+        std_log=args.std_log,
         log_freq=args.log_freq, eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
         image_keys=image_keys,
@@ -231,7 +253,9 @@ def main() -> None:
             num_traj=args.offline_num_traj,
         )
         logger.add_scalar("offline/loaded_transitions", loaded, 0)
-        _offline_update_loop(agent, args.num_offline_steps, logger, args.log_freq)
+        _offline_update_loop(
+            agent, args.num_offline_steps, logger, args.log_freq, args.std_log
+        )
 
         # Switch to online mode
         agent.switch_to_online_mode()

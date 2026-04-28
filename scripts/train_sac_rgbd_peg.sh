@@ -9,10 +9,26 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 1
 fi
 
-exec "$PYTHON_BIN" "$REPO_DIR/examples/train_sac_rgbd_peg.py" \
+STD_LOG="${RLG_STD_LOG:-1}"
+FORWARD_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --std_log|--std-log)
+            STD_LOG=1
+            ;;
+        --no_std_log|--no-std-log)
+            STD_LOG=0
+            ;;
+        *)
+            FORWARD_ARGS+=("$arg")
+            ;;
+    esac
+done
+
+exec env RLG_STD_LOG="$STD_LOG" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_sac_rgbd_peg.py" \
     --env_id PegInsertionSidePegOnly-v1 \
     --obs_mode rgb \
     --control_mode pd_ee_delta_pose \
     --camera_width 64 --camera_height 64 \
     --total_timesteps 1000000 \
-    "$@"
+    "${FORWARD_ARGS[@]}"
