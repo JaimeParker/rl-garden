@@ -5,7 +5,7 @@ Usage:
     python examples/train_wsrl.py --env_id PickCube-v1 --num_offline_steps 0
 
     # Offline→online training
-    python examples/train_wsrl.py --env_id PickCube-v1 --num_offline_steps 100000 --num_online_steps 50000
+    python examples/train_wsrl.py --env_id PickCube-v1 --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000 --num_online_steps 50000
 
     # Disable REDQ (use 2 critics like standard SAC)
     python examples/train_wsrl.py --env_id PickCube-v1 --n_critics 2
@@ -15,12 +15,14 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 import tyro
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import trange
 
 from rl_garden.algorithms import WSRL
+from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, seed_everything
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
@@ -36,6 +38,8 @@ class Args:
     # Training phases
     num_offline_steps: int = 0  # Set to 0 for online-only
     num_online_steps: int = 1_000_000
+    offline_dataset_path: Optional[str] = None
+    offline_num_traj: Optional[int] = None
 
     # Buffer and training
     buffer_size: int = 1_000_000
@@ -49,9 +53,9 @@ class Args:
     tau: float = 0.005
 
     # Optimizers
-    policy_lr: float = 3e-4
+    policy_lr: float = 1e-4
     q_lr: float = 3e-4
-    alpha_lr: float = 3e-4
+    alpha_lr: float = 1e-4
     cql_alpha_lr: float = 3e-4
     policy_frequency: int = 1
     target_network_frequency: int = 1
@@ -63,14 +67,26 @@ class Args:
     # CQL parameters
     use_cql_loss: bool = True
     cql_n_actions: int = 10
+    cql_action_sample_method: Literal["uniform", "normal"] = "uniform"
     cql_alpha: float = 5.0
     cql_autotune_alpha: bool = False
+    cql_alpha_lagrange_init: float = 1.0
+    cql_target_action_gap: float = 1.0
     cql_importance_sample: bool = True
     cql_max_target_backup: bool = True
+    cql_temp: float = 1.0
+    cql_clip_diff_min: float = float("-inf")
+    cql_clip_diff_max: float = float("inf")
+    backup_entropy: bool = False
 
     # Cal-QL parameters
     use_calql: bool = True
     calql_bound_random_actions: bool = False
+
+    # Upstream WSRL network options
+    actor_use_layer_norm: bool = True
+    critic_use_layer_norm: bool = True
+    std_parameterization: Literal["exp", "uniform"] = "exp"
 
     # Phase control
     online_cql_alpha: Optional[float] = None
@@ -82,6 +98,15 @@ class Args:
     log_freq: int = 1_000
     eval_freq: int = 25
     num_eval_steps: int = 50
+
+
+def _offline_update_loop(agent: WSRL, steps: int, logger: Logger, log_freq: int) -> None:
+    gradient_steps = int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
+    for step in trange(steps, desc="offline"):
+        losses = agent.train(gradient_steps)
+        if log_freq > 0 and (step + 1) % log_freq == 0:
+            for key, value in losses.items():
+                logger.add_scalar(f"offline_losses/{key}", value, step + 1)
 
 
 def main() -> None:
@@ -123,10 +148,20 @@ def main() -> None:
         cql_n_actions=args.cql_n_actions,
         cql_alpha=args.cql_alpha,
         cql_autotune_alpha=args.cql_autotune_alpha,
+        cql_alpha_lagrange_init=args.cql_alpha_lagrange_init,
+        cql_target_action_gap=args.cql_target_action_gap,
         cql_importance_sample=args.cql_importance_sample,
         cql_max_target_backup=args.cql_max_target_backup,
+        cql_temp=args.cql_temp,
+        cql_clip_diff_min=args.cql_clip_diff_min,
+        cql_clip_diff_max=args.cql_clip_diff_max,
+        cql_action_sample_method=args.cql_action_sample_method,
+        backup_entropy=args.backup_entropy,
         use_calql=args.use_calql,
         calql_bound_random_actions=args.calql_bound_random_actions,
+        actor_use_layer_norm=args.actor_use_layer_norm,
+        critic_use_layer_norm=args.critic_use_layer_norm,
+        std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
         seed=args.seed, logger=logger,
@@ -136,12 +171,18 @@ def main() -> None:
 
     # Offline training phase
     if args.num_offline_steps > 0:
-        logger.record("phase", "offline")
-        agent.learn(total_timesteps=args.num_offline_steps)
+        if args.offline_dataset_path is None:
+            raise ValueError("--offline_dataset_path is required when --num_offline_steps > 0.")
+        loaded = load_maniskill_h5_to_replay_buffer(
+            agent.replay_buffer,
+            args.offline_dataset_path,
+            num_traj=args.offline_num_traj,
+        )
+        logger.add_scalar("offline/loaded_transitions", loaded, 0)
+        _offline_update_loop(agent, args.num_offline_steps, logger, args.log_freq)
 
         # Switch to online mode
         agent.switch_to_online_mode()
-        logger.record("phase", "online")
 
     # Online training phase
     if args.num_online_steps > 0:

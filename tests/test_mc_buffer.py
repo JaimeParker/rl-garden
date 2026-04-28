@@ -261,6 +261,35 @@ class TestMCReturnComputation:
         assert torch.all(sample.mc_returns >= 0.9)
         assert torch.all(sample.mc_returns <= 1.1)
 
+    def test_full_buffer_wraparound_returns_are_chronological(self):
+        buffer = MCTensorReplayBuffer(
+            observation_space=spaces.Box(low=-1, high=1, shape=(1,)),
+            action_space=spaces.Box(low=-1, high=1, shape=(1,)),
+            num_envs=1,
+            buffer_size=4,
+            gamma=0.9,
+            storage_device="cpu",
+            sample_device="cpu",
+        )
+
+        for reward in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]:
+            obs = torch.zeros(1, 1)
+            action = torch.zeros(1, 1)
+            buffer.add(obs, obs, action, torch.tensor([reward]), torch.zeros(1))
+
+        table = buffer._build_mc_table().squeeze(1)
+        # Physical storage is [5, 6, 3, 4], but chronological order starts at pos=2:
+        # 3 -> 4 -> 5 -> 6.
+        expected = torch.tensor(
+            [
+                5.0 + 0.9 * 6.0,
+                6.0,
+                3.0 + 0.9 * 4.0 + 0.9**2 * 5.0 + 0.9**3 * 6.0,
+                4.0 + 0.9 * 5.0 + 0.9**2 * 6.0,
+            ]
+        )
+        torch.testing.assert_close(table, expected)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

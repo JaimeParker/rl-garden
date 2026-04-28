@@ -5,6 +5,7 @@ from rl_garden.buffers.mc_buffer import (
     MCReplayBufferSample,
     MCTensorReplayBuffer,
 )
+from rl_garden.buffers.maniskill_h5 import load_maniskill_h5_to_replay_buffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "MCReplayBufferSample",
     "MCTensorReplayBuffer",
     "TensorReplayBuffer",
+    "load_maniskill_h5_to_replay_buffer",
 ]

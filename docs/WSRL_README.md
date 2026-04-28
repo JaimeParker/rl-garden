@@ -5,7 +5,7 @@
 This repository now includes a complete PyTorch implementation of **WSRL (Warm-Start Reinforcement Learning)** with **Cal-QL (Calibrated Conservative Q-Learning)** and **REDQ (Randomized Ensembled Double Q-learning)**.
 
 WSRL enables efficient offline→online training:
-- **Offline phase**: Pre-train with Cal-QL on offline datasets
+- **Offline phase**: Pre-train with Cal-QL on ManiSkill trajectory H5 datasets
 - **Online phase**: Fine-tune with SAC or CQL without retaining offline data
 
 ## Key Features
@@ -44,6 +44,7 @@ python examples/train_wsrl.py --env_id PickCube-v1 --num_offline_steps 0
 # Offline→online training
 python examples/train_wsrl.py \
     --env_id PickCube-v1 \
+    --offline_dataset_path demos/pickcube_state.h5 \
     --num_offline_steps 100000 \
     --num_online_steps 50000 \
     --n_critics 10 \
@@ -82,9 +83,11 @@ python examples/train_wsrl_rgbd.py \
 - `--use_cql_loss`: Enable CQL regularization (default: True)
 - `--cql_alpha 5.0`: CQL regularization weight (default: 5.0)
 - `--cql_n_actions 10`: Number of OOD actions to sample (default: 10)
+- `--cql_action_sample_method uniform`: Random OOD action source (`uniform` | `normal`)
 - `--cql_autotune_alpha`: Auto-tune CQL alpha via Lagrange multiplier
 - `--cql_importance_sample`: Use importance sampling (default: True)
 - `--cql_max_target_backup`: Use max Q for target (default: True)
+- `--backup_entropy`: Include entropy in TD target backups (default: False, matching upstream WSRL/Cal-QL)
 
 ### Cal-QL Parameters
 - `--use_calql`: Enable Cal-QL lower bounds (default: True)
@@ -92,9 +95,17 @@ python examples/train_wsrl_rgbd.py \
 
 ### Offline→Online Control
 - `--num_offline_steps 100000`: Number of offline training steps
+- `--offline_dataset_path demos/foo.h5`: ManiSkill trajectory H5 path for offline pre-training
+- `--offline_num_traj`: Optional number of trajectories to load from the H5
 - `--num_online_steps 50000`: Number of online training steps
 - `--online_cql_alpha 0.5`: CQL alpha for online phase (optional)
 - `--online_use_cql_loss False`: Disable CQL loss for online phase (optional)
+
+### Upstream-Parity Defaults
+- `policy_lr=1e-4`, `q_lr=3e-4`, `alpha_lr=1e-4`
+- `gamma=0.99`, `tau=0.005`
+- WSRL actor/critic MLPs use layer norm by default
+- Actor std parameterization supports `exp` and `uniform`
 
 ### Vision-Specific
 - `--obs_mode rgb`: Observation mode (rgb | rgbd)
@@ -108,6 +119,7 @@ python examples/train_wsrl_rgbd.py \
 
 ```python
 from rl_garden.algorithms import WSRL
+from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.envs import make_maniskill_env, ManiSkillEnvConfig
 
 # Create environment
@@ -126,7 +138,9 @@ agent = WSRL(
 )
 
 # Offline training
-agent.learn(total_timesteps=100_000)
+load_maniskill_h5_to_replay_buffer(agent.replay_buffer, "demos/pickcube_state.h5")
+for _ in range(100_000):
+    agent.train(gradient_steps=1)
 
 # Switch to online mode
 agent.switch_to_online_mode()
@@ -182,35 +196,38 @@ OffPolicyAlgorithm (base class)
    - Q-ensemble with configurable size
    - Critic subsampling for REDQ
    - Optional CQL alpha Lagrange multiplier
+   - Upstream-style layer norm and actor std parameterization options
 
 2. **MCReplayBuffer** (`rl_garden/buffers/mc_buffer.py`)
-   - On-the-fly Monte Carlo return computation
+   - Cached vectorized Monte Carlo return computation
    - Episode boundary tracking
+   - Circular-buffer wraparound handling
    - Support for both Tensor and Dict observations
 
-3. **WSRL Algorithm** (`rl_garden/algorithms/wsrl.py`)
+3. **ManiSkill H5 Loader** (`rl_garden/buffers/maniskill_h5.py`)
+   - Loads `traj_*` H5 groups into existing MC replay buffers
+   - Supports flat state observations and dict/RGBD observation groups
+
+4. **WSRL Algorithm** (`rl_garden/algorithms/wsrl.py`)
    - CQL regularization with OOD action sampling
    - Cal-QL lower bounds using MC returns
    - Offline→online mode switching
    - High-UTD training support
 
-4. **WSRLRGBD** (`rl_garden/algorithms/wsrl_rgbd.py`)
+5. **WSRLRGBD** (`rl_garden/algorithms/wsrl_rgbd.py`)
    - Vision-based variant
    - Encoder detachment on actor path
    - Dict observation support
 
 ## Test Coverage
 
-All components are thoroughly tested:
-- **WSRLPolicy**: 20 tests
-- **MCReplayBuffer**: 12 tests
-- **WSRL Algorithm**: 21 tests
-- **WSRLRGBD**: 15 tests
-- **Total**: 68/68 tests passing ✅
+All WSRL components have focused tests covering policy options, CQL/Cal-QL loss
+semantics, high-UTD dispatch, MC replay returns, RGBD support, and ManiSkill H5
+loading.
 
 Run tests:
 ```bash
-pytest tests/test_wsrl*.py tests/test_mc*.py -v
+pytest tests/test_wsrl*.py tests/test_mc*.py tests/test_maniskill_h5_loader.py -v
 ```
 
 ## References

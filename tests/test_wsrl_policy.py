@@ -56,6 +56,36 @@ class TestWSRLPolicyBasics:
         assert wsrl_policy.critic_subsample_size == 2
         assert not wsrl_policy.use_cql_alpha_lagrange
 
+    def test_policy_uniform_std(self, obs_space, action_space):
+        features_extractor = FlattenExtractor(obs_space)
+        policy = WSRLPolicy(
+            observation_space=obs_space,
+            action_space=action_space,
+            features_extractor=features_extractor,
+            actor_hidden_dims=(32,),
+            critic_hidden_dims=(32,),
+            std_parameterization="uniform",
+        )
+        obs = torch.randn(5, 10)
+        action, log_prob, _ = policy.actor_action_log_prob(obs)
+        assert action.shape == (5, 3)
+        assert log_prob.shape == (5, 1)
+        assert policy.actor.log_stds is not None
+
+    def test_policy_layer_norm_options(self, obs_space, action_space):
+        features_extractor = FlattenExtractor(obs_space)
+        policy = WSRLPolicy(
+            observation_space=obs_space,
+            action_space=action_space,
+            features_extractor=features_extractor,
+            actor_hidden_dims=(32,),
+            critic_hidden_dims=(32,),
+            actor_use_layer_norm=True,
+            critic_use_layer_norm=True,
+        )
+        assert any(isinstance(module, torch.nn.LayerNorm) for module in policy.actor.modules())
+        assert any(isinstance(module, torch.nn.LayerNorm) for module in policy.critic.modules())
+
     def test_policy_with_lagrange(self, wsrl_policy_with_lagrange):
         assert wsrl_policy_with_lagrange.use_cql_alpha_lagrange
         assert wsrl_policy_with_lagrange.cql_alpha_lagrange is not None

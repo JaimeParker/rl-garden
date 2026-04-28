@@ -15,6 +15,7 @@ dependencies = [
     "tyro",
     "tensorboard",
     "tqdm",
+    "h5py",
 ]
 
 [project.optional-dependencies]

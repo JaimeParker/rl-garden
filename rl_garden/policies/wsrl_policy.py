@@ -14,11 +14,12 @@ Key differences from SACPolicy:
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from gymnasium import spaces
 
 from rl_garden.common.types import Obs
@@ -26,19 +27,30 @@ from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.policies.base import BasePolicy
 
 LOG_STD_MAX = 2.0
-LOG_STD_MIN = -5.0
+LOG_STD_MIN = -20.0
 
 
-def _mlp(in_dim: int, hidden: Sequence[int], out_dim: int, last_act: bool) -> nn.Sequential:
+def _mlp(
+    in_dim: int,
+    hidden: Sequence[int],
+    out_dim: int,
+    *,
+    use_layer_norm: bool = False,
+) -> nn.Sequential:
     layers: list[nn.Module] = []
     c = in_dim
     for h in hidden:
-        layers += [nn.Linear(c, h), nn.ReLU()]
+        layers.append(nn.Linear(c, h))
+        if use_layer_norm:
+            layers.append(nn.LayerNorm(h))
+        layers.append(nn.ReLU())
         c = h
     layers.append(nn.Linear(c, out_dim))
-    if last_act:
-        layers.append(nn.ReLU())
     return nn.Sequential(*layers)
+
+
+def _softplus_inverse(x: float) -> float:
+    return float(np.log(np.expm1(x)))
 
 
 class Actor(nn.Module):
@@ -49,17 +61,33 @@ class Actor(nn.Module):
         features_dim: int,
         action_space: spaces.Box,
         hidden_dims: Sequence[int] = (256, 256),
+        use_layer_norm: bool = False,
+        std_parameterization: Literal["exp", "uniform"] = "exp",
     ) -> None:
         super().__init__()
+        if std_parameterization not in ("exp", "uniform"):
+            raise ValueError(
+                "std_parameterization must be 'exp' or 'uniform', "
+                f"got {std_parameterization!r}"
+            )
+        self.std_parameterization = std_parameterization
         act_dim = int(np.prod(action_space.shape))
         layers: list[nn.Module] = []
         c = features_dim
         for h in hidden_dims:
-            layers += [nn.Linear(c, h), nn.ReLU()]
+            layers.append(nn.Linear(c, h))
+            if use_layer_norm:
+                layers.append(nn.LayerNorm(h))
+            layers.append(nn.ReLU())
             c = h
         self.trunk = nn.Sequential(*layers)
         self.fc_mean = nn.Linear(c, act_dim)
-        self.fc_logstd = nn.Linear(c, act_dim)
+        if std_parameterization == "exp":
+            self.fc_logstd = nn.Linear(c, act_dim)
+            self.log_stds = None
+        else:
+            self.fc_logstd = None
+            self.log_stds = nn.Parameter(torch.zeros(act_dim))
 
         high = torch.as_tensor(action_space.high, dtype=torch.float32)
         low = torch.as_tensor(action_space.low, dtype=torch.float32)
@@ -69,8 +97,13 @@ class Actor(nn.Module):
     def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.trunk(features)
         mean = self.fc_mean(x)
-        log_std = torch.tanh(self.fc_logstd(x))
-        log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
+        if self.std_parameterization == "exp":
+            assert self.fc_logstd is not None
+            log_std = self.fc_logstd(x)
+        else:
+            assert self.log_stds is not None
+            log_std = self.log_stds.expand_as(mean)
+        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
         return mean, log_std
 
     def action_log_prob(
@@ -101,13 +134,19 @@ class ContinuousCritic(nn.Module):
         action_space: spaces.Box,
         hidden_dims: Sequence[int] = (256, 256, 256),
         n_critics: int = 10,
+        use_layer_norm: bool = False,
     ) -> None:
         super().__init__()
         self.n_critics = n_critics
         act_dim = int(np.prod(action_space.shape))
         self.q_nets = nn.ModuleList(
             [
-                _mlp(features_dim + act_dim, hidden_dims, out_dim=1, last_act=False)
+                _mlp(
+                    features_dim + act_dim,
+                    hidden_dims,
+                    out_dim=1,
+                    use_layer_norm=use_layer_norm,
+                )
                 for _ in range(n_critics)
             ]
         )
@@ -132,10 +171,14 @@ class CQLAlphaLagrange(nn.Module):
 
     def __init__(self, init_value: float = 1.0):
         super().__init__()
-        self.log_alpha = nn.Parameter(torch.tensor(np.log(init_value), dtype=torch.float32))
+        if init_value <= 0:
+            raise ValueError("CQL alpha Lagrange init value must be positive.")
+        self.log_alpha = nn.Parameter(
+            torch.tensor(_softplus_inverse(init_value), dtype=torch.float32)
+        )
 
     def forward(self) -> torch.Tensor:
-        return self.log_alpha.exp()
+        return F.softplus(self.log_alpha)
 
 
 class WSRLPolicy(BasePolicy):
@@ -156,16 +199,20 @@ class WSRLPolicy(BasePolicy):
         actor_hidden_dims: Sequence[int] = (256, 256),
         critic_hidden_dims: Sequence[int] = (256, 256, 256),
         n_critics: int = 10,
-        critic_subsample_size: int = 2,
+        critic_subsample_size: Optional[int] = 2,
         use_cql_alpha_lagrange: bool = False,
         cql_alpha_lagrange_init: float = 1.0,
+        actor_use_layer_norm: bool = False,
+        critic_use_layer_norm: bool = False,
+        std_parameterization: Literal["exp", "uniform"] = "exp",
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "WSRL requires a Box action space."
         assert n_critics >= 2, f"n_critics must be >= 2, got {n_critics}"
-        assert critic_subsample_size <= n_critics, (
-            f"critic_subsample_size ({critic_subsample_size}) must be <= n_critics ({n_critics})"
-        )
+        if critic_subsample_size is not None:
+            assert critic_subsample_size <= n_critics, (
+                f"critic_subsample_size ({critic_subsample_size}) must be <= n_critics ({n_critics})"
+            )
 
         self.observation_space = observation_space
         self.action_space = action_space
@@ -174,13 +221,27 @@ class WSRLPolicy(BasePolicy):
         self.critic_subsample_size = critic_subsample_size
 
         fd = features_extractor.features_dim
-        self.actor = Actor(fd, action_space, hidden_dims=actor_hidden_dims)
+        self.actor = Actor(
+            fd,
+            action_space,
+            hidden_dims=actor_hidden_dims,
+            use_layer_norm=actor_use_layer_norm,
+            std_parameterization=std_parameterization,
+        )
         self.critic = ContinuousCritic(
-            fd, action_space, hidden_dims=critic_hidden_dims, n_critics=n_critics
+            fd,
+            action_space,
+            hidden_dims=critic_hidden_dims,
+            n_critics=n_critics,
+            use_layer_norm=critic_use_layer_norm,
         )
         # Separate target critic
         self.critic_target = ContinuousCritic(
-            fd, action_space, hidden_dims=critic_hidden_dims, n_critics=n_critics
+            fd,
+            action_space,
+            hidden_dims=critic_hidden_dims,
+            n_critics=n_critics,
+            use_layer_norm=critic_use_layer_norm,
         )
         self.critic_target.load_state_dict(self.critic.state_dict())
         for p in self.critic_target.parameters():
@@ -262,7 +323,7 @@ class WSRLPolicy(BasePolicy):
         q_all = self.q_values_all(features, actions, target=target)  # (n_critics, batch, 1)
 
         # Subsample critics
-        if subsample_size < self.n_critics:
+        if subsample_size is not None and subsample_size < self.n_critics:
             indices = torch.randint(
                 0, self.n_critics, (subsample_size,), device=q_all.device
             )
