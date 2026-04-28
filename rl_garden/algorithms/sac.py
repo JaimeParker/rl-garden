@@ -268,11 +268,11 @@ class SAC(OffPolicyAlgorithm):
     def _target_q(self, replay_data) -> torch.Tensor:
         alpha = self._current_alpha().detach()
         with torch.no_grad():
-            next_action, next_log_prob, _ = self.policy.actor_action_log_prob(
+            next_action, next_log_prob, features = self.policy.actor_action_log_prob(
                 replay_data.next_obs, detach_encoder=False
             )
             q_values_t = self.policy.q_values(
-                self.policy.extract_features(replay_data.next_obs),
+                features,
                 next_action,
                 target=True,
             )
