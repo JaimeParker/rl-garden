@@ -29,3 +29,7 @@ log/
 output/
 results/
 outputs/
+.idea
+
+# 默认忽略模型权重文件
+*.pt

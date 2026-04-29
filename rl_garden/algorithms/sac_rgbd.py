@@ -33,6 +33,8 @@ class RGBDSAC(SAC):
         state_key: str = "state",
         use_proprio: bool = True,
         proprio_latent_dim: int = 64,
+        image_fusion_mode: str = "stack_channels",
+        enable_stacking: bool = False,
         detach_encoder_on_actor: bool = True,
         batch_size: int = 512,
         utd: float = 0.25,
@@ -49,6 +51,8 @@ class RGBDSAC(SAC):
         self._state_key = state_key
         self._use_proprio = use_proprio
         self._proprio_latent_dim = proprio_latent_dim
+        self._image_fusion_mode = image_fusion_mode
+        self._enable_stacking = enable_stacking
         # RGBD defaults to smaller batch / utd (matches sac_rgbd.py).
         kwargs.setdefault("batch_size", batch_size)
         kwargs.setdefault("utd", utd)
@@ -68,6 +72,8 @@ class RGBDSAC(SAC):
             "image_encoder_factory": self._image_encoder_factory,
             "proprio_latent_dim": self._proprio_latent_dim,
             "use_proprio": self._use_proprio,
+            "fusion_mode": self._image_fusion_mode,
+            "enable_stacking": self._enable_stacking,
         }
 
     def _build_replay_buffer(self):

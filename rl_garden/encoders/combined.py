@@ -7,17 +7,20 @@ For each observation key we plug in one of:
   - proprio branch (Dense -> LayerNorm -> tanh) when the key is ``state``,
   - plain flatten for any other vector key.
 
-Image keys are combined by channel-concatenation BEFORE the encoder (matches
-``EncoderObsWrapper`` in ManiSkill's sac_rgbd.py), so a single encoder sees
-all image modalities stacked along channel dim. The proprio branch follows
-hil-serl's ``EncodingWrapper`` design (common/encoding.py L65-L69).
+By default, image keys are combined by channel-concatenation BEFORE the
+encoder (matches ``EncoderObsWrapper`` in ManiSkill's sac_rgbd.py), so a
+single encoder sees all image modalities stacked along channel dim.
+Alternatively, ``fusion_mode="per_key"`` mirrors hil-serl's
+``EncodingWrapper`` by encoding each image key independently and concatenating
+the encoded features. The proprio branch follows hil-serl's design
+(common/encoding.py L65-L69).
 
 Inputs from ManiSkill's ``FlattenRGBDObservationWrapper`` are HWC uint8
 tensors for images; we permute to NCHW and normalize to [0,1] here.
 """
 from __future__ import annotations
 
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Literal, Optional
 
 import numpy as np
 import torch
@@ -31,6 +34,7 @@ from rl_garden.encoders.plain_conv import PlainConv
 # a ``BaseFeaturesExtractor``. This lets the caller swap PlainConv for a ResNet
 # without changing the CombinedExtractor.
 ImageEncoderFactory = Callable[[spaces.Box], BaseFeaturesExtractor]
+ImageFusionMode = Literal["stack_channels", "per_key"]
 
 
 def default_image_encoder_factory(features_dim: int = 256) -> ImageEncoderFactory:
@@ -68,42 +72,63 @@ class CombinedExtractor(BaseFeaturesExtractor):
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
         proprio_latent_dim: int = 64,
         use_proprio: bool = True,
+        fusion_mode: ImageFusionMode = "stack_channels",
+        enable_stacking: bool = False,
     ) -> None:
         assert isinstance(observation_space, spaces.Dict)
+        if fusion_mode not in ("stack_channels", "per_key"):
+            raise ValueError(
+                "fusion_mode must be either 'stack_channels' or 'per_key', "
+                f"got {fusion_mode!r}"
+            )
 
         # Determine which image keys are actually present.
         present_image_keys = [k for k in image_keys if k in observation_space.spaces]
         has_state = use_proprio and state_key in observation_space.spaces
 
-        # Build the stacked image space by channel-concat.
-        # ManiSkill's FlattenRGBDObservationWrapper emits HWC uint8; we treat
-        # them as channels-last and stack along the last dim, then transpose.
-        total_channels = 0
-        image_hw: Optional[tuple[int, int]] = None
+        image_specs: dict[str, tuple[int, int, int]] = {}
         for k in present_image_keys:
             sp = observation_space.spaces[k]
-            assert isinstance(sp, spaces.Box) and len(sp.shape) == 3, (
-                f"image key {k!r} must be a 3D Box (H, W, C); got {sp.shape}"
+            assert isinstance(sp, spaces.Box), f"image key {k!r} must be a Box"
+            image_specs[k] = self._image_space_to_hwc(
+                sp, image_key=k, enable_stacking=enable_stacking
             )
-            h, w, c = sp.shape
-            total_channels += c
-            image_hw = (h, w) if image_hw is None else image_hw
-            assert image_hw == (h, w), "all image keys must share the same H, W"
 
         features_dim = 0
-        self._has_images = total_channels > 0
+        self._has_images = bool(image_specs)
+        factory = image_encoder_factory or default_image_encoder_factory()
         image_encoder: Optional[BaseFeaturesExtractor] = None
+        image_encoders: nn.ModuleDict = nn.ModuleDict()
         if self._has_images:
-            assert image_hw is not None
-            stacked_space = spaces.Box(
-                low=0.0,
-                high=1.0,
-                shape=(total_channels, image_hw[0], image_hw[1]),
-                dtype=np.float32,
-            )
-            factory = image_encoder_factory or default_image_encoder_factory()
-            image_encoder = factory(stacked_space)
-            features_dim += image_encoder.features_dim
+            if fusion_mode == "stack_channels":
+                total_channels = 0
+                image_hw: Optional[tuple[int, int]] = None
+                for h, w, c in image_specs.values():
+                    total_channels += c
+                    image_hw = (h, w) if image_hw is None else image_hw
+                    assert image_hw == (h, w), "all image keys must share the same H, W"
+                assert image_hw is not None
+                image_encoder = factory(
+                    spaces.Box(
+                        low=0.0,
+                        high=1.0,
+                        shape=(total_channels, image_hw[0], image_hw[1]),
+                        dtype=np.float32,
+                    )
+                )
+                features_dim += image_encoder.features_dim
+            else:
+                for k, (h, w, c) in image_specs.items():
+                    encoder = factory(
+                        spaces.Box(
+                            low=0.0,
+                            high=1.0,
+                            shape=(c, h, w),
+                            dtype=np.float32,
+                        )
+                    )
+                    image_encoders[k] = encoder
+                    features_dim += encoder.features_dim
 
         proprio: Optional[ProprioEncoder] = None
         if has_state:
@@ -118,30 +143,82 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.image_keys: tuple[str, ...] = tuple(present_image_keys)
         self.state_key = state_key
         self.has_state = has_state
+        self.fusion_mode = fusion_mode
+        self.enable_stacking = enable_stacking
         self.image_encoder = image_encoder
+        self.image_encoders = image_encoders
         self.proprio = proprio
 
-    def _stack_images(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        tensors = []
-        for k in self.image_keys:
-            x = obs[k]
-            if k == "rgb":
-                # uint8 HWC -> float32, normalized to [0, 1]
-                x = x.float() / 255.0
-            else:
-                x = x.float()
-            tensors.append(x)
-        x = torch.cat(tensors, dim=-1)  # (B, H, W, Ctotal)
-        x = x.permute(0, 3, 1, 2).contiguous()  # NCHW
+    @staticmethod
+    def _image_space_to_hwc(
+        space: spaces.Box, image_key: str, enable_stacking: bool
+    ) -> tuple[int, int, int]:
+        if len(space.shape) == 3:
+            h, w, c = space.shape
+            return int(h), int(w), int(c)
+        if enable_stacking and len(space.shape) == 4:
+            t, h, w, c = space.shape
+            return int(h), int(w), int(t * c)
+        raise AssertionError(
+            f"image key {image_key!r} must be a 3D Box (H, W, C)"
+            + (
+                " or 4D Box (T, H, W, C) when enable_stacking=True"
+                if enable_stacking
+                else ""
+            )
+            + f"; got {space.shape}"
+        )
+
+    def _prepare_image(self, key: str, x: torch.Tensor) -> torch.Tensor:
+        if x.dtype == torch.uint8 or key == "rgb":
+            # uint8 HWC -> float32, normalized to [0, 1]
+            x = x.float() / 255.0
+        else:
+            x = x.float()
+        if self.enable_stacking and x.ndim == 5:
+            # B,T,H,W,C -> B,H,W,(T*C), matching hil-serl's stacking behavior.
+            b, t, h, w, c = x.shape
+            x = x.permute(0, 2, 3, 1, 4).reshape(b, h, w, t * c)
         return x
 
-    def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        out = []
-        if self._has_images:
+    @staticmethod
+    def _to_nchw(x: torch.Tensor) -> torch.Tensor:
+        return x.permute(0, 3, 1, 2).contiguous()
+
+    def _stack_images(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        tensors = [self._prepare_image(k, obs[k]) for k in self.image_keys]
+        x = torch.cat(tensors, dim=-1)  # (B, H, W, Ctotal)
+        return self._to_nchw(x)
+
+    def _encode_images(
+        self, obs: dict[str, torch.Tensor], stop_gradient: bool
+    ) -> list[torch.Tensor]:
+        if not self._has_images:
+            return []
+        if self.fusion_mode == "stack_channels":
             assert self.image_encoder is not None
-            img = self._stack_images(obs)
-            out.append(self.image_encoder(img))
+            encoded = self.image_encoder(self._stack_images(obs))
+            return [encoded.detach() if stop_gradient else encoded]
+
+        encoded = []
+        for key in self.image_keys:
+            image = self._to_nchw(self._prepare_image(key, obs[key]))
+            y = self.image_encoders[key](image)
+            encoded.append(y.detach() if stop_gradient else y)
+        return encoded
+
+    def _encode_proprio(self, state: torch.Tensor) -> torch.Tensor:
+        if self.enable_stacking and state.ndim > 2:
+            state = state.flatten(1)
+        assert self.proprio is not None
+        return self.proprio(state)
+
+    def forward(
+        self, obs: dict[str, torch.Tensor], stop_gradient: bool = False
+    ) -> torch.Tensor:
+        # TODO: add an is_encoded fast path if replay buffers store image features.
+        out = []
+        out.extend(self._encode_images(obs, stop_gradient=stop_gradient))
         if self.has_state:
-            assert self.proprio is not None
-            out.append(self.proprio(obs[self.state_key]))
+            out.append(self._encode_proprio(obs[self.state_key]))
         return torch.cat(out, dim=-1)

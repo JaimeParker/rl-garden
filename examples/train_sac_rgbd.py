@@ -42,6 +42,7 @@ class Args:
     camera_height: Optional[int] = 64
     encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
     encoder_features_dim: int = 256
+    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
@@ -165,6 +166,7 @@ def main() -> None:
         num_eval_steps=args.num_eval_steps,
         image_keys=image_keys,
         image_encoder_factory=factory,
+        image_fusion_mode=args.image_fusion_mode,
     )
     agent.learn(total_timesteps=args.total_timesteps)
 

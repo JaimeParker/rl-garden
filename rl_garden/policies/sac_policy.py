@@ -89,10 +89,7 @@ class SACPolicy(BasePolicy):
     def extract_features(
         self, obs: Obs, detach: bool = False
     ) -> torch.Tensor:
-        features = self.features_extractor(obs)
-        if detach:
-            features = features.detach()
-        return features
+        return self._extract_features(obs, stop_gradient=detach)
 
     # --- public inference API ---
 

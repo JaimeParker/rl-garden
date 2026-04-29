@@ -119,7 +119,12 @@ class TestWSRLRGBDObservations:
         _, _, features_detached = wsrlrgbd_agent.policy.actor_action_log_prob(
             obs, detach_encoder=True
         )
-        assert not features_detached.requires_grad
+        # RGBD detach follows hil-serl: image encodings are detached, while
+        # proprio features may still require grad before optimizer filtering.
+        image_features = wsrlrgbd_agent.policy.features_extractor._encode_images(
+            obs, stop_gradient=True
+        )[0]
+        assert not image_features.requires_grad
 
         # Without detachment
         _, _, features_attached = wsrlrgbd_agent.policy.actor_action_log_prob(

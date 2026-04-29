@@ -2,6 +2,7 @@ from rl_garden.encoders.augment import RandomCrop
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
+    ImageFusionMode,
     ImageEncoderFactory,
     ProprioEncoder,
     default_image_encoder_factory,
@@ -19,6 +20,7 @@ __all__ = [
     "FiLM",
     "FlattenExtractor",
     "ImageEncoderFactory",
+    "ImageFusionMode",
     "PlainConv",
     "ProprioEncoder",
     "RandomCrop",

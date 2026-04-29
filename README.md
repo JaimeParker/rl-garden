@@ -93,6 +93,15 @@ RGB SAC (`ResNet10`):
 python examples/train_sac_rgbd.py --env_id PickCube-v1 --obs_mode rgb --encoder resnet10
 ```
 
+Image fusion modes:
+
+- `stack_channels` is the default. It concatenates visual keys along the channel
+  dimension before one image encoder, matching the current `PlainConv` path and
+  existing CNN experiments.
+- `per_key` encodes each image key independently and concatenates encoded
+  features, matching hil-serl's `EncodingWrapper` style. Prefer this mode for
+  pretrained ResNet and multi-view RGB inputs.
+
 Freeze a pretrained ResNet encoder:
 
 ```bash
@@ -100,6 +109,7 @@ python examples/train_sac_rgbd.py \
   --env_id PickCube-v1 \
   --obs_mode rgb \
   --encoder resnet10 \
+  --image_fusion_mode per_key \
   --pretrained_weights resnet10-imagenet \
   --freeze_resnet_encoder
 ```
@@ -111,9 +121,15 @@ python examples/train_sac_rgbd.py \
   --env_id PickCube-v1 \
   --obs_mode rgb \
   --encoder resnet10 \
+  --image_fusion_mode per_key \
   --pretrained_weights resnet10-imagenet \
   --freeze_resnet_backbone
 ```
+
+`--freeze_resnet_backbone` freezes the ResNet stem and residual blocks while
+leaving the pooling/bottleneck head trainable. In RGBD SAC actor updates, the
+policy asks the extractor to stop gradients through image encodings, so the
+image encoder/head is updated by critic loss only.
 
 Shell launchers:
 
@@ -151,6 +167,7 @@ agent = RGBDSAC(
         "features_extractor_kwargs": {
             "image_keys": ("rgb",),
             "image_encoder_factory": resnet_encoder_factory("resnet10"),
+            "fusion_mode": "per_key",
         },
     },
 )
@@ -176,7 +193,7 @@ compatibility, but they are deprecated in favor of `net_arch`.
 
 - Rollout path is GPU-native: no `action.cpu().numpy()` or numpy replay handoff in training hot path.
 - Replay tensors use `(T, N, ...)` storage layout for vectorized environments.
-- RGBD path uses shared encoder for actor/critic, and supports detaching encoder on actor updates.
+- RGBD path uses shared encoder for actor/critic, and actor updates stop gradients through image encodings.
 - SB3-like structure is borrowed, but `stable_baselines3` is not imported by framework code.
 
 ## Testing
