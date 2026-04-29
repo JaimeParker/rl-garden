@@ -43,7 +43,6 @@ def wsrlrgbd_agent(rgbd_env):
         state_key="state",
         use_proprio=True,
         proprio_latent_dim=16,
-        detach_encoder_on_actor=True,
         # General
         device="cpu",
         seed=42,
@@ -73,14 +72,14 @@ class TestWSRLRGBDCreation:
         from rl_garden.buffers.mc_buffer import MCDictReplayBuffer
         assert isinstance(wsrlrgbd_agent.replay_buffer, MCDictReplayBuffer)
 
-    def test_detach_encoder_required(self, rgbd_env):
-        with pytest.raises(ValueError, match="detach_encoder_on_actor"):
+    def test_actor_image_stop_gradient_required(self, rgbd_env):
+        with pytest.raises(ValueError, match="stop_gradient=True"):
             WSRLRGBD(
                 env=rgbd_env,
                 buffer_size=100,
                 buffer_device="cpu",
                 batch_size=4,
-                detach_encoder_on_actor=False,  # Should raise error
+                detach_encoder_on_actor=False,  # Backward-compatible guard.
                 device="cpu",
             )
 
@@ -109,29 +108,39 @@ class TestWSRLRGBDObservations:
         assert action.shape == (4, 2)
         assert log_prob.shape == (4, 1)
 
-    def test_encoder_detachment(self, wsrlrgbd_agent):
+    def test_actor_stop_gradient(self, wsrlrgbd_agent):
         obs = {
             "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(4, 4),
         }
 
-        # With detachment
-        _, _, features_detached = wsrlrgbd_agent.policy.actor_action_log_prob(
-            obs, detach_encoder=True
+        _, _, features_stopped = wsrlrgbd_agent.policy.actor_action_log_prob(
+            obs, stop_gradient=True
         )
-        # RGBD detach follows hil-serl: image encodings are detached, while
+        assert features_stopped.shape[0] == 4
+        # RGBD stop-gradient follows hil-serl: image encodings are detached, while
         # proprio features may still require grad before optimizer filtering.
         image_features = wsrlrgbd_agent.policy.features_extractor._encode_images(
             obs, stop_gradient=True
         )[0]
         assert not image_features.requires_grad
 
-        # Without detachment
         _, _, features_attached = wsrlrgbd_agent.policy.actor_action_log_prob(
-            obs, detach_encoder=False
+            obs, stop_gradient=False
         )
-        # Features should require grad when not detached (if encoder has grad)
+        assert features_attached.shape[0] == 4
+        # Features should require grad when stop-gradient is disabled (if encoder has grad)
         # Note: This depends on whether encoder parameters require grad
+
+    def test_detach_encoder_alias_still_works(self, wsrlrgbd_agent):
+        obs = {
+            "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),
+            "state": torch.randn(4, 4),
+        }
+        _, _, features = wsrlrgbd_agent.policy.actor_action_log_prob(
+            obs, detach_encoder=True
+        )
+        assert features.shape[0] == 4
 
 
 class TestWSRLRGBDTraining:

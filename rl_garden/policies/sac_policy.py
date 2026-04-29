@@ -8,10 +8,10 @@ Mirrors the architecture used by ManiSkill's sac.py (state) and sac_rgbd.py
   - ``critic`` (ensemble of Q-nets that *reuse* the same extractor)
   - ``critic_target`` (same, no grad)
 
-Key RGBD detail, preserved from sac_rgbd.py L696-L723:
+Key RGBD detail, preserved from hil-serl/ManiSkill visual SAC:
   - Critic optimizer owns the encoder params (encoder learns via Q-loss).
-  - Actor update passes ``detach_encoder=True`` so the encoder sees no
-    gradients from the policy loss.
+  - Actor update extracts visual features with ``stop_gradient=True`` so the
+    image encoder sees no gradients from the policy loss.
 """
 from __future__ import annotations
 
@@ -87,9 +87,11 @@ class SACPolicy(BasePolicy):
     # --- feature extraction helpers ---
 
     def extract_features(
-        self, obs: Obs, detach: bool = False
+        self,
+        obs: Obs,
+        stop_gradient: bool = False,
     ) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=detach)
+        return self._extract_features(obs, stop_gradient=stop_gradient)
 
     # --- public inference API ---
 
@@ -106,9 +108,14 @@ class SACPolicy(BasePolicy):
     # --- helpers for SAC.train() ---
 
     def actor_action_log_prob(
-        self, obs: Obs, detach_encoder: bool = False
+        self,
+        obs: Obs,
+        stop_gradient: bool = False,
+        detach_encoder: Optional[bool] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        features = self.extract_features(obs, detach=detach_encoder)
+        if detach_encoder is not None:
+            stop_gradient = detach_encoder
+        features = self.extract_features(obs, stop_gradient=stop_gradient)
         action, log_prob = self.actor.action_log_prob(features)
         return action, log_prob, features
 
@@ -132,5 +139,5 @@ class SACPolicy(BasePolicy):
         yield from self.features_extractor.parameters()
 
     def actor_parameters(self):
-        # Actor-only; encoder is detached on the actor path.
+        # Actor-only; RGBD actor path uses stop_gradient on image encodings.
         yield from self.actor.parameters()

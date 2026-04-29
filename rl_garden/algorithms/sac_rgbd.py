@@ -3,11 +3,11 @@
 This subclass keeps the base ``SAC`` training loop and only contributes:
   1. RGBD-specific default extractor settings (``CombinedExtractor``)
   2. Dict replay buffer construction
-  3. Encoder detachment on the actor path
+  3. Image stop-gradient on the actor path
 
-One RGBD-specific optimization from sac_rgbd.py L696-L723 matters: for the
-actor update, detach the encoder so gradients don't flow from policy loss
-into the (expensive) CNN/ResNet.
+One RGBD-specific optimization matters: for the actor update, image encodings
+use ``stop_gradient=True`` so gradients don't flow from policy loss into the
+(expensive) CNN/ResNet.
 """
 from __future__ import annotations
 
@@ -43,8 +43,8 @@ class RGBDSAC(SAC):
     ) -> None:
         if not detach_encoder_on_actor:
             raise ValueError(
-                "RGBDSAC requires detach_encoder_on_actor=True so the image encoder "
-                "is trained only by critic loss."
+                "RGBDSAC always uses stop_gradient=True on the actor image path "
+                "so the image encoder is trained only by critic loss."
             )
         self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
         self._image_keys = image_keys
@@ -91,7 +91,9 @@ class RGBDSAC(SAC):
         import torch
 
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(obs, detach_encoder=True)
+        action, log_prob, features = self.policy.actor_action_log_prob(
+            obs, stop_gradient=True
+        )
         q_values = self.policy.q_values(features, action, target=False)
         min_q = torch.min(torch.stack(q_values, dim=0), dim=0).values
         return (alpha * log_prob - min_q).mean(), log_prob.detach()

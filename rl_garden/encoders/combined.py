@@ -213,7 +213,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         assert self.proprio is not None
         return self.proprio(state)
 
-    def forward(
+    def extract(
         self, obs: dict[str, torch.Tensor], stop_gradient: bool = False
     ) -> torch.Tensor:
         # TODO: add an is_encoded fast path if replay buffers store image features.
@@ -222,3 +222,6 @@ class CombinedExtractor(BaseFeaturesExtractor):
         if self.has_state:
             out.append(self._encode_proprio(obs[self.state_key]))
         return torch.cat(out, dim=-1)
+
+    def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        return self.extract(obs, stop_gradient=False)

@@ -307,7 +307,7 @@ def test_sac_policy_critic_updates_image_encoder_but_actor_does_not():
         )
 
     policy.zero_grad(set_to_none=True)
-    action, log_prob, features = policy.actor_action_log_prob(obs, detach_encoder=True)
+    action, log_prob, features = policy.actor_action_log_prob(obs, stop_gradient=True)
     actor_loss = sum(q.mean() for q in policy.q_values(features, action)) + log_prob.mean()
     actor_loss.backward()
     assert all(p.grad is None or p.grad.abs().sum() == 0 for p in image_params)

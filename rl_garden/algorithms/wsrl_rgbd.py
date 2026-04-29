@@ -3,11 +3,12 @@
 This subclass keeps the base ``WSRL`` training loop (CQL + Cal-QL + REDQ) and only contributes:
   1. RGBD-specific default extractor settings (``CombinedExtractor``)
   2. Dict replay buffer construction (MCDictReplayBuffer for Cal-QL)
-  3. Encoder detachment on the actor path
+  3. Image stop-gradient on the actor path
 
-The encoder detachment optimization is critical for vision-based RL: for the
-actor update, detach the encoder so gradients don't flow from policy loss
-into the (expensive) CNN/ResNet. The encoder is trained only through critic loss.
+The image stop-gradient optimization is critical for vision-based RL: for the
+actor update, image encodings use ``stop_gradient=True`` so gradients don't
+flow from policy loss into the (expensive) CNN/ResNet. The encoder is trained
+only through critic loss.
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ class WSRLRGBD(WSRL):
         state_key: Key for proprioceptive state observations
         use_proprio: Whether to use proprioceptive state
         proprio_latent_dim: Latent dimension for proprioceptive MLP
-        detach_encoder_on_actor: Whether to detach encoder on actor path (must be True)
+        detach_encoder_on_actor: Backward-compatible guard; RGBD actor path always uses stop_gradient
         batch_size: Batch size for training (default 512 for vision)
         utd: Update-to-data ratio (default 0.25 for vision)
         **kwargs: Additional arguments passed to WSRL
@@ -61,8 +62,8 @@ class WSRLRGBD(WSRL):
     ) -> None:
         if not detach_encoder_on_actor:
             raise ValueError(
-                "WSRLRGBD requires detach_encoder_on_actor=True so the image encoder "
-                "is trained only by critic loss."
+                "WSRLRGBD always uses stop_gradient=True on the actor image path "
+                "so the image encoder is trained only by critic loss."
             )
         self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
         self._image_keys = image_keys
@@ -107,7 +108,7 @@ class WSRLRGBD(WSRL):
         )
 
     def _actor_loss(self, obs):
-        """Compute actor loss with detached encoder.
+        """Compute actor loss with stop-gradient on image encodings.
 
         The image encoder is trained only through critic loss, not policy loss.
         This prevents expensive backprop through the CNN/ResNet on every actor update.
@@ -115,7 +116,9 @@ class WSRLRGBD(WSRL):
         import torch
 
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(obs, detach_encoder=True)
+        action, log_prob, features = self.policy.actor_action_log_prob(
+            obs, stop_gradient=True
+        )
 
         # Actor loss uses all critics; REDQ subsampling is for target/CQL paths.
         min_q = self.policy.min_q_value(

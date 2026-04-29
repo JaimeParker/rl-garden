@@ -102,6 +102,21 @@ Image fusion modes:
   features, matching hil-serl's `EncodingWrapper` style. Prefer this mode for
   pretrained ResNet and multi-view RGB inputs.
 
+Recommended visual training settings:
+
+- `PlainConv` baseline: use the defaults, i.e. `--encoder plain_conv` and
+  `--image_fusion_mode stack_channels`. This is the simplest and fastest path
+  for current PickCube/Peg CNN experiments.
+- ResNet from scratch: use `--encoder resnet10`; keep
+  `--image_fusion_mode stack_channels` for single-key `rgb`, or switch to
+  `per_key` when using multiple camera/image keys.
+- Pretrained ResNet: use `--encoder resnet10 --image_fusion_mode per_key
+  --pretrained_weights <name> --freeze_resnet_backbone`. This keeps the
+  pretrained stem/residual blocks fixed while training the pooling/bottleneck
+  head through critic loss.
+- Full frozen visual encoder: use `--freeze_resnet_encoder` only for ablations
+  or when the pretrained visual representation should remain completely fixed.
+
 Freeze a pretrained ResNet encoder:
 
 ```bash
@@ -128,8 +143,9 @@ python examples/train_sac_rgbd.py \
 
 `--freeze_resnet_backbone` freezes the ResNet stem and residual blocks while
 leaving the pooling/bottleneck head trainable. In RGBD SAC actor updates, the
-policy asks the extractor to stop gradients through image encodings, so the
-image encoder/head is updated by critic loss only.
+policy calls the shared extractor with `stop_gradient=True`, so image encodings
+do not receive actor-loss gradients. Critic updates call the extractor with
+`stop_gradient=False`, so the image encoder/head is updated by critic loss.
 
 Shell launchers:
 

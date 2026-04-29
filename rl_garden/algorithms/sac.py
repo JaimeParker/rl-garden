@@ -7,7 +7,7 @@ actor/critic MLPs handle the rest).
 
 RGBD SAC subclasses this and only overrides:
   - ``_build_features_extractor`` (to use a CombinedExtractor with images)
-  - ``train`` (to reuse visual features + detach encoder on actor path)
+  - actor loss feature extraction (to stop gradients through image encodings)
 """
 from __future__ import annotations
 
@@ -264,14 +264,14 @@ class SAC(OffPolicyAlgorithm):
     # --- hot-path helpers overridden by RGBDSAC ---
 
     def _critic_forward(self, obs, actions, target: bool = False):
-        features = self.policy.extract_features(obs, detach=False)
+        features = self.policy.extract_features(obs, stop_gradient=False)
         return self.policy.q_values(features, actions, target=target)
 
     def _target_q(self, replay_data) -> torch.Tensor:
         alpha = self._current_alpha().detach()
         with torch.no_grad():
             next_action, next_log_prob, features = self.policy.actor_action_log_prob(
-                replay_data.next_obs, detach_encoder=False
+                replay_data.next_obs, stop_gradient=False
             )
             q_values_t = self.policy.q_values(
                 features,
@@ -288,7 +288,7 @@ class SAC(OffPolicyAlgorithm):
     def _actor_loss(self, obs):
         alpha = self._current_alpha().detach()
         action, log_prob, features = self.policy.actor_action_log_prob(
-            obs, detach_encoder=False
+            obs, stop_gradient=False
         )
         q_values = self.policy.q_values(features, action, target=False)
         min_q = torch.min(torch.stack(q_values, dim=0), dim=0).values

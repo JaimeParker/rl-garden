@@ -137,8 +137,12 @@ class WSRLPolicy(BasePolicy):
 
     # --- feature extraction helpers ---
 
-    def extract_features(self, obs: Obs, detach: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=detach)
+    def extract_features(
+        self,
+        obs: Obs,
+        stop_gradient: bool = False,
+    ) -> torch.Tensor:
+        return self._extract_features(obs, stop_gradient=stop_gradient)
 
     # --- public inference API ---
 
@@ -155,10 +159,15 @@ class WSRLPolicy(BasePolicy):
     # --- helpers for WSRL.train() ---
 
     def actor_action_log_prob(
-        self, obs: Obs, detach_encoder: bool = False
+        self,
+        obs: Obs,
+        stop_gradient: bool = False,
+        detach_encoder: Optional[bool] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample action from policy and return action, log_prob, features."""
-        features = self.extract_features(obs, detach=detach_encoder)
+        if detach_encoder is not None:
+            stop_gradient = detach_encoder
+        features = self.extract_features(obs, stop_gradient=stop_gradient)
         action, log_prob = self.actor.action_log_prob(features)
         return action, log_prob, features
 
@@ -250,7 +259,7 @@ class WSRLPolicy(BasePolicy):
         yield from self.features_extractor.parameters()
 
     def actor_parameters(self):
-        """Actor-only; encoder is detached on the actor path."""
+        """Actor-only; RGBD actor path uses stop_gradient on image encodings."""
         yield from self.actor.parameters()
 
     def cql_alpha_lagrange_parameters(self):

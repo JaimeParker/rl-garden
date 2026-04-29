@@ -597,7 +597,7 @@ class WSRL(OffPolicyAlgorithm):
 
     def _critic_forward(self, obs, actions, target: bool = False):
         """Forward pass through critic network."""
-        features = self.policy.extract_features(obs, detach=False)
+        features = self.policy.extract_features(obs, stop_gradient=False)
         return self.policy.q_values_all(features, actions, target=target)
 
     def _target_q(self, data: MCReplayBufferSample) -> torch.Tensor:
@@ -652,7 +652,7 @@ class WSRL(OffPolicyAlgorithm):
             else:
                 # Standard SAC target: single action sample.
                 next_action, next_log_prob, _ = self.policy.actor_action_log_prob(
-                    data.next_obs, detach_encoder=False
+                    data.next_obs, stop_gradient=False
                 )
                 min_q_next = self.policy.min_q_value(
                     self.policy.extract_features(data.next_obs),
@@ -717,7 +717,7 @@ class WSRL(OffPolicyAlgorithm):
         """Compute actor loss."""
         alpha = self._current_alpha().detach()
         action, log_prob, features = self.policy.actor_action_log_prob(
-            obs, detach_encoder=False
+            obs, stop_gradient=False
         )
         min_q = self.policy.min_q_value(
             features, action, subsample_size=None, target=False

@@ -196,12 +196,14 @@ class TestActorCriticIntegration:
         assert log_prob.shape == (16, 1)
         assert features.shape == (16, 10)  # FlattenExtractor output
 
-    def test_encoder_detach(self, wsrl_policy):
+    def test_stop_gradient(self, wsrl_policy):
         obs = torch.randn(16, 10)
-        _, _, features_detached = wsrl_policy.actor_action_log_prob(obs, detach_encoder=True)
+        _, _, features_stopped = wsrl_policy.actor_action_log_prob(
+            obs, stop_gradient=True
+        )
 
-        # Detached features should not require grad
-        assert not features_detached.requires_grad
+        # Stop-gradient features should not require grad.
+        assert not features_stopped.requires_grad
 
 
 class TestParameterGroups:
