@@ -30,6 +30,13 @@ from rl_garden.encoders.pooling import AvgPool, SpatialLearnedEmbeddings, Spatia
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+_BACKBONE_PREFIXES = ("stem_conv.", "stem_norm.", "blocks.")
+_ALLOWED_NON_BACKBONE_MISSING_PREFIXES = (
+    "pool.",
+    "post_pool_drop.",
+    "bottleneck.",
+)
+_ALLOWED_NON_BACKBONE_MISSING_KEYS = ("mean", "std")
 
 PoolingMethod = Literal["spatial_learned_embeddings", "spatial_softmax", "avg"]
 
@@ -211,7 +218,47 @@ class ResNetEncoder(BaseFeaturesExtractor):
         state = torch.load(path, map_location="cpu")
         if isinstance(state, dict) and "state_dict" in state:
             state = state["state_dict"]
+        if not isinstance(state, dict):
+            raise TypeError(
+                f"Pretrained weights {name!r} at {path} are not a state_dict."
+            )
+
+        model_state = self.state_dict()
+        model_keys = set(model_state.keys())
+        checkpoint_keys = set(state.keys())
+        overlap = model_keys.intersection(checkpoint_keys)
+        loaded_backbone_keys = sorted(
+            key for key in overlap if key.startswith(_BACKBONE_PREFIXES)
+        )
+        if not loaded_backbone_keys:
+            sample_model = sorted(model_keys)[:8]
+            sample_ckpt = sorted(checkpoint_keys)[:8]
+            raise RuntimeError(
+                "No pretrained backbone parameters were loaded from "
+                f"{path}. overlap={len(overlap)} "
+                f"model_keys={len(model_keys)} checkpoint_keys={len(checkpoint_keys)} "
+                f"sample_model_keys={sample_model} "
+                f"sample_checkpoint_keys={sample_ckpt}"
+            )
+
         missing, unexpected = self.load_state_dict(state, strict=strict)
+        if not strict:
+            disallowed_missing = [
+                key
+                for key in missing
+                if not key.startswith(_ALLOWED_NON_BACKBONE_MISSING_PREFIXES)
+                and key not in _ALLOWED_NON_BACKBONE_MISSING_KEYS
+            ]
+            if disallowed_missing:
+                sample_missing = sorted(disallowed_missing)[:12]
+                sample_unexpected = sorted(unexpected)[:12]
+                raise RuntimeError(
+                    "Pretrained checkpoint appears incomplete for backbone load. "
+                    f"missing_required={len(disallowed_missing)} "
+                    f"missing_sample={sample_missing} "
+                    f"unexpected={len(unexpected)} "
+                    f"unexpected_sample={sample_unexpected}"
+                )
         return list(missing) + list(unexpected)
 
     def freeze(self) -> None:

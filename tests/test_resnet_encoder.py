@@ -1,6 +1,10 @@
 """Tests for the PyTorch ResNet encoder."""
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -318,3 +322,97 @@ def test_pretrained_weights_missing_raises(tmp_path, monkeypatch):
     space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
     with pytest.raises(FileNotFoundError):
         ResNetEncoder(space, pretrained_weights="does-not-exist")
+
+
+def _to_torchvision_resnet10_state_dict(
+    source_state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {}
+
+    def _add_bn_running_stats(prefix: str, weight: torch.Tensor) -> None:
+        out[f"{prefix}.running_mean"] = torch.zeros_like(weight)
+        out[f"{prefix}.running_var"] = torch.ones_like(weight)
+        out[f"{prefix}.num_batches_tracked"] = torch.tensor(0, dtype=torch.long)
+
+    out["conv1.weight"] = source_state["stem_conv.weight"].clone()
+    out["bn1.weight"] = source_state["stem_norm.weight"].clone()
+    out["bn1.bias"] = source_state["stem_norm.bias"].clone()
+    _add_bn_running_stats("bn1", out["bn1.weight"])
+
+    for block_idx in range(4):
+        layer_prefix = f"layer{block_idx + 1}.0"
+        block_prefix = f"blocks.{block_idx}"
+        out[f"{layer_prefix}.conv1.weight"] = source_state[f"{block_prefix}.conv1.weight"].clone()
+        out[f"{layer_prefix}.bn1.weight"] = source_state[f"{block_prefix}.norm1.weight"].clone()
+        out[f"{layer_prefix}.bn1.bias"] = source_state[f"{block_prefix}.norm1.bias"].clone()
+        _add_bn_running_stats(f"{layer_prefix}.bn1", out[f"{layer_prefix}.bn1.weight"])
+        out[f"{layer_prefix}.conv2.weight"] = source_state[f"{block_prefix}.conv2.weight"].clone()
+        out[f"{layer_prefix}.bn2.weight"] = source_state[f"{block_prefix}.norm2.weight"].clone()
+        out[f"{layer_prefix}.bn2.bias"] = source_state[f"{block_prefix}.norm2.bias"].clone()
+        _add_bn_running_stats(f"{layer_prefix}.bn2", out[f"{layer_prefix}.bn2.weight"])
+        proj_w = f"{block_prefix}.proj.weight"
+        if proj_w in source_state:
+            out[f"{layer_prefix}.downsample.0.weight"] = source_state[proj_w].clone()
+            out[f"{layer_prefix}.downsample.1.weight"] = source_state[
+                f"{block_prefix}.proj_norm.weight"
+            ].clone()
+            out[f"{layer_prefix}.downsample.1.bias"] = source_state[
+                f"{block_prefix}.proj_norm.bias"
+            ].clone()
+            _add_bn_running_stats(
+                f"{layer_prefix}.downsample.1",
+                out[f"{layer_prefix}.downsample.1.weight"],
+            )
+
+    out["fc.weight"] = torch.randn(1000, 512)
+    out["fc.bias"] = torch.randn(1000)
+    return out
+
+
+def test_pretrained_rejects_zero_backbone_overlap(tmp_path, monkeypatch):
+    monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
+    space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
+    source = ResNetEncoder(space)
+    torchvision_like = _to_torchvision_resnet10_state_dict(source.state_dict())
+    torch.save(torchvision_like, tmp_path / "torchvision-like.pt")
+
+    with pytest.raises(RuntimeError, match="No pretrained backbone parameters were loaded"):
+        ResNetEncoder(space, pretrained_weights="torchvision-like")
+
+
+def test_convert_torchvision_checkpoint_script_outputs_loadable_weights(tmp_path, monkeypatch):
+    monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
+    space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
+    source = ResNetEncoder(space)
+    torchvision_like = _to_torchvision_resnet10_state_dict(source.state_dict())
+    src_path = tmp_path / "torchvision-like.pt"
+    out_path = tmp_path / "converted.pt"
+    torch.save(torchvision_like, src_path)
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "convert_resnet_checkpoint.py"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--input",
+            str(src_path),
+            "--output",
+            str(out_path),
+            "--arch",
+            "resnet10",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "mapped=" in proc.stdout
+    converted = torch.load(out_path, map_location="cpu")
+    assert "stem_conv.weight" in converted
+    assert "blocks.0.conv1.weight" in converted
+    assert "blocks.1.proj.weight" in converted
+    assert all(not k.startswith("fc.") for k in converted.keys())
+
+    # Should load without triggering the zero-backbone-overlap guard.
+    ResNetEncoder(space, pretrained_weights="converted")
