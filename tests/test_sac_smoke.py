@@ -32,6 +32,19 @@ def test_state_sac_smoke():
         env.close()
 
 
+def test_state_env_supports_pd_ee_twist():
+    cfg = ManiSkillEnvConfig(
+        env_id="PickCube-v1", num_envs=1, obs_mode="state",
+        control_mode="pd_ee_twist",
+        partial_reset=False, ignore_terminations=True,
+    )
+    env = make_maniskill_env(cfg)
+    try:
+        assert env.action_space.shape == (1, 7)
+    finally:
+        env.close()
+
+
 def test_rgbd_sac_smoke():
     cfg = ManiSkillEnvConfig(
         env_id="PickCube-v1", num_envs=4, obs_mode="rgb", include_state=True,

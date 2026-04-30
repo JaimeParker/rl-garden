@@ -12,10 +12,8 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
-from typing import Literal, Optional
 
 import tyro
 from tqdm import trange
@@ -23,101 +21,13 @@ from tqdm import trange
 from rl_garden.algorithms import WSRL
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, seed_everything
+from rl_garden.common.cli_args import WSRLTrainingArgs, apply_log_env_overrides
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
 
 @dataclass
-class Args:
-    # Environment
-    env_id: str = "PickCube-v1"
-    num_envs: int = 16
-    num_eval_envs: int = 16
-    control_mode: str = "pd_joint_delta_pos"
-
-    # Training phases
-    num_offline_steps: int = 0  # Set to 0 for online-only
-    num_online_steps: int = 1_000_000
-    offline_dataset_path: Optional[str] = None
-    offline_num_traj: Optional[int] = None
-
-    # Buffer and training
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    seed: int = 1
-    batch_size: int = 256
-    learning_starts: int = 4_000
-    training_freq: int = 64
-    utd: float = 1.0
-    gamma: float = 0.99
-    tau: float = 0.005
-
-    # Optimizers
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    alpha_lr: float = 1e-4
-    cql_alpha_lr: float = 3e-4
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-
-    # Q-ensemble (REDQ)
-    n_critics: int = 10
-    critic_subsample_size: int = 2
-
-    # CQL parameters
-    use_cql_loss: bool = True
-    cql_n_actions: int = 10
-    cql_action_sample_method: Literal["uniform", "normal"] = "uniform"
-    cql_alpha: float = 5.0
-    cql_autotune_alpha: bool = False
-    cql_alpha_lagrange_init: float = 1.0
-    cql_target_action_gap: float = 1.0
-    cql_importance_sample: bool = True
-    cql_max_target_backup: bool = True
-    cql_temp: float = 1.0
-    cql_clip_diff_min: float = float("-inf")
-    cql_clip_diff_max: float = float("inf")
-    backup_entropy: bool = False
-
-    # Cal-QL parameters
-    use_calql: bool = True
-    calql_bound_random_actions: bool = False
-
-    # Upstream WSRL network options
-    actor_use_layer_norm: bool = True
-    critic_use_layer_norm: bool = True
-    std_parameterization: Literal["exp", "uniform"] = "exp"
-
-    # Phase control
-    online_cql_alpha: Optional[float] = None
-    online_use_cql_loss: Optional[bool] = None
-
-    # Logging
-    log_dir: str = "runs"
-    exp_name: Optional[str] = None
-    log_freq: int = 1_000
-    eval_freq: int = 25
-    num_eval_steps: int = 50
-    std_log: bool = True
-    log_type: Literal["tensorboard", "wandb", "none"] = "tensorboard"
-    log_keywords: Optional[str] = None
-    wandb_project: str = "rl-garden"
-    wandb_entity: Optional[str] = None
-    wandb_group: Optional[str] = None
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _env_str(name: str, default: Optional[str]) -> Optional[str]:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    return raw if raw else None
+class Args(WSRLTrainingArgs):
+    pass
 
 
 def _offline_update_loop(
@@ -143,12 +53,7 @@ def _offline_update_loop(
 
 def main() -> None:
     args = tyro.cli(Args)
-    args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
-    args.log_type = _env_str("RLG_LOG_TYPE", args.log_type) or args.log_type
-    args.log_keywords = _env_str("RLG_LOG_KEYWORDS", args.log_keywords)
-    args.wandb_project = _env_str("RLG_WANDB_PROJECT", args.wandb_project) or args.wandb_project
-    args.wandb_entity = _env_str("RLG_WANDB_ENTITY", args.wandb_entity)
-    args.wandb_group = _env_str("RLG_WANDB_GROUP", args.wandb_group)
+    apply_log_env_overrides(args)
     seed_everything(args.seed)
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())

@@ -81,6 +81,12 @@ State SAC:
 python examples/train_sac_state.py --env_id PickCube-v1 --num_envs 16
 ```
 
+State SAC with EE twist control:
+
+```bash
+python examples/train_sac_state.py --env_id PickCube-v1 --num_envs 16 --control_mode pd_ee_twist
+```
+
 RGB SAC (`PlainConv`):
 
 ```bash
@@ -101,6 +107,10 @@ Image fusion modes:
 - `per_key` encodes each image key independently and concatenates encoded
   features, matching hil-serl's `EncodingWrapper` style. Prefer this mode for
   pretrained ResNet and multi-view RGB inputs.
+- For single-key `rgb` observations (one camera, no `depth` key), `per_key` and
+  `stack_channels` are effectively equivalent at the tensor level: both feed the
+  same `B x 3 x H x W` image into a ResNet/CNN. Differences matter when there
+  are multiple visual keys (for example `rgb+depth` or multi-camera RGB).
 
 Recommended visual training settings:
 
@@ -211,6 +221,9 @@ compatibility, but they are deprecated in favor of `net_arch`.
 - Replay tensors use `(T, N, ...)` storage layout for vectorized environments.
 - RGBD path uses shared encoder for actor/critic, and actor updates stop gradients through image encodings.
 - SB3-like structure is borrowed, but `stable_baselines3` is not imported by framework code.
+- `pd_ee_twist` is integrated as a ManiSkill control mode through the custom Panda agent registration path.
+- In ManiSkill GPU simulation, EE controllers run on torch tensors (including Jacobian/IK math on CUDA for the GPU kinematics path).
+- CPU simulation remains a compatibility fallback, where IK uses the Pinocchio-based CPU path.
 
 ## Testing
 
