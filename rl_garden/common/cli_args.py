@@ -14,7 +14,7 @@ class LoggingArgs:
     eval_freq: int = 25
     num_eval_steps: int = 50
     std_log: bool = True
-    log_type: Literal["tensorboard", "wandb", "none"] = "tensorboard"
+    log_type: Literal["tensorboard", "wandb", "none"] = "wandb"
     log_keywords: Optional[str] = None
     wandb_project: str = "rl-garden"
     wandb_entity: Optional[str] = None

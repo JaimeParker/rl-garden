@@ -14,7 +14,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 STD_LOG="${RLG_STD_LOG:-1}"
-LOG_TYPE="${RLG_LOG_TYPE:-tensorboard}"
+LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
 LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
 FORWARD_ARGS=()
 while [[ $# -gt 0 ]]; do
