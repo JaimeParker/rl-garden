@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 
 import tyro
+import os
 
 from rl_garden.algorithms import RGBDSAC
 from rl_garden.common import Logger, seed_everything

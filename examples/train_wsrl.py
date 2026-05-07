@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 
 import tyro
+import os
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
