@@ -66,6 +66,7 @@ def main() -> None:
         obs_mode=args.obs_mode,
         include_state=args.include_state,
         control_mode=args.control_mode,
+        render_mode=args.render_mode,
         sim_backend=args.sim_backend,
         render_backend=args.render_backend,
         reward_mode=args.reward_mode,
@@ -90,6 +91,11 @@ def main() -> None:
         reconfiguration_freq=1,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
+        render_mode=args.render_mode,
+        record_dir=args.eval_output_dir or os.path.join(args.log_dir, run_name, "eval_videos"),
+        save_video=args.capture_video,
+        video_fps=args.video_fps,
+        max_steps_per_video=args.num_eval_steps,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)

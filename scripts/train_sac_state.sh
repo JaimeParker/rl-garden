@@ -3,6 +3,8 @@
 # Forward all args to the python script; sensible defaults are in Args.
 set -euo pipefail
 
+export CUDA_VISIBLE_DEVICES=0
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="$(command -v python || command -v python3 || true)"
 if [[ -z "$PYTHON_BIN" ]]; then
@@ -58,5 +60,9 @@ done
 exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_sac_state.py" \
     --env_id PickCube-v1 \
     --num_envs 16 \
+    --capture_video \
+    --video_fps 30 \
+    --render_mode rgb_array \
+    --eval_freq 10000 \
     --total_timesteps 1000000 \
     "${FORWARD_ARGS[@]}"

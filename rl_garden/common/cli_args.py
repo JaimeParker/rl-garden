@@ -11,7 +11,7 @@ class LoggingArgs:
     log_dir: str = "runs"
     exp_name: Optional[str] = None
     log_freq: int = 1_000
-    eval_freq: int = 25
+    eval_freq: int = 10_000
     num_eval_steps: int = 50
     std_log: bool = True
     log_type: Literal["tensorboard", "wandb", "none"] = "wandb"
@@ -28,6 +28,10 @@ class ManiSkillRunArgs(LoggingArgs):
     num_eval_envs: int = 16
     seed: int = 1
     control_mode: str = "pd_joint_delta_pos"
+    render_mode: str = "rgb_array"
+    capture_video: bool = True
+    video_fps: int = 30
+    eval_output_dir: Optional[str] = None
 
 
 @dataclass

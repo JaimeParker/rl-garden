@@ -63,5 +63,9 @@ exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_
     --obs_mode rgb \
     --num_envs 16 \
     --camera_width 64 --camera_height 64 \
+    --capture_video \
+    --video_fps 30 \
+    --render_mode rgb_array \
+    --eval_freq 10000 \
     --total_timesteps 1000000 \
     "${FORWARD_ARGS[@]}"

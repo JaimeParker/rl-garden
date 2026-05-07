@@ -90,12 +90,19 @@ def main() -> None:
         obs_mode=args.obs_mode, include_state=args.include_state,
         control_mode=args.control_mode,
         camera_width=args.camera_width, camera_height=args.camera_height,
+        render_mode=args.render_mode,
     )
+    eval_record_dir = args.eval_output_dir or os.path.join(args.log_dir, run_name, "eval_videos")
     eval_cfg = ManiSkillEnvConfig(
         env_id=args.env_id, num_envs=args.num_eval_envs,
         obs_mode=args.obs_mode, include_state=args.include_state,
         control_mode=args.control_mode, reconfiguration_freq=1,
         camera_width=args.camera_width, camera_height=args.camera_height,
+        render_mode=args.render_mode,
+        record_dir=eval_record_dir,
+        save_video=args.capture_video,
+        video_fps=args.video_fps,
+        max_steps_per_video=args.num_eval_steps,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
