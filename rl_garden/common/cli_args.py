@@ -1,9 +1,10 @@
 """Shared dataclass CLI arguments for training examples."""
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 
 @dataclass
@@ -22,6 +23,16 @@ class LoggingArgs:
 
 
 @dataclass
+class CheckpointArgs:
+    checkpoint_dir: Optional[str] = None
+    checkpoint_freq: int = 0
+    load_checkpoint: Optional[str] = None
+    save_replay_buffer: bool = False
+    load_replay_buffer: bool = True
+    save_final_checkpoint: bool = True
+
+
+@dataclass
 class ManiSkillRunArgs(LoggingArgs):
     env_id: str = "PickCube-v1"
     num_envs: int = 16
@@ -35,7 +46,7 @@ class ManiSkillRunArgs(LoggingArgs):
 
 
 @dataclass
-class SACTrainingArgs(ManiSkillRunArgs):
+class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     total_timesteps: int = 1_000_000
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
@@ -71,7 +82,7 @@ class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
 
 
 @dataclass
-class WSRLTrainingArgs(ManiSkillRunArgs):
+class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     num_offline_steps: int = 0
     num_online_steps: int = 1_000_000
     offline_dataset_path: Optional[str] = None
@@ -149,9 +160,25 @@ def apply_log_env_overrides(args: LoggingArgs) -> None:
     args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
     args.log_type = _env_str("RLG_LOG_TYPE", args.log_type) or args.log_type
     args.log_keywords = _env_str("RLG_LOG_KEYWORDS", args.log_keywords)
-    args.wandb_project = _env_str("RLG_WANDB_PROJECT", args.wandb_project) or args.wandb_project
+    args.wandb_project = (
+        _env_str("RLG_WANDB_PROJECT", args.wandb_project) or args.wandb_project
+    )
     args.wandb_entity = _env_str("RLG_WANDB_ENTITY", args.wandb_entity)
     args.wandb_group = _env_str("RLG_WANDB_GROUP", args.wandb_group)
+
+
+def resolve_checkpoint_dir(args: Any, run_name: str) -> Optional[str]:
+    if args.checkpoint_dir is not None:
+        return args.checkpoint_dir
+    if not args.save_final_checkpoint and args.checkpoint_freq <= 0:
+        return None
+    return os.path.join(args.log_dir, run_name, "checkpoints")
+
+
+def resolve_eval_record_dir(args: Any, run_name: str) -> str:
+    if args.eval_output_dir:
+        return args.eval_output_dir
+    return os.path.join(args.log_dir, run_name, "eval_videos")
 
 
 def image_encoder_factory_from_args(args: VisionArgs):

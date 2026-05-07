@@ -13,13 +13,13 @@ Usage:
     # Offline→online training from a ManiSkill trajectory H5
     python examples/train_wsrl_rgbd.py --env_id PickCube-v1 --offline_dataset_path demos/pickcube_rgb.h5 --num_offline_steps 100000
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
 
 import tyro
-import os
 from tqdm import trange
 
 from rl_garden.algorithms import WSRLRGBD
@@ -30,6 +30,8 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_obs_mode,
+    resolve_checkpoint_dir,
+    resolve_eval_record_dir,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
@@ -42,7 +44,9 @@ class Args(VisionWSRLTrainingArgs):
 def _offline_update_loop(
     agent: WSRLRGBD, steps: int, logger: Logger, log_freq: int, std_log: bool
 ) -> None:
-    gradient_steps = int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
+    gradient_steps = (
+        int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
+    )
     for step in trange(steps, desc="offline"):
         losses = agent.train(gradient_steps)
         if log_freq > 0 and (step + 1) % log_freq == 0:
@@ -51,7 +55,9 @@ def _offline_update_loop(
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
                 loss_summary = " ".join(
-                    f"{k}={v:.4f}" for k, v in losses.items() if isinstance(v, (int, float))
+                    f"{k}={v:.4f}"
+                    for k, v in losses.items()
+                    if isinstance(v, (int, float))
                 )
                 print(
                     "[offline] "
@@ -70,6 +76,7 @@ def main() -> None:
         args.exp_name
         or f"{args.env_id}__wsrl_rgbd_{args.encoder}__{args.seed}__{int(time.time())}"
     )
+    checkpoint_dir = resolve_checkpoint_dir(args, run_name)
     logger = Logger.create(
         log_type=args.log_type,
         log_dir=args.log_dir,
@@ -83,22 +90,30 @@ def main() -> None:
     )
     logger.add_text(
         "hyperparameters",
-        "|param|value|\n|-|-|\n" + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
+        "|param|value|\n|-|-|\n"
+        + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
 
     env_cfg = ManiSkillEnvConfig(
-        env_id=args.env_id, num_envs=args.num_envs,
-        obs_mode=args.obs_mode, include_state=args.include_state,
+        env_id=args.env_id,
+        num_envs=args.num_envs,
+        obs_mode=args.obs_mode,
+        include_state=args.include_state,
         control_mode=args.control_mode,
-        camera_width=args.camera_width, camera_height=args.camera_height,
+        camera_width=args.camera_width,
+        camera_height=args.camera_height,
         render_mode=args.render_mode,
     )
-    eval_record_dir = args.eval_output_dir or os.path.join(args.log_dir, run_name, "eval_videos")
+    eval_record_dir = resolve_eval_record_dir(args, run_name)
     eval_cfg = ManiSkillEnvConfig(
-        env_id=args.env_id, num_envs=args.num_eval_envs,
-        obs_mode=args.obs_mode, include_state=args.include_state,
-        control_mode=args.control_mode, reconfiguration_freq=1,
-        camera_width=args.camera_width, camera_height=args.camera_height,
+        env_id=args.env_id,
+        num_envs=args.num_eval_envs,
+        obs_mode=args.obs_mode,
+        include_state=args.include_state,
+        control_mode=args.control_mode,
+        reconfiguration_freq=1,
+        camera_width=args.camera_width,
+        camera_height=args.camera_height,
         render_mode=args.render_mode,
         record_dir=eval_record_dir,
         save_video=args.capture_video,
@@ -112,13 +127,20 @@ def main() -> None:
     image_keys = image_keys_from_obs_mode(args.obs_mode)
 
     agent = WSRLRGBD(
-        env=env, eval_env=eval_env,
-        buffer_size=args.buffer_size, buffer_device=args.buffer_device,
-        learning_starts=args.learning_starts, batch_size=args.batch_size,
-        gamma=args.gamma, tau=args.tau,
-        training_freq=args.training_freq, utd=args.utd,
-        policy_lr=args.policy_lr, q_lr=args.q_lr,
-        alpha_lr=args.alpha_lr, cql_alpha_lr=args.cql_alpha_lr,
+        env=env,
+        eval_env=eval_env,
+        buffer_size=args.buffer_size,
+        buffer_device=args.buffer_device,
+        learning_starts=args.learning_starts,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        tau=args.tau,
+        training_freq=args.training_freq,
+        utd=args.utd,
+        policy_lr=args.policy_lr,
+        q_lr=args.q_lr,
+        alpha_lr=args.alpha_lr,
+        cql_alpha_lr=args.cql_alpha_lr,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,
@@ -141,19 +163,29 @@ def main() -> None:
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
-        seed=args.seed, logger=logger,
+        seed=args.seed,
+        logger=logger,
         std_log=args.std_log,
-        log_freq=args.log_freq, eval_freq=args.eval_freq,
+        log_freq=args.log_freq,
+        eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=args.checkpoint_freq,
+        save_replay_buffer=args.save_replay_buffer,
+        save_final_checkpoint=args.save_final_checkpoint,
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
     )
+    if args.load_checkpoint is not None:
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
 
     # Offline training phase
     if args.num_offline_steps > 0:
         if args.offline_dataset_path is None:
-            raise ValueError("--offline_dataset_path is required when --num_offline_steps > 0.")
+            raise ValueError(
+                "--offline_dataset_path is required when --num_offline_steps > 0."
+            )
         loaded = load_maniskill_h5_to_replay_buffer(
             agent.replay_buffer,
             args.offline_dataset_path,

@@ -62,6 +62,10 @@ class SAC(OffPolicyAlgorithm):
         log_freq: int = 1_000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_freq: int = 0,
+        save_replay_buffer: bool = False,
+        save_final_checkpoint: bool = True,
     ) -> None:
         super().__init__(
             env=env,
@@ -82,6 +86,10 @@ class SAC(OffPolicyAlgorithm):
             log_freq=log_freq,
             eval_freq=eval_freq,
             num_eval_steps=num_eval_steps,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=checkpoint_freq,
+            save_replay_buffer=save_replay_buffer,
+            save_final_checkpoint=save_final_checkpoint,
         )
         self.policy_lr = policy_lr
         self.q_lr = q_lr
@@ -98,6 +106,39 @@ class SAC(OffPolicyAlgorithm):
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
         self._setup_model()
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            **super()._checkpoint_metadata(),
+            "policy_lr": self.policy_lr,
+            "q_lr": self.q_lr,
+            "policy_frequency": self.policy_frequency,
+            "target_network_frequency": self.target_network_frequency,
+            "ent_coef": self.ent_coef_init,
+            "target_entropy": self.target_entropy_arg,
+            "target_entropy_value": self.target_entropy,
+            "net_arch": self.net_arch,
+            "n_critics": self.n_critics,
+        }
+
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "autotune": self.autotune,
+            "target_entropy": self.target_entropy,
+        }
+        if self.autotune:
+            state["log_alpha"] = self.log_alpha.detach()
+        else:
+            state["fixed_alpha"] = self._fixed_alpha.detach()
+        return state
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        if "target_entropy" in state:
+            self.target_entropy = float(state["target_entropy"])
+        if self.autotune and "log_alpha" in state:
+            self.log_alpha.data.copy_(state["log_alpha"].to(self.device))
+        elif not self.autotune and "fixed_alpha" in state:
+            self._fixed_alpha = state["fixed_alpha"].to(self.device)
 
     # --- construction hooks (RGBDSAC overrides defaults only) ---
 

@@ -4,13 +4,13 @@ Usage:
     python examples/train_sac_rgbd_peg.py
     python examples/train_sac_rgbd_peg.py --encoder resnet10
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
 
 import tyro
-import os
 
 from rl_garden.algorithms import RGBDSAC
 from rl_garden.common import Logger, seed_everything
@@ -19,6 +19,8 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_obs_mode,
+    resolve_checkpoint_dir,
+    resolve_eval_record_dir,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
@@ -45,6 +47,7 @@ def main() -> None:
         args.exp_name
         or f"{args.env_id}__sac_rgbd_{args.encoder}__{args.seed}__{int(time.time())}"
     )
+    checkpoint_dir = resolve_checkpoint_dir(args, run_name)
     logger = Logger.create(
         log_type=args.log_type,
         log_dir=args.log_dir,
@@ -58,7 +61,8 @@ def main() -> None:
     )
     logger.add_text(
         "hyperparameters",
-        "|param|value|\n|-|-|\n" + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
+        "|param|value|\n|-|-|\n"
+        + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
 
     env_cfg = ManiSkillEnvConfig(
@@ -93,7 +97,7 @@ def main() -> None:
         camera_width=args.camera_width,
         camera_height=args.camera_height,
         render_mode=args.render_mode,
-        record_dir=args.eval_output_dir or os.path.join(args.log_dir, run_name, "eval_videos"),
+        record_dir=resolve_eval_record_dir(args, run_name),
         save_video=args.capture_video,
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
@@ -123,10 +127,16 @@ def main() -> None:
         log_freq=args.log_freq,
         eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=args.checkpoint_freq,
+        save_replay_buffer=args.save_replay_buffer,
+        save_final_checkpoint=args.save_final_checkpoint,
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
     )
+    if args.load_checkpoint is not None:
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     agent.learn(total_timesteps=args.total_timesteps)
 
     logger.close()

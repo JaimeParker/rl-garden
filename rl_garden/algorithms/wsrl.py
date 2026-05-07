@@ -112,6 +112,10 @@ class WSRL(OffPolicyAlgorithm):
         log_freq: int = 1_000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_freq: int = 0,
+        save_replay_buffer: bool = False,
+        save_final_checkpoint: bool = True,
     ) -> None:
         super().__init__(
             env=env,
@@ -132,6 +136,10 @@ class WSRL(OffPolicyAlgorithm):
             log_freq=log_freq,
             eval_freq=eval_freq,
             num_eval_steps=num_eval_steps,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=checkpoint_freq,
+            save_replay_buffer=save_replay_buffer,
+            save_final_checkpoint=save_final_checkpoint,
         )
 
         # Optimizers
@@ -184,6 +192,72 @@ class WSRL(OffPolicyAlgorithm):
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            **super()._checkpoint_metadata(),
+            "policy_lr": self.policy_lr,
+            "q_lr": self.q_lr,
+            "alpha_lr": self.alpha_lr,
+            "cql_alpha_lr": self.cql_alpha_lr,
+            "policy_frequency": self.policy_frequency,
+            "target_network_frequency": self.target_network_frequency,
+            "ent_coef": self.ent_coef_init,
+            "target_entropy": self.target_entropy_arg,
+            "target_entropy_value": self.target_entropy,
+            "backup_entropy": self.backup_entropy,
+            "net_arch": self.net_arch,
+            "actor_use_layer_norm": self.actor_use_layer_norm,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "std_parameterization": self.std_parameterization,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            "use_cql_loss": self.use_cql_loss,
+            "cql_n_actions": self.cql_n_actions,
+            "cql_alpha": self.cql_alpha,
+            "cql_autotune_alpha": self.cql_autotune_alpha,
+            "cql_alpha_lagrange_init": self.cql_alpha_lagrange_init,
+            "cql_target_action_gap": self.cql_target_action_gap,
+            "cql_importance_sample": self.cql_importance_sample,
+            "cql_max_target_backup": self.cql_max_target_backup,
+            "cql_temp": self.cql_temp,
+            "cql_clip_diff_min": self.cql_clip_diff_min,
+            "cql_clip_diff_max": self.cql_clip_diff_max,
+            "cql_action_sample_method": self.cql_action_sample_method,
+            "use_calql": self.use_calql,
+            "calql_bound_random_actions": self.calql_bound_random_actions,
+            "use_td_loss": self.use_td_loss,
+            "online_cql_alpha": self.online_cql_alpha,
+            "online_use_cql_loss": self.online_use_cql_loss,
+        }
+
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "autotune": self.autotune,
+            "target_entropy": self.target_entropy,
+            "use_cql_loss": self.use_cql_loss,
+            "cql_alpha": self.cql_alpha,
+            "use_td_loss": self.use_td_loss,
+        }
+        if self.autotune:
+            state["temperature_lagrange"] = self.temperature_lagrange.state_dict()
+        else:
+            state["fixed_alpha"] = self._fixed_alpha.detach()
+        return state
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        if "target_entropy" in state:
+            self.target_entropy = float(state["target_entropy"])
+        if "use_cql_loss" in state:
+            self.use_cql_loss = bool(state["use_cql_loss"])
+        if "cql_alpha" in state:
+            self.cql_alpha = float(state["cql_alpha"])
+        if "use_td_loss" in state:
+            self.use_td_loss = bool(state["use_td_loss"])
+        if self.autotune and "temperature_lagrange" in state:
+            self.temperature_lagrange.load_state_dict(state["temperature_lagrange"])
+        elif not self.autotune and "fixed_alpha" in state:
+            self._fixed_alpha = state["fixed_alpha"].to(self.device)
 
     # --- Construction hooks (WSRLRGBD overrides defaults only) ---
 

@@ -30,7 +30,6 @@ log/
 output/
 results/
 outputs/
-3rd_party/
 wandb/
 runs/
 .idea

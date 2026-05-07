@@ -3,8 +3,6 @@
 # Forward all args to the python script; sensible defaults are in Args.
 set -euo pipefail
 
-export CUDA_VISIBLE_DEVICES=0
-
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="$(command -v python || command -v python3 || true)"
 if [[ -z "$PYTHON_BIN" ]]; then
