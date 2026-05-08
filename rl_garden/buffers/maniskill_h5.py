@@ -56,6 +56,17 @@ def _concat(xs: list[Any]) -> Any:
     return torch.cat(xs, dim=0)
 
 
+def _mc_returns(
+    rewards: torch.Tensor, dones: torch.Tensor, gamma: float
+) -> torch.Tensor:
+    returns = torch.zeros_like(rewards)
+    running = torch.zeros((), device=rewards.device, dtype=rewards.dtype)
+    for idx in range(rewards.shape[0] - 1, -1, -1):
+        running = rewards[idx] + gamma * running * (1.0 - dones[idx])
+        returns[idx] = running
+    return returns
+
+
 def _to_tensor(x: Any, device: torch.device) -> Any:
     if isinstance(x, dict):
         return {key: _to_tensor(value, device) for key, value in x.items()}
@@ -123,6 +134,7 @@ def _add_flat_transitions(
     actions: torch.Tensor,
     rewards: torch.Tensor,
     dones: torch.Tensor,
+    mc_returns: torch.Tensor | None = None,
 ) -> int:
     total = actions.shape[0]
     usable = (total // buffer.num_envs) * buffer.num_envs
@@ -131,8 +143,13 @@ def _add_flat_transitions(
             f"Offline dataset has {total} transitions, fewer than num_envs={buffer.num_envs}."
         )
 
+    mc_table = None
+    if mc_returns is not None and hasattr(buffer, "_mc_table"):
+        mc_table = torch.zeros_like(buffer.rewards)
+
     for start in range(0, usable, buffer.num_envs):
         end = start + buffer.num_envs
+        pos = buffer.pos
         buffer.add(
             _slice(obs, start, end),
             _slice(next_obs, start, end),
@@ -140,6 +157,11 @@ def _add_flat_transitions(
             rewards[start:end],
             dones[start:end],
         )
+        if mc_table is not None:
+            mc_table[pos] = mc_returns[start:end].to(buffer.storage_device)
+
+    if mc_table is not None:
+        buffer._mc_table = mc_table
     return usable
 
 
@@ -166,6 +188,7 @@ def load_maniskill_h5_to_replay_buffer(
     action_parts: list[torch.Tensor] = []
     reward_parts: list[torch.Tensor] = []
     done_parts: list[torch.Tensor] = []
+    mc_parts: list[torch.Tensor] = []
 
     with h5py.File(path, "r") as f:
         keys = list(f.keys())
@@ -186,6 +209,8 @@ def load_maniskill_h5_to_replay_buffer(
             action_parts.append(actions)
             reward_parts.append(rewards)
             done_parts.append(dones)
+            if hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma"):
+                mc_parts.append(_mc_returns(rewards, dones, float(buffer.gamma)))
 
     if not action_parts:
         raise ValueError(f"No trajectories found in ManiSkill H5 file: {path}")
@@ -195,6 +220,7 @@ def load_maniskill_h5_to_replay_buffer(
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
+    mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     return _add_flat_transitions(
-        buffer, obs_all, next_obs_all, actions_all, rewards_all, dones_all
+        buffer, obs_all, next_obs_all, actions_all, rewards_all, dones_all, mc_all
     )
