@@ -8,6 +8,10 @@ WSRL enables efficient offline→online training:
 - **Offline phase**: Pre-train with Cal-QL on ManiSkill trajectory H5 datasets
 - **Online phase**: Fine-tune with SAC or CQL without retaining offline data
 
+For the end-to-end PickCube reproduction workflow, including SAC checkpoint
+training, WSRL dataset generation, and offline-to-online launch commands, see
+[`WSRL_REPRODUCTION.md`](WSRL_REPRODUCTION.md).
+
 ## Key Features
 
 ### ✅ Algorithms Implemented
