@@ -87,6 +87,7 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     num_online_steps: int = 1_000_000
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
+    online_replay_mode: Literal["empty", "append"] = "empty"
 
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"

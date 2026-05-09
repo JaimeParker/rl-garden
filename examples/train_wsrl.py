@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import tyro
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
+from rl_garden.buffers import MCDictReplayBuffer, MCTensorReplayBuffer
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
@@ -37,16 +39,23 @@ class Args(WSRLTrainingArgs):
 
 
 def _offline_update_loop(
-    agent: WSRL, steps: int, logger: Logger, log_freq: int, std_log: bool
-) -> None:
+    agent: WSRL,
+    steps: int,
+    logger: Logger,
+    log_freq: int,
+    std_log: bool,
+    *,
+    start_step: int = 0,
+) -> int:
     gradient_steps = (
         int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
     )
     for step in trange(steps, desc="offline"):
+        global_step = start_step + step + 1
         losses = agent.train(gradient_steps)
         if log_freq > 0 and (step + 1) % log_freq == 0:
             for key, value in losses.items():
-                logger.add_scalar(f"offline_losses/{key}", value, step + 1)
+                logger.add_scalar(f"offline_losses/{key}", value, global_step)
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
                 loss_summary = " ".join(
@@ -56,9 +65,72 @@ def _offline_update_loop(
                 )
                 print(
                     "[offline] "
-                    f"step={step + 1}/{steps} ({progress:.2f}%) {loss_summary}",
+                    f"step={step + 1}/{steps} "
+                    f"global_step={global_step} "
+                    f"({progress:.2f}%) {loss_summary}",
                     flush=True,
                 )
+    return start_step + steps
+
+
+def _first_metric(metrics: dict[str, float], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key in metrics:
+            return metrics[key]
+    return None
+
+
+def _fmt_metric(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"
+
+
+def _evaluate_offline_end(agent: WSRL, logger: Logger, step: int, std_log: bool) -> None:
+    metrics = agent._evaluate()
+    if not metrics:
+        return
+    for key, value in metrics.items():
+        logger.add_scalar(f"offline_eval/{key}", value, step)
+    if std_log:
+        eval_return = _first_metric(metrics, ("return",))
+        eval_success = _first_metric(metrics, ("success_at_end", "success_once"))
+        print(
+            "[offline_eval] "
+            f"step={step} "
+            f"return={_fmt_metric(eval_return)} "
+            f"success_at_end={_fmt_metric(eval_success)}",
+            flush=True,
+        )
+
+
+def _save_offline_checkpoint(
+    agent: WSRL,
+    checkpoint_dir: str | None,
+    *,
+    include_replay_buffer: bool,
+    std_log: bool,
+) -> None:
+    if checkpoint_dir is None:
+        return
+    path = agent.save(
+        Path(checkpoint_dir) / "offline_final.pt",
+        include_replay_buffer=include_replay_buffer,
+    )
+    if std_log:
+        print(f"[offline] saved_checkpoint={path}", flush=True)
+
+
+def _clear_replay_buffer(agent: WSRL, logger: Logger, step: int, std_log: bool) -> None:
+    """Start online replay from an empty buffer, matching upstream WSRL default."""
+    buffer = agent.replay_buffer
+    previous_len = len(buffer)
+    buffer.pos = 0
+    buffer.full = False
+    if isinstance(buffer, (MCTensorReplayBuffer, MCDictReplayBuffer)):
+        buffer._mc_table = None
+    logger.add_scalar("online/replay_cleared", 1, step)
+    logger.add_scalar("online/replay_size_before_clear", previous_len, step)
+    if std_log:
+        print(f"[online] replay_mode=empty cleared_transitions={previous_len}", flush=True)
 
 
 def main() -> None:
@@ -175,17 +247,36 @@ def main() -> None:
             args.offline_dataset_path,
             num_traj=args.offline_num_traj,
         )
-        logger.add_scalar("offline/loaded_transitions", loaded, 0)
-        _offline_update_loop(
-            agent, args.num_offline_steps, logger, args.log_freq, args.std_log
+        offline_start_step = agent._global_step
+        logger.add_scalar("offline/loaded_transitions", loaded, offline_start_step)
+        offline_end_step = _offline_update_loop(
+            agent,
+            args.num_offline_steps,
+            logger,
+            args.log_freq,
+            args.std_log,
+            start_step=offline_start_step,
         )
+        agent._global_step = offline_end_step
+        _evaluate_offline_end(agent, logger, offline_end_step, args.std_log)
+        _save_offline_checkpoint(
+            agent,
+            checkpoint_dir,
+            include_replay_buffer=args.save_replay_buffer,
+            std_log=args.std_log,
+        )
+        if args.online_replay_mode == "empty":
+            _clear_replay_buffer(agent, logger, offline_end_step, args.std_log)
+        else:
+            logger.add_scalar("online/replay_cleared", 0, offline_end_step)
 
         # Switch to online mode
         agent.switch_to_online_mode()
 
     # Online training phase
     if args.num_online_steps > 0:
-        agent.learn(total_timesteps=args.num_online_steps)
+        online_target_step = agent._global_step + args.num_online_steps
+        agent.learn(total_timesteps=online_target_step)
 
     logger.close()
     env.close()

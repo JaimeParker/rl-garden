@@ -17,11 +17,20 @@ from typing import Literal, Optional
 
 import tyro
 
+try:
+    import typeguard
+
+    if not hasattr(typeguard, "TypeCheckError"):
+        typeguard.TypeCheckError = TypeError
+except ImportError:
+    pass
+
 from rl_garden.algorithms import RGBDSAC, SAC
 from rl_garden.common import seed_everything
 from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_obs_mode
 from rl_garden.datasets import (
     CheckpointScore,
+    PolicySource,
     WSRLTrajectoryWriter,
     collect_policy_dataset,
     discover_checkpoints,
@@ -66,6 +75,8 @@ class Args:
     use_random_failure_fallback: bool = True
     strict_checkpoint: bool = True
     report_path: Optional[str] = None
+    selection_only: bool = False
+    source_report_path: Optional[str] = None
 
 
 def _make_env(args: Args):
@@ -125,43 +136,111 @@ def _jsonable(obj):
     return obj
 
 
+def _default_report_path(args: Args) -> Path:
+    return (
+        Path(args.report_path)
+        if args.report_path is not None
+        else Path(args.output_path).with_suffix(".selection.json")
+    )
+
+
+def _source_from_dict(data: dict) -> PolicySource:
+    path = data.get("path")
+    return PolicySource(
+        tier=data["tier"],
+        name=data["name"],
+        path=None if path in {None, ""} else Path(path),
+        target_transitions=int(data["target_transitions"]),
+        success_rate=float(data["success_rate"]),
+        fallback_reason=data.get("fallback_reason"),
+    )
+
+
+def _load_sources_from_report(path: str | Path) -> tuple[list[CheckpointScore], list[PolicySource]]:
+    report = json.loads(Path(path).read_text(encoding="utf-8"))
+    scores = [
+        CheckpointScore(
+            path=Path(score["path"]),
+            success_rate=float(score["success_rate"]),
+            average_return=float(score["average_return"]),
+            average_length=float(score["average_length"]),
+            episodes=int(score["episodes"]),
+        )
+        for score in report.get("scores", [])
+    ]
+    sources = [_source_from_dict(source) for source in report["sources"]]
+    return scores, sources
+
+
+def _write_report(
+    *,
+    args: Args,
+    scores: list[CheckpointScore],
+    sources: list[PolicySource],
+    collection_stats: list[dict] | None = None,
+) -> Path:
+    report = {
+        "args": asdict(args),
+        "scores": [asdict(score) for score in scores],
+        "sources": [asdict(source) for source in sources],
+        "collection_stats": collection_stats or [],
+        "output_path": args.output_path,
+    }
+    report_path = _default_report_path(args)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(_jsonable(report), indent=2), encoding="utf-8")
+    return report_path
+
+
 def main() -> None:
     args = tyro.cli(Args)
+    if args.selection_only and args.source_report_path is not None:
+        raise ValueError("--selection_only cannot be combined with --source_report_path.")
+
     seed_everything(args.seed)
 
     env = _make_env(args)
     agent = _make_agent(args, env)
 
-    checkpoint_paths = discover_checkpoints(args.checkpoint_dir)
-    scores: list[CheckpointScore] = []
-    for path in checkpoint_paths:
-        agent.load(path, strict=args.strict_checkpoint, load_replay_buffer=False)
-        score = evaluate_policy_success(agent, env, episodes=args.eval_episodes)
-        scores.append(
-            CheckpointScore(
-                path=path,
-                success_rate=score.success_rate,
-                average_return=score.average_return,
-                average_length=score.average_length,
-                episodes=score.episodes,
+    if args.source_report_path is None:
+        checkpoint_paths = discover_checkpoints(args.checkpoint_dir)
+        scores: list[CheckpointScore] = []
+        for path in checkpoint_paths:
+            agent.load(path, strict=args.strict_checkpoint, load_replay_buffer=False)
+            score = evaluate_policy_success(agent, env, episodes=args.eval_episodes)
+            scores.append(
+                CheckpointScore(
+                    path=path,
+                    success_rate=score.success_rate,
+                    average_return=score.average_return,
+                    average_length=score.average_length,
+                    episodes=score.episodes,
+                )
             )
-        )
-        print(
-            "[eval] "
-            f"checkpoint={path.name} "
-            f"success_rate={score.success_rate:.3f} "
-            f"return={score.average_return:.3f} "
-            f"length={score.average_length:.1f}",
-            flush=True,
-        )
+            print(
+                "[eval] "
+                f"checkpoint={path.name} "
+                f"success_rate={score.success_rate:.3f} "
+                f"return={score.average_return:.3f} "
+                f"length={score.average_length:.1f}",
+                flush=True,
+            )
 
-    sources = select_policy_sources(
-        scores,
-        total_transitions=args.total_transitions,
-        policy_mix=args.policy_mix,
-        thresholds=args.tier_thresholds,
-        use_random_failure_fallback=args.use_random_failure_fallback,
-    )
+        sources = select_policy_sources(
+            scores,
+            total_transitions=args.total_transitions,
+            policy_mix=args.policy_mix,
+            thresholds=args.tier_thresholds,
+            use_random_failure_fallback=args.use_random_failure_fallback,
+        )
+    else:
+        scores, sources = _load_sources_from_report(args.source_report_path)
+
+    report_path = _write_report(args=args, scores=scores, sources=sources)
+    if args.selection_only:
+        print(f"[done] selection_report={report_path}", flush=True)
+        env.close()
+        return
 
     metadata = {
         "env_id": args.env_id,
@@ -172,6 +251,7 @@ def main() -> None:
         "tier_thresholds": args.tier_thresholds,
         "stochastic_collect": args.stochastic_collect,
     }
+    collection_stats: list[dict] = []
     with WSRLTrajectoryWriter(args.output_path, metadata=metadata) as writer:
         for source in sources:
             if source.path is None:
@@ -191,6 +271,17 @@ def main() -> None:
                 deterministic=not args.stochastic_collect,
                 device=agent.device,
             )
+            collection_stats.append(
+                {
+                    "tier": source.tier,
+                    "source": source.name,
+                    "target_transitions": source.target_transitions,
+                    "written_transitions": stats.transitions,
+                    "episodes": stats.episodes,
+                    "successes": stats.successes,
+                    "success_rate": stats.success_rate,
+                }
+            )
             print(
                 "[collect] "
                 f"tier={source.tier} "
@@ -202,19 +293,12 @@ def main() -> None:
                 flush=True,
             )
 
-    report = {
-        "args": asdict(args),
-        "scores": [asdict(score) for score in scores],
-        "sources": [asdict(source) for source in sources],
-        "output_path": args.output_path,
-    }
-    report_path = (
-        Path(args.report_path)
-        if args.report_path is not None
-        else Path(args.output_path).with_suffix(".selection.json")
+    report_path = _write_report(
+        args=args,
+        scores=scores,
+        sources=sources,
+        collection_stats=collection_stats,
     )
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(_jsonable(report), indent=2), encoding="utf-8")
     print(f"[done] dataset={args.output_path} report={report_path}", flush=True)
 
     env.close()
