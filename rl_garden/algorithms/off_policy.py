@@ -85,6 +85,25 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     @abstractmethod
     def train(self, gradient_steps: int) -> dict[str, float]: ...
 
+    # --- logging hooks ---
+
+    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"eval/{key}", value, step)
+
+    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
+        if self.logger is None:
+            return
+        self.logger.add_scalar(f"train/{key}", value, step)
+
+    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"losses/{key}", value, step)
+
     def _explore_action(self, obs) -> torch.Tensor:
         """Random uniform action in [-1, 1] across all envs. Used pre-learning."""
         shape = self.env.action_space.shape
@@ -239,8 +258,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 stime = time.perf_counter()
                 eval_metrics = self._evaluate()
                 if self.logger is not None:
-                    for k, v in eval_metrics.items():
-                        self.logger.add_scalar(f"eval/{k}", v, self._global_step)
+                    self._log_eval_metrics(eval_metrics, self._global_step)
                     self.logger.add_scalar(
                         "time/eval_time", time.perf_counter() - stime, self._global_step
                     )
@@ -286,11 +304,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         if done_values.numel() == 0:
                             continue
                         mean_value = float(done_values.float().mean().item())
-                        self.logger.add_scalar(
-                            f"train/{k}",
-                            mean_value,
-                            self._global_step,
-                        )
+                        self._log_rollout_metric(k, mean_value, self._global_step)
                         rollout_episode_metrics[k].append(mean_value)
                 elif "final_info" in infos:
                     fi = infos["final_info"]
@@ -357,8 +371,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
             if should_log:
                 if self.logger is not None:
-                    for k, v in losses.items():
-                        self.logger.add_scalar(f"losses/{k}", v, self._global_step)
+                    self._log_update_metrics(losses, self._global_step)
                     self.logger.add_scalar("time/update_time", update_time, self._global_step)
                     self.logger.add_scalar("time/rollout_time", rollout_time, self._global_step)
                     self.logger.add_scalar("time/rollout_fps", rollout_fps, self._global_step)

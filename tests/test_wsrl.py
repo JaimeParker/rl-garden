@@ -7,6 +7,18 @@ from unittest.mock import MagicMock
 from rl_garden.algorithms.wsrl import WSRL
 
 
+class _RecordingLogger:
+    def __init__(self):
+        self.scalars = []
+        self.summaries = []
+
+    def add_scalar(self, tag, value, step):
+        self.scalars.append((tag, value, step))
+
+    def add_summary(self, tag, value):
+        self.summaries.append((tag, value))
+
+
 @pytest.fixture
 def simple_env():
     """Create a simple mock environment for testing."""
@@ -147,6 +159,9 @@ class TestWSRLHelperMethods:
         assert cql_alpha.item() > 0
 
     def test_switch_to_online_mode(self, wsrl_agent):
+        logger = _RecordingLogger()
+        wsrl_agent.logger = logger
+        wsrl_agent._global_step = 123
         # Set online parameters
         wsrl_agent.online_cql_alpha = 0.5
         wsrl_agent.online_use_cql_loss = False
@@ -156,6 +171,62 @@ class TestWSRLHelperMethods:
 
         assert wsrl_agent.cql_alpha == 0.5
         assert not wsrl_agent.use_cql_loss
+        assert wsrl_agent._online_start_step == 123
+        assert logger.scalars == []
+        assert ("wsrl/online_start_step", 123) in logger.summaries
+
+    def test_update_metric_tags(self, wsrl_agent):
+        tags = wsrl_agent._update_metric_tags(
+            {
+                "critic_loss": 1.0,
+                "td_loss": 4.0,
+                "predicted_q": 2.0,
+                "target_q": 3.0,
+                "cql_ood_values": 5.0,
+                "cql_q_diff": 6.0,
+                "calql_bound_rate": 0.25,
+                "alpha": 0.1,
+                "cql_alpha": 5.0,
+            }
+        )
+
+        assert tags["losses/critic_loss"] == 1.0
+        assert tags["losses/td_loss"] == 4.0
+        assert tags["q/td_rmse"] == 2.0
+        assert tags["q/predicted"] == 2.0
+        assert tags["q/target"] == 3.0
+        assert tags["q/cql_ood"] == 5.0
+        assert tags["q/cql_diff"] == 6.0
+        assert tags["cql/bound_rate"] == 0.25
+        assert tags["entropy/alpha"] == 0.1
+        assert tags["cql/alpha"] == 5.0
+
+    def test_eval_metrics_include_normalized_score(self, wsrl_agent):
+        metrics = wsrl_agent.canonical_eval_metrics({"return": 1.0, "success_at_end": 0.82})
+
+        assert metrics["return"] == 1.0
+        assert metrics["success_at_end"] == 0.82
+        assert metrics["normalized_score"] == pytest.approx(82.0)
+
+    def test_wsrl_logging_uses_continuous_namespaces(self, wsrl_agent):
+        logger = _RecordingLogger()
+        wsrl_agent.logger = logger
+
+        wsrl_agent._log_update_metrics(
+            {"critic_loss": 1.0, "td_loss": 4.0, "predicted_q": 2.0},
+            step=100,
+        )
+        tags = {tag for tag, _, _ in logger.scalars}
+
+        assert "losses/critic_loss" in tags
+        assert "losses/td_loss" in tags
+        assert "q/predicted" in tags
+        assert "q/td_rmse" in tags
+        assert "phase/is_online" in tags
+        assert not any(
+            tag.startswith(("offline_losses/", "offline_eval/", "online/", "wsrl/"))
+            for tag in tags
+        )
 
 
 class TestCQLLossComputation:

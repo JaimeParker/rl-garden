@@ -54,8 +54,7 @@ def _offline_update_loop(
         global_step = start_step + step + 1
         losses = agent.train(gradient_steps)
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            for key, value in losses.items():
-                logger.add_scalar(f"offline_losses/{key}", value, global_step)
+            agent._log_update_metrics(losses, global_step)
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
                 loss_summary = " ".join(
@@ -88,8 +87,9 @@ def _evaluate_offline_end(agent: WSRL, logger: Logger, step: int, std_log: bool)
     metrics = agent._evaluate()
     if not metrics:
         return
-    for key, value in metrics.items():
-        logger.add_scalar(f"offline_eval/{key}", value, step)
+    agent._log_eval_metrics(metrics, step)
+    for key, value in agent.canonical_eval_metrics(metrics).items():
+        logger.add_summary(f"wsrl/offline_final_eval/{key}", value)
     if std_log:
         eval_return = _first_metric(metrics, ("return",))
         eval_success = _first_metric(metrics, ("success_at_end", "success_once"))
@@ -119,7 +119,7 @@ def _save_offline_checkpoint(
         print(f"[offline] saved_checkpoint={path}", flush=True)
 
 
-def _clear_replay_buffer(agent: WSRL, logger: Logger, step: int, std_log: bool) -> None:
+def _clear_replay_buffer(agent: WSRL, logger: Logger, step: int, std_log: bool) -> int:
     """Start online replay from an empty buffer, matching upstream WSRL default."""
     buffer = agent.replay_buffer
     previous_len = len(buffer)
@@ -127,10 +127,23 @@ def _clear_replay_buffer(agent: WSRL, logger: Logger, step: int, std_log: bool) 
     buffer.full = False
     if isinstance(buffer, (MCTensorReplayBuffer, MCDictReplayBuffer)):
         buffer._mc_table = None
-    logger.add_scalar("online/replay_cleared", 1, step)
-    logger.add_scalar("online/replay_size_before_clear", previous_len, step)
+    logger.add_summary("wsrl/online_replay_mode", "empty")
+    logger.add_summary("wsrl/online_replay_cleared", True)
+    logger.add_summary("wsrl/online_replay_size_before_clear", previous_len)
     if std_log:
         print(f"[online] replay_mode=empty cleared_transitions={previous_len}", flush=True)
+    return previous_len
+
+
+def _set_offline_probe(agent: WSRL, logger: Logger, std_log: bool) -> None:
+    probe_size = min(agent.batch_size, len(agent.replay_buffer))
+    if probe_size <= 0:
+        logger.add_summary("wsrl/offline_probe_size", 0)
+        return
+    agent.set_offline_probe_batch(agent.replay_buffer.sample(probe_size))
+    logger.add_summary("wsrl/offline_probe_size", probe_size)
+    if std_log:
+        print(f"[offline] probe_size={probe_size}", flush=True)
 
 
 def main() -> None:
@@ -248,7 +261,8 @@ def main() -> None:
             num_traj=args.offline_num_traj,
         )
         offline_start_step = agent._global_step
-        logger.add_scalar("offline/loaded_transitions", loaded, offline_start_step)
+        logger.add_summary("wsrl/offline_loaded_transitions", loaded)
+        logger.add_summary("wsrl/offline_start_step", offline_start_step)
         offline_end_step = _offline_update_loop(
             agent,
             args.num_offline_steps,
@@ -265,10 +279,12 @@ def main() -> None:
             include_replay_buffer=args.save_replay_buffer,
             std_log=args.std_log,
         )
+        _set_offline_probe(agent, logger, args.std_log)
         if args.online_replay_mode == "empty":
             _clear_replay_buffer(agent, logger, offline_end_step, args.std_log)
         else:
-            logger.add_scalar("online/replay_cleared", 0, offline_end_step)
+            logger.add_summary("wsrl/online_replay_mode", "append")
+            logger.add_summary("wsrl/online_replay_cleared", False)
 
         # Switch to online mode
         agent.switch_to_online_mode()

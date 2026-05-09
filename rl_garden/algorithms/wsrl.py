@@ -189,6 +189,8 @@ class WSRL(OffPolicyAlgorithm):
         self.use_td_loss = use_td_loss
         self.online_cql_alpha = online_cql_alpha
         self.online_use_cql_loss = online_use_cql_loss
+        self._online_start_step: int | None = None
+        self._offline_probe_batch: MCReplayBufferSample | None = None
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()
@@ -449,17 +451,114 @@ class WSRL(OffPolicyAlgorithm):
             return self.policy.get_cql_alpha()
         return torch.tensor(self.cql_alpha, device=self.device)
 
+    @staticmethod
+    def canonical_eval_metrics(metrics: dict[str, float]) -> dict[str, float]:
+        """Add paper-style score curves while preserving raw eval metrics."""
+        out = dict(metrics)
+        success = metrics.get("success_at_end", metrics.get("success_once"))
+        if success is not None:
+            out["normalized_score"] = float(success) * 100.0
+        return out
+
+    @staticmethod
+    def _update_metric_tags(metrics: dict[str, float]) -> dict[str, float]:
+        tagged: dict[str, float] = {}
+        loss_keys = {
+            "critic_loss",
+            "actor_loss",
+            "td_loss",
+            "cql_loss",
+            "alpha_loss",
+            "cql_alpha_loss",
+        }
+        for key, value in metrics.items():
+            if key in loss_keys:
+                tagged[f"losses/{key}"] = value
+            elif key == "predicted_q":
+                tagged["q/predicted"] = value
+            elif key == "target_q":
+                tagged["q/target"] = value
+            elif key == "cql_ood_values":
+                tagged["q/cql_ood"] = value
+            elif key == "cql_q_diff":
+                tagged["q/cql_diff"] = value
+            elif key == "cql_alpha":
+                tagged["cql/alpha"] = value
+            elif key == "calql_bound_rate":
+                tagged["cql/bound_rate"] = value
+            elif key == "alpha":
+                tagged["entropy/alpha"] = value
+            elif key == "utd_ratio":
+                tagged["train/utd_ratio"] = value
+            else:
+                tagged[f"losses/{key}"] = value
+
+        if "td_loss" in metrics:
+            tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
+        return tagged
+
+    def set_offline_probe_batch(self, batch: MCReplayBufferSample | None) -> None:
+        """Keep a fixed offline batch for no-grad online forgetting diagnostics."""
+        self._offline_probe_batch = batch
+
+    def _offline_probe_metrics(self) -> dict[str, float]:
+        if self._offline_probe_batch is None:
+            return {}
+        with torch.no_grad():
+            data = self._offline_probe_batch
+            q_pred = self._critic_forward(data.obs, data.actions, target=False)
+            target_q = self._target_q(data)
+            target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
+            td_mse = F.mse_loss(q_pred, target_q_expanded)
+        return {
+            "q/offline_probe/predicted": float(q_pred.mean().item()),
+            "q/offline_probe/target": float(target_q.mean().item()),
+            "q/offline_probe/td_rmse": float(torch.sqrt(td_mse).item()),
+        }
+
+    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in self.canonical_eval_metrics(metrics).items():
+            self.logger.add_scalar(f"eval/{key}", value, step)
+
+    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
+        if self.logger is None:
+            return
+        self.logger.add_scalar(f"train/{key}", value, step)
+        if key in {"success_at_end", "success_once"}:
+            self.logger.add_scalar("train/normalized_score", value * 100.0, step)
+
+    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for tag, value in self._update_metric_tags(metrics).items():
+            self.logger.add_scalar(tag, value, step)
+
+        online_start = self._online_start_step
+        is_online = online_start is not None and step >= online_start
+        offline_step = min(step, online_start) if online_start is not None else step
+        online_step = max(0, step - online_start) if online_start is not None else 0
+        self.logger.add_scalar("phase/is_online", float(is_online), step)
+        self.logger.add_scalar("phase/offline_step", float(offline_step), step)
+        self.logger.add_scalar("phase/online_step", float(online_step), step)
+
+        if is_online:
+            for tag, value in self._offline_probe_metrics().items():
+                self.logger.add_scalar(tag, value, step)
+
     def switch_to_online_mode(self):
         """Switch from offline to online training mode."""
+        self._online_start_step = self._global_step
         if self.online_use_cql_loss is not None:
             self.use_cql_loss = self.online_use_cql_loss
         if self.online_cql_alpha is not None:
             self.cql_alpha = self.online_cql_alpha
 
         if self.logger:
-            self.logger.add_scalar("wsrl/switched_to_online", 1, self._global_step)
-            self.logger.add_scalar("wsrl/use_cql_loss", int(self.use_cql_loss), self._global_step)
-            self.logger.add_scalar("wsrl/cql_alpha", self.cql_alpha, self._global_step)
+            self.logger.add_summary("wsrl/online_start_step", self._global_step)
+            self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
+            self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
 
     # --- CQL Loss Computation ---
 
