@@ -14,7 +14,9 @@ CPU simulator paths are compatibility fallbacks only, mainly for short local smo
 For remote training/evaluation/debugging, read `.agents/rules/remote-training-sop.md`.
 For Mutagen sync setup or repair, read `.agents/rules/mutagen-sync-sop.md`.
 Agent-specific local runtime bindings may live in ignored files such as
-`.claude.local.md`; do not commit personal server, path, or container details.
+`.agents/local/personal_config.md`; do not commit personal server, path, or
+container details. Before any remote command, read that file. If it is missing,
+stop and ask the user to create it from `.agents/local/personal_config.md.example`.
 
 ---
 

@@ -1,0 +1,21 @@
+# Personal Agent Runtime
+
+Copy this file to `.agents/local/personal_config.md` and fill in values for
+your own machine. Do not commit the copied personal file.
+
+Before training, evaluation, or remote debugging, read:
+`.agents/rules/remote-training-sop.md`
+
+Before changing or repairing Mutagen sync, read:
+`.agents/rules/mutagen-sync-sop.md`
+
+Use these local bindings with those SOPs:
+
+- SSH alias: `<ssh-alias>`
+- Local project path: `<local-project-path>`
+- Remote host project path: `<remote-project-path>`
+- Remote host bind-mount path: `<remote-bind-mount-path>`
+- Container name: `<container-name>`
+- Container workspace path: `<container-workspace-path>`
+- Python environment bin path: `<python-env-bin-path>`
+- Mutagen session name: `<mutagen-session-name>`

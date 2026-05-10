@@ -6,11 +6,10 @@ usernames, absolute home paths, container names, credentials, and private
 artifact locations must stay out of committed docs.
 
 Before running training, evaluation, or remote debugging, load environment
-bindings from the active agent runtime. For Claude, private bindings live in the
-ignored local `CLAUDE.local.md`; the committed `CLAUDE.md` only imports shared
-project guidance and points to this SOP. For Codex or other agents, use the same
-binding names from their local runtime context and substitute them into the
-placeholders below.
+bindings from `.agents/local/personal_config.md`. This file is local-only and
+ignored by git; create it from `.agents/local/personal_config.md.example` when
+setting up a new checkout. If the file is missing, do not guess server,
+container, path, or Python environment values.
 
 ## Required Local Bindings
 

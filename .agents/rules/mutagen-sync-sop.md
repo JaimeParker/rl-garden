@@ -3,7 +3,7 @@
 This SOP defines the shared Mutagen workflow for rl-garden. Read `AGENTS.md`
 first for the project-level agent rules. Personal SSH aliases, usernames, host
 paths, and local checkout paths must stay in ignored local runtime files such
-as `mutagen.yml` and `CLAUDE.local.md`, not in committed docs.
+as `mutagen.yml` and `.agents/local/personal_config.md`, not in committed docs.
 
 Use `mutagen.yml.example` as the copyable configuration skeleton.
 
@@ -34,7 +34,7 @@ Keep these categories out of Mutagen sync:
 - VCS metadata and local locks: `.git`, `mutagen.yml.lock`.
 - Python/build caches: `__pycache__`, `*.pyc`, `.pytest_cache`, `dist/`, `build/`.
 - External repos: `3rd_party/`.
-- Local environments and agent configs: `.venv`, `venv`, `.codex`, `CLAUDE.local.md`.
+- Local environments and agent configs: `.venv`, `venv`, `.codex`, `.agents/local/personal_config.md`.
 - IDE files: `.cursor/`, `.vscode/`, `.idea/`, `.github/`.
 - Training artifacts: `runs/`, `logs/`, `wandb/`, `checkpoints/`.
 

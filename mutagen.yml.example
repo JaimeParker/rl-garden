@@ -33,7 +33,7 @@ sync:
         - ".github/"
         - ".idea/"
         - ".codex"
-        - "CLAUDE.local.md"
+        - ".agents/"
 
         # System/editor files
         - ".DS_Store"

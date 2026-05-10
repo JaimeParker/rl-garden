@@ -21,8 +21,8 @@ PKG-INFO
 *.egg-info/
 mutagen.yml.lock
 mutagen.yml
+.agents/local/personal_config.md
 .codex
-.claude.local.md
 .pytest_cache
 .github
 runs/
