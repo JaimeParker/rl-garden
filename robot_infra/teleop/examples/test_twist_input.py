@@ -1,9 +1,11 @@
-import argparse
 import os
 import sys
 import time
+from dataclasses import dataclass
+from typing import Literal, Optional
 
 import numpy as np
+import tyro
 
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
@@ -14,44 +16,54 @@ if REPO_ROOT not in sys.path:
 from robot_infra.teleop.utils.telo_op_control_twist import EETwistTeleOpWrapper
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Print hand data and computed ee_twist.")
-    parser.add_argument("--zmq-url", type=str, default="tcp://192.168.6.2:7777")
-    parser.add_argument("--hand", choices=("left", "right"), default="right")
-    parser.add_argument("--dt", type=float, default=1 / 30)
-    parser.add_argument("--pos-scale", type=float, default=1.0)
-    parser.add_argument("--rot-scale", type=float, default=1.0)
-    parser.add_argument("--twist-limit", type=float, default=0.1)
-    return parser.parse_args()
+@dataclass
+class Args:
+    zmq_url: str = "tcp://192.168.6.2:7777"
+    device: Literal["pico", "spacemouse"] = "pico"
+    hand: Literal["left", "right"] = "right"
+    dt: float = 1 / 30
+    pos_scale: Optional[float] = None
+    rot_scale: Optional[float] = None
+    twist_limit: Optional[float] = None
+    intervention_threshold: float = 1e-4
 
 
 def main():
-    args = parse_args()
+    args = tyro.cli(Args)
     np.set_printoptions(precision=4, suppress=True)
 
-    teleop = EETwistTeleOpWrapper(
+    teleop_kwargs = dict(
         zmq_url=args.zmq_url,
         hand=args.hand,
-        pos_scale=args.pos_scale,
-        rot_scale=args.rot_scale,
-        twist_limit=args.twist_limit,
+        device=args.device,
+        intervention_threshold=args.intervention_threshold,
     )
-    print(f"Listening on {args.zmq_url}, hand={args.hand}")
+    if args.pos_scale is not None:
+        teleop_kwargs["pos_scale"] = args.pos_scale
+    if args.rot_scale is not None:
+        teleop_kwargs["rot_scale"] = args.rot_scale
+    if args.twist_limit is not None:
+        teleop_kwargs["twist_limit"] = args.twist_limit
+
+    teleop = EETwistTeleOpWrapper(**teleop_kwargs)
+    print(f"Listening on {args.zmq_url}, device={args.device}, hand={args.hand}")
     try:
         while True:
             sample = teleop.poll()
-            if sample is None:
-                print("No teleop data received.")
-            else:
-                print("raw:", sample["raw"])
-                print(
-                    "twist:",
-                    sample["twist"],
-                    "gripper:",
-                    sample["gripper"],
-                    "button:",
-                    sample["button_state"].name,
-                )
+            print(
+                "received:",
+                teleop.last_received,
+                "twist:",
+                sample.twist,
+                "gripper:",
+                sample.gripper,
+                "bind:",
+                sample.bind_pressed,
+                "episode_end:",
+                sample.episode_end,
+                "intervened:",
+                sample.intervened,
+            )
             time.sleep(args.dt)
     except KeyboardInterrupt:
         pass

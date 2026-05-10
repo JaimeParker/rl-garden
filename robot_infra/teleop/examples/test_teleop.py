@@ -1,9 +1,11 @@
-import argparse
 import os
 import sys
 import time
+from dataclasses import dataclass
+from typing import Literal, Optional
 
 import numpy as np
+import tyro
 
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
@@ -11,32 +13,27 @@ REPO_ROOT = os.path.abspath(
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-TWIST_TRACKING_RATIO = 0.39
-TWIST_TRACKING_COMPENSATION = 1.0 / TWIST_TRACKING_RATIO
-RAW_TWIST_LIMIT = 0.1
 
+@dataclass
+class Args:
+    zmq_url: str = "tcp://192.168.6.2:7777"
+    device: Literal["pico", "spacemouse"] = "pico"
+    hand: Literal["left", "right"] = "right"
+    env_id: str = "PegInsertionSidePegOnly-v1"
+    control_mode: str = "pd_ee_twist"
+    robot_uids: str = "panda_wristcam_gripper_closed_wo_norm"
+    sim_backend: str = "cpu"
+    render_backend: str = "gpu"
+    max_steps: int = -1
+    dt: float = 1 / 30
+    pos_scale: Optional[float] = None
+    rot_scale: Optional[float] = None
+    twist_limit: Optional[float] = None
+    intervention_threshold: float = 1e-4
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Teleoperate PegInsertionSidePegOnly-v1 with ee_twist actions."
-    )
-    parser.add_argument("--zmq-url", type=str, default="tcp://192.168.6.2:7777")
-    parser.add_argument("--hand", choices=("left", "right"), default="right")
-    parser.add_argument("--env-id", type=str, default="PegInsertionSidePegOnly-v1")
-    parser.add_argument(
-        "--robot-uids", type=str, default="panda_wristcam_gripper_closed_wo_norm"
-    )
-    parser.add_argument("--sim-backend", type=str, default="cpu")
-    parser.add_argument("--render-backend", type=str, default="gpu")
-    parser.add_argument("--max-steps", type=int, default=-1)
-    parser.add_argument("--dt", type=float, default=1/30)
-    parser.add_argument("--pos-scale", type=float, default=TWIST_TRACKING_COMPENSATION)
-    parser.add_argument("--rot-scale", type=float, default=TWIST_TRACKING_COMPENSATION)
-    parser.add_argument("--twist-limit", type=float, default=RAW_TWIST_LIMIT * TWIST_TRACKING_COMPENSATION)
-    return parser.parse_args()
 
 def main():
-    args = parse_args()
+    args = tyro.cli(Args)
     import torch
     from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
     from robot_infra.teleop.utils.telo_op_control_twist import EETwistTeleOpWrapper
@@ -46,14 +43,14 @@ def main():
         num_envs=1,
         obs_mode="rgb",
         include_state=True,
-        control_mode="pd_ee_twist",
+        control_mode=args.control_mode,
         render_mode="human",
         sim_backend=args.sim_backend,
         render_backend=args.render_backend,
         reward_mode="normalized_dense",
-        # robot_uids=args.robot_uids,
-        # fix_peg_pose=False,
-        # fix_box=True,
+        robot_uids=args.robot_uids,
+        fix_peg_pose=False,
+        fix_box=True,
         ignore_terminations=False,
     )
     env = make_maniskill_env(env_cfg)
@@ -65,30 +62,43 @@ def main():
             print("normalize_action=False: using raw ee_twist actions.")
         else:
             print("normalize_action=True: scaling ee_twist actions to [-1, 1].")
-        print(
-            f"twist compensation: pos_scale={args.pos_scale:.3f}, "
-            f"rot_scale={args.rot_scale:.3f}, twist_limit={args.twist_limit:.3f}"
-        )
-        teleop = EETwistTeleOpWrapper(
+        teleop_kwargs = dict(
             zmq_url=args.zmq_url,
             hand=args.hand,
-            pos_scale=args.pos_scale,
-            rot_scale=args.rot_scale,
-            twist_limit=args.twist_limit,
+            device=args.device,
+            intervention_threshold=args.intervention_threshold,
+        )
+        if args.pos_scale is not None:
+            teleop_kwargs["pos_scale"] = args.pos_scale
+        if args.rot_scale is not None:
+            teleop_kwargs["rot_scale"] = args.rot_scale
+        if args.twist_limit is not None:
+            teleop_kwargs["twist_limit"] = args.twist_limit
+        teleop = EETwistTeleOpWrapper(
+            **teleop_kwargs,
         )
         obs, info = env.reset()
         step = 0
         while args.max_steps <= 0 or step < args.max_steps:
-            teleop_action = normalize_twist(teleop.get_action(), twist_normalizer)
+            sample = teleop.poll()
+            teleop_action = normalize_twist(sample.action, twist_normalizer)
             teleop_action = fit_action(teleop_action, env.action_space.shape)
             action = torch.as_tensor(
                 teleop_action, dtype=torch.float32, device=obs_device(obs)
             ).reshape(env.action_space.shape)
-            print("action:", action)
             obs, reward, terminated, truncated, info = env.step(action)
             env.render()
             step += 1
-            print(step)
+            print(
+                "step:",
+                step,
+                "twist:",
+                sample.twist,
+                "gripper:",
+                sample.gripper,
+                "intervened:",
+                sample.intervened,
+            )
             time.sleep(args.dt)
     finally:
         if teleop is not None:

@@ -5,6 +5,10 @@ from enum import Enum
 
 import numpy as np
 
+TRACKING_RATIO = 0.39
+TRACKING_COMPENSATION = 1.0 / TRACKING_RATIO
+DEFAULT_TWIST_LIMIT = 0.1
+
 
 RIGHT_ALIGN = (
     np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
@@ -89,6 +93,25 @@ class ButtonStatus(Enum):
     JUST_RELEASED = 3
 
 
+@dataclass(frozen=True)
+class DeviceSample:
+    hand_pos: np.ndarray
+    hand_quat: np.ndarray
+    gripper_cmd: float
+    bind_pressed: bool
+    episode_end_pressed: bool
+
+
+@dataclass(frozen=True)
+class TeleOpSample:
+    action: np.ndarray
+    twist: np.ndarray
+    gripper: float
+    bind_pressed: bool
+    episode_end: bool
+    intervened: bool
+
+
 @dataclass
 class HandPoseToEETwist:
     hand: str = "right"
@@ -108,6 +131,11 @@ class HandPoseToEETwist:
         self._last_pos = np.asarray(hand_pos, dtype=np.float64).reshape(3).copy()
         self._last_quat = _quat(hand_quat)
         self.bound = True
+
+    def reset(self) -> None:
+        self.bound = False
+        self._last_pos = None
+        self._last_quat = None
 
     def compute(self, hand_pos: np.ndarray, hand_quat: np.ndarray):
         pos = np.asarray(hand_pos, dtype=np.float64).reshape(3)
@@ -134,41 +162,65 @@ class EETwistTeleOpWrapper:
         self,
         zmq_url: str = "tcp://localhost:7777",
         hand: str = "right",
-        pos_scale: float = 1.0,
-        rot_scale: float = 1.0,
-        twist_limit: float = 0.1,
+        device: str = "pico",
+        pos_scale: float = TRACKING_COMPENSATION,
+        rot_scale: float = TRACKING_COMPENSATION,
+        twist_limit: float = DEFAULT_TWIST_LIMIT,
+        intervention_threshold: float = 1e-4,
     ):
+        if device not in ("pico", "spacemouse"):
+            raise ValueError("device must be 'pico' or 'spacemouse'.")
+        if device == "spacemouse":
+            raise NotImplementedError(
+                "SpaceMouse teleoperation parser is not implemented yet."
+            )
+
         import zmq
 
         self.zmq = zmq
+        self.device = device
         self.hand = hand
         self.mapper = HandPoseToEETwist(hand, pos_scale, rot_scale, twist_limit)
-        self.button_state = ButtonStatus.PRESSED
-        self.last_gripper = 1.0
+        self.intervention_threshold = float(intervention_threshold)
+        self.reset()
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.SUB)
         self.socket.connect(zmq_url)
         self.socket.setsockopt_string(zmq.SUBSCRIBE, "")
+
+    def reset(self, *, episode_end_pressed: bool = False) -> None:
+        self.mapper.reset()
+        self.button_state = ButtonStatus.PRESSED
+        self.episode_button_state = (
+            ButtonStatus.PRESSED if episode_end_pressed else ButtonStatus.RELEASED
+        )
+        self.last_gripper = 1.0
+        self.last_received = False
 
     @staticmethod
     def _gripper_action(cmd: float) -> float:
         return -1.0 if cmd == 1 else 1.0
 
     @staticmethod
-    def _update_button_state(data: np.ndarray, button_state: ButtonStatus):
-        if data[11] == 1 and button_state in [ButtonStatus.RELEASED]:
+    def _update_button_state(pressed: bool, button_state: ButtonStatus):
+        if pressed and button_state in [
+            ButtonStatus.RELEASED,
+            ButtonStatus.JUST_RELEASED,
+        ]:
             return ButtonStatus.JUST_PRESSED
-        if data[11] == 1 and button_state in [ButtonStatus.JUST_PRESSED, ButtonStatus.PRESSED]:
+        if pressed and button_state in [ButtonStatus.JUST_PRESSED, ButtonStatus.PRESSED]:
             return ButtonStatus.PRESSED
-        if data[11] == 0 and button_state in [ButtonStatus.PRESSED]:
+        if not pressed and button_state in [
+            ButtonStatus.PRESSED,
+            ButtonStatus.JUST_PRESSED,
+        ]:
             return ButtonStatus.JUST_RELEASED
-        if data[11] == 0 and button_state in [ButtonStatus.JUST_RELEASED, ButtonStatus.RELEASED]:
+        if not pressed and button_state in [
+            ButtonStatus.JUST_RELEASED,
+            ButtonStatus.RELEASED,
+        ]:
             return ButtonStatus.RELEASED
         return button_state
-
-    def _update_mapper_state(self, hand_data: np.ndarray) -> None:
-        if self.button_state in [ButtonStatus.JUST_PRESSED, ButtonStatus.PRESSED]:
-            self.mapper.bind(hand_data[:3], hand_data[6:10])
 
     def _recv_latest(self) -> np.ndarray | None:
         latest = None
@@ -179,50 +231,85 @@ class EETwistTeleOpWrapper:
                 break
         return None if latest is None else np.asarray(latest, dtype=np.float32)
 
-    def _select_hand_data(self, data: np.ndarray | None) -> np.ndarray | None:
-        if data is None:
-            return None
-
+    def _parse_pico(self, data: np.ndarray) -> DeviceSample:
         if data.size == 13:
-            return data
-        if data.size >= 26:
-            return data[:13] if self.hand == "left" else data[13:26]
-        raise ValueError(f"Expected 13 or 26 teleop values, got {data.size}.")
+            hand_data = data
+        elif data.size >= 26:
+            hand_data = data[:13] if self.hand == "left" else data[13:26]
+        else:
+            raise ValueError(f"Pico data must contain 13 or 26 values, got {data.size}.")
 
-    def poll(self) -> dict[str, np.ndarray | float | ButtonStatus] | None:
+        return DeviceSample(
+            hand_pos=hand_data[:3],
+            hand_quat=hand_data[6:10],
+            gripper_cmd=float(hand_data[10]),
+            bind_pressed=bool(hand_data[11]),
+            episode_end_pressed=bool(hand_data[12]),
+        )
+
+    def _parse_device(self, data: np.ndarray) -> DeviceSample:
+        if self.device == "pico":
+            return self._parse_pico(data)
+        raise NotImplementedError(
+            "SpaceMouse teleoperation parser is not implemented yet."
+        )
+
+    def _fallback_sample(self) -> TeleOpSample:
+        self.last_received = False
+        twist = np.zeros(6, dtype=np.float32)
+        return TeleOpSample(
+            action=np.concatenate([twist, [self.last_gripper]]).astype(np.float32),
+            twist=twist,
+            gripper=self.last_gripper,
+            bind_pressed=False,
+            episode_end=False,
+            intervened=False,
+        )
+
+    def poll(self) -> TeleOpSample:
         data = self._recv_latest()
         if data is None:
-            return None
+            return self._fallback_sample()
+        self.last_received = True
 
-        hand_data = self._select_hand_data(data)
-        self.button_state = self._update_button_state(hand_data, self.button_state)
-        self._update_mapper_state(hand_data)
-        twist = self.mapper.compute(hand_data[:3], hand_data[6:10])
-        if hand_data[11] == 1:
+        parsed = self._parse_device(data)
+        prev_gripper = self.last_gripper
+
+        self.button_state = self._update_button_state(
+            parsed.bind_pressed, self.button_state
+        )
+        self.episode_button_state = self._update_button_state(
+            parsed.episode_end_pressed, self.episode_button_state
+        )
+
+        if self.button_state in [ButtonStatus.JUST_PRESSED, ButtonStatus.PRESSED]:
+            self.mapper.bind(parsed.hand_pos, parsed.hand_quat)
+
+        twist = self.mapper.compute(parsed.hand_pos, parsed.hand_quat)
+        if parsed.bind_pressed:
             twist = np.zeros(6, dtype=np.float32)
-        self.last_gripper = self._gripper_action(hand_data[10])
-        return {
-            "raw": data,
-            "hand": hand_data,
-            "twist": twist,
-            "gripper": self.last_gripper,
-            "button_state": self.button_state,
-        }
+
+        self.last_gripper = self._gripper_action(parsed.gripper_cmd)
+        episode_end = self.episode_button_state == ButtonStatus.JUST_PRESSED
+        intervened = (
+            np.linalg.norm(twist) > self.intervention_threshold
+            or self.last_gripper != prev_gripper
+        )
+        action = np.concatenate([twist, [self.last_gripper]]).astype(np.float32)
+        return TeleOpSample(
+            action=action,
+            twist=twist,
+            gripper=self.last_gripper,
+            bind_pressed=parsed.bind_pressed,
+            episode_end=episode_end,
+            intervened=bool(intervened),
+        )
 
     def get_ee_twist(self) -> np.ndarray:
-        sample = self.poll()
-        if sample is None:
-            return np.zeros(6, dtype=np.float32)
-        return sample["twist"]
+        return self.poll().twist
 
     def get_action(self) -> np.ndarray:
-        sample = self.poll()
-        if sample is None:
-            return np.array(
-                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, self.last_gripper],
-                dtype=np.float32,
-            )
-        return np.concatenate([sample["twist"], [sample["gripper"]]]).astype(np.float32)
+        return self.poll().action
 
     def close(self) -> None:
         self.socket.close()
