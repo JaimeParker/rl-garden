@@ -18,7 +18,13 @@ from gymnasium import spaces
 
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.networks import EnsembleQCritic, SquashedGaussianActor, get_actor_critic_arch
+from rl_garden.networks import (
+    BackboneType,
+    EnsembleQCritic,
+    KernelInit,
+    SquashedGaussianActor,
+    get_actor_critic_arch,
+)
 from rl_garden.policies.base import BasePolicy
 
 LOG_STD_MAX = 2.0
@@ -74,6 +80,13 @@ class WSRLPolicy(BasePolicy):
         cql_alpha_lagrange_init: float = 1.0,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
+        actor_use_group_norm: bool = False,
+        critic_use_group_norm: bool = False,
+        num_groups: int = 32,
+        actor_dropout_rate: Optional[float] = None,
+        critic_dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -104,6 +117,11 @@ class WSRLPolicy(BasePolicy):
             action_space,
             hidden_dims=actor_arch,
             use_layer_norm=actor_use_layer_norm,
+            use_group_norm=actor_use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=actor_dropout_rate,
+            kernel_init=kernel_init,
+            backbone_type=backbone_type,
             std_parameterization=std_parameterization,
             log_std_mode="clamp",
             log_std_min=LOG_STD_MIN,
@@ -115,6 +133,11 @@ class WSRLPolicy(BasePolicy):
             hidden_dims=critic_arch,
             n_critics=n_critics,
             use_layer_norm=critic_use_layer_norm,
+            use_group_norm=critic_use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=critic_dropout_rate,
+            kernel_init=kernel_init,
+            backbone_type=backbone_type,
         )
         # Separate target critic
         self.critic_target = EnsembleQCritic(
@@ -123,6 +146,11 @@ class WSRLPolicy(BasePolicy):
             hidden_dims=critic_arch,
             n_critics=n_critics,
             use_layer_norm=critic_use_layer_norm,
+            use_group_norm=critic_use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=critic_dropout_rate,
+            kernel_init=kernel_init,
+            backbone_type=backbone_type,
         )
         self.critic_target.load_state_dict(self.critic.state_dict())
         for p in self.critic_target.parameters():

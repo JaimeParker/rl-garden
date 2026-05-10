@@ -29,6 +29,7 @@ from gymnasium import spaces
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.buffers.mc_buffer import MCReplayBufferSample, MCTensorReplayBuffer
 from rl_garden.common.logger import Logger
+from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.flatten import FlattenExtractor
@@ -69,6 +70,12 @@ class WSRL(OffPolicyAlgorithm):
         cql_alpha_lr: float = 3e-4,
         policy_frequency: int = 1,
         target_network_frequency: int = 1,
+        weight_decay: float = 0.0,
+        use_adamw: bool = False,
+        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
+        lr_warmup_steps: int = 0,
+        lr_decay_steps: int = 0,
+        lr_min_ratio: float = 0.0,
         # Entropy
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
@@ -79,6 +86,13 @@ class WSRL(OffPolicyAlgorithm):
         critic_hidden_dims: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
+        actor_use_group_norm: bool = False,
+        critic_use_group_norm: bool = False,
+        num_groups: int = 32,
+        actor_dropout_rate: Optional[float] = None,
+        critic_dropout_rate: Optional[float] = None,
+        kernel_init: Optional[str] = None,
+        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
         # Q-ensemble (REDQ)
         n_critics: int = 10,
@@ -103,6 +117,11 @@ class WSRL(OffPolicyAlgorithm):
         use_td_loss: bool = True,
         online_cql_alpha: Optional[float] = None,
         online_use_cql_loss: Optional[bool] = None,
+        offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        # Sparse-reward MC (for antmaze/adroit-style envs)
+        sparse_reward_mc: bool = False,
+        sparse_negative_reward: float = 0.0,
+        success_threshold: float = 0.5,
         # General
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
@@ -149,6 +168,12 @@ class WSRL(OffPolicyAlgorithm):
         self.cql_alpha_lr = cql_alpha_lr
         self.policy_frequency = policy_frequency
         self.target_network_frequency = target_network_frequency
+        self.weight_decay = weight_decay
+        self.use_adamw = use_adamw
+        self.lr_schedule: ScheduleType = lr_schedule
+        self.lr_warmup_steps = lr_warmup_steps
+        self.lr_decay_steps = lr_decay_steps
+        self.lr_min_ratio = lr_min_ratio
 
         # Entropy
         self.ent_coef_init = ent_coef
@@ -163,6 +188,13 @@ class WSRL(OffPolicyAlgorithm):
         )
         self.actor_use_layer_norm = actor_use_layer_norm
         self.critic_use_layer_norm = critic_use_layer_norm
+        self.actor_use_group_norm = actor_use_group_norm
+        self.critic_use_group_norm = critic_use_group_norm
+        self.num_groups = num_groups
+        self.actor_dropout_rate = actor_dropout_rate
+        self.critic_dropout_rate = critic_dropout_rate
+        self.kernel_init = kernel_init
+        self.backbone_type = backbone_type
         self.std_parameterization = std_parameterization
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
@@ -192,6 +224,18 @@ class WSRL(OffPolicyAlgorithm):
         self._online_start_step: int | None = None
         self._offline_probe_batch: MCReplayBufferSample | None = None
 
+        # Sparse-reward MC config
+        self.sparse_reward_mc = sparse_reward_mc
+        self.sparse_negative_reward = sparse_negative_reward
+        self.success_threshold = success_threshold
+
+        # Offline-phase sampling strategy. Online phase always uses with-replacement.
+        self.offline_sampling: Literal["with_replace", "without_replace"] = offline_sampling
+
+        # Mixed-batch online sampling (set by switch_to_online_mode("mixed", ...)).
+        self.offline_replay_buffer: Optional[Any] = None
+        self.offline_data_ratio: float = 0.0
+
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()
 
@@ -204,6 +248,12 @@ class WSRL(OffPolicyAlgorithm):
             "cql_alpha_lr": self.cql_alpha_lr,
             "policy_frequency": self.policy_frequency,
             "target_network_frequency": self.target_network_frequency,
+            "weight_decay": self.weight_decay,
+            "use_adamw": self.use_adamw,
+            "lr_schedule": self.lr_schedule,
+            "lr_warmup_steps": self.lr_warmup_steps,
+            "lr_decay_steps": self.lr_decay_steps,
+            "lr_min_ratio": self.lr_min_ratio,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
@@ -211,6 +261,13 @@ class WSRL(OffPolicyAlgorithm):
             "net_arch": self.net_arch,
             "actor_use_layer_norm": self.actor_use_layer_norm,
             "critic_use_layer_norm": self.critic_use_layer_norm,
+            "actor_use_group_norm": self.actor_use_group_norm,
+            "critic_use_group_norm": self.critic_use_group_norm,
+            "num_groups": self.num_groups,
+            "actor_dropout_rate": self.actor_dropout_rate,
+            "critic_dropout_rate": self.critic_dropout_rate,
+            "kernel_init": self.kernel_init,
+            "backbone_type": self.backbone_type,
             "std_parameterization": self.std_parameterization,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
@@ -231,6 +288,10 @@ class WSRL(OffPolicyAlgorithm):
             "use_td_loss": self.use_td_loss,
             "online_cql_alpha": self.online_cql_alpha,
             "online_use_cql_loss": self.online_use_cql_loss,
+            "sparse_reward_mc": self.sparse_reward_mc,
+            "sparse_negative_reward": self.sparse_negative_reward,
+            "success_threshold": self.success_threshold,
+            "offline_sampling": self.offline_sampling,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -245,6 +306,11 @@ class WSRL(OffPolicyAlgorithm):
             state["temperature_lagrange"] = self.temperature_lagrange.state_dict()
         else:
             state["fixed_alpha"] = self._fixed_alpha.detach()
+        # LR scheduler state (per scheduler index; None if no scheduler).
+        sched_states: list[Optional[dict]] = []
+        for sched in self._lr_schedulers:
+            sched_states.append(sched.state_dict() if sched is not None else None)
+        state["lr_scheduler_states"] = sched_states
         return state
 
     def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
@@ -260,6 +326,10 @@ class WSRL(OffPolicyAlgorithm):
             self.temperature_lagrange.load_state_dict(state["temperature_lagrange"])
         elif not self.autotune and "fixed_alpha" in state:
             self._fixed_alpha = state["fixed_alpha"].to(self.device)
+        if "lr_scheduler_states" in state:
+            for sched, sched_state in zip(self._lr_schedulers, state["lr_scheduler_states"]):
+                if sched is not None and sched_state is not None:
+                    sched.load_state_dict(sched_state)
 
     # --- Construction hooks (WSRLRGBD overrides defaults only) ---
 
@@ -334,6 +404,75 @@ class WSRL(OffPolicyAlgorithm):
             **resolved["features_extractor_kwargs"],
         )
 
+    def _step_critic_scheduler(self) -> None:
+        sched = self._lr_schedulers[0] if self._lr_schedulers else None
+        if sched is not None:
+            sched.step()
+
+    def _step_actor_scheduler(self) -> None:
+        sched = self._lr_schedulers[1] if len(self._lr_schedulers) >= 2 else None
+        if sched is not None:
+            sched.step()
+
+    def _sample_batch(self, batch_size: int) -> MCReplayBufferSample:
+        """Dispatch to with/without-replacement sampling based on phase + config.
+
+        Online phase (after ``switch_to_online_mode``) uses with-replacement and
+        optionally a mixed-batch composed of online + offline samples when
+        ``offline_replay_buffer`` is set.
+        Offline phase honors ``self.offline_sampling``.
+        """
+        in_offline_phase = self._online_start_step is None
+        if in_offline_phase and self.offline_sampling == "without_replace":
+            return self.replay_buffer.sample_without_repeat(batch_size)
+
+        # Online mixed-batch: combine online (current buffer) + offline buffer samples.
+        if (
+            not in_offline_phase
+            and self.offline_replay_buffer is not None
+            and self.offline_data_ratio > 0.0
+        ):
+            return self._sample_mixed_batch(batch_size)
+
+        return self.replay_buffer.sample(batch_size)
+
+    def _sample_mixed_batch(self, batch_size: int) -> MCReplayBufferSample:
+        """Sample ``(1-r)*B`` from online + ``r*B`` from offline and concatenate."""
+        ratio = self.offline_data_ratio
+        n_online = batch_size - int(round(batch_size * ratio))
+        online_size = len(self.replay_buffer)
+        if online_size == 0:
+            # Online buffer empty (e.g., before learning_starts collected enough);
+            # fall back to all-offline for this batch.
+            return self.offline_replay_buffer.sample(batch_size)
+        n_offline = batch_size - n_online
+        if n_online == 0:
+            return self.offline_replay_buffer.sample(batch_size)
+        if n_offline == 0:
+            return self.replay_buffer.sample(batch_size)
+
+        online_sample = self.replay_buffer.sample(n_online)
+        offline_sample = self.offline_replay_buffer.sample(n_offline)
+        return self._concat_replay_samples(online_sample, offline_sample)
+
+    @staticmethod
+    def _concat_replay_samples(
+        a: MCReplayBufferSample, b: MCReplayBufferSample
+    ) -> MCReplayBufferSample:
+        def _cat(x, y):
+            if isinstance(x, dict):
+                return {k: torch.cat([x[k], y[k]], dim=0) for k in x}
+            return torch.cat([x, y], dim=0)
+
+        return MCReplayBufferSample(
+            obs=_cat(a.obs, b.obs),
+            next_obs=_cat(a.next_obs, b.next_obs),
+            actions=_cat(a.actions, b.actions),
+            rewards=_cat(a.rewards, b.rewards),
+            dones=_cat(a.dones, b.dones),
+            mc_returns=_cat(a.mc_returns, b.mc_returns),
+        )
+
     def _build_replay_buffer(self):
         return MCTensorReplayBuffer(
             observation_space=self.env.single_observation_space,
@@ -343,6 +482,9 @@ class WSRL(OffPolicyAlgorithm):
             gamma=self.gamma,
             storage_device=self.buffer_device,
             sample_device=self.device,
+            sparse_reward_mc=self.sparse_reward_mc,
+            sparse_negative_reward=self.sparse_negative_reward,
+            success_threshold=self.success_threshold,
         )
 
     @staticmethod
@@ -394,17 +536,30 @@ class WSRL(OffPolicyAlgorithm):
             cql_alpha_lagrange_init=self.cql_alpha_lagrange_init,
             actor_use_layer_norm=self.actor_use_layer_norm,
             critic_use_layer_norm=self.critic_use_layer_norm,
+            actor_use_group_norm=self.actor_use_group_norm,
+            critic_use_group_norm=self.critic_use_group_norm,
+            num_groups=self.num_groups,
+            actor_dropout_rate=self.actor_dropout_rate,
+            critic_dropout_rate=self.critic_dropout_rate,
+            kernel_init=self.kernel_init,
+            backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
         ).to(self.device)
 
-        self.q_optimizer = torch.optim.Adam(
-            list(self.policy.critic_and_encoder_parameters()), lr=self.q_lr
+        self.q_optimizer = make_optimizer(
+            list(self.policy.critic_and_encoder_parameters()),
+            lr=self.q_lr,
+            weight_decay=self.weight_decay,
+            use_adamw=self.use_adamw,
         )
-        self.actor_optimizer = torch.optim.Adam(
-            list(self.policy.actor_parameters()), lr=self.policy_lr
+        self.actor_optimizer = make_optimizer(
+            list(self.policy.actor_parameters()),
+            lr=self.policy_lr,
+            weight_decay=self.weight_decay,
+            use_adamw=self.use_adamw,
         )
 
-        # CQL alpha Lagrange multiplier optimizer
+        # CQL alpha Lagrange multiplier optimizer (no weight decay on scalars).
         if self.cql_autotune_alpha:
             self.cql_alpha_optimizer = torch.optim.Adam(
                 list(self.policy.cql_alpha_lagrange_parameters()), lr=self.cql_alpha_lr
@@ -438,6 +593,19 @@ class WSRL(OffPolicyAlgorithm):
             self.target_entropy = float(self.target_entropy_arg)
 
         self.replay_buffer = self._build_replay_buffer()
+
+        # LR schedulers (one per actor/critic optimizer, sharing schedule config).
+        self._lr_schedulers: list[Optional[Any]] = []
+        for opt in (self.q_optimizer, self.actor_optimizer):
+            self._lr_schedulers.append(
+                make_lr_scheduler(
+                    opt,
+                    schedule_type=self.lr_schedule,
+                    warmup_steps=self.lr_warmup_steps,
+                    decay_steps=self.lr_decay_steps,
+                    min_lr_ratio=self.lr_min_ratio,
+                )
+            )
 
     # --- Helper methods ---
 
@@ -547,18 +715,45 @@ class WSRL(OffPolicyAlgorithm):
             for tag, value in self._offline_probe_metrics().items():
                 self.logger.add_scalar(tag, value, step)
 
-    def switch_to_online_mode(self):
-        """Switch from offline to online training mode."""
+    def switch_to_online_mode(
+        self,
+        online_replay_mode: Literal["empty", "append", "mixed"] = "append",
+        offline_data_ratio: float = 0.0,
+    ) -> None:
+        """Switch from offline to online training mode.
+
+        Args:
+            online_replay_mode:
+                - ``"empty"`` / ``"append"``: keep a single replay buffer; the
+                  caller is responsible for clearing it (matches existing flow).
+                - ``"mixed"``: freeze current buffer as ``self.offline_replay_buffer``
+                  and replace ``self.replay_buffer`` with a fresh empty MC buffer.
+                  Each train batch will be ``(1-r)`` from online + ``r`` from offline,
+                  where ``r = offline_data_ratio``.
+            offline_data_ratio: Used only when mode is ``"mixed"``. Must be in [0, 1].
+        """
         self._online_start_step = self._global_step
         if self.online_use_cql_loss is not None:
             self.use_cql_loss = self.online_use_cql_loss
         if self.online_cql_alpha is not None:
             self.cql_alpha = self.online_cql_alpha
 
+        if online_replay_mode == "mixed":
+            if not (0.0 <= offline_data_ratio <= 1.0):
+                raise ValueError(
+                    f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}."
+                )
+            self.offline_replay_buffer = self.replay_buffer
+            self.replay_buffer = self._build_replay_buffer()
+            self.offline_data_ratio = offline_data_ratio
+
         if self.logger:
             self.logger.add_summary("wsrl/online_start_step", self._global_step)
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
+            self.logger.add_summary("wsrl/online_replay_mode", online_replay_mode)
+            if online_replay_mode == "mixed":
+                self.logger.add_summary("wsrl/offline_data_ratio", offline_data_ratio)
 
     # --- CQL Loss Computation ---
 
@@ -951,13 +1146,14 @@ class WSRL(OffPolicyAlgorithm):
 
         for step in range(gradient_steps):
             self._global_update += 1
-            data = self.replay_buffer.sample(self.batch_size)
+            data = self._sample_batch(self.batch_size)
 
             # --- Critic update ---
             critic_loss, critic_info = self._critic_loss(data)
             self.q_optimizer.zero_grad()
             critic_loss.backward()
             self.q_optimizer.step()
+            self._step_critic_scheduler()
             critic_losses.append(critic_loss.item())
 
             # Accumulate info
@@ -973,6 +1169,7 @@ class WSRL(OffPolicyAlgorithm):
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self.actor_optimizer.step()
+                self._step_actor_scheduler()
                 actor_losses.append(actor_loss.item())
 
                 # Entropy coefficient update
@@ -1056,7 +1253,7 @@ class WSRL(OffPolicyAlgorithm):
             self.batch_size % utd_ratio == 0
         ), f"batch_size ({self.batch_size}) must be divisible by utd_ratio ({utd_ratio})"
 
-        full_batch = self.replay_buffer.sample(self.batch_size)
+        full_batch = self._sample_batch(self.batch_size)
         minibatch_size = self.batch_size // utd_ratio
 
         critic_losses: list[float] = []
@@ -1071,6 +1268,7 @@ class WSRL(OffPolicyAlgorithm):
             self.q_optimizer.zero_grad()
             critic_loss.backward()
             self.q_optimizer.step()
+            self._step_critic_scheduler()
             critic_losses.append(critic_loss.item())
 
             for k, v in critic_info.items():
@@ -1089,6 +1287,7 @@ class WSRL(OffPolicyAlgorithm):
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
+        self._step_actor_scheduler()
 
         alpha_loss_val = None
         if self.autotune:

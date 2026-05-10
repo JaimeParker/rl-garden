@@ -568,5 +568,99 @@ class TestWSRLModeSwitch:
         assert wsrl_agent.cql_alpha == 0.5
 
 
+class TestMixedBatchSampling:
+    """Mixed-batch online sampling: switch_to_online_mode("mixed", ratio)."""
+
+    def _fill_buffer(self, buffer, num_steps: int, marker: float = 0.0) -> None:
+        """Fill buffer with deterministic values; obs[0] = marker for identification."""
+        n = buffer.num_envs
+        obs_dim = buffer.obs.shape[-1]
+        act_dim = buffer.actions.shape[-1]
+        for step in range(num_steps):
+            buffer.add(
+                torch.full((n, obs_dim), marker),
+                torch.full((n, obs_dim), marker + 1.0),
+                torch.zeros(n, act_dim),
+                torch.zeros(n),
+                torch.zeros(n),
+            )
+
+    def test_switch_to_online_mode_mixed_freezes_offline_buffer(self, wsrl_agent):
+        # Pre-fill with offline data
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=42.0)
+        assert wsrl_agent.offline_replay_buffer is None
+
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
+
+        # Original buffer should now be the offline buffer (still has the data).
+        assert wsrl_agent.offline_replay_buffer is not None
+        assert len(wsrl_agent.offline_replay_buffer) > 0
+        # New replay buffer is empty.
+        assert len(wsrl_agent.replay_buffer) == 0
+        assert wsrl_agent.offline_data_ratio == 0.5
+
+    def test_mixed_batch_sample_when_online_empty_uses_all_offline(self, wsrl_agent):
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=42.0)
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
+        # Online buffer empty → all samples from offline (marker=42)
+        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
+        assert sample.obs.shape[0] == wsrl_agent.batch_size
+        # All obs should have marker=42 since online is empty
+        assert torch.all(sample.obs[:, 0] == 42.0)
+
+    def test_mixed_batch_combines_online_and_offline(self, wsrl_agent):
+        # Offline data with marker=10.0
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=10.0)
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.25)
+        # Add online data with marker=99.0
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=99.0)
+        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
+        # batch_size=8, ratio=0.25 → 2 from offline (marker=10), 6 from online (marker=99)
+        offline_count = (sample.obs[:, 0] == 10.0).sum().item()
+        online_count = (sample.obs[:, 0] == 99.0).sum().item()
+        assert offline_count + online_count == wsrl_agent.batch_size
+        assert offline_count == 2
+        assert online_count == 6
+
+    def test_mixed_batch_zero_ratio_uses_only_online(self, wsrl_agent):
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=10.0)
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.0)
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=99.0)
+        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
+        # ratio=0 → no offline samples
+        assert torch.all(sample.obs[:, 0] == 99.0)
+
+    def test_mixed_batch_invalid_ratio_raises(self, wsrl_agent):
+        with pytest.raises(ValueError, match="offline_data_ratio"):
+            wsrl_agent.switch_to_online_mode(
+                online_replay_mode="mixed", offline_data_ratio=1.5
+            )
+
+    def test_concat_replay_samples_preserves_mc_returns(self, wsrl_agent):
+        from rl_garden.common.types import MCReplayBufferSample
+
+        a = MCReplayBufferSample(
+            obs=torch.zeros(2, 4),
+            next_obs=torch.zeros(2, 4),
+            actions=torch.zeros(2, 2),
+            rewards=torch.tensor([1.0, 2.0]),
+            dones=torch.zeros(2),
+            mc_returns=torch.tensor([10.0, 20.0]),
+        )
+        b = MCReplayBufferSample(
+            obs=torch.ones(3, 4),
+            next_obs=torch.ones(3, 4),
+            actions=torch.ones(3, 2),
+            rewards=torch.tensor([3.0, 4.0, 5.0]),
+            dones=torch.zeros(3),
+            mc_returns=torch.tensor([30.0, 40.0, 50.0]),
+        )
+        out = WSRL._concat_replay_samples(a, b)
+        assert out.obs.shape == (5, 4)
+        torch.testing.assert_close(
+            out.mc_returns, torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

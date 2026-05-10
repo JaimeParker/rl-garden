@@ -170,6 +170,8 @@ def load_maniskill_h5_to_replay_buffer(
     path: str | Path,
     *,
     num_traj: Optional[int] = None,
+    reward_scale: float = 1.0,
+    reward_bias: float = 0.0,
 ) -> int:
     """Load ManiSkill trajectory H5 transitions into an existing replay buffer.
 
@@ -178,6 +180,10 @@ def load_maniskill_h5_to_replay_buffer(
     terminal flags or explicit ``next_obs``. Transitions are inserted in
     full ``buffer.num_envs`` chunks to preserve the existing ``(T, N, ...)``
     replay layout.
+
+    ``reward_scale`` and ``reward_bias`` apply ``r := scale * r + bias`` to each
+    loaded reward. Use the same values as ``RewardScaleBiasWrapper`` so that
+    offline and online rewards live on the same scale.
     """
     h5py = _require_h5py()
     path = Path(path)
@@ -204,6 +210,8 @@ def load_maniskill_h5_to_replay_buffer(
             obs, next_obs, actions, rewards, dones = _load_traj_transitions(
                 traj, storage_device
             )
+            if reward_scale != 1.0 or reward_bias != 0.0:
+                rewards = rewards * reward_scale + reward_bias
             obs_parts.append(obs)
             next_obs_parts.append(next_obs)
             action_parts.append(actions)

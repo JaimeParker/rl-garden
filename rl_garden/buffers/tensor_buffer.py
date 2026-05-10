@@ -9,11 +9,12 @@ from __future__ import annotations
 import torch
 from gymnasium import spaces
 
+from rl_garden.buffers._sampling import WithoutReplaceSamplerMixin
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.types import ReplayBufferSample
 
 
-class TensorReplayBuffer(BaseReplayBuffer):
+class TensorReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
     def __init__(
         self,
         observation_space: spaces.Box,
@@ -72,10 +73,9 @@ class TensorReplayBuffer(BaseReplayBuffer):
             self.full = True
             self.pos = 0
 
-    def sample(self, batch_size: int) -> ReplayBufferSample:
-        upper = self.per_env_buffer_size if self.full else self.pos
-        batch_inds = torch.randint(0, upper, size=(batch_size,))
-        env_inds = torch.randint(0, self.num_envs, size=(batch_size,))
+    def _index_batch(
+        self, batch_inds: torch.Tensor, env_inds: torch.Tensor
+    ) -> ReplayBufferSample:
         return ReplayBufferSample(
             obs=self.obs[batch_inds, env_inds].to(self.sample_device),
             next_obs=self.next_obs[batch_inds, env_inds].to(self.sample_device),
@@ -83,3 +83,9 @@ class TensorReplayBuffer(BaseReplayBuffer):
             rewards=self.rewards[batch_inds, env_inds].to(self.sample_device),
             dones=self.dones[batch_inds, env_inds].to(self.sample_device),
         )
+
+    def sample(self, batch_size: int) -> ReplayBufferSample:
+        upper = self.per_env_buffer_size if self.full else self.pos
+        batch_inds = torch.randint(0, upper, size=(batch_size,))
+        env_inds = torch.randint(0, self.num_envs, size=(batch_size,))
+        return self._index_batch(batch_inds, env_inds)

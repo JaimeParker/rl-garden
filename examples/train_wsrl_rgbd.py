@@ -103,6 +103,8 @@ def main() -> None:
         camera_width=args.camera_width,
         camera_height=args.camera_height,
         render_mode=args.render_mode,
+        reward_scale=args.reward_scale,
+        reward_bias=args.reward_bias,
     )
     eval_record_dir = resolve_eval_record_dir(args, run_name)
     eval_cfg = ManiSkillEnvConfig(
@@ -119,6 +121,8 @@ def main() -> None:
         save_video=args.capture_video,
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
+        reward_scale=args.reward_scale,
+        reward_bias=args.reward_bias,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
@@ -141,6 +145,12 @@ def main() -> None:
         q_lr=args.q_lr,
         alpha_lr=args.alpha_lr,
         cql_alpha_lr=args.cql_alpha_lr,
+        weight_decay=args.weight_decay,
+        use_adamw=args.use_adamw,
+        lr_schedule=args.lr_schedule,
+        lr_warmup_steps=args.lr_warmup_steps,
+        lr_decay_steps=args.lr_decay_steps,
+        lr_min_ratio=args.lr_min_ratio,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,
@@ -160,9 +170,20 @@ def main() -> None:
         calql_bound_random_actions=args.calql_bound_random_actions,
         actor_use_layer_norm=args.actor_use_layer_norm,
         critic_use_layer_norm=args.critic_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        actor_dropout_rate=args.actor_dropout_rate,
+        critic_dropout_rate=args.critic_dropout_rate,
+        kernel_init=args.kernel_init,
+        backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
+        offline_sampling=args.offline_sampling,
+        sparse_reward_mc=args.sparse_reward_mc,
+        sparse_negative_reward=args.sparse_negative_reward,
+        success_threshold=args.success_threshold,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -190,6 +211,8 @@ def main() -> None:
             agent.replay_buffer,
             args.offline_dataset_path,
             num_traj=args.offline_num_traj,
+            reward_scale=args.reward_scale,
+            reward_bias=args.reward_bias,
         )
         logger.add_scalar("offline/loaded_transitions", loaded, 0)
         _offline_update_loop(
@@ -197,7 +220,10 @@ def main() -> None:
         )
 
         # Switch to online mode
-        agent.switch_to_online_mode()
+        agent.switch_to_online_mode(
+            online_replay_mode=args.online_replay_mode,
+            offline_data_ratio=args.offline_data_ratio,
+        )
 
     # Online training phase
     if args.num_online_steps > 0:

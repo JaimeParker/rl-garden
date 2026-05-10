@@ -87,7 +87,8 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     num_online_steps: int = 1_000_000
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
-    online_replay_mode: Literal["empty", "append"] = "empty"
+    online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
+    offline_data_ratio: float = 0.0
 
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
@@ -104,6 +105,12 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     cql_alpha_lr: float = 3e-4
     policy_frequency: int = 1
     target_network_frequency: int = 1
+    weight_decay: float = 0.0
+    use_adamw: bool = False
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
 
     n_critics: int = 10
     critic_subsample_size: int = 2
@@ -127,10 +134,27 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
 
     actor_use_layer_norm: bool = True
     critic_use_layer_norm: bool = True
+    actor_use_group_norm: bool = False
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    critic_dropout_rate: Optional[float] = None
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"
 
     online_cql_alpha: Optional[float] = None
     online_use_cql_loss: Optional[bool] = None
+    offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
+
+    sparse_reward_mc: bool = False
+    sparse_negative_reward: float = 0.0
+    success_threshold: float = 0.5
+
+    reward_scale: float = 1.0
+    reward_bias: float = 0.0
 
 
 @dataclass

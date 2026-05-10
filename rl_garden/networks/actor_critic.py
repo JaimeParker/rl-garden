@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal, Sequence
+from typing import Literal, Optional, Sequence
 
 import numpy as np
 import torch
 import torch.nn as nn
 from gymnasium import spaces
 
-from rl_garden.networks.mlp import create_mlp
+from rl_garden.networks.mlp import KernelInit, MLPResNet, create_mlp
+
+BackboneType = Literal["mlp", "mlp_resnet"]
 
 
 def get_actor_critic_arch(
@@ -27,6 +29,61 @@ def get_actor_critic_arch(
     return list(net_arch), list(net_arch)
 
 
+def _build_trunk(
+    input_dim: int,
+    hidden_dims: Sequence[int],
+    *,
+    backbone_type: BackboneType,
+    use_layer_norm: bool,
+    use_group_norm: bool,
+    num_groups: int,
+    dropout_rate: Optional[float],
+    kernel_init: Optional[KernelInit],
+) -> tuple[nn.Module, int]:
+    """Build a feature trunk and return (module, output_dim).
+
+    For ``backbone_type='mlp'``, returns standard create_mlp() with no output head.
+    For ``backbone_type='mlp_resnet'``, ``hidden_dims`` must be a list of identical
+    widths; ``hidden_dim`` is taken from the first entry and ``num_blocks`` from len.
+    """
+    if backbone_type == "mlp":
+        trunk = create_mlp(
+            input_dim=input_dim,
+            output_dim=-1,
+            net_arch=hidden_dims,
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        out_dim = hidden_dims[-1] if len(hidden_dims) > 0 else input_dim
+        return trunk, out_dim
+
+    if backbone_type == "mlp_resnet":
+        if len(hidden_dims) < 1:
+            raise ValueError("mlp_resnet requires at least one hidden dim.")
+        if any(h != hidden_dims[0] for h in hidden_dims):
+            raise ValueError(
+                "mlp_resnet requires identical widths across hidden_dims; "
+                f"got {list(hidden_dims)!r}."
+            )
+        trunk = MLPResNet(
+            input_dim=input_dim,
+            output_dim=-1,
+            hidden_dim=hidden_dims[0],
+            num_blocks=len(hidden_dims),
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        return trunk, hidden_dims[0]
+
+    raise ValueError(f"Unknown backbone_type: {backbone_type!r}")
+
+
 class SquashedGaussianActor(nn.Module):
     """Tanh-squashed Gaussian actor for SAC/WSRL families."""
 
@@ -37,6 +94,11 @@ class SquashedGaussianActor(nn.Module):
         hidden_dims: Sequence[int],
         *,
         use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         log_std_min: float = -20.0,
@@ -60,13 +122,16 @@ class SquashedGaussianActor(nn.Module):
         self.log_std_max = log_std_max
 
         act_dim = int(np.prod(action_space.shape))
-        self.trunk = create_mlp(
-            input_dim=features_dim,
-            output_dim=-1,
-            net_arch=hidden_dims,
+        self.trunk, trunk_dim = _build_trunk(
+            features_dim,
+            hidden_dims,
+            backbone_type=backbone_type,
             use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
         )
-        trunk_dim = hidden_dims[-1] if len(hidden_dims) > 0 else features_dim
 
         self.fc_mean = nn.Linear(trunk_dim, act_dim)
         if std_parameterization == "exp":
@@ -121,8 +186,42 @@ class SquashedGaussianActor(nn.Module):
         return torch.tanh(mean) * self.action_scale + self.action_bias
 
 
+class _QHead(nn.Module):
+    """Single Q-network: trunk over (features, actions) -> scalar Q."""
+
+    def __init__(
+        self,
+        features_dim: int,
+        act_dim: int,
+        hidden_dims: Sequence[int],
+        *,
+        backbone_type: BackboneType,
+        use_layer_norm: bool,
+        use_group_norm: bool,
+        num_groups: int,
+        dropout_rate: Optional[float],
+        kernel_init: Optional[KernelInit],
+    ) -> None:
+        super().__init__()
+        self.trunk, trunk_dim = _build_trunk(
+            features_dim + act_dim,
+            hidden_dims,
+            backbone_type=backbone_type,
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        self.head = nn.Linear(trunk_dim, 1)
+
+    def forward(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        x = torch.cat([features, actions], dim=-1)
+        return self.head(self.trunk(x))
+
+
 class EnsembleQCritic(nn.Module):
-    """Ensemble of Q(s, a) MLPs."""
+    """Ensemble of Q(s, a) networks."""
 
     def __init__(
         self,
@@ -132,6 +231,11 @@ class EnsembleQCritic(nn.Module):
         *,
         n_critics: int = 2,
         use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
     ) -> None:
         super().__init__()
         if n_critics < 1:
@@ -141,11 +245,16 @@ class EnsembleQCritic(nn.Module):
         act_dim = int(np.prod(action_space.shape))
         self.q_nets = nn.ModuleList(
             [
-                create_mlp(
-                    input_dim=features_dim + act_dim,
-                    output_dim=1,
-                    net_arch=hidden_dims,
+                _QHead(
+                    features_dim,
+                    act_dim,
+                    hidden_dims,
+                    backbone_type=backbone_type,
                     use_layer_norm=use_layer_norm,
+                    use_group_norm=use_group_norm,
+                    num_groups=num_groups,
+                    dropout_rate=dropout_rate,
+                    kernel_init=kernel_init,
                 )
                 for _ in range(n_critics)
             ]
@@ -154,8 +263,7 @@ class EnsembleQCritic(nn.Module):
     def forward(
         self, features: torch.Tensor, actions: torch.Tensor
     ) -> tuple[torch.Tensor, ...]:
-        x = torch.cat([features, actions], dim=-1)
-        return tuple(q(x) for q in self.q_nets)
+        return tuple(q(features, actions) for q in self.q_nets)
 
     def forward_all(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         q_values = self.forward(features, actions)
