@@ -112,6 +112,10 @@ class WSRL(OffPolicyAlgorithm):
         log_freq: int = 1_000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_freq: int = 0,
+        save_replay_buffer: bool = False,
+        save_final_checkpoint: bool = True,
     ) -> None:
         super().__init__(
             env=env,
@@ -132,6 +136,10 @@ class WSRL(OffPolicyAlgorithm):
             log_freq=log_freq,
             eval_freq=eval_freq,
             num_eval_steps=num_eval_steps,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=checkpoint_freq,
+            save_replay_buffer=save_replay_buffer,
+            save_final_checkpoint=save_final_checkpoint,
         )
 
         # Optimizers
@@ -181,9 +189,77 @@ class WSRL(OffPolicyAlgorithm):
         self.use_td_loss = use_td_loss
         self.online_cql_alpha = online_cql_alpha
         self.online_use_cql_loss = online_use_cql_loss
+        self._online_start_step: int | None = None
+        self._offline_probe_batch: MCReplayBufferSample | None = None
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            **super()._checkpoint_metadata(),
+            "policy_lr": self.policy_lr,
+            "q_lr": self.q_lr,
+            "alpha_lr": self.alpha_lr,
+            "cql_alpha_lr": self.cql_alpha_lr,
+            "policy_frequency": self.policy_frequency,
+            "target_network_frequency": self.target_network_frequency,
+            "ent_coef": self.ent_coef_init,
+            "target_entropy": self.target_entropy_arg,
+            "target_entropy_value": self.target_entropy,
+            "backup_entropy": self.backup_entropy,
+            "net_arch": self.net_arch,
+            "actor_use_layer_norm": self.actor_use_layer_norm,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "std_parameterization": self.std_parameterization,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            "use_cql_loss": self.use_cql_loss,
+            "cql_n_actions": self.cql_n_actions,
+            "cql_alpha": self.cql_alpha,
+            "cql_autotune_alpha": self.cql_autotune_alpha,
+            "cql_alpha_lagrange_init": self.cql_alpha_lagrange_init,
+            "cql_target_action_gap": self.cql_target_action_gap,
+            "cql_importance_sample": self.cql_importance_sample,
+            "cql_max_target_backup": self.cql_max_target_backup,
+            "cql_temp": self.cql_temp,
+            "cql_clip_diff_min": self.cql_clip_diff_min,
+            "cql_clip_diff_max": self.cql_clip_diff_max,
+            "cql_action_sample_method": self.cql_action_sample_method,
+            "use_calql": self.use_calql,
+            "calql_bound_random_actions": self.calql_bound_random_actions,
+            "use_td_loss": self.use_td_loss,
+            "online_cql_alpha": self.online_cql_alpha,
+            "online_use_cql_loss": self.online_use_cql_loss,
+        }
+
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "autotune": self.autotune,
+            "target_entropy": self.target_entropy,
+            "use_cql_loss": self.use_cql_loss,
+            "cql_alpha": self.cql_alpha,
+            "use_td_loss": self.use_td_loss,
+        }
+        if self.autotune:
+            state["temperature_lagrange"] = self.temperature_lagrange.state_dict()
+        else:
+            state["fixed_alpha"] = self._fixed_alpha.detach()
+        return state
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        if "target_entropy" in state:
+            self.target_entropy = float(state["target_entropy"])
+        if "use_cql_loss" in state:
+            self.use_cql_loss = bool(state["use_cql_loss"])
+        if "cql_alpha" in state:
+            self.cql_alpha = float(state["cql_alpha"])
+        if "use_td_loss" in state:
+            self.use_td_loss = bool(state["use_td_loss"])
+        if self.autotune and "temperature_lagrange" in state:
+            self.temperature_lagrange.load_state_dict(state["temperature_lagrange"])
+        elif not self.autotune and "fixed_alpha" in state:
+            self._fixed_alpha = state["fixed_alpha"].to(self.device)
 
     # --- Construction hooks (WSRLRGBD overrides defaults only) ---
 
@@ -375,17 +451,114 @@ class WSRL(OffPolicyAlgorithm):
             return self.policy.get_cql_alpha()
         return torch.tensor(self.cql_alpha, device=self.device)
 
+    @staticmethod
+    def canonical_eval_metrics(metrics: dict[str, float]) -> dict[str, float]:
+        """Add paper-style score curves while preserving raw eval metrics."""
+        out = dict(metrics)
+        success = metrics.get("success_at_end", metrics.get("success_once"))
+        if success is not None:
+            out["normalized_score"] = float(success) * 100.0
+        return out
+
+    @staticmethod
+    def _update_metric_tags(metrics: dict[str, float]) -> dict[str, float]:
+        tagged: dict[str, float] = {}
+        loss_keys = {
+            "critic_loss",
+            "actor_loss",
+            "td_loss",
+            "cql_loss",
+            "alpha_loss",
+            "cql_alpha_loss",
+        }
+        for key, value in metrics.items():
+            if key in loss_keys:
+                tagged[f"losses/{key}"] = value
+            elif key == "predicted_q":
+                tagged["q/predicted"] = value
+            elif key == "target_q":
+                tagged["q/target"] = value
+            elif key == "cql_ood_values":
+                tagged["q/cql_ood"] = value
+            elif key == "cql_q_diff":
+                tagged["q/cql_diff"] = value
+            elif key == "cql_alpha":
+                tagged["cql/alpha"] = value
+            elif key == "calql_bound_rate":
+                tagged["cql/bound_rate"] = value
+            elif key == "alpha":
+                tagged["entropy/alpha"] = value
+            elif key == "utd_ratio":
+                tagged["train/utd_ratio"] = value
+            else:
+                tagged[f"losses/{key}"] = value
+
+        if "td_loss" in metrics:
+            tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
+        return tagged
+
+    def set_offline_probe_batch(self, batch: MCReplayBufferSample | None) -> None:
+        """Keep a fixed offline batch for no-grad online forgetting diagnostics."""
+        self._offline_probe_batch = batch
+
+    def _offline_probe_metrics(self) -> dict[str, float]:
+        if self._offline_probe_batch is None:
+            return {}
+        with torch.no_grad():
+            data = self._offline_probe_batch
+            q_pred = self._critic_forward(data.obs, data.actions, target=False)
+            target_q = self._target_q(data)
+            target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
+            td_mse = F.mse_loss(q_pred, target_q_expanded)
+        return {
+            "q/offline_probe/predicted": float(q_pred.mean().item()),
+            "q/offline_probe/target": float(target_q.mean().item()),
+            "q/offline_probe/td_rmse": float(torch.sqrt(td_mse).item()),
+        }
+
+    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in self.canonical_eval_metrics(metrics).items():
+            self.logger.add_scalar(f"eval/{key}", value, step)
+
+    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
+        if self.logger is None:
+            return
+        self.logger.add_scalar(f"train/{key}", value, step)
+        if key in {"success_at_end", "success_once"}:
+            self.logger.add_scalar("train/normalized_score", value * 100.0, step)
+
+    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for tag, value in self._update_metric_tags(metrics).items():
+            self.logger.add_scalar(tag, value, step)
+
+        online_start = self._online_start_step
+        is_online = online_start is not None and step >= online_start
+        offline_step = min(step, online_start) if online_start is not None else step
+        online_step = max(0, step - online_start) if online_start is not None else 0
+        self.logger.add_scalar("phase/is_online", float(is_online), step)
+        self.logger.add_scalar("phase/offline_step", float(offline_step), step)
+        self.logger.add_scalar("phase/online_step", float(online_step), step)
+
+        if is_online:
+            for tag, value in self._offline_probe_metrics().items():
+                self.logger.add_scalar(tag, value, step)
+
     def switch_to_online_mode(self):
         """Switch from offline to online training mode."""
+        self._online_start_step = self._global_step
         if self.online_use_cql_loss is not None:
             self.use_cql_loss = self.online_use_cql_loss
         if self.online_cql_alpha is not None:
             self.cql_alpha = self.online_cql_alpha
 
         if self.logger:
-            self.logger.add_scalar("wsrl/switched_to_online", 1, self._global_step)
-            self.logger.add_scalar("wsrl/use_cql_loss", int(self.use_cql_loss), self._global_step)
-            self.logger.add_scalar("wsrl/cql_alpha", self.cql_alpha, self._global_step)
+            self.logger.add_summary("wsrl/online_start_step", self._global_step)
+            self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
+            self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
 
     # --- CQL Loss Computation ---
 

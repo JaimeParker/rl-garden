@@ -11,7 +11,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 STD_LOG="${RLG_STD_LOG:-1}"
-LOG_TYPE="${RLG_LOG_TYPE:-tensorboard}"
+LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
 LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
 FORWARD_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -63,4 +63,8 @@ exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_
     --n_critics 10 \
     --critic_subsample_size 2 \
     --use_calql \
+    --capture_video \
+    --video_fps 30 \
+    --render_mode rgb_array \
+    --eval_freq 10000 \
     "${FORWARD_ARGS[@]}"

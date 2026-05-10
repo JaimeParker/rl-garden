@@ -81,6 +81,10 @@ State SAC:
 python examples/train_sac_state.py --env_id PickCube-v1 --num_envs 16
 ```
 
+End-to-end WSRL reproduction, from SAC checkpoints to dataset generation and
+offline-to-online training, is documented in
+[`docs/WSRL_REPRODUCTION.md`](docs/WSRL_REPRODUCTION.md).
+
 State SAC with EE twist control:
 
 ```bash

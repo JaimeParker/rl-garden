@@ -11,7 +11,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 STD_LOG="${RLG_STD_LOG:-1}"
-LOG_TYPE="${RLG_LOG_TYPE:-tensorboard}"
+LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
 LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
 FORWARD_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -58,5 +58,9 @@ done
 exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_sac_state.py" \
     --env_id PickCube-v1 \
     --num_envs 16 \
+    --capture_video \
+    --video_fps 30 \
+    --render_mode rgb_array \
+    --eval_freq 10000 \
     --total_timesteps 1000000 \
     "${FORWARD_ARGS[@]}"

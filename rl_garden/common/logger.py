@@ -107,6 +107,13 @@ class Logger:
         if self.writer is not None:
             self.writer.add_text(tag, text)
 
+    def add_summary(self, tag: str, value: Any) -> None:
+        """Record run-level metadata without creating sparse scalar curves."""
+        if self.wandb_run is not None:
+            self.wandb_run.summary[tag] = value
+        elif self.writer is not None:
+            self.writer.add_text(tag, str(value))
+
     def close(self) -> None:
         if self.writer is not None:
             self.writer.close()

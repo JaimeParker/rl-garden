@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from abc import abstractmethod
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -45,6 +46,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         log_freq: int = 1_000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_freq: int = 0,
+        save_replay_buffer: bool = False,
+        save_final_checkpoint: bool = True,
     ) -> None:
         super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
         self.buffer_size = buffer_size
@@ -61,6 +66,11 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.log_freq = log_freq
         self.eval_freq = eval_freq
         self.num_eval_steps = num_eval_steps
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_freq = checkpoint_freq
+        self.save_replay_buffer = save_replay_buffer
+        self.save_final_checkpoint = save_final_checkpoint
+        self._last_checkpoint_step = -1
 
         self.num_envs = env.num_envs
         self.steps_per_env = max(1, training_freq // self.num_envs)
@@ -74,6 +84,25 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
     @abstractmethod
     def train(self, gradient_steps: int) -> dict[str, float]: ...
+
+    # --- logging hooks ---
+
+    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"eval/{key}", value, step)
+
+    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
+        if self.logger is None:
+            return
+        self.logger.add_scalar(f"train/{key}", value, step)
+
+    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"losses/{key}", value, step)
 
     def _explore_action(self, obs) -> torch.Tensor:
         """Random uniform action in [-1, 1] across all envs. Used pre-learning."""
@@ -152,6 +181,44 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def _fmt_metric(value: float) -> str:
         return "nan" if value != value else f"{value:.4f}"
 
+    # --- checkpointing ---
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            **super()._checkpoint_metadata(),
+            "buffer_size": self.buffer_size,
+            "buffer_device": self.buffer_device,
+            "learning_starts": self.learning_starts,
+            "batch_size": self.batch_size,
+            "gamma": self.gamma,
+            "tau": self.tau,
+            "training_freq": self.training_freq,
+            "utd": self.utd,
+            "bootstrap_at_done": self.bootstrap_at_done,
+        }
+
+    def _checkpoint_path(self, name: str) -> Path:
+        assert self.checkpoint_dir is not None
+        return Path(self.checkpoint_dir) / name
+
+    def _save_checkpoint(self, name: str) -> None:
+        if self.checkpoint_dir is None:
+            return
+        self.save(
+            self._checkpoint_path(name),
+            include_replay_buffer=self.save_replay_buffer,
+        )
+
+    def _maybe_save_periodic_checkpoint(self, previous_step: int) -> None:
+        if self.checkpoint_dir is None or self.checkpoint_freq <= 0:
+            return
+        if self._global_step // self.checkpoint_freq <= previous_step // self.checkpoint_freq:
+            return
+        if self._global_step == self._last_checkpoint_step:
+            return
+        self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
+        self._last_checkpoint_step = self._global_step
+
     # --- evaluation ---
 
     def _evaluate(self) -> dict[str, float]:
@@ -181,6 +248,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         global_steps_per_iteration = self.num_envs * self.steps_per_env
 
         while self._global_step < total_timesteps:
+            previous_step = self._global_step
             # Eval at iteration boundary.
             if (
                 self.eval_freq > 0
@@ -190,8 +258,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 stime = time.perf_counter()
                 eval_metrics = self._evaluate()
                 if self.logger is not None:
-                    for k, v in eval_metrics.items():
-                        self.logger.add_scalar(f"eval/{k}", v, self._global_step)
+                    self._log_eval_metrics(eval_metrics, self._global_step)
                     self.logger.add_scalar(
                         "time/eval_time", time.perf_counter() - stime, self._global_step
                     )
@@ -237,11 +304,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         if done_values.numel() == 0:
                             continue
                         mean_value = float(done_values.float().mean().item())
-                        self.logger.add_scalar(
-                            f"train/{k}",
-                            mean_value,
-                            self._global_step,
-                        )
+                        self._log_rollout_metric(k, mean_value, self._global_step)
                         rollout_episode_metrics[k].append(mean_value)
                 elif "final_info" in infos:
                     fi = infos["final_info"]
@@ -284,6 +347,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             )
 
             if self._global_step < self.learning_starts:
+                self._maybe_save_periodic_checkpoint(previous_step)
                 if self.std_log and should_log:
                     progress = 100.0 * self._global_step / total_timesteps
                     print(
@@ -307,8 +371,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
             if should_log:
                 if self.logger is not None:
-                    for k, v in losses.items():
-                        self.logger.add_scalar(f"losses/{k}", v, self._global_step)
+                    self._log_update_metrics(losses, self._global_step)
                     self.logger.add_scalar("time/update_time", update_time, self._global_step)
                     self.logger.add_scalar("time/rollout_time", rollout_time, self._global_step)
                     self.logger.add_scalar("time/rollout_fps", rollout_fps, self._global_step)
@@ -330,5 +393,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         f"fps={self._fmt_metric(rollout_fps)}",
                         flush=True,
                     )
+
+            self._maybe_save_periodic_checkpoint(previous_step)
+
+        if self.checkpoint_dir is not None and self.save_final_checkpoint:
+            self._save_checkpoint("final.pt")
 
         return self

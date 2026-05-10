@@ -77,6 +77,17 @@ class WSRLRGBD(WSRL):
         kwargs.setdefault("utd", utd)
         super().__init__(*args, policy_kwargs=policy_kwargs, **kwargs)
 
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            **super()._checkpoint_metadata(),
+            "image_keys": self._image_keys,
+            "state_key": self._state_key,
+            "use_proprio": self._use_proprio,
+            "proprio_latent_dim": self._proprio_latent_dim,
+            "image_fusion_mode": self._image_fusion_mode,
+            "enable_stacking": self._enable_stacking,
+        }
+
     def _default_features_extractor_class(self):
         obs_space = self.env.single_observation_space
         assert isinstance(obs_space, spaces.Dict), (
