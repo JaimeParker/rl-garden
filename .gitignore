@@ -20,7 +20,9 @@ uv.lock
 PKG-INFO
 *.egg-info/
 mutagen.yml.lock
+mutagen.yml
 .codex
+.claude.local.md
 .pytest_cache
 .github
 runs/

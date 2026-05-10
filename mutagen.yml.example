@@ -1,0 +1,49 @@
+sync:
+  defaults:
+    mode: "one-way-replica"
+    ignore:
+      vcs: true
+      paths:
+        # Python caches and build outputs
+        - "__pycache__"
+        - "*.pyc"
+        - ".pytest_cache"
+        - ".ipynb_checkpoints"
+        - "*.egg-info"
+        - "dist/"
+        - "build/"
+
+        # External repositories and local lock files
+        - "3rd_party/"
+        - "mutagen.yml.lock"
+
+        # Virtual environments
+        - ".venv"
+        - "venv"
+
+        # Training artifacts
+        - "logs/"
+        - "runs/"
+        - "wandb/"
+        - "checkpoints/"
+
+        # IDE and local-agent files
+        - ".cursor/"
+        - ".vscode/"
+        - ".github/"
+        - ".idea/"
+        - ".codex"
+        - "CLAUDE.local.md"
+
+        # System/editor files
+        - ".DS_Store"
+        - "*.swp"
+        - "*.swo"
+
+    permissions:
+      defaultFileMode: 0644
+      defaultDirectoryMode: 0755
+
+  <mutagen-session-name>:
+    alpha: "<local-project-path>"
+    beta: "<ssh-alias>:<remote-project-path>"

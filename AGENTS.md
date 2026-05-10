@@ -11,6 +11,11 @@ Brief for AI coding agents working on `rl-garden`. For broader context, read
 
 CPU simulator paths are compatibility fallbacks only, mainly for short local smoke tests or CPU-backed ManiSkill envs such as `physx_cpu`. Do not make CPU the default training path.
 
+For remote training/evaluation/debugging, read `.agents/rules/remote-training-sop.md`.
+For Mutagen sync setup or repair, read `.agents/rules/mutagen-sync-sop.md`.
+Agent-specific local runtime bindings may live in ignored files such as
+`.claude.local.md`; do not commit personal server, path, or container details.
+
 ---
 
 ## Quick Orientation
@@ -164,4 +169,3 @@ for peg-only experiments.
 ## Git and Artifacts
 
 - Check `git status --short` before and after changes.
-
