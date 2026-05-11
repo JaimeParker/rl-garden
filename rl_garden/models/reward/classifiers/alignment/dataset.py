@@ -9,8 +9,8 @@ import numpy as np
 import torch
 from torch.utils.data import ConcatDataset, Dataset
 
-from rl_garden.models.reward.classifiers.shared.io import decode_jpeg
-from rl_garden.models.reward.classifiers.shared.transforms import build_transforms, empty_image
+from rl_garden.models.reward.classifiers.base.io import decode_jpeg
+from rl_garden.models.reward.classifiers.base.transforms import build_transforms, empty_image
 
 
 class AlignmentRewardDataset(Dataset):

@@ -11,8 +11,8 @@ from rl_garden.models.reward.classifiers.alignment.dataset import (
     AlignmentRewardDataset,
     CombinedAlignmentDataset,
 )
-from rl_garden.models.reward.classifiers.shared.loop import BaseBinaryClassifierTrainer, BaseTrainConfig
-from rl_garden.models.reward.classifiers.shared.model import ResNetBinaryClassifier
+from rl_garden.models.reward.classifiers.base.loop import BaseBinaryClassifierTrainer, BaseTrainConfig
+from rl_garden.models.reward.classifiers.base.model import ResNetBinaryClassifier
 
 
 @dataclass(frozen=True)
@@ -34,14 +34,12 @@ class AlignmentClassifierTrainer(BaseBinaryClassifierTrainer):
 
     def build_dataset(self) -> Dataset:
         label_files = self._validate_paths(self.config.label_files)
-        if not label_files:
-            raise ValueError("label_files is required for alignment classifiers")
-        if len(label_files) == 1:
-            return AlignmentRewardDataset(
-                label_file=label_files[0],
-                image_size=(self.config.image_size, self.config.image_size),
-                normalize=self.config.normalize,
-            )
+        # if len(label_files) == 1:
+        #     return AlignmentRewardDataset(
+        #         label_file=label_files[0],
+        #         image_size=(self.config.image_size, self.config.image_size),
+        #         normalize=self.config.normalize,
+        #     )
         return CombinedAlignmentDataset(
             label_files=label_files,
             image_size=(self.config.image_size, self.config.image_size),

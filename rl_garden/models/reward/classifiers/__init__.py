@@ -12,7 +12,7 @@ from rl_garden.models.reward.classifiers.color import (
     ColorRewardDataset,
     CombinedColorRewardDataset,
 )
-from rl_garden.models.reward.classifiers.shared.model import ResNetBinaryClassifier
+from rl_garden.models.reward.classifiers.base.model import ResNetBinaryClassifier
 
 __all__ = [
     "AlignmentClassifierConfig",

@@ -11,8 +11,8 @@ from rl_garden.models.reward.classifiers.color.dataset import (
     ColorRewardDataset,
     CombinedColorRewardDataset,
 )
-from rl_garden.models.reward.classifiers.shared.loop import BaseBinaryClassifierTrainer, BaseTrainConfig
-from rl_garden.models.reward.classifiers.shared.model import ResNetBinaryClassifier
+from rl_garden.models.reward.classifiers.base.loop import BaseBinaryClassifierTrainer, BaseTrainConfig
+from rl_garden.models.reward.classifiers.base.model import ResNetBinaryClassifier
 
 
 @dataclass(frozen=True)
