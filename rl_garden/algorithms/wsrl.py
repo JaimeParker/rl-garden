@@ -842,12 +842,60 @@ class WSRL(OffPolicyAlgorithm):
                 f"Unknown cql_action_sample_method: {self.cql_action_sample_method}"
             )
 
-    def _cql_loss(
+    # ------------------------------------------------------------------
+    # Critic-loss component hooks. Subclasses can override individual
+    # pieces without rewriting the whole critic loss.
+    # ------------------------------------------------------------------
+
+    def _calql_lower_bound(
+        self,
+        q_ood: torch.Tensor,
+        mc_returns: torch.Tensor,
+        n_samples: int,
+        batch_size: int,
+    ) -> tuple[torch.Tensor, float]:
+        """Apply Cal-QL infinite-horizon lower bound to OOD Q-values.
+
+        Args:
+            q_ood: ``(critic_size, batch, n_samples)`` raw OOD Q-values.
+            mc_returns: ``(batch,)`` Monte Carlo returns from the replay sample.
+            n_samples: ``3 * cql_n_actions`` — total OOD samples per state.
+            batch_size: Convenience scalar.
+
+        Returns:
+            (q_ood_bounded, calql_bound_rate) where ``bound_rate`` is the
+            fraction of OOD values that were below their MC lower bound prior
+            to clamping (for logging).
+        """
+        mc_returns_b1 = mc_returns.reshape(batch_size, 1)  # (batch, 1)
+
+        if self.calql_bound_random_actions:
+            # Bound all 3*N action positions.
+            mc_lower_bound = mc_returns_b1.expand(batch_size, n_samples)
+        else:
+            # Random actions: -inf (no bound). Current+next: real MC returns.
+            fake = torch.full(
+                (batch_size, self.cql_n_actions),
+                float("-inf"),
+                device=self.device,
+                dtype=mc_returns_b1.dtype,
+            )
+            real = mc_returns_b1.expand(batch_size, 2 * self.cql_n_actions)
+            mc_lower_bound = torch.cat([fake, real], dim=1)
+        # Broadcast over the critic dim: (1, batch, n_samples)
+        mc_lower_bound = mc_lower_bound.unsqueeze(0)
+
+        # Track bound violation rate before clamping (for logging).
+        num_vals = q_ood.numel()
+        bound_rate = (q_ood < mc_lower_bound).sum().item() / max(num_vals, 1)
+        return torch.maximum(q_ood, mc_lower_bound), bound_rate
+
+    def _cql_regularizer(
         self,
         data: MCReplayBufferSample,
         q_pred: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        """Compute CQL regularization loss with optional Cal-QL bounds.
+        """Compute the CQL regularization term ``E[logsumexp_a Q] - E_data[Q]``.
 
         Faithful port of ``wsrl/agents/cql.py::CQLAgent._get_cql_q_diff``:
           1. Sample ``cql_n_actions`` random + current-policy + next-policy
@@ -856,7 +904,7 @@ class WSRL(OffPolicyAlgorithm):
           2. Evaluate Q over all sampled actions → ``(n_critics, batch, 3*N)``.
           3. Subsample critics with shared indices for both ``q_ood`` and
              ``q_pred`` (REDQ).
-          4. Apply Cal-QL lower bounds (optional).
+          4. Optionally apply Cal-QL lower bounds via ``_calql_lower_bound``.
           5. Apply importance sampling OR concat ``q_pred`` + ``-log(M)*temp``.
           6. ``logsumexp`` over actions; ``cql_q_diff = ood - q_pred``.
 
@@ -866,9 +914,7 @@ class WSRL(OffPolicyAlgorithm):
                 ``(n_critics, batch, 1)``.
 
         Returns:
-            cql_q_diff_mean: Scalar — mean of ``cql_q_diff`` (post-clip if
-                ``not cql_autotune_alpha``). Caller multiplies by alpha.
-            info: Logging dict.
+            (cql_q_diff_mean, info). Caller multiplies by ``cql_alpha``.
         """
         batch_size = data.rewards.shape[0]
         action_dim = self.env.single_action_space.shape[0]
@@ -876,7 +922,6 @@ class WSRL(OffPolicyAlgorithm):
 
         # ---- 1. Sample OOD actions (random / current-policy / next-policy) ----
         cql_random_actions = self._sample_random_actions(batch_size, action_dim)
-
         cql_current_actions, cql_current_log_pis = self._sample_n_actions_with_log_probs(
             data.obs, self.cql_n_actions
         )
@@ -889,7 +934,6 @@ class WSRL(OffPolicyAlgorithm):
         )
 
         # ---- 2. Evaluate Q over all sampled actions ----
-        # Reuse features for current obs to avoid recomputing the encoder.
         features = self.policy.extract_features(data.obs)
         feat_dim = features.shape[-1]
         n_samples = 3 * self.cql_n_actions
@@ -900,7 +944,6 @@ class WSRL(OffPolicyAlgorithm):
         )
         actions_flat = all_sampled_actions.reshape(-1, action_dim)
         q_ood = self.policy.q_values_all(features_repeated, actions_flat, target=False)
-        # (n_critics, batch * n_samples, 1) → (n_critics, batch, n_samples)
         q_ood = q_ood.reshape(self.n_critics, batch_size, n_samples)
 
         # ---- 3. Critic subsampling (shared indices for q_ood AND q_pred) ----
@@ -913,40 +956,15 @@ class WSRL(OffPolicyAlgorithm):
             )
             q_ood = q_ood[idx]                              # (S, batch, n_samples)
             q_pred_for_diff = q_pred[idx].squeeze(-1)       # (S, batch)
-            critic_size = self.critic_subsample_size
         else:
             q_pred_for_diff = q_pred.squeeze(-1)            # (n_critics, batch)
-            critic_size = self.n_critics
 
         # ---- 4. Cal-QL lower bounds ----
-        if (
-            self.use_calql
-            and getattr(data, "mc_returns", None) is not None
-        ):
-            mc_returns_b1 = data.mc_returns.reshape(batch_size, 1)  # (batch, 1)
-
-            if self.calql_bound_random_actions:
-                # Bound all 3*N action positions.
-                mc_lower_bound = mc_returns_b1.expand(batch_size, n_samples)
-            else:
-                # Random actions: -inf (no bound). Current+next: real MC returns.
-                fake = torch.full(
-                    (batch_size, self.cql_n_actions),
-                    float("-inf"),
-                    device=self.device,
-                    dtype=mc_returns_b1.dtype,
-                )
-                real = mc_returns_b1.expand(batch_size, 2 * self.cql_n_actions)
-                mc_lower_bound = torch.cat([fake, real], dim=1)
-            # Broadcast over the critic dim: (1, batch, n_samples)
-            mc_lower_bound = mc_lower_bound.unsqueeze(0)
-
-            # Track bound violation rate before clamping (for logging).
-            num_vals = q_ood.numel()
-            calql_bound_rate = (q_ood < mc_lower_bound).sum().item() / max(num_vals, 1)
-            info["calql_bound_rate"] = calql_bound_rate
-
-            q_ood = torch.maximum(q_ood, mc_lower_bound)
+        if self.use_calql and getattr(data, "mc_returns", None) is not None:
+            q_ood, bound_rate = self._calql_lower_bound(
+                q_ood, data.mc_returns, n_samples, batch_size
+            )
+            info["calql_bound_rate"] = bound_rate
 
         # ---- 5. Importance sampling OR concat-q_pred branch ----
         if self.cql_importance_sample:
@@ -957,16 +975,12 @@ class WSRL(OffPolicyAlgorithm):
                 device=self.device,
                 dtype=q_ood.dtype,
             )
-            # Concatenate log-probs in the same order as all_sampled_actions:
-            # [random, current, next].
             importance_log = torch.cat(
                 [random_log, cql_current_log_pis, cql_next_log_pis], dim=1
             )
-            # Subtract along the action axis; broadcast over the critic dim.
             q_ood = q_ood - importance_log.unsqueeze(0)     # (S, batch, n_samples)
         else:
             # Original CQL: concatenate q_pred and apply -log(M)*temp.
-            # q_pred_for_diff: (S, batch) → (S, batch, 1) for cat.
             q_ood = torch.cat([q_ood, q_pred_for_diff.unsqueeze(-1)], dim=-1)
             q_ood = q_ood - float(np.log(q_ood.shape[-1])) * self.cql_temp
 
@@ -984,15 +998,25 @@ class WSRL(OffPolicyAlgorithm):
             )
 
         cql_loss_raw = cql_q_diff.mean()
-
         info.update(
             {
                 "cql_q_diff": cql_q_diff.mean().item(),
                 "cql_ood_values": cql_ood_values.mean().item(),
             }
         )
-
         return cql_loss_raw, info
+
+    def _cql_loss(
+        self,
+        data: MCReplayBufferSample,
+        q_pred: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Backward-compatible entry point for the CQL regularizer.
+
+        Keep this as a wrapper rather than a class-level alias so subclass
+        overrides of ``_cql_regularizer`` are dynamically dispatched.
+        """
+        return self._cql_regularizer(data, q_pred)
 
     # --- Training Methods ---
 
@@ -1072,46 +1096,55 @@ class WSRL(OffPolicyAlgorithm):
 
         return target
 
+    def _td_loss(
+        self,
+        data: MCReplayBufferSample,
+        q_pred: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute the TD loss term and ``target_q`` info.
+
+        Returns ``(td_loss, info)``. ``q_pred`` is forwarded so callers don't
+        recompute the Q forward.
+        """
+        target_q = self._target_q(data)
+        target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
+        td_loss = F.mse_loss(q_pred, target_q_expanded)
+        info = {
+            "td_loss": td_loss.item(),
+            "target_q": target_q.mean().item(),
+        }
+        return td_loss, info
+
     def _critic_loss(self, data: MCReplayBufferSample) -> tuple[torch.Tensor, dict[str, float]]:
-        """Compute critic loss (TD + CQL)."""
-        info = {}
-
-        # Get current Q-values
+        """Combine ``_td_loss`` and ``_cql_regularizer`` into the critic loss."""
+        info: dict[str, float] = {}
         q_pred = self._critic_forward(data.obs, data.actions, target=False)
-        # (n_critics, batch, 1)
+        # q_pred: (n_critics, batch, 1)
 
-        # TD loss
         td_loss = torch.tensor(0.0, device=self.device)
         if self.use_td_loss:
-            target_q = self._target_q(data)
-            target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
-            td_loss = F.mse_loss(q_pred, target_q_expanded)
-            info["td_loss"] = td_loss.item()
-            info["target_q"] = target_q.mean().item()
+            td_loss, td_info = self._td_loss(data, q_pred)
+            info.update(td_info)
 
-        # CQL loss
         cql_loss = torch.tensor(0.0, device=self.device)
         if self.use_cql_loss:
-            cql_loss_raw, cql_info = self._cql_loss(data, q_pred)
+            cql_loss_raw, cql_info = self._cql_regularizer(data, q_pred)
             info.update(cql_info)
 
-            # Apply CQL alpha (with optional auto-tuning)
             cql_alpha = self._current_cql_alpha()
             if self.cql_autotune_alpha:
                 # Lagrange penalty: alpha * (cql_loss - target_gap)
-                cql_loss = (cql_loss_raw - self.cql_target_action_gap)
+                cql_loss = cql_loss_raw - self.cql_target_action_gap
             else:
                 cql_loss = cql_loss_raw
-
             cql_loss = cql_alpha * cql_loss
+
             info["cql_loss"] = cql_loss_raw.item()
             info["cql_alpha"] = cql_alpha.item()
 
-        # Total critic loss
         critic_loss = td_loss + cql_loss
         info["critic_loss"] = critic_loss.item()
         info["predicted_q"] = q_pred.mean().item()
-
         return critic_loss, info
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:

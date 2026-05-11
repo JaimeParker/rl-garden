@@ -688,5 +688,187 @@ class TestMixedBatchSampling:
         )
 
 
+class TestLossHookComposition:
+    """Refactored loss hooks: TD / CQL regularizer / Cal-QL lower bound.
+
+    These tests pin down the contract for each hook so future subclasses can
+    override individual pieces without breaking the others.
+    """
+
+    def test_wsrl_as_pure_sac(self, simple_env):
+        """use_cql_loss=False, use_calql=False → critic loss is TD-only."""
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100, buffer_device="cpu", batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4, critic_subsample_size=2,
+            use_cql_loss=False,
+            use_calql=False,
+            use_td_loss=True,
+            device="cpu", seed=42,
+        )
+        # Fill buffer
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        data = agent.replay_buffer.sample(8)
+        critic_loss, info = agent._critic_loss(data)
+
+        assert torch.isfinite(critic_loss)
+        # Pure SAC path: TD present, CQL absent from info dict.
+        assert "td_loss" in info
+        assert "cql_loss" not in info
+        assert "cql_alpha" not in info
+        assert "cql_q_diff" not in info
+        assert "calql_bound_rate" not in info
+        # critic_loss equals td_loss when no CQL term is added.
+        assert critic_loss.item() == pytest.approx(info["td_loss"], abs=1e-6)
+
+    def test_wsrl_calql_without_cql_silently_ignores_calql(self, simple_env):
+        """use_cql_loss=False + use_calql=True: Cal-QL only runs inside the CQL
+        regularizer, so without CQL the calql flag has no effect (and no error).
+
+        This pins down the current behavior so future refactors don't change it
+        accidentally. If we ever want to raise instead, this test should be
+        updated together with the new contract.
+        """
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100, buffer_device="cpu", batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4, critic_subsample_size=2,
+            use_cql_loss=False,
+            use_calql=True,
+            device="cpu", seed=42,
+        )
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        data = agent.replay_buffer.sample(8)
+        critic_loss, info = agent._critic_loss(data)
+        assert torch.isfinite(critic_loss)
+        # No CQL → no Cal-QL bound rate gets logged.
+        assert "calql_bound_rate" not in info
+
+    def test_cql_regularizer_isolated(self, wsrl_agent):
+        """Direct call to _cql_regularizer returns the same value as _cql_loss alias."""
+        for _ in range(5):
+            wsrl_agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        data = wsrl_agent.replay_buffer.sample(8)
+        q_pred = wsrl_agent._critic_forward(data.obs, data.actions, target=False)
+
+        # Same RNG seed → same result through both entry points.
+        torch.manual_seed(101)
+        reg_a, info_a = wsrl_agent._cql_regularizer(data, q_pred)
+        torch.manual_seed(101)
+        reg_b, info_b = wsrl_agent._cql_loss(data, q_pred)
+
+        assert reg_a.shape == ()
+        torch.testing.assert_close(reg_a, reg_b)
+        assert info_a["cql_q_diff"] == info_b["cql_q_diff"]
+        # Returned info includes the standard set of keys.
+        assert "cql_q_diff" in info_a
+        assert "cql_ood_values" in info_a
+        assert "calql_bound_rate" in info_a  # use_calql=True by default in fixture
+
+    def test_cql_loss_wrapper_dispatches_subclass_override(self, simple_env):
+        """_cql_loss must call the current instance's _cql_regularizer override."""
+
+        class OverrideCQLRegularizerWSRL(WSRL):
+            def _cql_regularizer(self, data, q_pred):
+                return torch.tensor(3.0, device=self.device), {"override_marker": 7.0}
+
+        agent = OverrideCQLRegularizerWSRL(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4,
+            critic_subsample_size=2,
+            cql_alpha=2.0,
+            use_cql_loss=True,
+            use_calql=True,
+            device="cpu",
+            seed=42,
+        )
+
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4),
+                torch.randn(2, 4),
+                torch.randn(2, 2),
+                torch.randn(2),
+                torch.zeros(2),
+            )
+        data = agent.replay_buffer.sample(8)
+        q_pred = agent._critic_forward(data.obs, data.actions, target=False)
+
+        cql_loss, cql_info = agent._cql_loss(data, q_pred)
+        assert cql_loss.item() == pytest.approx(3.0)
+        assert cql_info["override_marker"] == 7.0
+
+        critic_loss, critic_info = agent._critic_loss(data)
+        assert torch.isfinite(critic_loss)
+        assert critic_info["override_marker"] == 7.0
+        assert critic_info["cql_loss"] == pytest.approx(3.0)
+
+    def test_calql_lower_bound_clamps_to_mc_returns(self, wsrl_agent):
+        """_calql_lower_bound replaces q_ood values below MC returns with MC."""
+        batch_size = 4
+        critic_size = 2
+        n_samples = 3 * wsrl_agent.cql_n_actions  # 12 with cql_n_actions=4
+
+        # Construct q_ood deliberately below the MC returns at every position.
+        q_ood = torch.full(
+            (critic_size, batch_size, n_samples), -100.0, device=wsrl_agent.device
+        )
+        mc_returns = torch.full((batch_size,), 5.0, device=wsrl_agent.device)
+
+        # calql_bound_random_actions=False (fixture default): random-action
+        # positions stay at -inf bound (unclamped), current/next positions get
+        # clamped up to 5.0.
+        bounded, bound_rate = wsrl_agent._calql_lower_bound(
+            q_ood, mc_returns, n_samples=n_samples, batch_size=batch_size
+        )
+
+        # First cql_n_actions positions = random → bound is -inf → no clamp
+        random_block = bounded[:, :, : wsrl_agent.cql_n_actions]
+        torch.testing.assert_close(
+            random_block, torch.full_like(random_block, -100.0)
+        )
+        # Last 2*cql_n_actions positions get clamped up to 5.0
+        real_block = bounded[:, :, wsrl_agent.cql_n_actions :]
+        torch.testing.assert_close(real_block, torch.full_like(real_block, 5.0))
+
+        # All -100 values were below the MC bound (only on the real-action
+        # positions, since random positions had -inf bound → never below).
+        # Bound rate = (clamped count) / total = (2/3 of positions clamped).
+        expected_rate = (2 * wsrl_agent.cql_n_actions) / n_samples
+        assert bound_rate == pytest.approx(expected_rate)
+
+    def test_calql_lower_bound_no_clamp_when_q_above_returns(self, wsrl_agent):
+        """When q_ood is already above mc_returns, _calql_lower_bound is a no-op."""
+        batch_size = 4
+        critic_size = 2
+        n_samples = 3 * wsrl_agent.cql_n_actions
+        q_ood = torch.full(
+            (critic_size, batch_size, n_samples), 50.0, device=wsrl_agent.device
+        )
+        mc_returns = torch.full((batch_size,), 1.0, device=wsrl_agent.device)
+        bounded, bound_rate = wsrl_agent._calql_lower_bound(
+            q_ood, mc_returns, n_samples=n_samples, batch_size=batch_size
+        )
+        torch.testing.assert_close(bounded, q_ood)
+        assert bound_rate == 0.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
