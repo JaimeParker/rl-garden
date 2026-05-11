@@ -7,12 +7,12 @@ from typing import Iterable, Sequence
 
 from torch.utils.data import Dataset
 
-from rl_garden.reward_models.classifiers.color.dataset import (
+from rl_garden.models.reward.classifiers.color.dataset import (
     ColorRewardDataset,
     CombinedColorRewardDataset,
 )
-from rl_garden.reward_models.classifiers.shared.loop import BaseBinaryClassifierTrainer, BaseTrainConfig
-from rl_garden.reward_models.classifiers.shared.model import ResNetBinaryClassifier
+from rl_garden.models.reward.classifiers.shared.loop import BaseBinaryClassifierTrainer, BaseTrainConfig
+from rl_garden.models.reward.classifiers.shared.model import ResNetBinaryClassifier
 
 
 @dataclass(frozen=True)

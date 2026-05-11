@@ -1,25 +1,27 @@
-"""Reward classifier datasets, networks, and training helpers."""
+"""Classifier-specific helpers for reward models."""
 
-from rl_garden.reward_models.classifiers import (
+from rl_garden.models.reward.classifiers.alignment import (
     AlignmentClassifierConfig,
     AlignmentClassifierTrainer,
     AlignmentRewardDataset,
+    CombinedAlignmentDataset,
+)
+from rl_garden.models.reward.classifiers.color import (
     ColorClassifierConfig,
     ColorClassifierTrainer,
     ColorRewardDataset,
-    CombinedAlignmentDataset,
     CombinedColorRewardDataset,
-    ResNetBinaryClassifier,
 )
+from rl_garden.models.reward.classifiers.shared.model import ResNetBinaryClassifier
 
 __all__ = [
     "AlignmentClassifierConfig",
     "AlignmentClassifierTrainer",
     "AlignmentRewardDataset",
+    "CombinedAlignmentDataset",
     "ColorClassifierConfig",
     "ColorClassifierTrainer",
     "ColorRewardDataset",
-    "CombinedAlignmentDataset",
     "CombinedColorRewardDataset",
     "ResNetBinaryClassifier",
 ]

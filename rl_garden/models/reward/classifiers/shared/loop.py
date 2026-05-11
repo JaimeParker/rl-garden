@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange
 
 from rl_garden.common.utils import get_device, seed_everything
-from rl_garden.reward_models.classifiers.shared.metrics import compute_metrics
+from rl_garden.models.reward.classifiers.shared.metrics import compute_metrics
 
 
 @dataclass(frozen=True)

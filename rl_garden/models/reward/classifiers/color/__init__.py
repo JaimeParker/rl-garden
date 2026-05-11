@@ -1,10 +1,10 @@
 """Color reward classifier (ResNet)."""
 
-from rl_garden.reward_models.classifiers.color.dataset import (
+from rl_garden.models.reward.classifiers.color.dataset import (
     ColorRewardDataset,
     CombinedColorRewardDataset,
 )
-from rl_garden.reward_models.classifiers.color.loop import (
+from rl_garden.models.reward.classifiers.color.loop import (
     ColorClassifierConfig,
     ColorClassifierTrainer,
 )

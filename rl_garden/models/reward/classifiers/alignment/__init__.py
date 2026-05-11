@@ -1,10 +1,10 @@
 """Alignment reward classifier (ResNet)."""
 
-from rl_garden.reward_models.classifiers.alignment.dataset import (
+from rl_garden.models.reward.classifiers.alignment.dataset import (
 	AlignmentRewardDataset,
 	CombinedAlignmentDataset,
 )
-from rl_garden.reward_models.classifiers.alignment.loop import (
+from rl_garden.models.reward.classifiers.alignment.loop import (
 	AlignmentClassifierConfig,
 	AlignmentClassifierTrainer,
 )

@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Train the color reward classifier (ResNet)."""
+"""Train the alignment reward classifier (ResNet)."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-from rl_garden.reward_models.classifiers.color.loop import (
-    ColorClassifierConfig,
-    ColorClassifierTrainer,
+from rl_garden.models.reward.classifiers.alignment.loop import (
+    AlignmentClassifierConfig,
+    AlignmentClassifierTrainer,
 )
 
 
-def parse_args() -> ColorClassifierConfig:
-    parser = argparse.ArgumentParser(description="Train color reward classifier")
+def parse_args() -> AlignmentClassifierConfig:
+    parser = argparse.ArgumentParser(description="Train alignment reward classifier")
 
-    parser.add_argument("--npz_files", nargs="+", default=["data/labels.npz", "data/labels_1.npz"])
-    parser.add_argument("--data_dirs", nargs="+", default=["data/epi0-19_trimmed", "data/epi20-36_trimmed"])
-    parser.add_argument("--output_dir", default="data/checkpoints_color")
+    parser.add_argument(
+        "--label_files",
+        nargs="+",
+        default=[
+            "data/epi0-19_trimmed/dual_camera_rgb_labels.hdf5",
+            "data/epi20-36_trimmed/dual_camera_rgb_labels.hdf5",
+        ],
+    )
+    parser.add_argument("--output_dir", default="data/checkpoints_alignment")
     parser.add_argument("--image_size", type=int, default=128)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--num_epochs", type=int, default=50)
+    parser.add_argument("--num_epochs", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--num_workers", type=int, default=0)
@@ -28,7 +34,7 @@ def parse_args() -> ColorClassifierConfig:
     parser.add_argument("--no_pretrained", action="store_true")
 
     args = parser.parse_args()
-    return ColorClassifierConfig(
+    return AlignmentClassifierConfig(
         output_dir=Path(args.output_dir),
         image_size=args.image_size,
         batch_size=args.batch_size,
@@ -39,14 +45,13 @@ def parse_args() -> ColorClassifierConfig:
         seed=args.seed,
         device=args.device,
         resnet_pretrained=not args.no_pretrained,
-        npz_files=[Path(p) for p in args.npz_files],
-        data_dirs=[Path(p) for p in args.data_dirs],
+        label_files=[Path(p) for p in args.label_files],
     )
 
 
 def main() -> None:
     config = parse_args()
-    trainer = ColorClassifierTrainer(config)
+    trainer = AlignmentClassifierTrainer(config)
     trainer.train()
 
 
