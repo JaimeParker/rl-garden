@@ -69,6 +69,13 @@ def _compute_reach_pose_and_qpos(env, env_id: int) -> Optional[np.ndarray]:
         depth=FINGER_LENGTH,
     )
     closing, center = grasp_info["closing"], grasp_info["center"]
+
+    # debug：grap needs to be the end of peg
+    peg_front_world = T[:3, :3] @ np.array([1.0, 0.0, 0.0])
+    offset_dir_world = np.cross(approaching, closing)
+    if np.dot(offset_dir_world, peg_front_world) > 0:
+        closing = -closing
+
     grasp_pose = base_env.agent.build_grasp_pose(approaching, closing, center)
     offset = sapien.Pose(
         [-max(0.05, base_env.peg_half_sizes[0, 0].item() / 2 + 0.01), 0, 0]
