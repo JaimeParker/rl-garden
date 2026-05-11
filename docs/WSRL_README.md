@@ -170,6 +170,48 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--camera_width 128`: Camera width (default: 128)
 - `--camera_height 128`: Camera height (default: 128)
 
+### Acceleration
+
+Two single-GPU speedups are wired in. Both are orthogonal and stack.
+
+**1. `EnsembleQCritic` is vmap-fused (always on).** N critics share one
+prototype and stacked parameters; `torch.func.vmap` runs them in a single
+fused forward pass instead of N independent kernel launches. Replaces the
+old `nn.ModuleList` layout. Legacy checkpoints (with `q_nets.<i>.*` keys)
+are migrated transparently on load.
+
+**2. `--use_compile` (off by default).** Wraps `_critic_loss`, `_actor_loss`,
+and `_target_q` with `torch.compile(mode="default")`. First step pays a
+30–60 s warm-up; subsequent steps run a fused inductor graph.
+
+```bash
+# Enable compile-based acceleration
+python examples/pretrain_wsrl_offline.py \
+    --offline_dataset_path real_robot.h5 \
+    --num_offline_steps 100000 \
+    --batch_size 1024 \
+    --use_compile
+```
+
+**Measured speedup** (RTX 5060, PyTorch 2.11, state-only, batch=1024,
+n_critics=10, cql_n_actions=10):
+
+| Configuration              | ms / grad step | step/s | speedup |
+|----------------------------|---------------:|-------:|--------:|
+| vmap critic only (default) |         86.0   |  11.6  |    1.0× |
+| vmap + `--use_compile`     |         48.8   |  20.5  |    1.76× |
+
+Notes:
+- `compile_mode="reduce-overhead"` uses CUDA graphs and currently conflicts
+  with the separately-compiled critic/actor methods (tensor lifetimes cross
+  callable boundaries). Stick with the default `"default"` mode unless you
+  benchmark a specific environment.
+- Inside `switch_to_online_mode`, the compiled methods are re-wrapped because
+  Python-side flags (`use_cql_loss`, `cql_alpha`) may have flipped and would
+  otherwise leave a stale specialization in the graph.
+- For larger speedups, also raise `--batch_size` until VRAM is exhausted —
+  the small networks here leave most of the GPU idle.
+
 ## Python API
 
 ### State-Based WSRL

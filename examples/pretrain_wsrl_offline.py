@@ -164,6 +164,8 @@ def _build_agent(args: Args, env_spec: _EnvSpec, logger: Logger) -> WSRL:
         lr_decay_steps=args.lr_decay_steps,
         lr_min_ratio=args.lr_min_ratio,
         grad_clip_norm=args.grad_clip_norm,
+        use_compile=args.use_compile,
+        compile_mode=args.compile_mode,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,

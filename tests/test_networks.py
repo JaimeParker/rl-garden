@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
@@ -223,3 +224,133 @@ def test_actor_dropout_changes_outputs_in_train_mode():
     mean_c, _ = actor(features)
     mean_d, _ = actor(features)
     assert torch.allclose(mean_c, mean_d)
+
+
+# ----------------------------------------------------------------------------
+# vmap-fused EnsembleQCritic: numerical parity + checkpoint migration
+# ----------------------------------------------------------------------------
+
+class _LegacyEnsembleQCritic(torch.nn.Module):
+    """Reference ModuleList implementation (pre-vmap) used to verify parity.
+
+    Mirrors the old structure: ``q_nets[i]`` is an independent _QHead, forward
+    iterates sequentially. We construct one with the same per-head random init
+    as the vmap version, then check that both produce identical outputs.
+    """
+
+    def __init__(self, features_dim, action_space, hidden_dims, *, n_critics):
+        from rl_garden.networks.actor_critic import _QHead
+        super().__init__()
+        act_dim = int(np.prod(action_space.shape))
+        self.q_nets = torch.nn.ModuleList(
+            [
+                _QHead(
+                    features_dim=features_dim,
+                    act_dim=act_dim,
+                    hidden_dims=hidden_dims,
+                    backbone_type="mlp",
+                    use_layer_norm=False,
+                    use_group_norm=False,
+                    num_groups=32,
+                    dropout_rate=None,
+                    kernel_init=None,
+                )
+                for _ in range(n_critics)
+            ]
+        )
+
+    def forward_all(self, features, actions):
+        return torch.stack([q(features, actions) for q in self.q_nets], dim=0)
+
+
+def test_ensemble_vmap_numerical_parity():
+    """vmap critic with weights copied from legacy ModuleList must match exactly."""
+    from rl_garden.networks.actor_critic import _PARAM_PREFIX, _safe_name
+
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=float)
+    torch.manual_seed(0)
+    legacy = _LegacyEnsembleQCritic(features_dim=8, action_space=act_space,
+                                     hidden_dims=[32, 32], n_critics=4)
+
+    torch.manual_seed(99)  # different init seed for vmap version
+    vmap_critic = EnsembleQCritic(features_dim=8, action_space=act_space,
+                                  hidden_dims=[32, 32], n_critics=4)
+
+    # Copy legacy weights into vmap's stacked parameters.
+    legacy_states = [head.state_dict() for head in legacy.q_nets]
+    for dotted in vmap_critic._dotted_param_names:
+        stacked = torch.stack([s[dotted] for s in legacy_states], dim=0)
+        safe = _safe_name(dotted, _PARAM_PREFIX)
+        getattr(vmap_critic, safe).data.copy_(stacked)
+
+    features = torch.randn(7, 8)
+    actions = torch.randn(7, 3)
+    legacy_out = legacy.forward_all(features, actions)  # (4, 7, 1)
+    vmap_out = vmap_critic.forward_all(features, actions)  # (4, 7, 1)
+    # Same parameters, deterministic forward → bit-identical or near-identical.
+    torch.testing.assert_close(vmap_out, legacy_out, atol=1e-5, rtol=1e-5)
+
+
+def test_ensemble_vmap_forward_shape():
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=float)
+    critic = EnsembleQCritic(
+        features_dim=11, action_space=act_space, hidden_dims=[32, 32], n_critics=7
+    )
+    features = torch.randn(5, 11)
+    actions = torch.randn(5, 3)
+    q_all = critic.forward_all(features, actions)
+    assert q_all.shape == (7, 5, 1)
+    q_tuple = critic(features, actions)
+    assert len(q_tuple) == 7
+    assert all(q.shape == (5, 1) for q in q_tuple)
+
+
+def test_ensemble_vmap_polyak_update():
+    """polyak_update treats stacked params as one tensor → broadcasts naturally."""
+    from rl_garden.common.utils import polyak_update
+
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+    src = EnsembleQCritic(features_dim=6, action_space=act_space,
+                          hidden_dims=[16], n_critics=3)
+    tgt = EnsembleQCritic(features_dim=6, action_space=act_space,
+                          hidden_dims=[16], n_critics=3)
+    # Make src very different from tgt initially.
+    for p in src.parameters():
+        p.data.fill_(1.0)
+    for p in tgt.parameters():
+        p.data.fill_(0.0)
+    # Polyak with tau=0.5 → tgt should average toward 0.5 after one step.
+    polyak_update(src.parameters(), tgt.parameters(), tau=0.5)
+    for p in tgt.parameters():
+        torch.testing.assert_close(p, torch.full_like(p, 0.5))
+
+
+def test_ensemble_load_legacy_modulelist_state_dict():
+    """Old ``q_nets.<i>.<...>`` keys should migrate transparently on load."""
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+
+    # 1) Build a legacy ModuleList critic; capture its state_dict.
+    torch.manual_seed(0)
+    legacy = _LegacyEnsembleQCritic(features_dim=5, action_space=act_space,
+                                     hidden_dims=[8], n_critics=3)
+    features = torch.randn(4, 5)
+    actions = torch.randn(4, 2)
+    legacy_out = legacy.forward_all(features, actions)
+
+    # 2) Strip the legacy state_dict to the format that would appear inside
+    #    a checkpoint of the OLD EnsembleQCritic (keys start with "q_nets.").
+    legacy_sd = legacy.state_dict()
+
+    # 3) Build a new vmap EnsembleQCritic (different init).
+    torch.manual_seed(123)
+    vmap_critic = EnsembleQCritic(features_dim=5, action_space=act_space,
+                                  hidden_dims=[8], n_critics=3)
+
+    # 4) Load: should detect q_nets.<i>.* keys and stack along axis 0.
+    missing, unexpected = vmap_critic.load_state_dict(legacy_sd, strict=False)
+    assert not missing, f"Migration missed keys: {missing}"
+    assert not unexpected, f"Unexpected keys after migration: {unexpected}"
+
+    # 5) After migration the vmap critic should match the legacy forward output.
+    vmap_out = vmap_critic.forward_all(features, actions)
+    torch.testing.assert_close(vmap_out, legacy_out, atol=1e-5, rtol=1e-5)

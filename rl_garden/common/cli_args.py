@@ -113,6 +113,9 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     lr_min_ratio: float = 0.0
     grad_clip_norm: Optional[float] = None
 
+    use_compile: bool = False
+    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
+
     n_critics: int = 10
     critic_subsample_size: int = 2
 

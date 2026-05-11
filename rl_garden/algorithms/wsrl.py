@@ -77,6 +77,12 @@ class WSRL(OffPolicyAlgorithm):
         lr_decay_steps: int = 0,
         lr_min_ratio: float = 0.0,
         grad_clip_norm: Optional[float] = None,
+        use_compile: bool = False,
+        # NOTE: "reduce-overhead" enables CUDA graphs which conflict with our
+        # separately-compiled critic/actor methods (tensors get overwritten
+        # between callable boundaries). Default to "default" inductor mode,
+        # which still gives kernel fusion without CUDA-graph constraints.
+        compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default",
         # Entropy
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
@@ -178,6 +184,12 @@ class WSRL(OffPolicyAlgorithm):
         self.grad_clip_norm = grad_clip_norm
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
             raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
+        self.use_compile = use_compile
+        self.compile_mode = compile_mode
+        # Track the un-compiled originals so we can re-wrap after mode switches.
+        self._eager_critic_loss = None
+        self._eager_actor_loss = None
+        self._eager_target_q = None
 
         # Entropy
         self.ent_coef_init = ent_coef
@@ -259,6 +271,8 @@ class WSRL(OffPolicyAlgorithm):
             "lr_decay_steps": self.lr_decay_steps,
             "lr_min_ratio": self.lr_min_ratio,
             "grad_clip_norm": self.grad_clip_norm,
+            "use_compile": self.use_compile,
+            "compile_mode": self.compile_mode,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
@@ -630,6 +644,27 @@ class WSRL(OffPolicyAlgorithm):
                 )
             )
 
+        # Optional torch.compile on the hot loss methods. We stash the eager
+        # versions so ``switch_to_online_mode`` can re-wrap after Python-side
+        # flag changes (e.g., ``use_cql_loss`` flipping false on online switch
+        # would otherwise leave a stale specialization in the compiled graph).
+        if self.use_compile:
+            self._apply_compile()
+
+    def _apply_compile(self) -> None:
+        """Compile (or re-compile) the three hot loss methods.
+
+        Called from ``_setup_model`` and ``switch_to_online_mode``. Stashes
+        eager originals on first call so re-wrap is idempotent.
+        """
+        if self._eager_critic_loss is None:
+            self._eager_critic_loss = self._critic_loss
+            self._eager_actor_loss = self._actor_loss
+            self._eager_target_q = self._target_q
+        self._critic_loss = torch.compile(self._eager_critic_loss, mode=self.compile_mode)
+        self._actor_loss = torch.compile(self._eager_actor_loss, mode=self.compile_mode)
+        self._target_q = torch.compile(self._eager_target_q, mode=self.compile_mode)
+
     # --- Helper methods ---
 
     def _current_alpha(self) -> torch.Tensor:
@@ -787,6 +822,11 @@ class WSRL(OffPolicyAlgorithm):
                 self.logger.add_summary("wsrl/online_replay_size_before_clear", cleared_transitions)
             if online_replay_mode == "mixed":
                 self.logger.add_summary("wsrl/offline_data_ratio", offline_data_ratio)
+
+        # Re-compile the loss methods if compile is enabled — Python-side flags
+        # (use_cql_loss, cql_alpha) may have flipped, invalidating the old graph.
+        if self.use_compile and self._eager_critic_loss is not None:
+            self._apply_compile()
 
     # --- CQL Loss Computation ---
 

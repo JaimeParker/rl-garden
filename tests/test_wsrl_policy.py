@@ -80,7 +80,25 @@ class TestWSRLPolicyBasics:
             critic_use_layer_norm=True,
         )
         assert any(isinstance(module, torch.nn.LayerNorm) for module in policy.actor.modules())
-        assert any(isinstance(module, torch.nn.LayerNorm) for module in policy.critic.modules())
+        # The vmap-fused EnsembleQCritic flattens stacked params and hides the
+        # prototype on the meta device, so ``modules()`` won't surface
+        # LayerNorm directly. Verify presence by counting parameters against
+        # a no-norm baseline — LayerNorm adds 2 params (weight, bias) per
+        # hidden layer.
+        no_norm_policy = WSRLPolicy(
+            observation_space=obs_space,
+            action_space=action_space,
+            features_extractor=FlattenExtractor(obs_space),
+            net_arch={"pi": [32], "qf": [32]},
+            actor_use_layer_norm=False,
+            critic_use_layer_norm=False,
+        )
+        critic_params_with = sum(1 for _ in policy.critic.parameters())
+        critic_params_without = sum(1 for _ in no_norm_policy.critic.parameters())
+        assert critic_params_with == critic_params_without + 2, (
+            f"Expected LayerNorm to add 2 params; got {critic_params_with} vs "
+            f"{critic_params_without} (baseline)."
+        )
 
     def test_policy_with_lagrange(self, wsrl_policy_with_lagrange):
         assert wsrl_policy_with_lagrange.use_cql_alpha_lagrange
