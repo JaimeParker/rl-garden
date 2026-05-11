@@ -116,6 +116,9 @@ class WSRLRGBD(WSRL):
             storage_device=self.buffer_device,
             sample_device=self.device,
             gamma=self.gamma,
+            sparse_reward_mc=self.sparse_reward_mc,
+            sparse_negative_reward=self.sparse_negative_reward,
+            success_threshold=self.success_threshold,
         )
 
     def _actor_loss(self, obs):

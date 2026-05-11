@@ -291,5 +291,148 @@ class TestMCReturnComputation:
         torch.testing.assert_close(table, expected)
 
 
+# ----------------------------------------------------------------------------
+# Sparse-reward MC handling
+# ----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sparse_buffer(obs_space, action_space):
+    return MCTensorReplayBuffer(
+        observation_space=obs_space,
+        action_space=action_space,
+        num_envs=2,
+        buffer_size=20,
+        gamma=0.9,
+        storage_device="cpu",
+        sample_device="cpu",
+        sparse_reward_mc=True,
+        sparse_negative_reward=-1.0,
+        success_threshold=0.5,
+    )
+
+
+def _add_step(buf, reward, done, success):
+    n = buf.num_envs
+    obs = torch.zeros(n, 4)
+    next_obs = torch.zeros(n, 4)
+    action = torch.zeros(n, 2)
+    buf.add(
+        obs,
+        next_obs,
+        action,
+        torch.as_tensor(reward, dtype=torch.float32),
+        torch.as_tensor(done, dtype=torch.float32),
+        success=torch.as_tensor(success, dtype=torch.float32),
+    )
+
+
+def test_sparse_mc_failed_episode_uses_inf_horizon(sparse_buffer):
+    # Single env (env 0): 5-step episode, never succeeds, all rewards = -1, terminated.
+    # env 1 unused (success will default to 0).
+    for step in range(5):
+        is_last = step == 4
+        _add_step(
+            sparse_buffer,
+            reward=[-1.0, -1.0],
+            done=[1.0 if is_last else 0.0, 0.0],
+            success=[0.0, 0.0],
+        )
+    table = sparse_buffer._build_mc_table()
+    # Expected: r_neg / (1 - γ) = -1 / 0.1 = -10 for every step in the failed episode
+    expected = torch.full((5,), -10.0)
+    torch.testing.assert_close(table[:5, 0], expected)
+
+
+def test_sparse_mc_successful_episode_uses_standard_sum(sparse_buffer):
+    # 3-step episode ending in success. Rewards: [-1, -1, +1]. γ=0.9.
+    # Backward sum: G_2 = +1, G_1 = -1 + 0.9*1 = -0.1, G_0 = -1 + 0.9*-0.1 = -1.09
+    rewards_seq = [-1.0, -1.0, 1.0]
+    for step, r in enumerate(rewards_seq):
+        is_last = step == len(rewards_seq) - 1
+        _add_step(
+            sparse_buffer,
+            reward=[r, 0.0],
+            done=[1.0 if is_last else 0.0, 0.0],
+            success=[1.0 if is_last else 0.0, 0.0],
+        )
+    table = sparse_buffer._build_mc_table()
+    expected = torch.tensor([-1.09, -0.1, 1.0])
+    torch.testing.assert_close(table[:3, 0], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_sparse_mc_two_consecutive_episodes(sparse_buffer):
+    # env 0: 2-step failed episode then 2-step successful episode.
+    # episode 1 (failed): rewards [-1, -1], dones [0, 1]. Both steps map to -10.
+    # episode 2 (success): rewards [-1, +1], dones [0, 1]. G_3=+1, G_2 = -1 + 0.9 = -0.1.
+    transitions = [
+        ([-1.0, 0.0], [0.0, 0.0], [0.0, 0.0]),
+        ([-1.0, 0.0], [1.0, 0.0], [0.0, 0.0]),
+        ([-1.0, 0.0], [0.0, 0.0], [0.0, 0.0]),
+        ([1.0, 0.0], [1.0, 0.0], [1.0, 0.0]),
+    ]
+    for r, d, s in transitions:
+        _add_step(sparse_buffer, reward=r, done=d, success=s)
+    table = sparse_buffer._build_mc_table()
+    expected = torch.tensor([-10.0, -10.0, -0.1, 1.0])
+    torch.testing.assert_close(table[:4, 0], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_sparse_mc_disabled_falls_back_to_standard(obs_space, action_space):
+    # When sparse_reward_mc=False, behaviour matches the previous backward sweep
+    # (no inf-horizon replacement), and add() still accepts standard signature.
+    buf = MCTensorReplayBuffer(
+        observation_space=obs_space,
+        action_space=action_space,
+        num_envs=1,
+        buffer_size=5,
+        gamma=0.9,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+    for step in range(3):
+        is_last = step == 2
+        buf.add(
+            torch.zeros(1, 4),
+            torch.zeros(1, 4),
+            torch.zeros(1, 2),
+            torch.tensor([-1.0]),
+            torch.tensor([1.0 if is_last else 0.0]),
+        )
+    table = buf._build_mc_table()
+    # Standard backward sum without inf-horizon override
+    expected = torch.tensor([-1.0 - 0.9 - 0.81, -1.0 - 0.9, -1.0])
+    torch.testing.assert_close(table[:3, 0], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_sparse_mc_infers_success_from_reward_threshold(obs_space, action_space):
+    # Without explicit success= arg, threshold-based inference kicks in.
+    buf = MCTensorReplayBuffer(
+        observation_space=obs_space,
+        action_space=action_space,
+        num_envs=1,
+        buffer_size=5,
+        gamma=0.9,
+        storage_device="cpu",
+        sample_device="cpu",
+        sparse_reward_mc=True,
+        sparse_negative_reward=-1.0,
+        success_threshold=0.5,
+    )
+    for step, r in enumerate([-1.0, -1.0, 1.0]):
+        is_last = step == 2
+        buf.add(
+            torch.zeros(1, 4),
+            torch.zeros(1, 4),
+            torch.zeros(1, 2),
+            torch.tensor([r]),
+            torch.tensor([1.0 if is_last else 0.0]),
+        )
+    table = buf._build_mc_table()
+    # Last step reward 1.0 >= 0.5 → success → standard sum
+    expected = torch.tensor([-1.09, -0.1, 1.0])
+    torch.testing.assert_close(table[:3, 0], expected, atol=1e-5, rtol=1e-5)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

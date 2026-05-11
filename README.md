@@ -15,6 +15,9 @@ SB3-style, PyTorch-native, GPU-parallel SAC framework for ManiSkill.
 
 - `SAC` (state-based) as the base off-policy algorithm.
 - `RGBDSAC(SAC)` subclass for dict observations with image encoders.
+- `SACCore`, shared by online SAC, offline SAC, CQL, Cal-QL, and WSRL.
+- `CQL` / `CalQL` plus offline-only `OfflineCQL` / `OfflineCalQL` entrypoints.
+- `WSRL(CalQL)` as the offline→online warm-start flow layer.
 - GPU-native replay buffers:
   - `TensorReplayBuffer` for Box observations.
   - `DictReplayBuffer` for `{rgb, depth, state, ...}` observations.
@@ -85,6 +88,21 @@ python examples/train_sac_state.py --env_id PickCube-v1 --num_envs 16
 End-to-end WSRL reproduction, from SAC checkpoints to dataset generation and
 offline-to-online training, is documented in
 [`docs/WSRL_REPRODUCTION.md`](docs/WSRL_REPRODUCTION.md).
+
+Offline pretraining from a flat ManiSkill H5 dataset:
+
+```bash
+scripts/pretrain_offline.sh --algorithm calql --offline_dataset_path demos/pickcube.h5
+scripts/pretrain_offline.sh --algorithm cql --offline_dataset_path demos/pickcube.h5
+scripts/pretrain_cql_offline.sh --offline_dataset_path demos/pickcube.h5
+scripts/pretrain_calql_offline.sh --offline_dataset_path demos/pickcube.h5
+```
+
+The primary entrypoint is `examples/pretrain_offline.py --algorithm
+cql|calql|wsrl-calql`; the algorithm-specific launchers are compatibility
+wrappers. The final checkpoint defaults to
+`<algorithm>_offline_pretrained.pt` and can be loaded into compatible
+SAC-family agents for later evaluation or fine-tuning.
 
 State SAC with EE twist control:
 
@@ -225,7 +243,7 @@ agent = RGBDSAC(
 )
 ```
 
-Network architecture configuration (`net_arch`) for SAC/WSRL families:
+Network architecture configuration (`net_arch`) for SAC/CQL/Cal-QL/WSRL families:
 
 ```python
 from rl_garden.algorithms import SAC, WSRL

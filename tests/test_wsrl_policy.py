@@ -4,7 +4,8 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.encoders.flatten import FlattenExtractor
-from rl_garden.policies.wsrl_policy import WSRLPolicy
+from rl_garden.policies.sac_policy import SACPolicy
+from rl_garden.policies.wsrl_policy import CQLAlphaLagrange, WSRLPolicy
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def wsrl_policy(obs_space, action_space):
 
 
 @pytest.fixture
-def wsrl_policy_with_lagrange(obs_space, action_space):
+def wsrl_policy_with_legacy_lagrange_args(obs_space, action_space):
     features_extractor = FlattenExtractor(obs_space)
     return WSRLPolicy(
         observation_space=obs_space,
@@ -80,13 +81,31 @@ class TestWSRLPolicyBasics:
             critic_use_layer_norm=True,
         )
         assert any(isinstance(module, torch.nn.LayerNorm) for module in policy.actor.modules())
-        assert any(isinstance(module, torch.nn.LayerNorm) for module in policy.critic.modules())
+        # The vmap-fused EnsembleQCritic flattens stacked params and hides the
+        # prototype on the meta device, so ``modules()`` won't surface
+        # LayerNorm directly. Verify presence by counting parameters against
+        # a no-norm baseline — LayerNorm adds 2 params (weight, bias) per
+        # hidden layer.
+        no_norm_policy = WSRLPolicy(
+            observation_space=obs_space,
+            action_space=action_space,
+            features_extractor=FlattenExtractor(obs_space),
+            net_arch={"pi": [32], "qf": [32]},
+            actor_use_layer_norm=False,
+            critic_use_layer_norm=False,
+        )
+        critic_params_with = sum(1 for _ in policy.critic.parameters())
+        critic_params_without = sum(1 for _ in no_norm_policy.critic.parameters())
+        assert critic_params_with == critic_params_without + 2, (
+            f"Expected LayerNorm to add 2 params; got {critic_params_with} vs "
+            f"{critic_params_without} (baseline)."
+        )
 
-    def test_policy_with_lagrange(self, wsrl_policy_with_lagrange):
-        assert wsrl_policy_with_lagrange.use_cql_alpha_lagrange
-        assert wsrl_policy_with_lagrange.cql_alpha_lagrange is not None
-        alpha = wsrl_policy_with_lagrange.get_cql_alpha()
-        assert alpha.item() > 0
+    def test_policy_ignores_legacy_cql_alpha_lagrange_args(
+        self, wsrl_policy_with_legacy_lagrange_args
+    ):
+        assert not wsrl_policy_with_legacy_lagrange_args.use_cql_alpha_lagrange
+        assert wsrl_policy_with_legacy_lagrange_args.cql_alpha_lagrange is None
 
     def test_forward_pass(self, wsrl_policy):
         obs = torch.randn(16, 10)
@@ -184,6 +203,29 @@ class TestCriticSubsampling:
         expected_min = q_all.min(dim=0)[0]
         torch.testing.assert_close(min_q, expected_min)
 
+    def test_sac_policy_supports_redq_subsampling(self, obs_space, action_space):
+        policy = SACPolicy(
+            observation_space=obs_space,
+            action_space=action_space,
+            features_extractor=FlattenExtractor(obs_space),
+            net_arch={"pi": [32], "qf": [32]},
+            n_critics=10,
+            critic_subsample_size=2,
+        )
+        obs = torch.randn(16, 10)
+        actions = torch.randn(16, 3)
+        features = policy.extract_features(obs)
+
+        q_all = policy.q_values_all(features, actions, target=True)
+        q_sub = policy.q_values_subsampled(
+            features, actions, subsample_size=policy.critic_subsample_size, target=True
+        )
+        min_q = policy.min_q_value(features, actions, subsample_size=None, target=False)
+
+        assert q_all.shape == (10, 16, 1)
+        assert q_sub.shape == (2, 16, 1)
+        assert min_q.shape == (16, 1)
+
 
 class TestActorCriticIntegration:
     """Test actor-critic integration."""
@@ -231,9 +273,9 @@ class TestParameterGroups:
 
         assert actor_params == param_set
 
-    def test_cql_alpha_lagrange_parameters(self, wsrl_policy_with_lagrange):
-        params = list(wsrl_policy_with_lagrange.cql_alpha_lagrange_parameters())
-        assert len(params) == 1  # Only log_alpha parameter
+    def test_cql_alpha_lagrange_parameters(self, wsrl_policy_with_legacy_lagrange_args):
+        params = list(wsrl_policy_with_legacy_lagrange_args.cql_alpha_lagrange_parameters())
+        assert len(params) == 0
 
     def test_cql_alpha_lagrange_disabled(self, wsrl_policy):
         params = list(wsrl_policy.cql_alpha_lagrange_parameters())
@@ -243,21 +285,22 @@ class TestParameterGroups:
 class TestCQLAlphaLagrange:
     """Test CQL alpha Lagrange multiplier."""
 
-    def test_lagrange_forward(self, wsrl_policy_with_lagrange):
-        alpha = wsrl_policy_with_lagrange.get_cql_alpha()
+    def test_lagrange_forward(self):
+        lagrange = CQLAlphaLagrange(init_value=5.0)
+        alpha = lagrange()
         assert alpha.shape == ()
         assert alpha.item() > 0
 
-    def test_lagrange_gradient(self, wsrl_policy_with_lagrange):
-        alpha = wsrl_policy_with_lagrange.get_cql_alpha()
+    def test_lagrange_gradient(self):
+        lagrange = CQLAlphaLagrange(init_value=5.0)
+        alpha = lagrange()
         loss = alpha * 2.0
         loss.backward()
 
-        # Check gradient exists
-        assert wsrl_policy_with_lagrange.cql_alpha_lagrange.log_alpha.grad is not None
+        assert lagrange.log_alpha.grad is not None
 
     def test_lagrange_not_enabled_raises(self, wsrl_policy):
-        with pytest.raises(ValueError, match="not enabled"):
+        with pytest.raises(ValueError, match="owned by CQL/CalQL algorithms"):
             wsrl_policy.get_cql_alpha()
 
 

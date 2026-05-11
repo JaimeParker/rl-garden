@@ -103,3 +103,123 @@ def test_dict_replay_buffer_add_and_sample():
     assert batch.actions.shape == (5, 4)
     assert batch.rewards.shape == (5,)
     assert batch.dones.shape == (5,)
+
+
+# ----------------------------------------------------------------------------
+# sample_without_repeat
+# ----------------------------------------------------------------------------
+
+
+def _fill_tensor_buffer(buf, num_steps):
+    obs_dim = buf.obs.shape[-1]
+    act_dim = buf.actions.shape[-1]
+    n = buf.num_envs
+    for step in range(num_steps):
+        buf.add(
+            obs=torch.full((n, obs_dim), float(step)),
+            next_obs=torch.full((n, obs_dim), float(step + 1)),
+            action=torch.zeros(n, act_dim),
+            reward=torch.full((n,), float(step)),
+            done=torch.zeros(n),
+        )
+
+
+def test_sample_without_repeat_no_duplicates_within_epoch():
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    rb = TensorReplayBuffer(
+        obs_space, act_space, num_envs=4, buffer_size=20,
+        storage_device="cpu", sample_device="cpu",
+    )
+    _fill_tensor_buffer(rb, num_steps=5)  # 5 * 4 = 20 transitions
+def test_sample_without_repeat_visits_all_indices_in_epoch():
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    rb = TensorReplayBuffer(
+        obs_space, act_space, num_envs=4, buffer_size=20,
+        storage_device="cpu", sample_device="cpu",
+    )
+    # Fill with per-env distinct values so we can identify each transition
+    for step in range(5):
+        rb.add(
+            obs=torch.tensor([[step, e] for e in range(4)], dtype=torch.float32),
+            next_obs=torch.zeros(4, 2),
+            action=torch.zeros(4, 1),
+            reward=torch.zeros(4),
+            done=torch.zeros(4),
+        )
+    seen = set()
+    epoch = rb.epoch_size
+    batch_size = 5
+    for _ in range(epoch // batch_size):
+        sample = rb.sample_without_repeat(batch_size)
+        for o in sample.obs:
+            seen.add((int(o[0].item()), int(o[1].item())))
+    assert len(seen) == 20  # all distinct (t, env) pairs visited
+
+
+def test_sample_without_repeat_reshuffles_after_exhaustion():
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    rb = TensorReplayBuffer(
+        obs_space, act_space, num_envs=2, buffer_size=8,
+        storage_device="cpu", sample_device="cpu",
+    )
+    _fill_tensor_buffer(rb, num_steps=4)  # 8 transitions
+    # Exhaust epoch: 8/2 = 4 batches
+    for _ in range(4):
+        rb.sample_without_repeat(2)
+    # Next sample triggers reshuffle (not a new add); should still return valid sample
+    sample = rb.sample_without_repeat(2)
+    assert sample.obs.shape == (2, 2)
+
+
+def test_sample_without_repeat_invalidates_after_pos_change():
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    rb = TensorReplayBuffer(
+        obs_space, act_space, num_envs=2, buffer_size=20,
+        storage_device="cpu", sample_device="cpu",
+    )
+    _fill_tensor_buffer(rb, num_steps=5)  # 10 transitions
+    sample1 = rb.sample_without_repeat(2)
+    pos_before = rb.pos
+    # Add more data → pos changes → permutation should rebuild on next call
+    _fill_tensor_buffer(rb, num_steps=2)
+    assert rb.pos != pos_before
+    sample2 = rb.sample_without_repeat(2)
+    assert sample2.obs.shape == (2, 2)
+
+
+def test_sample_without_repeat_empty_buffer_raises():
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    rb = TensorReplayBuffer(
+        obs_space, act_space, num_envs=2, buffer_size=10,
+        storage_device="cpu", sample_device="cpu",
+    )
+    import pytest
+    with pytest.raises(RuntimeError, match="empty"):
+        rb.sample_without_repeat(1)
+
+
+def test_dict_buffer_sample_without_repeat():
+    obs_space = spaces.Dict({
+        "state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+    })
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    rb = DictReplayBuffer(
+        obs_space, act_space, num_envs=2, buffer_size=8,
+        storage_device="cpu", sample_device="cpu",
+    )
+    for step in range(4):
+        rb.add(
+            obs={"state": torch.full((2, 3), float(step))},
+            next_obs={"state": torch.zeros(2, 3)},
+            action=torch.zeros(2, 2),
+            reward=torch.zeros(2),
+            done=torch.zeros(2),
+        )
+    sample = rb.sample_without_repeat(4)
+    assert isinstance(sample.obs, dict)
+    assert sample.obs["state"].shape == (4, 3)

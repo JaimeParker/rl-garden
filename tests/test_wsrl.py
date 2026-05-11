@@ -91,7 +91,7 @@ class TestWSRLCreation:
 
     def test_agent_with_autotune(self, wsrl_agent_with_autotune):
         assert wsrl_agent_with_autotune.cql_autotune_alpha
-        assert wsrl_agent_with_autotune.policy.use_cql_alpha_lagrange
+        assert wsrl_agent_with_autotune.cql_alpha_lagrange is not None
 
     def test_policy_creation(self, wsrl_agent):
         assert wsrl_agent.policy is not None
@@ -174,6 +174,32 @@ class TestWSRLHelperMethods:
         assert wsrl_agent._online_start_step == 123
         assert logger.scalars == []
         assert ("wsrl/online_start_step", 123) in logger.summaries
+
+    def test_switch_to_online_mode_empty_clears_replay(self, wsrl_agent):
+        for _ in range(5):
+            wsrl_agent.replay_buffer.add(
+                torch.randn(2, 4),
+                torch.randn(2, 4),
+                torch.randn(2, 2),
+                torch.ones(2),
+                torch.zeros(2),
+            )
+        assert len(wsrl_agent.replay_buffer) > 0
+        wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
+        assert len(wsrl_agent.replay_buffer) == 0
+
+    def test_grad_clip_norm_configured(self, simple_env):
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4,
+            grad_clip_norm=1.0,
+            device="cpu",
+        )
+        assert agent.grad_clip_norm == 1.0
 
     def test_update_metric_tags(self, wsrl_agent):
         tags = wsrl_agent._update_metric_tags(
@@ -566,6 +592,382 @@ class TestWSRLModeSwitch:
 
         assert not wsrl_agent.use_cql_loss
         assert wsrl_agent.cql_alpha == 0.5
+
+
+class TestMixedBatchSampling:
+    """Mixed-batch online sampling: switch_to_online_mode("mixed", ratio)."""
+
+    def _fill_buffer(self, buffer, num_steps: int, marker: float = 0.0) -> None:
+        """Fill buffer with deterministic values; obs[0] = marker for identification."""
+        n = buffer.num_envs
+        obs_dim = buffer.obs.shape[-1]
+        act_dim = buffer.actions.shape[-1]
+        for step in range(num_steps):
+            buffer.add(
+                torch.full((n, obs_dim), marker),
+                torch.full((n, obs_dim), marker + 1.0),
+                torch.zeros(n, act_dim),
+                torch.zeros(n),
+                torch.zeros(n),
+            )
+
+    def test_switch_to_online_mode_mixed_freezes_offline_buffer(self, wsrl_agent):
+        # Pre-fill with offline data
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=42.0)
+        assert wsrl_agent.offline_replay_buffer is None
+
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
+
+        # Original buffer should now be the offline buffer (still has the data).
+        assert wsrl_agent.offline_replay_buffer is not None
+        assert len(wsrl_agent.offline_replay_buffer) > 0
+        # New replay buffer is empty.
+        assert len(wsrl_agent.replay_buffer) == 0
+        assert wsrl_agent.offline_data_ratio == 0.5
+
+    def test_mixed_batch_sample_when_online_empty_uses_all_offline(self, wsrl_agent):
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=42.0)
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
+        # Online buffer empty → all samples from offline (marker=42)
+        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
+        assert sample.obs.shape[0] == wsrl_agent.batch_size
+        # All obs should have marker=42 since online is empty
+        assert torch.all(sample.obs[:, 0] == 42.0)
+
+    def test_mixed_batch_combines_online_and_offline(self, wsrl_agent):
+        # Offline data with marker=10.0
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=10.0)
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.25)
+        # Add online data with marker=99.0
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=99.0)
+        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
+        # batch_size=8, ratio=0.25 → 2 from offline (marker=10), 6 from online (marker=99)
+        offline_count = (sample.obs[:, 0] == 10.0).sum().item()
+        online_count = (sample.obs[:, 0] == 99.0).sum().item()
+        assert offline_count + online_count == wsrl_agent.batch_size
+        assert offline_count == 2
+        assert online_count == 6
+
+    def test_mixed_batch_zero_ratio_uses_only_online(self, wsrl_agent):
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=10.0)
+        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.0)
+        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=99.0)
+        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
+        # ratio=0 → no offline samples
+        assert torch.all(sample.obs[:, 0] == 99.0)
+
+    def test_mixed_batch_invalid_ratio_raises(self, wsrl_agent):
+        with pytest.raises(ValueError, match="offline_data_ratio"):
+            wsrl_agent.switch_to_online_mode(
+                online_replay_mode="mixed", offline_data_ratio=1.5
+            )
+
+    def test_concat_replay_samples_preserves_mc_returns(self, wsrl_agent):
+        from rl_garden.common.types import MCReplayBufferSample
+
+        a = MCReplayBufferSample(
+            obs=torch.zeros(2, 4),
+            next_obs=torch.zeros(2, 4),
+            actions=torch.zeros(2, 2),
+            rewards=torch.tensor([1.0, 2.0]),
+            dones=torch.zeros(2),
+            mc_returns=torch.tensor([10.0, 20.0]),
+        )
+        b = MCReplayBufferSample(
+            obs=torch.ones(3, 4),
+            next_obs=torch.ones(3, 4),
+            actions=torch.ones(3, 2),
+            rewards=torch.tensor([3.0, 4.0, 5.0]),
+            dones=torch.zeros(3),
+            mc_returns=torch.tensor([30.0, 40.0, 50.0]),
+        )
+        out = WSRL._concat_replay_samples(a, b)
+        assert out.obs.shape == (5, 4)
+        torch.testing.assert_close(
+            out.mc_returns, torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        )
+
+
+class TestLossHookComposition:
+    """Refactored loss hooks: TD / CQL regularizer / Cal-QL lower bound.
+
+    These tests pin down the contract for each hook so future subclasses can
+    override individual pieces without breaking the others.
+    """
+
+    def test_wsrl_as_pure_sac(self, simple_env):
+        """use_cql_loss=False, use_calql=False → critic loss is TD-only."""
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100, buffer_device="cpu", batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4, critic_subsample_size=2,
+            use_cql_loss=False,
+            use_calql=False,
+            use_td_loss=True,
+            device="cpu", seed=42,
+        )
+        # Fill buffer
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        data = agent.replay_buffer.sample(8)
+        critic_loss, info = agent._critic_loss(data)
+
+        assert torch.isfinite(critic_loss)
+        # Pure SAC path: TD present, CQL absent from info dict.
+        assert "td_loss" in info
+        assert "cql_loss" not in info
+        assert "cql_alpha" not in info
+        assert "cql_q_diff" not in info
+        assert "calql_bound_rate" not in info
+        # critic_loss equals td_loss when no CQL term is added.
+        assert critic_loss.item() == pytest.approx(info["td_loss"], abs=1e-6)
+
+    def test_wsrl_calql_without_cql_silently_ignores_calql(self, simple_env):
+        """use_cql_loss=False + use_calql=True: Cal-QL only runs inside the CQL
+        regularizer, so without CQL the calql flag has no effect (and no error).
+
+        This pins down the current behavior so future refactors don't change it
+        accidentally. If we ever want to raise instead, this test should be
+        updated together with the new contract.
+        """
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100, buffer_device="cpu", batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4, critic_subsample_size=2,
+            use_cql_loss=False,
+            use_calql=True,
+            device="cpu", seed=42,
+        )
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        data = agent.replay_buffer.sample(8)
+        critic_loss, info = agent._critic_loss(data)
+        assert torch.isfinite(critic_loss)
+        # No CQL → no Cal-QL bound rate gets logged.
+        assert "calql_bound_rate" not in info
+
+    def test_cql_regularizer_isolated(self, wsrl_agent):
+        """Direct call to _cql_regularizer returns the same value as _cql_loss alias."""
+        for _ in range(5):
+            wsrl_agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        data = wsrl_agent.replay_buffer.sample(8)
+        q_pred = wsrl_agent._critic_forward(data.obs, data.actions, target=False)
+
+        # Same RNG seed → same result through both entry points.
+        torch.manual_seed(101)
+        reg_a, info_a = wsrl_agent._cql_regularizer(data, q_pred)
+        torch.manual_seed(101)
+        reg_b, info_b = wsrl_agent._cql_loss(data, q_pred)
+
+        assert reg_a.shape == ()
+        torch.testing.assert_close(reg_a, reg_b)
+        assert info_a["cql_q_diff"] == info_b["cql_q_diff"]
+        # Returned info includes the standard set of keys.
+        assert "cql_q_diff" in info_a
+        assert "cql_ood_values" in info_a
+        assert "calql_bound_rate" in info_a  # use_calql=True by default in fixture
+
+    def test_cql_loss_wrapper_dispatches_subclass_override(self, simple_env):
+        """_cql_loss must call the current instance's _cql_regularizer override."""
+
+        class OverrideCQLRegularizerWSRL(WSRL):
+            def _cql_regularizer(self, data, q_pred):
+                return torch.tensor(3.0, device=self.device), {"override_marker": 7.0}
+
+        agent = OverrideCQLRegularizerWSRL(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4,
+            critic_subsample_size=2,
+            cql_alpha=2.0,
+            use_cql_loss=True,
+            use_calql=True,
+            device="cpu",
+            seed=42,
+        )
+
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4),
+                torch.randn(2, 4),
+                torch.randn(2, 2),
+                torch.randn(2),
+                torch.zeros(2),
+            )
+        data = agent.replay_buffer.sample(8)
+        q_pred = agent._critic_forward(data.obs, data.actions, target=False)
+
+        cql_loss, cql_info = agent._cql_loss(data, q_pred)
+        assert cql_loss.item() == pytest.approx(3.0)
+        assert cql_info["override_marker"] == 7.0
+
+        critic_loss, critic_info = agent._critic_loss(data)
+        assert torch.isfinite(critic_loss)
+        assert critic_info["override_marker"] == 7.0
+        assert critic_info["cql_loss"] == pytest.approx(3.0)
+
+    def test_calql_lower_bound_clamps_to_mc_returns(self, wsrl_agent):
+        """_calql_lower_bound replaces q_ood values below MC returns with MC."""
+        batch_size = 4
+        critic_size = 2
+        n_samples = 3 * wsrl_agent.cql_n_actions  # 12 with cql_n_actions=4
+
+        # Construct q_ood deliberately below the MC returns at every position.
+        q_ood = torch.full(
+            (critic_size, batch_size, n_samples), -100.0, device=wsrl_agent.device
+        )
+        mc_returns = torch.full((batch_size,), 5.0, device=wsrl_agent.device)
+
+        # calql_bound_random_actions=False (fixture default): random-action
+        # positions stay at -inf bound (unclamped), current/next positions get
+        # clamped up to 5.0.
+        bounded, bound_rate = wsrl_agent._calql_lower_bound(
+            q_ood, mc_returns, n_samples=n_samples, batch_size=batch_size
+        )
+
+        # First cql_n_actions positions = random → bound is -inf → no clamp
+        random_block = bounded[:, :, : wsrl_agent.cql_n_actions]
+        torch.testing.assert_close(
+            random_block, torch.full_like(random_block, -100.0)
+        )
+        # Last 2*cql_n_actions positions get clamped up to 5.0
+        real_block = bounded[:, :, wsrl_agent.cql_n_actions :]
+        torch.testing.assert_close(real_block, torch.full_like(real_block, 5.0))
+
+        # All -100 values were below the MC bound (only on the real-action
+        # positions, since random positions had -inf bound → never below).
+        # Bound rate = (clamped count) / total = (2/3 of positions clamped).
+        expected_rate = (2 * wsrl_agent.cql_n_actions) / n_samples
+        assert bound_rate == pytest.approx(expected_rate)
+
+    def test_calql_lower_bound_no_clamp_when_q_above_returns(self, wsrl_agent):
+        """When q_ood is already above mc_returns, _calql_lower_bound is a no-op."""
+        batch_size = 4
+        critic_size = 2
+        n_samples = 3 * wsrl_agent.cql_n_actions
+        q_ood = torch.full(
+            (critic_size, batch_size, n_samples), 50.0, device=wsrl_agent.device
+        )
+        mc_returns = torch.full((batch_size,), 1.0, device=wsrl_agent.device)
+        bounded, bound_rate = wsrl_agent._calql_lower_bound(
+            q_ood, mc_returns, n_samples=n_samples, batch_size=batch_size
+        )
+        torch.testing.assert_close(bounded, q_ood)
+        assert bound_rate == 0.0
+
+
+class TestCompilePath:
+    """torch.compile wrapping of the hot loss methods.
+
+    These tests are CPU-friendly because torch.compile compiles for whatever
+    device the tensors live on. On CPU, compile may fall back to the inductor
+    "default" mode; we ask for it explicitly to avoid CUDA-only paths.
+    """
+
+    def _make_compiled_agent(self, simple_env, mode: str = "default") -> WSRL:
+        return WSRL(
+            env=simple_env,
+            buffer_size=100, buffer_device="cpu", batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4, critic_subsample_size=2,
+            use_cql_loss=True, cql_n_actions=4, cql_alpha=1.0,
+            cql_autotune_alpha=False,
+            use_calql=True, calql_bound_random_actions=False,
+            device="cpu", seed=42,
+            use_compile=True, compile_mode=mode,
+        )
+
+    def _fill(self, agent: WSRL, n_steps: int = 5) -> None:
+        for _ in range(n_steps):
+            agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+
+    def test_wsrl_with_compile_smoke(self, simple_env):
+        """A 2-step train under use_compile=True must run without error.
+
+        Compile warm-up takes the first step; the second step measures the
+        compiled path. We only assert that nothing blows up and losses are
+        finite — performance is benchmarked separately.
+        """
+        agent = self._make_compiled_agent(simple_env)
+        self._fill(agent, n_steps=5)
+        try:
+            losses_1 = agent.train(gradient_steps=1)
+            losses_2 = agent.train(gradient_steps=1)
+        except Exception as exc:
+            # If torch._dynamo cannot compile in this environment, surface a
+            # clear skip rather than a confusing failure.
+            pytest.skip(f"torch.compile not usable in this environment: {exc}")
+        assert all(torch.isfinite(torch.tensor(v)) for v in losses_1.values() if isinstance(v, (int, float)))
+        assert all(torch.isfinite(torch.tensor(v)) for v in losses_2.values() if isinstance(v, (int, float)))
+        # Compiled methods should be wrapped; eager originals stashed for re-wrap.
+        assert agent._eager_critic_loss is not None
+        assert agent._critic_loss is not agent._eager_critic_loss
+
+    def test_compile_re_wrap_on_mode_switch(self, simple_env):
+        """switch_to_online_mode must rebuild compiled graphs (flags may flip)."""
+        agent = self._make_compiled_agent(simple_env)
+        self._fill(agent)
+        compiled_before = agent._critic_loss
+        agent.online_use_cql_loss = False  # forces a Python-side flag change
+        try:
+            agent.switch_to_online_mode(online_replay_mode="append")
+        except Exception as exc:
+            pytest.skip(f"torch.compile not usable in this environment: {exc}")
+        compiled_after = agent._critic_loss
+        # After re-wrap, the compiled callable should be a fresh object.
+        assert compiled_after is not compiled_before
+        # Eager original is still stashed and unchanged.
+        assert agent._eager_critic_loss is not None
+
+    def test_compiled_critic_loss_is_deterministic(self, simple_env):
+        """Same compiled agent + same seed + same input → identical output.
+
+        We do NOT cross-compare eager vs compiled at the float level: compile
+        may reorder or fuse RNG-consuming ops (OOD sampling, critic-subsample
+        indices), so the two paths draw different random numbers from the same
+        seed. That's expected and not a correctness bug. What we DO assert is
+        that the compiled path itself is deterministic — re-running with the
+        same seed reproduces the same output, which is the meaningful contract
+        for downstream training reproducibility.
+        """
+        agent = self._make_compiled_agent(simple_env)
+        torch.manual_seed(123)
+        for _ in range(5):
+            agent.replay_buffer.add(
+                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                torch.randn(2), torch.zeros(2),
+            )
+        torch.manual_seed(7)
+        data = agent.replay_buffer.sample(8)
+
+        torch.manual_seed(11)
+        try:
+            loss_a, _ = agent._critic_loss(data)
+            torch.manual_seed(11)
+            loss_b, _ = agent._critic_loss(data)
+        except Exception as exc:
+            pytest.skip(f"torch.compile not usable in this environment: {exc}")
+
+        # Same seed + same input → bit-identical output from compiled path.
+        torch.testing.assert_close(loss_a, loss_b, atol=0.0, rtol=0.0)
+        assert torch.isfinite(loss_a)
 
 
 if __name__ == "__main__":

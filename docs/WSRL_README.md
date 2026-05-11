@@ -2,11 +2,20 @@
 
 ## Overview
 
-This repository now includes a complete PyTorch implementation of **WSRL (Warm-Start Reinforcement Learning)** with **Cal-QL (Calibrated Conservative Q-Learning)** and **REDQ (Randomized Ensembled Double Q-learning)**.
+This repository includes a PyTorch implementation of the SAC-family backbone,
+standalone **CQL (Conservative Q-Learning)** / **Cal-QL (Calibrated
+Q-Learning)** entrypoints, and **WSRL (Warm-Start Reinforcement Learning)**.
+The current design keeps SAC/REDQ update mechanics in a shared core, CQL and
+Cal-QL as independent algorithm layers, and WSRL as the offline→online flow
+layer.
 
 WSRL enables efficient offline→online training:
 - **Offline phase**: Pre-train with Cal-QL on ManiSkill trajectory H5 datasets
 - **Online phase**: Fine-tune with SAC or CQL without retaining offline data
+
+Standalone offline training is also available:
+- **OfflineCQL**: Pure offline CQL pretraining from flat H5 datasets
+- **OfflineCalQL**: Pure offline Cal-QL pretraining with MC return lower bounds
 
 For the end-to-end PickCube reproduction workflow, including SAC checkpoint
 training, WSRL dataset generation, and offline-to-online launch commands, see
@@ -15,10 +24,15 @@ training, WSRL dataset generation, and offline-to-online launch commands, see
 ## Key Features
 
 ### ✅ Algorithms Implemented
+- **SAC / RGBDSAC**: Online SAC using the shared SACCore update path
+- **OfflineSAC**: Offline SAC scaffold over static replay buffers
+- **CQL / CalQL**: Online/off-policy CQL and Cal-QL algorithm classes
+- **OfflineCQL / OfflineCalQL**: Pure offline CQL and Cal-QL pretraining
 - **WSRL**: State-based WSRL with CQL/Cal-QL
 - **WSRLRGBD**: Vision-based WSRL for RGB/RGBD observations
 
 ### ✅ Core Components
+- **SACCore**: Shared actor/critic/temperature update mechanics
 - **Q-Ensemble (REDQ)**: 10 critics by default with subsampling (2 critics for target)
 - **CQL Regularization**: Prevents Q-value overestimation with OOD action sampling
 - **Cal-QL Lower Bounds**: Uses Monte Carlo returns to calibrate Q-values
@@ -77,6 +91,91 @@ python examples/train_wsrl_rgbd.py \
 ./scripts/train_wsrl_rgbd.sh --env_id PickCube-v1 --encoder resnet10
 ```
 
+### Offline-Only Pretraining (No Sim Env)
+
+Use this when you have a static offline dataset (e.g., real-robot teleop H5)
+and want a pretrained actor + critic checkpoint without spinning up a sim
+env or running any eval.
+
+Use the generic offline pretraining entrypoint and select the algorithm with
+`--algorithm`:
+
+```bash
+# Pure offline CQL
+python examples/pretrain_offline.py \
+    --algorithm cql \
+    --offline_dataset_path /path/to/real_robot.h5 \
+    --num_offline_steps 200000 \
+    --checkpoint_dir runs/cql_pretrain \
+    --buffer_device cuda
+
+# Pure offline Cal-QL
+python examples/pretrain_offline.py \
+    --algorithm calql \
+    --offline_dataset_path /path/to/real_robot.h5 \
+    --num_offline_steps 200000 \
+    --checkpoint_dir runs/calql_pretrain \
+    --buffer_device cuda \
+    --use_calql --cql_alpha 5.0
+
+# Equivalent launchers
+scripts/pretrain_cql_offline.sh --offline_dataset_path /path/to/real_robot.h5
+scripts/pretrain_calql_offline.sh --offline_dataset_path /path/to/real_robot.h5
+```
+
+These write `cql_offline_pretrained.pt` or `calql_offline_pretrained.pt` by
+default. The script infers obs/action specs from the H5, constructs an
+`OfflineEnvSpec`, loads the dataset into the algorithm replay buffer, and runs
+`run_offline_pretraining()`.
+
+For WSRL-specific offline pretraining, use `--algorithm wsrl-calql`. It builds
+a `WSRL(CalQL)` agent directly and is useful when the checkpoint will be
+resumed by WSRL's offline→online flow:
+
+```bash
+python examples/pretrain_offline.py \
+    --algorithm wsrl-calql \
+    --offline_dataset_path /path/to/real_robot.h5 \
+    --num_offline_steps 200000 \
+    --checkpoint_dir runs/robot_pretrain \
+    --buffer_device cuda \
+    --batch_size 256 \
+    --use_calql --cql_alpha 5.0
+```
+
+The WSRL-compatible mode writes
+`runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt` by default,
+which contains the policy, critic ensemble, target critic, optimizer state,
+and Lagrange multipliers — everything needed to resume.
+
+`examples/pretrain_cql_offline.py` and `examples/pretrain_wsrl_offline.py`
+remain as thin compatibility wrappers for older commands.
+
+**Online fine-tune on a deployment machine** (which does have an env):
+
+```bash
+python examples/train_wsrl.py \
+    --env_id <your_env_id> \
+    --load_checkpoint runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt \
+    --num_offline_steps 0 \
+    --num_online_steps 50000 \
+    --online_replay_mode mixed \
+    --offline_data_ratio 0.5
+```
+
+This cleanly separates the two WSRL phases across machines: the pretraining
+host needs no sim, and the deployment host runs only online fine-tuning.
+
+**Constraints:**
+- State observations only (flat `Box`). For RGBD pretraining, write a vision
+  variant — the standalone offline CQL/Cal-QL entrypoint and WSRL offline
+  pretrain script raise with a clear error if they detect dict obs.
+- Action bounds default to ±1; override with `--action_low` / `--action_high`
+  if your dataset uses a different action space.
+- `OfflineEnvSpec` has no `reset` / `step`; pure offline algorithms interpret
+  `learn()` as gradient steps, while WSRL online fine-tuning still requires a
+  real environment.
+
 ## Configuration Options
 
 ### Q-Ensemble (REDQ)
@@ -112,6 +211,17 @@ python examples/train_wsrl_rgbd.py \
 - `--online_cql_alpha 0.5`: CQL alpha for online phase (optional)
 - `--online_use_cql_loss False`: Disable CQL loss for online phase (optional)
 
+### Standalone Offline CQL/Cal-QL Control
+- `--algorithm cql`: Use `OfflineCQL` with a normal tensor replay buffer.
+- `--algorithm calql`: Use `OfflineCalQL` with an MC replay buffer and Cal-QL bounds.
+- `--algorithm wsrl-calql`: Build `WSRL(CalQL)` for checkpoints intended for
+  the WSRL offline→online flow.
+- `--agent cql|calql`: Backward-compatible alias accepted by the CQL wrapper.
+- `--save_filename`: Override the default
+  `<algorithm>_offline_pretrained.pt` checkpoint name.
+- `--offline_sampling without_replace`: Sample offline batches without repeating
+  until the static replay buffer is exhausted.
+
 ### Upstream-Parity Defaults
 - `policy_lr=1e-4`, `q_lr=3e-4`, `alpha_lr=1e-4`
 - `gamma=0.99`, `tau=0.005`
@@ -123,6 +233,49 @@ python examples/train_wsrl_rgbd.py \
 - `--encoder plain_conv`: Image encoder (plain_conv | resnet10 | resnet18)
 - `--camera_width 128`: Camera width (default: 128)
 - `--camera_height 128`: Camera height (default: 128)
+
+### Acceleration
+
+Two single-GPU speedups are wired in. Both are orthogonal and stack.
+
+**1. `EnsembleQCritic` is vmap-fused (always on).** N critics share one
+prototype and stacked parameters; `torch.func.vmap` runs them in a single
+fused forward pass instead of N independent kernel launches. Replaces the
+old `nn.ModuleList` layout. Legacy checkpoints (with `q_nets.<i>.*` keys)
+are migrated transparently on load.
+
+**2. `--use_compile` (off by default).** Wraps `_critic_loss`, `_actor_loss`,
+and `_target_q` with `torch.compile(mode="default")`. First step pays a
+30–60 s warm-up; subsequent steps run a fused inductor graph.
+
+```bash
+# Enable compile-based acceleration
+python examples/pretrain_offline.py \
+    --algorithm wsrl-calql \
+    --offline_dataset_path real_robot.h5 \
+    --num_offline_steps 100000 \
+    --batch_size 1024 \
+    --use_compile
+```
+
+**Measured speedup** (RTX 5060, PyTorch 2.11, state-only, batch=1024,
+n_critics=10, cql_n_actions=10):
+
+| Configuration              | ms / grad step | step/s | speedup |
+|----------------------------|---------------:|-------:|--------:|
+| vmap critic only (default) |         86.0   |  11.6  |    1.0× |
+| vmap + `--use_compile`     |         48.8   |  20.5  |    1.76× |
+
+Notes:
+- `compile_mode="reduce-overhead"` uses CUDA graphs and currently conflicts
+  with the separately-compiled critic/actor methods (tensor lifetimes cross
+  callable boundaries). Stick with the default `"default"` mode unless you
+  benchmark a specific environment.
+- Inside `switch_to_online_mode`, the compiled methods are re-wrapped because
+  Python-side flags (`use_cql_loss`, `cql_alpha`) may have flipped and would
+  otherwise leave a stale specialization in the graph.
+- For larger speedups, also raise `--batch_size` until VRAM is exhausted —
+  the small networks here leave most of the GPU idle.
 
 ## Python API
 
@@ -161,6 +314,49 @@ agent.switch_to_online_mode()
 agent.learn(total_timesteps=50_000)
 ```
 
+### Offline CQL/Cal-QL Pretraining (Python)
+
+```python
+import numpy as np
+from gymnasium import spaces
+
+from rl_garden.algorithms import OfflineCalQL, OfflineEnvSpec
+from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
+
+
+obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(OBS_DIM,), dtype=np.float32)
+action_space = spaces.Box(low=-1.0, high=1.0, shape=(ACT_DIM,), dtype=np.float32)
+env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=1)
+
+agent = OfflineCalQL(
+    env=env_spec,
+    n_critics=10,
+    critic_subsample_size=2,
+    use_calql=True,
+    cql_alpha=5.0,
+    checkpoint_dir="runs/calql_pretrain/checkpoints",
+)
+
+load_maniskill_h5_to_replay_buffer(agent.replay_buffer, "real_robot.h5")
+agent.learn_offline(num_steps=200_000, save_filename="calql_offline_pretrained.pt")
+```
+
+Use `OfflineCQL` instead of `OfflineCalQL` for pure CQL without MC-return
+lower bounds. To resume on a deployment host with a real env, construct a
+compatible `WSRL`, `CalQL`, or `SAC`-family agent against the live env and call
+`agent.load(checkpoint_path)`.
+
+### WSRL Offline→Online Resume (Python)
+
+```python
+from rl_garden.algorithms import WSRL
+
+agent = WSRL(env=live_env, n_critics=10, critic_subsample_size=2, use_calql=True)
+agent.load("runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt")
+agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
+agent.learn(total_timesteps=50_000)
+```
+
 ### Vision-Based WSRLRGBD
 
 ```python
@@ -196,52 +392,70 @@ agent.learn(total_timesteps=1_000_000)
 ### Class Hierarchy
 
 ```
-OffPolicyAlgorithm (base class)
-├── SAC (state-based SAC)
-│   └── RGBDSAC (vision-based SAC)
-└── WSRL (state-based WSRL with CQL/Cal-QL)
-    └── WSRLRGBD (vision-based WSRL)
+OffPolicyAlgorithm
+├── SAC(SACCore)
+│   └── RGBDSAC
+└── CQL(CQLCore)
+    └── CalQL
+        └── WSRL
+            └── WSRLRGBD
+
+OfflineRLAlgorithm
+├── OfflineSAC(SACCore)
+└── OfflineCQL(CQLCore)
+    └── OfflineCalQL
 ```
 
 ### Key Components
 
-1. **WSRLPolicy** (`rl_garden/policies/wsrl_policy.py`)
-   - Q-ensemble with configurable size
-   - Critic subsampling for REDQ
-   - Optional CQL alpha Lagrange multiplier
-   - Upstream-style layer norm and actor std parameterization options
-   - Uses shared network modules from `rl_garden/networks/`
+1. **SACCore** (`rl_garden/algorithms/sac_core.py`)
+   - Shared SAC actor/critic/alpha update loop
+   - REDQ target critic subsampling
+   - High-UTD splitting, scheduler stepping, grad clipping, target updates
 
-2. **MCReplayBuffer** (`rl_garden/buffers/mc_buffer.py`)
+2. **SACPolicy / WSRLPolicy** (`rl_garden/policies/`)
+   - `SACPolicy` owns Q-ensembles, critic subsampling helpers, modern MLP
+     options, and actor std parameterization.
+   - `WSRLPolicy` is a compatibility shim with WSRL-style defaults.
+   - CQL alpha Lagrange state is owned by `CQLCore`, not the policy.
+
+3. **CQL / CalQL** (`rl_garden/algorithms/cql.py`, `calql.py`)
+   - `CQLCore` implements conservative regularization, CQL alpha, and max
+     target backup.
+   - `CalQLCore` adds MC replay buffers and MC return lower bounds.
+   - Online and offline shells share the same loss implementation.
+
+4. **MCReplayBuffer** (`rl_garden/buffers/mc_buffer.py`)
    - Cached vectorized Monte Carlo return computation
    - Episode boundary tracking
    - Circular-buffer wraparound handling
    - Support for both Tensor and Dict observations
 
-3. **ManiSkill H5 Loader** (`rl_garden/buffers/maniskill_h5.py`)
+5. **ManiSkill H5 Loader** (`rl_garden/buffers/maniskill_h5.py`)
    - Loads `traj_*` H5 groups into existing MC replay buffers
    - Supports flat state observations and dict/RGBD observation groups
 
-4. **WSRL Algorithm** (`rl_garden/algorithms/wsrl.py`)
-   - CQL regularization with OOD action sampling
-   - Cal-QL lower bounds using MC returns
+6. **WSRL Algorithm** (`rl_garden/algorithms/wsrl.py`)
+   - Inherits `CalQL`
    - Offline→online mode switching
-   - High-UTD training support
+   - Empty/append/mixed replay modes
+   - Offline probe and WSRL phase logging
 
-5. **WSRLRGBD** (`rl_garden/algorithms/wsrl_rgbd.py`)
+7. **WSRLRGBD** (`rl_garden/algorithms/wsrl_rgbd.py`)
    - Vision-based variant
    - Encoder detachment on actor path
    - Dict observation support
 
 ## Test Coverage
 
-All WSRL components have focused tests covering policy options, CQL/Cal-QL loss
-semantics, high-UTD dispatch, MC replay returns, RGBD support, and ManiSkill H5
-loading.
+The SAC/CQL/Cal-QL/WSRL stack has focused tests covering policy options,
+CQL/Cal-QL loss semantics, standalone offline CQL/Cal-QL pretraining,
+high-UTD dispatch, MC replay returns, RGBD support, checkpoint roundtrips, and
+ManiSkill H5 loading.
 
 Run tests:
 ```bash
-pytest tests/test_wsrl*.py tests/test_mc*.py tests/test_maniskill_h5_loader.py -v
+pytest tests/test_cql_calql.py tests/test_sac_core.py tests/test_wsrl*.py -v
 ```
 
 ## References

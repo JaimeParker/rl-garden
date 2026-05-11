@@ -210,11 +210,13 @@ def test_sac_net_arch_dict_splits_actor_and_critic():
         net_arch={"pi": [7], "qf": [9, 8]},
     )
     actor_first_linear = next(m for m in agent.policy.actor.trunk.modules() if isinstance(m, torch.nn.Linear))
-    critic_first_linear = next(
-        m for m in agent.policy.critic.q_nets[0].modules() if isinstance(m, torch.nn.Linear)
-    )
     assert actor_first_linear.out_features == 7
-    assert critic_first_linear.out_features == 9
+    # vmap-fused EnsembleQCritic stores stacked params, not a ModuleList of
+    # critics. The first trunk-Linear weight has shape
+    # ``(n_critics, qf_hidden_0, features_dim + act_dim)``, so we read the
+    # qf_hidden_0 (= 9) off axis 1.
+    first_critic_weight = agent.policy.critic.ens_p_trunk__0__weight
+    assert first_critic_weight.shape[1] == 9
 
 
 def test_sac_deprecated_hidden_dims_still_work_with_warning():

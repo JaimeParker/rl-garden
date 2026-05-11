@@ -37,6 +37,8 @@ class ManiSkillEnvConfig:
     partial_reset: bool = False
     ignore_terminations: bool = True
     record_metrics: bool = True
+    reward_scale: float = 1.0
+    reward_bias: float = 0.0
     # Recording
     record_dir: Optional[str] = None
     save_video: bool = False
@@ -110,6 +112,10 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
 
     if isinstance(env.action_space, gym.spaces.Dict):
         env = FlattenActionSpaceWrapper(env)
+
+    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
+        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
+        env = RewardScaleBiasWrapper(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     if cfg.record_dir is not None and (cfg.save_video or cfg.save_trajectory):
         env = RecordEpisode(

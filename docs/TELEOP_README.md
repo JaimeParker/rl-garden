@@ -155,4 +155,15 @@ terminated
 truncated
 ```
 
-This file can be passed to WSRL training through `--offline_dataset_path`.
+This file can be passed to WSRL, CQL, or Cal-QL offline training through
+`--offline_dataset_path`.
+
+For real-robot data where you only want to do offline pretraining (no sim
+env, no eval), use `examples/pretrain_offline.py --algorithm cql` or
+`--algorithm calql` for standalone offline CQL/Cal-QL checkpoints. Use
+`--algorithm wsrl-calql` when the checkpoint should be resumed by the WSRL
+offline→online flow. This entrypoint infers obs/action specs from the H5 and
+produces pretrained checkpoints that can later be loaded into compatible
+live-env training runs for online fine-tuning. See
+[`WSRL_README.md`](WSRL_README.md#offline-only-pretraining-no-sim-env) for
+the full workflow.

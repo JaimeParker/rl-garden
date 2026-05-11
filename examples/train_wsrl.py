@@ -21,7 +21,6 @@ import tyro
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
-from rl_garden.buffers import MCDictReplayBuffer, MCTensorReplayBuffer
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
@@ -119,22 +118,6 @@ def _save_offline_checkpoint(
         print(f"[offline] saved_checkpoint={path}", flush=True)
 
 
-def _clear_replay_buffer(agent: WSRL, logger: Logger, step: int, std_log: bool) -> int:
-    """Start online replay from an empty buffer, matching upstream WSRL default."""
-    buffer = agent.replay_buffer
-    previous_len = len(buffer)
-    buffer.pos = 0
-    buffer.full = False
-    if isinstance(buffer, (MCTensorReplayBuffer, MCDictReplayBuffer)):
-        buffer._mc_table = None
-    logger.add_summary("wsrl/online_replay_mode", "empty")
-    logger.add_summary("wsrl/online_replay_cleared", True)
-    logger.add_summary("wsrl/online_replay_size_before_clear", previous_len)
-    if std_log:
-        print(f"[online] replay_mode=empty cleared_transitions={previous_len}", flush=True)
-    return previous_len
-
-
 def _set_offline_probe(agent: WSRL, logger: Logger, std_log: bool) -> None:
     probe_size = min(agent.batch_size, len(agent.replay_buffer))
     if probe_size <= 0:
@@ -179,6 +162,8 @@ def main() -> None:
         obs_mode="state",
         control_mode=args.control_mode,
         render_mode=args.render_mode,
+        reward_scale=args.reward_scale,
+        reward_bias=args.reward_bias,
     )
     eval_record_dir = resolve_eval_record_dir(args, run_name)
     eval_cfg = ManiSkillEnvConfig(
@@ -192,6 +177,8 @@ def main() -> None:
         save_video=args.capture_video,
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
+        reward_scale=args.reward_scale,
+        reward_bias=args.reward_bias,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
@@ -213,6 +200,15 @@ def main() -> None:
         cql_alpha_lr=args.cql_alpha_lr,
         policy_frequency=args.policy_frequency,
         target_network_frequency=args.target_network_frequency,
+        weight_decay=args.weight_decay,
+        use_adamw=args.use_adamw,
+        lr_schedule=args.lr_schedule,
+        lr_warmup_steps=args.lr_warmup_steps,
+        lr_decay_steps=args.lr_decay_steps,
+        lr_min_ratio=args.lr_min_ratio,
+        grad_clip_norm=args.grad_clip_norm,
+        use_compile=args.use_compile,
+        compile_mode=args.compile_mode,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,
@@ -232,9 +228,20 @@ def main() -> None:
         calql_bound_random_actions=args.calql_bound_random_actions,
         actor_use_layer_norm=args.actor_use_layer_norm,
         critic_use_layer_norm=args.critic_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        actor_dropout_rate=args.actor_dropout_rate,
+        critic_dropout_rate=args.critic_dropout_rate,
+        kernel_init=args.kernel_init,
+        backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
+        offline_sampling=args.offline_sampling,
+        sparse_reward_mc=args.sparse_reward_mc,
+        sparse_negative_reward=args.sparse_negative_reward,
+        success_threshold=args.success_threshold,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -259,6 +266,9 @@ def main() -> None:
             agent.replay_buffer,
             args.offline_dataset_path,
             num_traj=args.offline_num_traj,
+            reward_scale=args.reward_scale,
+            reward_bias=args.reward_bias,
+            success_key=args.success_key,
         )
         offline_start_step = agent._global_step
         logger.add_summary("wsrl/offline_loaded_transitions", loaded)
@@ -280,14 +290,14 @@ def main() -> None:
             std_log=args.std_log,
         )
         _set_offline_probe(agent, logger, args.std_log)
-        if args.online_replay_mode == "empty":
-            _clear_replay_buffer(agent, logger, offline_end_step, args.std_log)
-        else:
-            logger.add_summary("wsrl/online_replay_mode", "append")
-            logger.add_summary("wsrl/online_replay_cleared", False)
 
-        # Switch to online mode
-        agent.switch_to_online_mode()
+        # Switch to online mode. The algorithm owns empty/append/mixed buffer handling.
+        agent.switch_to_online_mode(
+            online_replay_mode=args.online_replay_mode,
+            offline_data_ratio=args.offline_data_ratio,
+        )
+        if args.std_log:
+            print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
 
     # Online training phase
     if args.num_online_steps > 0:
