@@ -25,16 +25,17 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import torch
 import tyro
-from gymnasium import spaces
-from tqdm import trange
 
-from rl_garden.algorithms import WSRL
+from rl_garden.algorithms import (
+    OfflineEnvSpec,
+    WSRL,
+    infer_box_specs_from_h5,
+    run_offline_pretraining,
+)
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
@@ -63,82 +64,7 @@ class Args(WSRLTrainingArgs):
     save_filename: str = "offline_pretrained.pt"
 
 
-class _EnvSpec:
-    """Minimal stand-in for an env that only exposes spaces + num_envs.
-
-    Mirrors the attributes ``OffPolicyAlgorithm`` actually reads (``num_envs``,
-    ``single_observation_space``, ``single_action_space``). No ``reset`` /
-    ``step`` — this stub must never be passed to ``agent.learn()``.
-    """
-
-    def __init__(
-        self,
-        observation_space: spaces.Space,
-        action_space: spaces.Box,
-        num_envs: int = 1,
-    ) -> None:
-        self.single_observation_space = observation_space
-        self.single_action_space = action_space
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.num_envs = num_envs
-
-
-def _infer_specs_from_h5(
-    path: str | Path,
-    action_low: float,
-    action_high: float,
-) -> tuple[spaces.Space, spaces.Box]:
-    """Peek at the H5 to derive observation + action specs.
-
-    For state-only datasets, ``obs`` is a flat 2D array. We do not try to
-    auto-detect dict observations here; vision data uses a different script.
-    """
-    try:
-        import h5py  # type: ignore
-    except ImportError as exc:
-        raise ImportError(
-            "Loading H5 datasets requires h5py. Install with `pip install h5py`."
-        ) from exc
-
-    path = Path(path)
-    with h5py.File(path, "r") as f:
-        traj_keys = sorted([k for k in f.keys() if k.startswith("traj_")])
-        if not traj_keys:
-            raise ValueError(f"No traj_* groups found in {path}.")
-        traj = f[traj_keys[0]]
-        if "obs" in traj:
-            obs_node = traj["obs"]
-        elif "observations" in traj:
-            obs_node = traj["observations"]
-        else:
-            raise ValueError(f"No obs/observations field in {traj_keys[0]}.")
-        if isinstance(obs_node, h5py.Group):
-            raise NotImplementedError(
-                "Dict observations detected. This script supports flat Box "
-                "observations only; for RGBD pretraining, write a vision-specific "
-                "variant that constructs a Dict observation space."
-            )
-        obs_shape = tuple(obs_node.shape[1:])  # strip time dim
-
-        if "actions" in traj:
-            act_node = traj["actions"]
-        elif "action" in traj:
-            act_node = traj["action"]
-        else:
-            raise ValueError(f"No actions field in {traj_keys[0]}.")
-        action_shape = tuple(act_node.shape[1:])
-
-    obs_space = spaces.Box(
-        low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32
-    )
-    action_space = spaces.Box(
-        low=action_low, high=action_high, shape=action_shape, dtype=np.float32
-    )
-    return obs_space, action_space
-
-
-def _build_agent(args: Args, env_spec: _EnvSpec, logger: Logger) -> WSRL:
+def _build_agent(args: Args, env_spec: OfflineEnvSpec, logger: Logger) -> WSRL:
     """Construct WSRL with the same algorithm knobs as train_wsrl.py."""
     return WSRL(
         env=env_spec,
@@ -247,8 +173,10 @@ def main() -> None:
     )
 
     # 1) Infer spaces from H5 and build an env stub.
-    obs_space, action_space = _infer_specs_from_h5(
-        args.offline_dataset_path, args.action_low, args.action_high
+    obs_space, action_space = infer_box_specs_from_h5(
+        args.offline_dataset_path,
+        action_low=args.action_low,
+        action_high=args.action_high,
     )
     if args.std_log:
         print(
@@ -256,7 +184,7 @@ def main() -> None:
             f"action_range=[{args.action_low}, {args.action_high}]",
             flush=True,
         )
-    env_spec = _EnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
+    env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
 
     # 2) Build agent (no env interaction; eval_env=None).
     agent = _build_agent(args, env_spec, logger)
@@ -279,55 +207,18 @@ def main() -> None:
         if args.std_log:
             print(f"[pretrain] resumed_from={args.load_checkpoint}", flush=True)
 
-    # 5) Pure offline gradient loop.
-    gradient_steps = (
-        int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
+    # 5) Pure offline gradient loop and final save.
+    run_offline_pretraining(
+        agent,
+        num_steps=args.num_offline_steps,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=args.checkpoint_freq,
+        save_filename=args.save_filename,
+        save_replay_buffer=args.save_replay_buffer,
+        save_final_checkpoint=args.save_final_checkpoint,
+        log_freq=args.log_freq,
+        std_log=args.std_log,
     )
-    for step in trange(args.num_offline_steps, desc="offline"):
-        losses = agent.train(gradient_steps)
-        global_step = step + 1
-        if args.log_freq > 0 and global_step % args.log_freq == 0:
-            agent._log_update_metrics(losses, global_step)
-            if args.std_log:
-                progress = 100.0 * global_step / args.num_offline_steps
-                loss_summary = " ".join(
-                    f"{k}={v:.4f}"
-                    for k, v in losses.items()
-                    if isinstance(v, (int, float))
-                )
-                print(
-                    f"[offline] step={global_step}/{args.num_offline_steps} "
-                    f"({progress:.2f}%) {loss_summary}",
-                    flush=True,
-                )
-        if (
-            checkpoint_dir is not None
-            and args.checkpoint_freq > 0
-            and global_step % args.checkpoint_freq == 0
-        ):
-            ckpt = agent.save(
-                Path(checkpoint_dir) / f"checkpoint_{global_step}.pt",
-                include_replay_buffer=args.save_replay_buffer,
-            )
-            if args.std_log:
-                print(f"[offline] intermediate_checkpoint={ckpt}", flush=True)
-
-    # 6) Final save.
-    if checkpoint_dir is not None:
-        final_path = agent.save(
-            Path(checkpoint_dir) / args.save_filename,
-            include_replay_buffer=args.save_replay_buffer,
-        )
-        logger.add_summary("offline/final_checkpoint", str(final_path))
-        if args.std_log:
-            print(f"[pretrain] final_checkpoint={final_path}", flush=True)
-    else:
-        if args.std_log:
-            print(
-                "[pretrain] no checkpoint_dir resolved; pass --checkpoint_dir "
-                "or --save_final_checkpoint=True to keep the pretrained weights.",
-                flush=True,
-            )
 
     logger.close()
 
