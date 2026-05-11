@@ -42,7 +42,8 @@ rl-garden/
 │   ├── encoders/
 │   ├── envs/
 │   ├── networks/
-│   └── policies/
+│   ├── policies/
+│   └── reward_models/
 ├── examples/
 ├── scripts/
 ├── tests/
@@ -182,6 +183,27 @@ scripts/train_sac_state.sh \
 
 # Stdout only (no tensorboard/wandb artifacts)
 scripts/train_sac_state.sh --log_type none
+```
+
+## Reward Classifiers
+
+Generate HSV labels from compressed HDF5 episodes:
+
+```bash
+python rl_garden/reward_models/classifiers/hsv/generate_labels.py --data_dir data/epi0-19_trimmed --tune_hsv --camera high
+python rl_garden/reward_models/classifiers/hsv/generate_labels.py --camera high --output data/labels.npz
+```
+
+Train the color reward classifier:
+
+```bash
+python rl_garden/reward_models/classifiers/color/train.py
+```
+
+Train the alignment reward classifier:
+
+```bash
+python rl_garden/reward_models/classifiers/alignment/train.py
 ```
 
 Python-side extractor injection:
