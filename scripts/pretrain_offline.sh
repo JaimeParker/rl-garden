@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pure offline CQL launcher. Pass --offline_dataset_path /path/to/demo.h5.
+# Generic pure offline pretraining launcher.
+# Pass --algorithm cql|calql|wsrl-calql and --offline_dataset_path /path/to/demo.h5.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,5 +56,4 @@ while [[ $# -gt 0 ]]; do
 done
 
 exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/pretrain_offline.py" \
-    --algorithm cql \
     "${FORWARD_ARGS[@]}"

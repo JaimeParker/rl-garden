@@ -1,205 +1,30 @@
-"""Pure offline CQL/Cal-QL pretraining from a flat ManiSkill H5 dataset.
+"""Compatibility wrapper for offline CQL/Cal-QL pretraining.
 
-Examples:
-    python examples/pretrain_cql_offline.py \
-        --agent cql \
-        --offline_dataset_path demos/pickcube.h5 \
-        --num_offline_steps 100000
+Prefer the generic entrypoint:
 
-    python examples/pretrain_cql_offline.py \
-        --agent calql \
-        --offline_dataset_path demos/pickcube.h5 \
-        --num_offline_steps 100000
+    python examples/pretrain_offline.py --algorithm cql --offline_dataset_path demos/pickcube.h5
+    python examples/pretrain_offline.py --algorithm calql --offline_dataset_path demos/pickcube.h5
+
+The legacy ``--agent cql|calql`` alias remains supported here.
 """
 from __future__ import annotations
 
-import time
-from typing import TypeAlias
+from dataclasses import dataclass
+from typing import Literal, Optional
 
-import torch
-import tyro
+from pretrain_offline import main as _main
 
-from rl_garden.algorithms import (
-    OfflineCalQL,
-    OfflineCQL,
-    OfflineEnvSpec,
-    infer_box_specs_from_h5,
-    run_offline_pretraining,
-)
-from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
-from rl_garden.common import Logger, seed_everything
-from rl_garden.common.cli_args import (
-    CQLTrainingArgs,
-    apply_log_env_overrides,
-    resolve_checkpoint_dir,
-)
-
-OfflineCQLAgent: TypeAlias = OfflineCQL | OfflineCalQL
+from rl_garden.common.cli_args import OfflinePretrainArgs
 
 
-def _save_filename(args: CQLTrainingArgs) -> str:
-    if args.save_filename is not None:
-        return args.save_filename
-    return f"{args.agent}_offline_pretrained.pt"
-
-
-def _build_agent(
-    args: CQLTrainingArgs, env_spec: OfflineEnvSpec, logger: Logger
-) -> OfflineCQLAgent:
-    common_kwargs = dict(
-        env=env_spec,
-        buffer_size=args.buffer_size,
-        buffer_device=args.buffer_device,
-        batch_size=args.batch_size,
-        gamma=args.gamma,
-        tau=args.tau,
-        offline_sampling=args.offline_sampling,
-        utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        alpha_lr=args.alpha_lr,
-        cql_alpha_lr=args.cql_alpha_lr,
-        policy_frequency=args.policy_frequency,
-        target_network_frequency=args.target_network_frequency,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        use_compile=args.use_compile,
-        compile_mode=args.compile_mode,
-        ent_coef="auto",
-        target_entropy="auto",
-        backup_entropy=args.backup_entropy,
-        n_critics=args.n_critics,
-        critic_subsample_size=args.critic_subsample_size,
-        use_cql_loss=args.use_cql_loss,
-        use_td_loss=args.use_td_loss,
-        cql_n_actions=args.cql_n_actions,
-        cql_alpha=args.cql_alpha,
-        cql_autotune_alpha=args.cql_autotune_alpha,
-        cql_alpha_lagrange_init=args.cql_alpha_lagrange_init,
-        cql_target_action_gap=args.cql_target_action_gap,
-        cql_importance_sample=args.cql_importance_sample,
-        cql_max_target_backup=args.cql_max_target_backup,
-        cql_temp=args.cql_temp,
-        cql_clip_diff_min=args.cql_clip_diff_min,
-        cql_clip_diff_max=args.cql_clip_diff_max,
-        cql_action_sample_method=args.cql_action_sample_method,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        actor_use_group_norm=args.actor_use_group_norm,
-        critic_use_group_norm=args.critic_use_group_norm,
-        num_groups=args.num_groups,
-        actor_dropout_rate=args.actor_dropout_rate,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        std_parameterization=args.std_parameterization,
-        seed=args.seed,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=None,
-        checkpoint_freq=0,
-        save_replay_buffer=args.save_replay_buffer,
-        save_final_checkpoint=False,
-    )
-    if args.agent == "cql":
-        return OfflineCQL(**common_kwargs)
-    if args.agent == "calql":
-        return OfflineCalQL(
-            **common_kwargs,
-            use_calql=args.use_calql,
-            calql_bound_random_actions=args.calql_bound_random_actions,
-            sparse_reward_mc=args.sparse_reward_mc,
-            sparse_negative_reward=args.sparse_negative_reward,
-            success_threshold=args.success_threshold,
-        )
-    raise ValueError(f"Unknown agent: {args.agent!r}")
+@dataclass
+class Args(OfflinePretrainArgs):
+    algorithm: Literal["cql", "calql"] = "cql"
+    agent: Optional[Literal["cql", "calql"]] = None
 
 
 def main() -> None:
-    args = tyro.cli(CQLTrainingArgs)
-    apply_log_env_overrides(args)
-    seed_everything(args.seed)
-
-    if not args.offline_dataset_path:
-        raise SystemExit("--offline_dataset_path is required for offline CQL pretraining.")
-    if args.num_offline_steps <= 0:
-        raise SystemExit("--num_offline_steps must be positive.")
-    if args.agent == "cql" and args.sparse_reward_mc:
-        raise SystemExit("--sparse_reward_mc requires --agent calql.")
-    if args.buffer_device == "cuda" and not torch.cuda.is_available():
-        print("[pretrain] CUDA not available; falling back to CPU buffer.")
-        args.buffer_device = "cpu"
-
-    start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    run_name = args.exp_name or f"{args.agent}_offline_pretrain__{args.seed}__{int(time.time())}"
-    checkpoint_dir = resolve_checkpoint_dir(args, run_name)
-    logger = Logger.create(
-        log_type=args.log_type,
-        log_dir=args.log_dir,
-        run_name=run_name,
-        config=vars(args),
-        start_time=start_time,
-        log_keywords=args.log_keywords,
-        wandb_project=args.wandb_project,
-        wandb_entity=args.wandb_entity,
-        wandb_group=args.wandb_group or f"{args.agent}_offline_pretrain",
-    )
-    logger.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n"
-        + "\n".join(f"|{key}|{value}|" for key, value in vars(args).items()),
-    )
-
-    obs_space, action_space = infer_box_specs_from_h5(
-        args.offline_dataset_path,
-        action_low=args.action_low,
-        action_high=args.action_high,
-    )
-    env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
-    if args.std_log:
-        print(
-            f"[pretrain] agent={args.agent} obs={obs_space.shape} "
-            f"action={action_space.shape}",
-            flush=True,
-        )
-
-    agent = _build_agent(args, env_spec, logger)
-    loaded = load_maniskill_h5_to_replay_buffer(
-        agent.replay_buffer,
-        args.offline_dataset_path,
-        num_traj=args.offline_num_traj,
-        reward_scale=args.reward_scale,
-        reward_bias=args.reward_bias,
-        success_key=args.success_key,
-    )
-    logger.add_summary("offline/loaded_transitions", loaded)
-    if args.std_log:
-        print(f"[pretrain] loaded_transitions={loaded}", flush=True)
-
-    if args.load_checkpoint is not None:
-        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
-        if args.std_log:
-            print(f"[pretrain] resumed_from={args.load_checkpoint}", flush=True)
-
-    run_offline_pretraining(
-        agent,
-        num_steps=args.num_offline_steps,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_filename=_save_filename(args),
-        save_replay_buffer=args.save_replay_buffer,
-        save_final_checkpoint=args.save_final_checkpoint,
-        log_freq=args.log_freq,
-        std_log=args.std_log,
-        desc=f"{args.agent}-offline",
-    )
-    logger.close()
+    _main(Args, allowed_algorithms={"cql", "calql"})
 
 
 if __name__ == "__main__":

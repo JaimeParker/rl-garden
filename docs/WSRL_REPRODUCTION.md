@@ -262,10 +262,12 @@ PY
 The codebase now exposes CQL and Cal-QL as standalone algorithms as well as
 WSRL flow components. Use one of two paths:
 
-- **Standalone offline pretrain**: `examples/pretrain_cql_offline.py --agent cql`
-  or `--agent calql` trains `OfflineCQL` / `OfflineCalQL` without constructing a
-  ManiSkill env. This mirrors the upstream idea that CQL and Cal-QL can be
-  trained independently.
+- **Standalone offline pretrain**: `examples/pretrain_offline.py --algorithm cql`
+  or `--algorithm calql` trains `OfflineCQL` / `OfflineCalQL` without
+  constructing a ManiSkill env. `--algorithm wsrl-calql` builds the
+  WSRL-compatible `WSRL(CalQL)` pretrain path. This mirrors the upstream idea
+  that CQL and Cal-QL can be trained independently while keeping the example
+  extensible to future offline algorithms.
 - **WSRL offline→online**: `examples/train_wsrl.py` builds `WSRL(CalQL)`, runs
   offline updates, switches replay mode, then continues online interaction.
 
@@ -312,8 +314,8 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
   cd /workspace/rl-garden && \
   export PATH=/opt/venv/openvla/bin:\$PATH && \
   export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
-  MPLCONFIGDIR=/tmp python -u examples/pretrain_cql_offline.py \
-    --agent cql \
+  MPLCONFIGDIR=/tmp python -u examples/pretrain_offline.py \
+    --algorithm cql \
     --offline_dataset_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
     --num_offline_steps 20000 \
     --checkpoint_dir runs/pickcube_cql_state_smoke_20koff_seed1/checkpoints \
@@ -326,9 +328,11 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
 '"
 ```
 
-Switch `--agent cql` to `--agent calql` to run standalone Cal-QL; the default
-final checkpoint names are `cql_offline_pretrained.pt` and
-`calql_offline_pretrained.pt`.
+Switch `--algorithm cql` to `--algorithm calql` to run standalone Cal-QL. Use
+`--algorithm wsrl-calql` when the checkpoint should resume through the WSRL
+offline→online path. The default final checkpoint names are
+`cql_offline_pretrained.pt`, `calql_offline_pretrained.pt`, and
+`wsrl_calql_offline_pretrained.pt`.
 
 Expected checkpoint layout:
 

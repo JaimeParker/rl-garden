@@ -172,8 +172,10 @@ class VisionWSRLTrainingArgs(WSRLTrainingArgs, VisionArgs):
 
 
 @dataclass
-class CQLTrainingArgs(LoggingArgs, CheckpointArgs):
-    agent: Literal["cql", "calql"] = "cql"
+class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
+    algorithm: Literal["cql", "calql", "wsrl-calql"] = "calql"
+    # Backward-compatible alias used by examples/pretrain_cql_offline.py.
+    agent: Optional[Literal["cql", "calql"]] = None
     num_offline_steps: int = 100_000
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
@@ -184,6 +186,7 @@ class CQLTrainingArgs(LoggingArgs, CheckpointArgs):
     batch_size: int = 256
     gamma: float = 0.99
     tau: float = 0.005
+    training_freq: int = 64
     utd: float = 1.0
     offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
 
@@ -251,6 +254,9 @@ class CQLTrainingArgs(LoggingArgs, CheckpointArgs):
     action_low: float = -1.0
     action_high: float = 1.0
     spec_num_envs: int = 1
+
+
+CQLTrainingArgs = OfflinePretrainArgs
 
 
 def _env_bool(name: str, default: bool) -> bool:

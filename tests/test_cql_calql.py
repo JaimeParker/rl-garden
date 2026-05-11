@@ -162,17 +162,17 @@ def _write_demo_h5(path):
         group.create_dataset("dones", data=dones)
 
 
-def test_pretrain_cql_offline_cli_cql_and_calql(tmp_path):
+def test_pretrain_offline_cli_algorithm_selection(tmp_path):
     dataset = tmp_path / "demo.h5"
     _write_demo_h5(dataset)
 
-    for agent_name in ("cql", "calql"):
-        checkpoint_dir = tmp_path / agent_name
+    for algorithm in ("cql", "calql", "wsrl-calql"):
+        checkpoint_dir = tmp_path / algorithm
         cmd = [
             sys.executable,
-            "examples/pretrain_cql_offline.py",
-            "--agent",
-            agent_name,
+            "examples/pretrain_offline.py",
+            "--algorithm",
+            algorithm,
             "--offline_dataset_path",
             str(dataset),
             "--num_offline_steps",
@@ -198,14 +198,89 @@ def test_pretrain_cql_offline_cli_cql_and_calql(tmp_path):
             "2",
         ]
         subprocess.run(cmd, check=True)
-        assert (checkpoint_dir / f"{agent_name}_offline_pretrained.pt").exists()
+        expected = f"{algorithm.replace('-', '_')}_offline_pretrained.pt"
+        assert (checkpoint_dir / expected).exists()
+
+
+def test_pretrain_cql_offline_cli_legacy_agent_alias(tmp_path):
+    dataset = tmp_path / "demo.h5"
+    _write_demo_h5(dataset)
+
+    checkpoint_dir = tmp_path / "legacy_cql"
+    cmd = [
+        sys.executable,
+        "examples/pretrain_cql_offline.py",
+        "--agent",
+        "cql",
+        "--offline_dataset_path",
+        str(dataset),
+        "--num_offline_steps",
+        "1",
+        "--buffer_device",
+        "cpu",
+        "--device",
+        "cpu",
+        "--log_type",
+        "none",
+        "--no-std-log",
+        "--checkpoint_dir",
+        str(checkpoint_dir),
+        "--batch_size",
+        "4",
+        "--buffer_size",
+        "32",
+        "--n_critics",
+        "4",
+        "--critic_subsample_size",
+        "2",
+        "--cql_n_actions",
+        "2",
+    ]
+    subprocess.run(cmd, check=True)
+    assert (checkpoint_dir / "cql_offline_pretrained.pt").exists()
+
+
+def test_pretrain_wsrl_offline_cli_legacy_filename(tmp_path):
+    dataset = tmp_path / "demo.h5"
+    _write_demo_h5(dataset)
+
+    checkpoint_dir = tmp_path / "legacy_wsrl"
+    cmd = [
+        sys.executable,
+        "examples/pretrain_wsrl_offline.py",
+        "--offline_dataset_path",
+        str(dataset),
+        "--num_offline_steps",
+        "1",
+        "--buffer_device",
+        "cpu",
+        "--device",
+        "cpu",
+        "--log_type",
+        "none",
+        "--no-std-log",
+        "--checkpoint_dir",
+        str(checkpoint_dir),
+        "--batch_size",
+        "4",
+        "--buffer_size",
+        "32",
+        "--n_critics",
+        "4",
+        "--critic_subsample_size",
+        "2",
+        "--cql_n_actions",
+        "2",
+    ]
+    subprocess.run(cmd, check=True)
+    assert (checkpoint_dir / "offline_pretrained.pt").exists()
 
 
 def test_pretrain_cql_offline_cli_requires_dataset():
     cmd = [
         sys.executable,
-        "examples/pretrain_cql_offline.py",
-        "--agent",
+        "examples/pretrain_offline.py",
+        "--algorithm",
         "cql",
         "--num_offline_steps",
         "1",
