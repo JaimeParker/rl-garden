@@ -12,7 +12,7 @@ RGBD SAC subclasses this and only overrides:
 from __future__ import annotations
 
 import warnings
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -20,15 +20,16 @@ import torch.nn.functional as F
 from gymnasium import spaces
 
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
+from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.logger import Logger
-from rl_garden.common.utils import polyak_update
+from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.sac_policy import SACPolicy
 
 
-class SAC(OffPolicyAlgorithm):
+class SAC(SACCore, OffPolicyAlgorithm):
     _SUPPORTED_POLICY_KWARGS = frozenset({"features_extractor_class", "features_extractor_kwargs"})
 
     def __init__(
@@ -46,14 +47,23 @@ class SAC(OffPolicyAlgorithm):
         bootstrap_at_done: str = "always",
         policy_lr: float = 3e-4,
         q_lr: float = 3e-4,
+        alpha_lr: Optional[float] = None,
         policy_frequency: int = 1,
         target_network_frequency: int = 1,
+        weight_decay: float = 0.0,
+        use_adamw: bool = False,
+        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
+        lr_warmup_steps: int = 0,
+        lr_decay_steps: int = 0,
+        lr_min_ratio: float = 0.0,
+        grad_clip_norm: Optional[float] = None,
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
+        critic_subsample_size: Optional[int] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -93,8 +103,18 @@ class SAC(OffPolicyAlgorithm):
         )
         self.policy_lr = policy_lr
         self.q_lr = q_lr
+        self.alpha_lr = alpha_lr if alpha_lr is not None else q_lr
         self.policy_frequency = policy_frequency
         self.target_network_frequency = target_network_frequency
+        self.weight_decay = weight_decay
+        self.use_adamw = use_adamw
+        self.lr_schedule: ScheduleType = lr_schedule
+        self.lr_warmup_steps = lr_warmup_steps
+        self.lr_decay_steps = lr_decay_steps
+        self.lr_min_ratio = lr_min_ratio
+        self.grad_clip_norm = grad_clip_norm
+        if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
+            raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
         self.ent_coef_init = ent_coef
         self.target_entropy_arg = target_entropy
         self.net_arch = self._resolve_net_arch(
@@ -103,6 +123,7 @@ class SAC(OffPolicyAlgorithm):
             critic_hidden_dims=critic_hidden_dims,
         )
         self.n_critics = n_critics
+        self.critic_subsample_size = critic_subsample_size
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
         self._setup_model()
@@ -112,13 +133,22 @@ class SAC(OffPolicyAlgorithm):
             **super()._checkpoint_metadata(),
             "policy_lr": self.policy_lr,
             "q_lr": self.q_lr,
+            "alpha_lr": self.alpha_lr,
             "policy_frequency": self.policy_frequency,
             "target_network_frequency": self.target_network_frequency,
+            "weight_decay": self.weight_decay,
+            "use_adamw": self.use_adamw,
+            "lr_schedule": self.lr_schedule,
+            "lr_warmup_steps": self.lr_warmup_steps,
+            "lr_decay_steps": self.lr_decay_steps,
+            "lr_min_ratio": self.lr_min_ratio,
+            "grad_clip_norm": self.grad_clip_norm,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -130,6 +160,10 @@ class SAC(OffPolicyAlgorithm):
             state["log_alpha"] = self.log_alpha.detach()
         else:
             state["fixed_alpha"] = self._fixed_alpha.detach()
+        sched_states: list[Optional[dict]] = []
+        for sched in getattr(self, "_lr_schedulers", []):
+            sched_states.append(sched.state_dict() if sched is not None else None)
+        state["lr_scheduler_states"] = sched_states
         return state
 
     def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
@@ -139,6 +173,10 @@ class SAC(OffPolicyAlgorithm):
             self.log_alpha.data.copy_(state["log_alpha"].to(self.device))
         elif not self.autotune and "fixed_alpha" in state:
             self._fixed_alpha = state["fixed_alpha"].to(self.device)
+        if "lr_scheduler_states" in state:
+            for sched, sched_state in zip(self._lr_schedulers, state["lr_scheduler_states"]):
+                if sched is not None and sched_state is not None:
+                    sched.load_state_dict(sched_state)
 
     # --- construction hooks (RGBDSAC overrides defaults only) ---
 
@@ -267,13 +305,20 @@ class SAC(OffPolicyAlgorithm):
             features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
+            critic_subsample_size=self.critic_subsample_size,
         ).to(self.device)
 
-        self.q_optimizer = torch.optim.Adam(
-            list(self.policy.critic_and_encoder_parameters()), lr=self.q_lr
+        self.q_optimizer = make_optimizer(
+            list(self.policy.critic_and_encoder_parameters()),
+            lr=self.q_lr,
+            weight_decay=self.weight_decay,
+            use_adamw=self.use_adamw,
         )
-        self.actor_optimizer = torch.optim.Adam(
-            list(self.policy.actor_parameters()), lr=self.policy_lr
+        self.actor_optimizer = make_optimizer(
+            list(self.policy.actor_parameters()),
+            lr=self.policy_lr,
+            weight_decay=self.weight_decay,
+            use_adamw=self.use_adamw,
         )
 
         # Entropy coefficient (auto-tuned by default).
@@ -287,7 +332,9 @@ class SAC(OffPolicyAlgorithm):
             self.log_alpha = torch.log(
                 torch.ones(1, device=self.device) * init
             ).requires_grad_(True)
-            self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=self.q_lr)
+            self.alpha_optimizer = make_optimizer(
+                [self.log_alpha], lr=self.alpha_lr, weight_decay=0.0, use_adamw=self.use_adamw
+            )
         else:
             self.log_alpha = None
             self.alpha_optimizer = None
@@ -301,98 +348,41 @@ class SAC(OffPolicyAlgorithm):
             self.target_entropy = float(self.target_entropy_arg)
 
         self.replay_buffer = self._build_replay_buffer()
-
-    # --- hot-path helpers overridden by RGBDSAC ---
-
-    def _critic_forward(self, obs, actions, target: bool = False):
-        features = self.policy.extract_features(obs, stop_gradient=False)
-        return self.policy.q_values(features, actions, target=target)
-
-    def _target_q(self, replay_data) -> torch.Tensor:
-        alpha = self._current_alpha().detach()
-        with torch.no_grad():
-            next_action, next_log_prob, features = self.policy.actor_action_log_prob(
-                replay_data.next_obs, stop_gradient=False
+        self._lr_schedulers: list[Optional[Any]] = []
+        for opt in (self.q_optimizer, self.actor_optimizer):
+            self._lr_schedulers.append(
+                make_lr_scheduler(
+                    opt,
+                    schedule_type=self.lr_schedule,
+                    warmup_steps=self.lr_warmup_steps,
+                    decay_steps=self.lr_decay_steps,
+                    min_lr_ratio=self.lr_min_ratio,
+                )
             )
-            q_values_t = self.policy.q_values(
-                features,
-                next_action,
-                target=True,
-            )
-            min_q_next = torch.min(torch.stack(q_values_t, dim=0), dim=0).values
-            min_q_next = min_q_next - alpha * next_log_prob
-            target = replay_data.rewards.reshape(-1, 1) + (
-                1 - replay_data.dones.reshape(-1, 1)
-            ) * self.gamma * min_q_next
-        return target
-
-    def _actor_loss(self, obs):
-        alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(
-            obs, stop_gradient=False
-        )
-        q_values = self.policy.q_values(features, action, target=False)
-        min_q = torch.min(torch.stack(q_values, dim=0), dim=0).values
-        return (alpha * log_prob - min_q).mean(), log_prob.detach()
 
     def _current_alpha(self) -> torch.Tensor:
         if self.autotune:
             return self.log_alpha.exp()
         return self._fixed_alpha
 
-    # --- training step ---
-
-    def train(self, gradient_steps: int) -> dict[str, float]:
-        q_losses: list[float] = []
-        actor_losses: list[float] = []
-        alpha_losses: list[float] = []
-        alphas: list[float] = []
-
-        for step in range(gradient_steps):
-            self._global_update += 1
-            data = self.replay_buffer.sample(self.batch_size)
-
-            # --- critic update ---
-            target_q = self._target_q(data)
-            current_q_values = self._critic_forward(data.obs, data.actions, target=False)
-            q_loss = sum(F.mse_loss(q, target_q) for q in current_q_values)
-            self.q_optimizer.zero_grad()
-            q_loss.backward()
-            self.q_optimizer.step()
-            q_losses.append(q_loss.item())
-
-            # --- actor + alpha updates ---
-            if self._global_update % self.policy_frequency == 0:
-                actor_loss, log_prob_detached = self._actor_loss(data.obs)
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                self.actor_optimizer.step()
-                actor_losses.append(actor_loss.item())
-
-                if self.autotune:
-                    alpha_loss = -(
-                        self.log_alpha.exp() * (log_prob_detached + self.target_entropy)
-                    ).mean()
-                    self.alpha_optimizer.zero_grad()
-                    alpha_loss.backward()
-                    self.alpha_optimizer.step()
-                    alpha_losses.append(alpha_loss.item())
-
-            alphas.append(self._current_alpha().item())
-
-            # --- target critic update ---
-            if self._global_update % self.target_network_frequency == 0:
-                polyak_update(
-                    self.policy.critic.parameters(),
-                    self.policy.critic_target.parameters(),
-                    self.tau,
-                )
-
-        out = {
-            "qf_loss": float(np.mean(q_losses)) if q_losses else 0.0,
-            "actor_loss": float(np.mean(actor_losses)) if actor_losses else 0.0,
-            "alpha": float(np.mean(alphas)) if alphas else 0.0,
+    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+        target_q = self._target_q(data)
+        q_loss = sum(F.mse_loss(q, target_q) for q in q_pred)
+        return q_loss, {
+            "td_loss": q_loss.item(),
+            "target_q": target_q.mean().item(),
         }
-        if alpha_losses:
-            out["alpha_loss"] = float(np.mean(alpha_losses))
-        return out
+
+    def _step_critic_scheduler(self) -> None:
+        sched = self._lr_schedulers[0] if self._lr_schedulers else None
+        if sched is not None:
+            sched.step()
+
+    def _step_actor_scheduler(self) -> None:
+        sched = self._lr_schedulers[1] if len(self._lr_schedulers) >= 2 else None
+        if sched is not None:
+            sched.step()
+
+    def _clip_grad_norm(self, params) -> None:
+        if self.grad_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(list(params), self.grad_clip_norm)

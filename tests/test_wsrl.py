@@ -91,7 +91,7 @@ class TestWSRLCreation:
 
     def test_agent_with_autotune(self, wsrl_agent_with_autotune):
         assert wsrl_agent_with_autotune.cql_autotune_alpha
-        assert wsrl_agent_with_autotune.policy.use_cql_alpha_lagrange
+        assert wsrl_agent_with_autotune.cql_alpha_lagrange is not None
 
     def test_policy_creation(self, wsrl_agent):
         assert wsrl_agent.policy is not None
