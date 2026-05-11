@@ -106,13 +106,13 @@ def create_mlp(
 
 
 class _MLPResNetBlock(nn.Module):
-    """Pre-norm residual block: x -> Norm -> Act -> Linear -> Dropout -> + x."""
+    """WSRL residual MLP block: dropout/norm -> Linear(4H) -> act -> Linear(H) -> +x."""
 
     def __init__(
         self,
         hidden_dim: int,
         *,
-        activation_fn: type[nn.Module] = nn.ReLU,
+        activation_fn: type[nn.Module] = nn.SiLU,
         use_layer_norm: bool = False,
         use_group_norm: bool = False,
         num_groups: int = 32,
@@ -126,29 +126,31 @@ class _MLPResNetBlock(nn.Module):
             num_groups=num_groups,
         )
         self.norm: nn.Module = norm if norm is not None else nn.Identity()
-        self.act = activation_fn()
-        self.linear = nn.Linear(hidden_dim, hidden_dim)
         self.dropout: nn.Module = (
             nn.Dropout(p=dropout_rate)
             if dropout_rate is not None and dropout_rate > 0
             else nn.Identity()
         )
+        self.fc1 = nn.Linear(hidden_dim, hidden_dim * 4)
+        self.act = activation_fn()
+        self.fc2 = nn.Linear(hidden_dim * 4, hidden_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
-        h = self.norm(x)
+        h = self.dropout(x)
+        h = self.norm(h)
+        h = self.fc1(h)
         h = self.act(h)
-        h = self.linear(h)
-        h = self.dropout(h)
+        h = self.fc2(h)
         return residual + h
 
 
 class MLPResNet(nn.Module):
-    """Residual MLP: input proj -> N residual blocks -> norm -> act -> output proj.
+    """Residual MLP matching the JAX WSRL reference.
 
-    Mirrors ``MLPResNet`` from the JAX wsrl reference (3rd_party/wsrl/wsrl/networks/mlp.py).
-    All blocks share the same ``hidden_dim``. Output projection is omitted when
-    ``output_dim < 0`` (use as a feature trunk).
+    Structure: input projection -> N residual MLP blocks -> Swish -> output
+    projection. Each block expands to ``4 * hidden_dim`` then projects back.
+    Output projection is omitted when ``output_dim < 0`` (use as a trunk).
     """
 
     def __init__(
@@ -158,7 +160,7 @@ class MLPResNet(nn.Module):
         *,
         hidden_dim: int = 256,
         num_blocks: int = 2,
-        activation_fn: type[nn.Module] = nn.ReLU,
+        activation_fn: type[nn.Module] = nn.SiLU,
         use_layer_norm: bool = False,
         use_group_norm: bool = False,
         num_groups: int = 32,
@@ -186,13 +188,6 @@ class MLPResNet(nn.Module):
             ]
         )
 
-        final_norm = _make_norm(
-            hidden_dim,
-            use_layer_norm=use_layer_norm,
-            use_group_norm=use_group_norm,
-            num_groups=num_groups,
-        )
-        self.final_norm: nn.Module = final_norm if final_norm is not None else nn.Identity()
         self.final_act = activation_fn()
 
         if output_dim > 0:
@@ -208,6 +203,5 @@ class MLPResNet(nn.Module):
         h = self.input_proj(x)
         for block in self.blocks:
             h = block(h)
-        h = self.final_norm(h)
         h = self.final_act(h)
         return self.output_proj(h)

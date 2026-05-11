@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
+import warnings
 
 import torch
 
@@ -35,6 +36,24 @@ def _first_existing(data: dict[str, Any], names: tuple[str, ...]) -> Any:
         if name in data:
             return data[name]
     raise KeyError(f"None of the expected keys exist: {names}")
+
+
+def _find_nested(data: dict[str, Any], key: str) -> Any | None:
+    """Find ``key`` in a trajectory dict; supports slash paths and one-level common nests."""
+    if "/" in key:
+        cur: Any = data
+        for part in key.split("/"):
+            if not isinstance(cur, dict) or part not in cur:
+                return None
+            cur = cur[part]
+        return cur
+    if key in data:
+        return data[key]
+    for parent in ("infos", "info", "episode", "metrics"):
+        child = data.get(parent)
+        if isinstance(child, dict) and key in child:
+            return child[key]
+    return None
 
 
 def _length(x: Any) -> int:
@@ -92,6 +111,44 @@ def _transition_done(traj: dict[str, Any], length: int, device: torch.device) ->
     return done.float()
 
 
+def _load_success(
+    traj: dict[str, Any],
+    length: int,
+    device: torch.device,
+    *,
+    success_key: str | None,
+    rewards: torch.Tensor,
+    success_threshold: float,
+) -> tuple[torch.Tensor, bool]:
+    """Load per-transition success flags or infer them from rewards.
+
+    Returns ``(success, inferred)``. Scalar or one-element episode-level success
+    values are broadcast to the full trajectory.
+    """
+    keys: tuple[str, ...]
+    if success_key is not None:
+        keys = (success_key,)
+    else:
+        keys = ("success", "success_once", "success_at_end", "is_success")
+
+    for key in keys:
+        raw = _find_nested(traj, key)
+        if raw is None:
+            continue
+        success = torch.as_tensor(raw, device=device).float()
+        if success.numel() == 1:
+            return success.reshape(1).expand(length), False
+        success = success.reshape(-1)
+        if success.numel() < length:
+            raise ValueError(
+                f"Success field {key!r} has {success.numel()} entries, "
+                f"but trajectory has {length} transitions."
+            )
+        return success[:length], False
+
+    return (rewards >= success_threshold).float(), True
+
+
 def _load_traj_transitions(
     traj: dict[str, Any],
     device: torch.device,
@@ -135,6 +192,7 @@ def _add_flat_transitions(
     rewards: torch.Tensor,
     dones: torch.Tensor,
     mc_returns: torch.Tensor | None = None,
+    successes: torch.Tensor | None = None,
 ) -> int:
     total = actions.shape[0]
     usable = (total // buffer.num_envs) * buffer.num_envs
@@ -150,12 +208,16 @@ def _add_flat_transitions(
     for start in range(0, usable, buffer.num_envs):
         end = start + buffer.num_envs
         pos = buffer.pos
+        add_kwargs = {}
+        if successes is not None:
+            add_kwargs["success"] = successes[start:end]
         buffer.add(
             _slice(obs, start, end),
             _slice(next_obs, start, end),
             actions[start:end],
             rewards[start:end],
             dones[start:end],
+            **add_kwargs,
         )
         if mc_table is not None:
             mc_table[pos] = mc_returns[start:end].to(buffer.storage_device)
@@ -172,6 +234,7 @@ def load_maniskill_h5_to_replay_buffer(
     num_traj: Optional[int] = None,
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
+    success_key: str | None = None,
 ) -> int:
     """Load ManiSkill trajectory H5 transitions into an existing replay buffer.
 
@@ -195,6 +258,9 @@ def load_maniskill_h5_to_replay_buffer(
     reward_parts: list[torch.Tensor] = []
     done_parts: list[torch.Tensor] = []
     mc_parts: list[torch.Tensor] = []
+    success_parts: list[torch.Tensor] = []
+    sparse_reward_mc = bool(getattr(buffer, "sparse_reward_mc", False))
+    warned_success_fallback = False
 
     with h5py.File(path, "r") as f:
         keys = list(f.keys())
@@ -212,12 +278,30 @@ def load_maniskill_h5_to_replay_buffer(
             )
             if reward_scale != 1.0 or reward_bias != 0.0:
                 rewards = rewards * reward_scale + reward_bias
+            if sparse_reward_mc:
+                success, inferred = _load_success(
+                    traj,
+                    rewards.shape[0],
+                    storage_device,
+                    success_key=success_key,
+                    rewards=rewards,
+                    success_threshold=float(getattr(buffer, "success_threshold", 0.5)),
+                )
+                success_parts.append(success)
+                if inferred and not warned_success_fallback:
+                    warnings.warn(
+                        "sparse_reward_mc=True but no success field was found in the H5 "
+                        "trajectory; inferring success from reward >= success_threshold.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    warned_success_fallback = True
             obs_parts.append(obs)
             next_obs_parts.append(next_obs)
             action_parts.append(actions)
             reward_parts.append(rewards)
             done_parts.append(dones)
-            if hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma"):
+            if (not sparse_reward_mc) and hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma"):
                 mc_parts.append(_mc_returns(rewards, dones, float(buffer.gamma)))
 
     if not action_parts:
@@ -229,6 +313,14 @@ def load_maniskill_h5_to_replay_buffer(
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
     mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
+    success_all = torch.cat(success_parts, dim=0) if success_parts else None
     return _add_flat_transitions(
-        buffer, obs_all, next_obs_all, actions_all, rewards_all, dones_all, mc_all
+        buffer,
+        obs_all,
+        next_obs_all,
+        actions_all,
+        rewards_all,
+        dones_all,
+        mc_all,
+        success_all,
     )

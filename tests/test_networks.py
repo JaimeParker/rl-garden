@@ -148,6 +148,18 @@ def test_mlp_resnet_forward_shape():
     assert y.shape == (8, 4)
 
 
+def test_mlp_resnet_block_matches_wsrl_expansion():
+    net = MLPResNet(input_dim=12, output_dim=4, hidden_dim=64, num_blocks=2)
+    first_block = net.blocks[0]
+    assert isinstance(first_block.fc1, torch.nn.Linear)
+    assert isinstance(first_block.fc2, torch.nn.Linear)
+    assert first_block.fc1.in_features == 64
+    assert first_block.fc1.out_features == 64 * 4
+    assert first_block.fc2.in_features == 64 * 4
+    assert first_block.fc2.out_features == 64
+    assert isinstance(first_block.act, torch.nn.SiLU)
+
+
 def test_mlp_resnet_as_trunk():
     net = MLPResNet(input_dim=12, output_dim=-1, hidden_dim=64, num_blocks=2)
     y = net(torch.randn(8, 12))

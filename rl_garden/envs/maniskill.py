@@ -37,6 +37,8 @@ class ManiSkillEnvConfig:
     partial_reset: bool = False
     ignore_terminations: bool = True
     record_metrics: bool = True
+    reward_scale: float = 1.0
+    reward_bias: float = 0.0
     # Recording
     record_dir: Optional[str] = None
     save_video: bool = False

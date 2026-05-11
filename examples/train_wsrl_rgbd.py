@@ -151,6 +151,7 @@ def main() -> None:
         lr_warmup_steps=args.lr_warmup_steps,
         lr_decay_steps=args.lr_decay_steps,
         lr_min_ratio=args.lr_min_ratio,
+        grad_clip_norm=args.grad_clip_norm,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,
@@ -213,6 +214,7 @@ def main() -> None:
             num_traj=args.offline_num_traj,
             reward_scale=args.reward_scale,
             reward_bias=args.reward_bias,
+            success_key=args.success_key,
         )
         logger.add_scalar("offline/loaded_transitions", loaded, 0)
         _offline_update_loop(
@@ -227,7 +229,8 @@ def main() -> None:
 
     # Online training phase
     if args.num_online_steps > 0:
-        agent.learn(total_timesteps=args.num_online_steps)
+        online_target_step = agent._global_step + args.num_online_steps
+        agent.learn(total_timesteps=online_target_step)
 
     logger.close()
     env.close()

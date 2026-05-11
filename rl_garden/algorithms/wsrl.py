@@ -76,6 +76,7 @@ class WSRL(OffPolicyAlgorithm):
         lr_warmup_steps: int = 0,
         lr_decay_steps: int = 0,
         lr_min_ratio: float = 0.0,
+        grad_clip_norm: Optional[float] = None,
         # Entropy
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
@@ -174,6 +175,9 @@ class WSRL(OffPolicyAlgorithm):
         self.lr_warmup_steps = lr_warmup_steps
         self.lr_decay_steps = lr_decay_steps
         self.lr_min_ratio = lr_min_ratio
+        self.grad_clip_norm = grad_clip_norm
+        if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
+            raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
 
         # Entropy
         self.ent_coef_init = ent_coef
@@ -254,6 +258,7 @@ class WSRL(OffPolicyAlgorithm):
             "lr_warmup_steps": self.lr_warmup_steps,
             "lr_decay_steps": self.lr_decay_steps,
             "lr_min_ratio": self.lr_min_ratio,
+            "grad_clip_norm": self.grad_clip_norm,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
@@ -414,6 +419,18 @@ class WSRL(OffPolicyAlgorithm):
         if sched is not None:
             sched.step()
 
+    def _clip_grad_norm(self, params) -> None:
+        if self.grad_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(list(params), self.grad_clip_norm)
+
+    def _clear_replay_buffer(self) -> int:
+        previous_len = len(self.replay_buffer)
+        self.replay_buffer.pos = 0
+        self.replay_buffer.full = False
+        if hasattr(self.replay_buffer, "_mc_table"):
+            self.replay_buffer._mc_table = None
+        return previous_len
+
     def _sample_batch(self, batch_size: int) -> MCReplayBufferSample:
         """Dispatch to with/without-replacement sampling based on phase + config.
 
@@ -561,8 +578,11 @@ class WSRL(OffPolicyAlgorithm):
 
         # CQL alpha Lagrange multiplier optimizer (no weight decay on scalars).
         if self.cql_autotune_alpha:
-            self.cql_alpha_optimizer = torch.optim.Adam(
-                list(self.policy.cql_alpha_lagrange_parameters()), lr=self.cql_alpha_lr
+            self.cql_alpha_optimizer = make_optimizer(
+                list(self.policy.cql_alpha_lagrange_parameters()),
+                lr=self.cql_alpha_lr,
+                weight_decay=0.0,
+                use_adamw=self.use_adamw,
             )
         else:
             self.cql_alpha_optimizer = None
@@ -576,8 +596,11 @@ class WSRL(OffPolicyAlgorithm):
             if isinstance(self.ent_coef_init, str) and "_" in self.ent_coef_init:
                 init = float(self.ent_coef_init.split("_")[1])
             self.temperature_lagrange = TemperatureLagrange(init_value=init).to(self.device)
-            self.alpha_optimizer = torch.optim.Adam(
-                list(self.temperature_lagrange.parameters()), lr=self.alpha_lr
+            self.alpha_optimizer = make_optimizer(
+                list(self.temperature_lagrange.parameters()),
+                lr=self.alpha_lr,
+                weight_decay=0.0,
+                use_adamw=self.use_adamw,
             )
         else:
             self.temperature_lagrange = None
@@ -724,8 +747,8 @@ class WSRL(OffPolicyAlgorithm):
 
         Args:
             online_replay_mode:
-                - ``"empty"`` / ``"append"``: keep a single replay buffer; the
-                  caller is responsible for clearing it (matches existing flow).
+                - ``"empty"``: clear the current replay buffer before online rollout.
+                - ``"append"``: keep the offline data in the online replay buffer.
                 - ``"mixed"``: freeze current buffer as ``self.offline_replay_buffer``
                   and replace ``self.replay_buffer`` with a fresh empty MC buffer.
                   Each train batch will be ``(1-r)`` from online + ``r`` from offline,
@@ -738,20 +761,30 @@ class WSRL(OffPolicyAlgorithm):
         if self.online_cql_alpha is not None:
             self.cql_alpha = self.online_cql_alpha
 
-        if online_replay_mode == "mixed":
-            if not (0.0 <= offline_data_ratio <= 1.0):
-                raise ValueError(
-                    f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}."
-                )
+        if not (0.0 <= offline_data_ratio <= 1.0):
+            raise ValueError(f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}.")
+        self.offline_replay_buffer = None
+        self.offline_data_ratio = 0.0
+        cleared_transitions = 0
+        if online_replay_mode == "empty":
+            cleared_transitions = self._clear_replay_buffer()
+        elif online_replay_mode == "append":
+            pass
+        elif online_replay_mode == "mixed":
             self.offline_replay_buffer = self.replay_buffer
             self.replay_buffer = self._build_replay_buffer()
             self.offline_data_ratio = offline_data_ratio
+        else:
+            raise ValueError(f"Unknown online_replay_mode: {online_replay_mode!r}")
 
         if self.logger:
             self.logger.add_summary("wsrl/online_start_step", self._global_step)
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
             self.logger.add_summary("wsrl/online_replay_mode", online_replay_mode)
+            self.logger.add_summary("wsrl/online_replay_cleared", online_replay_mode == "empty")
+            if online_replay_mode == "empty":
+                self.logger.add_summary("wsrl/online_replay_size_before_clear", cleared_transitions)
             if online_replay_mode == "mixed":
                 self.logger.add_summary("wsrl/offline_data_ratio", offline_data_ratio)
 
@@ -1152,6 +1185,7 @@ class WSRL(OffPolicyAlgorithm):
             critic_loss, critic_info = self._critic_loss(data)
             self.q_optimizer.zero_grad()
             critic_loss.backward()
+            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
             self.q_optimizer.step()
             self._step_critic_scheduler()
             critic_losses.append(critic_loss.item())
@@ -1168,6 +1202,7 @@ class WSRL(OffPolicyAlgorithm):
                 actor_loss, log_prob_detached = self._actor_loss(data.obs)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
+                self._clip_grad_norm(self.policy.actor_parameters())
                 self.actor_optimizer.step()
                 self._step_actor_scheduler()
                 actor_losses.append(actor_loss.item())
@@ -1179,6 +1214,7 @@ class WSRL(OffPolicyAlgorithm):
                     ).mean()
                     self.alpha_optimizer.zero_grad()
                     alpha_loss.backward()
+                    self._clip_grad_norm(self.temperature_lagrange.parameters())
                     self.alpha_optimizer.step()
                     alpha_losses.append(alpha_loss.item())
 
@@ -1187,6 +1223,7 @@ class WSRL(OffPolicyAlgorithm):
                     cql_alpha_loss = self._cql_alpha_loss(data)
                     self.cql_alpha_optimizer.zero_grad()
                     cql_alpha_loss.backward()
+                    self._clip_grad_norm(self.policy.cql_alpha_lagrange_parameters())
                     self.cql_alpha_optimizer.step()
                     cql_alpha_losses.append(cql_alpha_loss.item())
 
@@ -1267,6 +1304,7 @@ class WSRL(OffPolicyAlgorithm):
             critic_loss, critic_info = self._critic_loss(mb)
             self.q_optimizer.zero_grad()
             critic_loss.backward()
+            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
             self.q_optimizer.step()
             self._step_critic_scheduler()
             critic_losses.append(critic_loss.item())
@@ -1286,6 +1324,7 @@ class WSRL(OffPolicyAlgorithm):
         actor_loss, log_prob_detached = self._actor_loss(full_batch.obs)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        self._clip_grad_norm(self.policy.actor_parameters())
         self.actor_optimizer.step()
         self._step_actor_scheduler()
 
@@ -1296,6 +1335,7 @@ class WSRL(OffPolicyAlgorithm):
             ).mean()
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
+            self._clip_grad_norm(self.temperature_lagrange.parameters())
             self.alpha_optimizer.step()
             alpha_loss_val = alpha_loss.item()
 
@@ -1304,6 +1344,7 @@ class WSRL(OffPolicyAlgorithm):
             cql_alpha_loss = self._cql_alpha_loss(full_batch)
             self.cql_alpha_optimizer.zero_grad()
             cql_alpha_loss.backward()
+            self._clip_grad_norm(self.policy.cql_alpha_lagrange_parameters())
             self.cql_alpha_optimizer.step()
             cql_alpha_loss_val = cql_alpha_loss.item()
 

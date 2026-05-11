@@ -82,6 +82,14 @@ def test_reward_scale_bias_wrapper_works_with_tensor_reward():
     torch.testing.assert_close(r, torch.tensor([1.5, 2.0]))
 
 
+def test_maniskill_env_config_accepts_reward_transform_fields():
+    from rl_garden.envs import ManiSkillEnvConfig
+
+    cfg = ManiSkillEnvConfig(reward_scale=2.0, reward_bias=-0.5)
+    assert cfg.reward_scale == 2.0
+    assert cfg.reward_bias == -0.5
+
+
 def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
     # Build a tiny H5 with one trajectory and verify the loaded buffer reflects
     # the scaled rewards.
@@ -118,3 +126,39 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
     assert n == 3
     expected = torch.tensor([2.0 * 1.0 - 0.5, 2.0 * 0.0 - 0.5, 2.0 * 1.0 - 0.5])
     torch.testing.assert_close(buf.rewards[:3, 0], expected)
+
+
+def test_h5_loader_sparse_mc_uses_success_key_not_standard_table(tmp_path: Path):
+    h5py = pytest.importorskip("h5py")
+    from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+    from rl_garden.buffers.maniskill_h5 import load_maniskill_h5_to_replay_buffer
+
+    path = tmp_path / "sparse.h5"
+    obs = np.zeros((4, 3), dtype=np.float32)
+    actions = np.zeros((3, 2), dtype=np.float32)
+    rewards = np.array([-1.0, -1.0, -1.0], dtype=np.float32)
+    terminated = np.array([False, False, True])
+    success = np.array([False, False, False])
+    with h5py.File(path, "w") as f:
+        traj = f.create_group("traj_0")
+        traj.create_dataset("obs", data=obs)
+        traj.create_dataset("actions", data=actions)
+        traj.create_dataset("rewards", data=rewards)
+        traj.create_dataset("terminated", data=terminated)
+        traj.create_dataset("success", data=success)
+
+    buf = MCTensorReplayBuffer(
+        observation_space=spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32),
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=10,
+        gamma=0.9,
+        storage_device="cpu",
+        sample_device="cpu",
+        sparse_reward_mc=True,
+        sparse_negative_reward=-1.0,
+    )
+    load_maniskill_h5_to_replay_buffer(buf, path, success_key="success")
+    assert buf._mc_table is None
+    table = buf._build_mc_table()
+    torch.testing.assert_close(table[:3, 0], torch.full((3,), -10.0))

@@ -111,6 +111,7 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     lr_warmup_steps: int = 0
     lr_decay_steps: int = 0
     lr_min_ratio: float = 0.0
+    grad_clip_norm: Optional[float] = None
 
     n_critics: int = 10
     critic_subsample_size: int = 2
@@ -152,6 +153,7 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     sparse_reward_mc: bool = False
     sparse_negative_reward: float = 0.0
     success_threshold: float = 0.5
+    success_key: Optional[str] = None
 
     reward_scale: float = 1.0
     reward_bias: float = 0.0

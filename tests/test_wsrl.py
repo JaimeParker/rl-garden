@@ -175,6 +175,32 @@ class TestWSRLHelperMethods:
         assert logger.scalars == []
         assert ("wsrl/online_start_step", 123) in logger.summaries
 
+    def test_switch_to_online_mode_empty_clears_replay(self, wsrl_agent):
+        for _ in range(5):
+            wsrl_agent.replay_buffer.add(
+                torch.randn(2, 4),
+                torch.randn(2, 4),
+                torch.randn(2, 2),
+                torch.ones(2),
+                torch.zeros(2),
+            )
+        assert len(wsrl_agent.replay_buffer) > 0
+        wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
+        assert len(wsrl_agent.replay_buffer) == 0
+
+    def test_grad_clip_norm_configured(self, simple_env):
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4,
+            grad_clip_norm=1.0,
+            device="cpu",
+        )
+        assert agent.grad_clip_norm == 1.0
+
     def test_update_metric_tags(self, wsrl_agent):
         tags = wsrl_agent._update_metric_tags(
             {
