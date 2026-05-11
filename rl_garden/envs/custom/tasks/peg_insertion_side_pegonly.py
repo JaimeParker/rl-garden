@@ -2,7 +2,6 @@ from typing import Dict, Optional
 
 import numpy as np
 import sapien
-import sapien.physx as physx
 import torch
 
 from mani_skill.sensors.camera import CameraConfig
@@ -14,7 +13,6 @@ from rl_garden.envs.custom.tasks.peg_insertion_side import (
     _build_box_with_hole,
     _build_pose_axes,
 )
-from mani_skill.utils.geometry.trimesh_utils import get_component_mesh
 from mani_skill.utils import common
 from mani_skill.utils.scene_builder.table import TableSceneBuilder
 from mani_skill.utils.structs import Actor, Pose
@@ -32,24 +30,30 @@ def _compute_reach_pose_and_qpos(env, env_id: int) -> Optional[np.ndarray]:
         import mplib
         from mani_skill.examples.motionplanning.base_motionplanner.utils import (
             compute_grasp_info_by_obb,
-            get_actor_obb,
         )
     except ImportError:
         return None
 
+    import trimesh
+    import trimesh.transformations as tr
+
     base_env = env.unwrapped
     FINGER_LENGTH = 0.025
 
-    # Same as peg_insertion_side solution: get grasp_pose then reach_pose.
-    # Use the per-env peg actor (instead of merged actor[0]) so each env has its own IK target.
-    peg_entity = base_env.peg._objs[env_id]
-    peg_component = peg_entity.find_component_by_type(physx.PhysxRigidDynamicComponent)
-    if peg_component is None:
-        return None
-    mesh = get_component_mesh(peg_component, to_world_frame=True)
-    if mesh is None:
-        return None
-    obb = mesh.bounding_box_oriented
+    # Build OBB from the peg Actor's pose instead of get_component_mesh.
+    # get_component_mesh(peg_component, to_world_frame=True) can return stale
+    # component transforms in parallel environments, giving the same OBB center
+    # for all envs.  The Actor pose is tracked correctly by ManiSkill.
+    peg_pose = base_env.peg.pose[env_id]
+    half_sizes = base_env.peg_half_sizes[env_id].cpu().numpy()
+    extents = 2 * half_sizes
+    quat_wxyz = peg_pose.q.cpu().numpy()
+    pos = peg_pose.p.cpu().numpy()
+    T = np.eye(4)
+    T[:3, :3] = tr.quaternion_matrix(quat_wxyz)[:3, :3]
+    T[:3, 3] = pos
+    obb = trimesh.primitives.Box(extents=extents, transform=T)
+
     approaching = np.array([0, 0, -1])
     tcp_link = sapien_utils.get_obj_by_name(
         base_env.agent.robot.get_links(), "panda_hand_tcp"
@@ -313,10 +317,9 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
 
         # Overwrite robot: per-env reach_pose via IK, retry by reinitializing failed env only.
         max_ik_retries = 10
-        env_ids = [int(i) for i in env_idx.detach().cpu().tolist()]
-        qpos_all = self.agent.robot.get_qpos().cpu().numpy().copy()
+        qpos_all = self.agent.robot.get_qpos().clone()
 
-        fallback_qpos = np.array(
+        fallback_qpos = torch.tensor(
             [
                 0.0,
                 np.pi / 8,
@@ -328,29 +331,33 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
                 0.0,
                 0.0,
             ],
-            dtype=np.float32,
+            dtype=torch.float32,
+            device=env_idx.device,
         )
 
         failed_envs = []
-        for env_id in env_ids:
+        for env_id in env_idx:
+            env_id_int = int(env_id.item())
             target_qpos = None
             for attempt in range(1, max_ik_retries + 1):
-                target_qpos = _compute_reach_pose_and_qpos(self, env_id)
+                target_qpos = _compute_reach_pose_and_qpos(self, env_id_int)
                 if target_qpos is not None:
                     break
 
                 if attempt < max_ik_retries:
                     single_env_idx = torch.tensor(
-                        [env_id], device=env_idx.device, dtype=env_idx.dtype
+                        [env_id_int], device=env_idx.device, dtype=env_idx.dtype
                     )
                     super()._initialize_episode(single_env_idx, options)
                     self._apply_fixed_scene_poses(single_env_idx)
 
             if target_qpos is None:
-                failed_envs.append(env_id)
-                qpos_all[env_id] = fallback_qpos
+                failed_envs.append(env_id_int)
+                qpos_all[env_id_int] = fallback_qpos
             else:
-                qpos_all[env_id] = target_qpos
+                qpos_all[env_id_int] = torch.from_numpy(target_qpos).to(
+                    device=qpos_all.device, dtype=qpos_all.dtype
+                )
 
         self.agent.robot.set_qpos(qpos_all)
         if failed_envs:
