@@ -77,6 +77,52 @@ python examples/train_wsrl_rgbd.py \
 ./scripts/train_wsrl_rgbd.sh --env_id PickCube-v1 --encoder resnet10
 ```
 
+### Offline-Only Pretraining (No Sim Env)
+
+Use this when you have a static offline dataset (e.g., real-robot teleop H5)
+and want a pretrained actor + critic checkpoint without spinning up a sim
+env or running any eval. The script infers obs/action specs from the H5,
+constructs a lightweight `_EnvSpec` stub, and runs a pure offline gradient
+loop — `agent.learn()` and `_evaluate()` are never called.
+
+```bash
+# Offline-only pretraining: no ManiSkill / sim required on this machine
+python examples/pretrain_wsrl_offline.py \
+    --offline_dataset_path /path/to/real_robot.h5 \
+    --num_offline_steps 200000 \
+    --checkpoint_dir runs/robot_pretrain \
+    --buffer_device cuda \
+    --batch_size 256 \
+    --use_calql --cql_alpha 5.0
+```
+
+The script writes `runs/robot_pretrain/checkpoints/offline_pretrained.pt`,
+which contains the policy, critic ensemble, target critic, optimizer state,
+and Lagrange multipliers — everything needed to resume.
+
+**Online fine-tune on a deployment machine** (which does have an env):
+
+```bash
+python examples/train_wsrl.py \
+    --env_id <your_env_id> \
+    --load_checkpoint runs/robot_pretrain/checkpoints/offline_pretrained.pt \
+    --num_offline_steps 0 \
+    --num_online_steps 50000 \
+    --online_replay_mode mixed \
+    --offline_data_ratio 0.5
+```
+
+This cleanly separates the two WSRL phases across machines: the pretraining
+host needs no sim, and the deployment host runs only online fine-tuning.
+
+**Constraints:**
+- State observations only (flat `Box`). For RGBD pretraining, write a vision
+  variant — the script raises with a clear error if it detects dict obs.
+- Action bounds default to ±1; override with `--action_low` / `--action_high`
+  if your dataset uses a different action space.
+- The `_EnvSpec` stub has no `reset` / `step` — any attempt to call
+  `agent.learn()` with it will fail fast (by design).
+
 ## Configuration Options
 
 ### Q-Ensemble (REDQ)
@@ -160,6 +206,54 @@ agent.switch_to_online_mode()
 # Online fine-tuning
 agent.learn(total_timesteps=50_000)
 ```
+
+### Offline-Only Pretraining (Python)
+
+```python
+import numpy as np
+import torch
+from gymnasium import spaces
+
+from rl_garden.algorithms import WSRL
+from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
+
+
+class _EnvSpec:
+    """Minimal env stub — exposes spaces + num_envs, no reset/step."""
+    def __init__(self, obs_space, action_space, num_envs=1):
+        self.single_observation_space = obs_space
+        self.single_action_space = action_space
+        self.observation_space = obs_space
+        self.action_space = action_space
+        self.num_envs = num_envs
+
+
+# Construct spaces yourself (or infer from H5 — see pretrain_wsrl_offline.py).
+obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(OBS_DIM,), dtype=np.float32)
+action_space = spaces.Box(low=-1.0, high=1.0, shape=(ACT_DIM,), dtype=np.float32)
+env_spec = _EnvSpec(obs_space, action_space, num_envs=1)
+
+agent = WSRL(
+    env=env_spec,
+    eval_env=None,  # no eval in offline-only pretraining
+    n_critics=10,
+    use_calql=True,
+    cql_alpha=5.0,
+    learning_starts=0,
+)
+
+# Load offline dataset and train. Never call agent.learn() with this stub.
+load_maniskill_h5_to_replay_buffer(agent.replay_buffer, "real_robot.h5")
+for _ in range(200_000):
+    agent.train(gradient_steps=1)
+
+agent.save("runs/robot_pretrain/offline_pretrained.pt", include_replay_buffer=False)
+```
+
+To resume on a deployment host with a real env, construct a fresh `WSRL`
+against the live env, call `agent.load(checkpoint_path)`, then
+`agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)`
+followed by `agent.learn(...)`.
 
 ### Vision-Based WSRLRGBD
 
