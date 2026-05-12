@@ -354,3 +354,80 @@ def test_ensemble_load_legacy_modulelist_state_dict():
     # 5) After migration the vmap critic should match the legacy forward output.
     vmap_out = vmap_critic.forward_all(features, actions)
     torch.testing.assert_close(vmap_out, legacy_out, atol=1e-5, rtol=1e-5)
+
+
+def test_ensemble_load_intermediate_flat_state_dict():
+    """Intermediate ``ens_p_{N}__*`` keys (pre-trunk/head refactor) should
+    migrate to the current ``ens_p_trunk__{N}__*`` / ``ens_p_head__*`` layout."""
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+
+    # 1) Build a current critic and snapshot its state_dict + forward output.
+    torch.manual_seed(0)
+    source = EnsembleQCritic(features_dim=5, action_space=act_space,
+                             hidden_dims=[8, 8], n_critics=3)
+    features = torch.randn(4, 5)
+    actions = torch.randn(4, 2)
+    source_out = source.forward_all(features, actions)
+
+    # 2) Rebuild the intermediate flat-sequential key layout from the current
+    #    state_dict. For hidden_dims=[8, 8] the old _QHead was
+    #    Sequential(Linear_0, Act_1, Linear_2, Act_3, Linear_4) so linear
+    #    params lived at flat indices 0, 2, 4 with index 4 as the output head.
+    head_flat_index = 2 * len([8, 8])  # 4
+    flat_sd: dict[str, torch.Tensor] = {}
+    for k, v in source.state_dict().items():
+        if k.startswith("ens_p_trunk__"):
+            rest = k[len("ens_p_trunk__"):]  # e.g. "0__weight"
+            flat_sd["ens_p_" + rest] = v.clone()
+        elif k.startswith("ens_p_head__"):
+            suffix = k[len("ens_p_head__"):]  # "weight" or "bias"
+            flat_sd[f"ens_p_{head_flat_index}__" + suffix] = v.clone()
+        else:
+            flat_sd[k] = v.clone()
+
+    # Sanity: the synthetic state_dict must use the OLD key shape.
+    assert any(k.startswith("ens_p_0__") for k in flat_sd)
+    assert any(k.startswith(f"ens_p_{head_flat_index}__") for k in flat_sd)
+    assert not any(k.startswith("ens_p_trunk__") for k in flat_sd)
+    assert not any(k.startswith("ens_p_head__") for k in flat_sd)
+
+    # 3) Build a fresh critic with a DIFFERENT init so any leftover params
+    #    would show up as numerical mismatch in the forward check below.
+    torch.manual_seed(123)
+    target = EnsembleQCritic(features_dim=5, action_space=act_space,
+                             hidden_dims=[8, 8], n_critics=3)
+
+    # 4) Load: migration should rename keys 1:1 with no leftovers.
+    missing, unexpected = target.load_state_dict(flat_sd, strict=False)
+    assert not missing, f"Migration missed keys: {missing}"
+    assert not unexpected, f"Unexpected keys after migration: {unexpected}"
+
+    # 5) After migration the target critic must reproduce source forward output.
+    target_out = target.forward_all(features, actions)
+    torch.testing.assert_close(target_out, source_out, atol=1e-5, rtol=1e-5)
+
+
+def test_ensemble_state_dict_roundtrip_no_false_migration():
+    """Current-format state_dict round-trip must NOT trigger either migration
+    branch.  Regression guard: ensures the flat-sequential regex does not
+    falsely match keys like ``ens_p_trunk__0__weight`` or ``ens_p_head__weight``."""
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+
+    torch.manual_seed(0)
+    source = EnsembleQCritic(features_dim=6, action_space=act_space,
+                             hidden_dims=[16, 16], n_critics=4)
+    features = torch.randn(3, 6)
+    actions = torch.randn(3, 2)
+    source_out = source.forward_all(features, actions)
+    sd = {k: v.clone() for k, v in source.state_dict().items()}
+
+    torch.manual_seed(999)  # different init so leftover params would diverge
+    target = EnsembleQCritic(features_dim=6, action_space=act_space,
+                             hidden_dims=[16, 16], n_critics=4)
+    missing, unexpected = target.load_state_dict(sd, strict=False)
+    assert not missing, f"Round-trip missed keys: {missing}"
+    assert not unexpected, f"Round-trip produced unexpected keys: {unexpected}"
+
+    # With identical params, forward output should be bit-identical.
+    target_out = target.forward_all(features, actions)
+    torch.testing.assert_close(target_out, source_out, atol=1e-7, rtol=1e-7)
