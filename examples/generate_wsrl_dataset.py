@@ -206,7 +206,7 @@ def main() -> None:
         checkpoint_paths = discover_checkpoints(args.checkpoint_dir)
         scores: list[CheckpointScore] = []
         for path in checkpoint_paths:
-            agent.load(path, strict=args.strict_checkpoint, load_replay_buffer=False)
+            agent.load(path, strict=args.strict_checkpoint, load_replay_buffer=False, load_optimizers=False)
             score = evaluate_policy_success(agent, env, episodes=args.eval_episodes)
             scores.append(
                 CheckpointScore(
@@ -261,6 +261,7 @@ def main() -> None:
                     source.path,
                     strict=args.strict_checkpoint,
                     load_replay_buffer=False,
+                    load_optimizers=False,
                 )
                 source_agent = agent
             stats = collect_policy_dataset(

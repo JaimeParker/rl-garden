@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal, Optional, Sequence
 
 import numpy as np
@@ -387,6 +388,26 @@ class EnsembleQCritic(nn.Module):
                     [by_idx[i] for i in range(self.n_critics)], dim=0
                 )
                 state_dict[prefix + _safe_name(dotted, _PARAM_PREFIX)] = stacked
+
+        # Migrate intermediate flat-sequential format: ``ens_p_{N}__weight``
+        # (no trunk/head submodule) → current ``ens_p_trunk__{N}__weight`` /
+        # ``ens_p_head__weight`` layout.  The last (highest-indexed) linear
+        # layer becomes ``head``; all preceding ones stay in ``trunk``.
+        flat_pat = re.compile(
+            r"^" + re.escape(prefix + _PARAM_PREFIX) + r"(\d+)__(.+)$"
+        )
+        flat_keys = [k for k in list(state_dict) if flat_pat.match(k)]
+        if flat_keys:
+            max_idx = max(int(flat_pat.match(k).group(1)) for k in flat_keys)
+            for key in flat_keys:
+                m = flat_pat.match(key)
+                flat_idx, param_suffix = int(m.group(1)), m.group(2)
+                if flat_idx == max_idx:
+                    new_dotted = "head." + param_suffix.replace(_PARAM_SEP, ".")
+                else:
+                    new_dotted = f"trunk.{flat_idx}." + param_suffix.replace(_PARAM_SEP, ".")
+                state_dict[prefix + _safe_name(new_dotted, _PARAM_PREFIX)] = state_dict.pop(key)
+
         return super()._load_from_state_dict(
             state_dict,
             prefix,
