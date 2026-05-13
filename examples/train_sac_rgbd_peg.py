@@ -1,4 +1,4 @@
-"""RGBD SAC on the vendored PegInsertionSidePegOnly-v1 ManiSkill env.
+"""SAC on the vendored PegInsertionSidePegOnly-v1 ManiSkill RGBD env.
 
 Usage:
     python examples/train_sac_rgbd_peg.py
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import tyro
 
-from rl_garden.algorithms import RGBDSAC
+from rl_garden.algorithms import SAC
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
     VisionSACTrainingArgs,
@@ -108,7 +108,7 @@ def main() -> None:
     factory = image_encoder_factory_from_args(args)
     image_keys = image_keys_from_obs_mode(args.obs_mode)
 
-    agent = RGBDSAC(
+    agent = SAC(
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,

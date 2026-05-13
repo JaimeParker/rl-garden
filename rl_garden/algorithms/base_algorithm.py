@@ -97,12 +97,18 @@ class BaseAlgorithm(ABC):
             "extra": self._extra_checkpoint_state(),
         }
 
-    def load_state_dict(self, sd: dict[str, Any], strict: bool = True) -> None:
+    def load_state_dict(
+        self,
+        sd: dict[str, Any],
+        strict: bool = True,
+        load_optimizers: bool = True,
+    ) -> None:
         self.policy.load_state_dict(sd["policy"], strict=strict)
         self._global_step = int(sd.get("global_step", 0))
         self._global_update = int(sd.get("global_update", 0))
         self._load_extra_checkpoint_state(sd.get("extra", {}))
-        self._load_optimizer_state_dicts(sd.get("optimizers", {}))
+        if load_optimizers:
+            self._load_optimizer_state_dicts(sd.get("optimizers", {}))
 
     def save(self, path: str | Path, include_replay_buffer: bool = False) -> Path:
         """Save model/optimizer/train state to ``path``.
@@ -137,6 +143,7 @@ class BaseAlgorithm(ABC):
         path: str | Path,
         strict: bool = True,
         load_replay_buffer: bool = True,
+        load_optimizers: bool = True,
     ) -> "BaseAlgorithm":
         """Load a checkpoint in-place into an already constructed agent."""
         checkpoint_path = Path(path)
@@ -148,7 +155,7 @@ class BaseAlgorithm(ABC):
             action_space=self.env.single_action_space,
             strict=strict,
         )
-        self.load_state_dict(checkpoint["state"], strict=strict)
+        self.load_state_dict(checkpoint["state"], strict=strict, load_optimizers=load_optimizers)
 
         replay_ref = checkpoint.get("metadata", {}).get("replay_buffer_path")
         if load_replay_buffer and hasattr(self, "replay_buffer"):

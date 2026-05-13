@@ -1,4 +1,4 @@
-"""Generate WSRL-compatible H5 datasets from SAC/RGBDSAC checkpoints.
+"""Generate WSRL-compatible H5 datasets from SAC checkpoints.
 
 Example:
     python examples/generate_wsrl_dataset.py \
@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from rl_garden.algorithms import RGBDSAC, SAC
+from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
 from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_obs_mode
 from rl_garden.datasets import (
@@ -68,8 +68,8 @@ class Args:
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
 
-    policy_mix: tuple[float, float, float] = (0.3, 0.3, 0.4)
-    tier_thresholds: tuple[float, float] = (0.2, 0.8)
+    policy_mix: tuple[float, float, float, float] = (0.3, 0.3, 0.3, 0.1)
+    tier_thresholds: tuple[float, float, float] = (0.2, 0.6, 0.8)
     eval_episodes: int = 20
     stochastic_collect: bool = False
     use_random_failure_fallback: bool = True
@@ -116,7 +116,7 @@ def _make_agent(args: Args, env):
         return SAC(**common_kwargs)
 
     factory = image_encoder_factory_from_args(args)
-    return RGBDSAC(
+    return SAC(
         **common_kwargs,
         image_keys=image_keys_from_obs_mode(args.obs_mode),
         image_encoder_factory=factory,
@@ -206,7 +206,7 @@ def main() -> None:
         checkpoint_paths = discover_checkpoints(args.checkpoint_dir)
         scores: list[CheckpointScore] = []
         for path in checkpoint_paths:
-            agent.load(path, strict=args.strict_checkpoint, load_replay_buffer=False)
+            agent.load(path, strict=args.strict_checkpoint, load_replay_buffer=False, load_optimizers=False)
             score = evaluate_policy_success(agent, env, episodes=args.eval_episodes)
             scores.append(
                 CheckpointScore(
@@ -261,6 +261,7 @@ def main() -> None:
                     source.path,
                     strict=args.strict_checkpoint,
                     load_replay_buffer=False,
+                    load_optimizers=False,
                 )
                 source_agent = agent
             stats = collect_policy_dataset(

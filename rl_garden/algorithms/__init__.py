@@ -1,6 +1,6 @@
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
-from rl_garden.algorithms.calql import CalQL, OfflineCalQL
-from rl_garden.algorithms.cql import CQL, OfflineCQL
+from rl_garden.algorithms.calql import CalQL
+from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
     OfflinePretrainResult,
@@ -11,7 +11,6 @@ from rl_garden.algorithms.offline import (
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.sac import SAC
-from rl_garden.algorithms.sac_rgbd import RGBDSAC
 from rl_garden.algorithms.wsrl import WSRL
 from rl_garden.algorithms.wsrl_rgbd import WSRLRGBD
 
@@ -19,14 +18,11 @@ __all__ = [
     "BaseAlgorithm",
     "CalQL",
     "CQL",
-    "OfflineCQL",
-    "OfflineCalQL",
     "OfflineEnvSpec",
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",
     "OfflineSAC",
     "OffPolicyAlgorithm",
-    "RGBDSAC",
     "SAC",
     "WSRL",
     "WSRLRGBD",

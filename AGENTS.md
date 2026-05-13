@@ -36,7 +36,7 @@ Core design constraints:
 
 ## Code Structure
 
-- `rl_garden/algorithms/` - `BaseAlgorithm`, `OffPolicyAlgorithm`, `SAC`, `RGBDSAC`.
+- `rl_garden/algorithms/` - `BaseAlgorithm`, `OffPolicyAlgorithm`, `SAC`.
 - `rl_garden/policies/` - SAC actor/critic policy modules.
 - `rl_garden/buffers/` - GPU-native tensor and dict replay buffers.
 - `rl_garden/encoders/` - flatten, plain CNN, combined RGBD/proprio, pooling, FiLM, augmentation, and ResNet encoders.

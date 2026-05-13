@@ -13,11 +13,10 @@ SB3-style, PyTorch-native, GPU-parallel SAC framework for ManiSkill.
 
 ## What Is Already Implemented
 
-- `SAC` (state-based) as the base off-policy algorithm.
-- `RGBDSAC(SAC)` subclass for dict observations with image encoders.
+- `SAC` for both flat Box state observations and Dict image/image+state observations.
 - `SACCore`, shared by online SAC, offline SAC, CQL, Cal-QL, and WSRL.
-- `CQL` / `CalQL` plus offline-only `OfflineCQL` / `OfflineCalQL` entrypoints.
-- `WSRL(CalQL)` as the offline→online warm-start flow layer.
+- `CQL` / `CalQL` as standalone offline pretraining algorithms.
+- `WSRL` as the Cal-QL-based offline→online warm-start flow layer.
 - GPU-native replay buffers:
   - `TensorReplayBuffer` for Box observations.
   - `DictReplayBuffer` for `{rgb, depth, state, ...}` observations.
@@ -27,7 +26,7 @@ SB3-style, PyTorch-native, GPU-parallel SAC framework for ManiSkill.
   - `CombinedExtractor` (image + proprio fusion)
   - `ResNetEncoder` (`resnet10`/`resnet18`/`resnet34`) + pooling heads
 - ManiSkill env factory with wrappers for state/rgb/rgbd.
-- Examples for state SAC and RGB SAC.
+- Python examples for state SAC and RGB SAC.
 - Unit tests + CUDA smoke tests.
 
 ## Project Layout
@@ -175,17 +174,25 @@ python examples/train_sac_rgbd.py \
 ```
 
 `--freeze_resnet_backbone` freezes the ResNet stem and residual blocks while
-leaving the pooling/bottleneck head trainable. In RGBD SAC actor updates, the
-policy calls the shared extractor with `stop_gradient=True`, so image encodings
-do not receive actor-loss gradients. Critic updates call the extractor with
-`stop_gradient=False`, so the image encoder/head is updated by critic loss.
+leaving the pooling/bottleneck head trainable. For Dict observations, SAC calls
+the shared extractor with `stop_gradient=True` on actor updates, so image
+encodings do not receive actor-loss gradients. Critic updates call the extractor
+with `stop_gradient=False`, so the image encoder/head is updated by critic loss.
 
 Shell launchers:
 
 ```bash
-scripts/train_sac_state.sh
-scripts/train_sac_rgbd.sh --encoder resnet10
+scripts/train_sac_state.sh                       # state SAC, PickCube-v1
+scripts/train_sac_rgbd.sh --encoder resnet10     # RGB SAC, PickCube-v1
+scripts/train_sac_rgbd_peg.sh                    # RGB SAC, PegInsertionSidePegOnly-v1
 ```
+
+Shell launchers wrap `python examples/train_sac_*.py` with env-specific
+flag presets (`--env_id`, `--num_envs`, `--total_timesteps`, etc.) and
+logging environment variables (`RLG_LOG_TYPE`, `RLG_LOG_KEYWORDS`).
+Algorithm hyperparameters (`batch_size`, `utd`, learning rates, ...) live
+in `SACTrainingArgs` / `VisionSACTrainingArgs` and are not duplicated in
+the shell.
 
 Logging backend selection:
 
@@ -193,10 +200,11 @@ Logging backend selection:
 # Default: tensorboard
 scripts/train_sac_state.sh --log_type tensorboard
 
-# Weights & Biases
-scripts/train_sac_state.sh \
+# Weights & Biases (RGBD)
+scripts/train_sac_rgbd.sh \
   --log_type wandb \
   --wandb_project rl-garden \
+  --encoder resnet10 \
   --log_keywords debug,pickcube
 
 # Stdout only (no tensorboard/wandb artifacts)
@@ -227,10 +235,10 @@ python rl_garden/reward_models/classifiers/alignment/train.py
 Python-side extractor injection:
 
 ```python
-from rl_garden.algorithms import RGBDSAC
+from rl_garden.algorithms import SAC
 from rl_garden.encoders import CombinedExtractor, resnet_encoder_factory
 
-agent = RGBDSAC(
+agent = SAC(
     env=env,
     policy_kwargs={
         "features_extractor_class": CombinedExtractor,
@@ -242,6 +250,16 @@ agent = RGBDSAC(
     },
 )
 ```
+
+SAC chooses observation handling automatically:
+
+- `spaces.Box` observations use `FlattenExtractor` and `TensorReplayBuffer`.
+- `spaces.Dict` observations use `CombinedExtractor` and `DictReplayBuffer`.
+- Dict observations may be image-only, image+state, or mixed vector inputs.
+- Dict-obs training defaults (smaller `batch_size`, lower `utd`) live in
+  `VisionSACTrainingArgs` and the `examples/train_sac_rgbd*.py` entrypoints.
+  When constructing `SAC(env=dict_env, ...)` directly from Python, consider
+  overriding `batch_size=512, utd=0.25` to match the vision-tuned defaults.
 
 Network architecture configuration (`net_arch`) for SAC/CQL/Cal-QL/WSRL families:
 
@@ -263,7 +281,7 @@ compatibility, but they are deprecated in favor of `net_arch`.
 
 - Rollout path is GPU-native: no `action.cpu().numpy()` or numpy replay handoff in training hot path.
 - Replay tensors use `(T, N, ...)` storage layout for vectorized environments.
-- RGBD path uses shared encoder for actor/critic, and actor updates stop gradients through image encodings.
+- Dict image observations use a shared encoder for actor/critic, and actor updates stop gradients through image encodings.
 - SB3-like structure is borrowed, but `stable_baselines3` is not imported by framework code.
 - `pd_ee_twist` is integrated as a ManiSkill control mode through the custom Panda agent registration path.
 - In ManiSkill GPU simulation, EE controllers run on torch tensors (including Jacobian/IK math on CUDA for the GPU kinematics path).

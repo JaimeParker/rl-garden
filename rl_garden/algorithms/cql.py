@@ -719,8 +719,17 @@ class CQLCore(SACCore):
         return info
 
 
-class CQL(CQLCore, OffPolicyAlgorithm):
-    """CQL with SAC/REDQ updates and conservative critic regularization."""
+class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
+    """Internal rollout/eval shell that wires ``CQLCore`` into ``OffPolicyAlgorithm``.
+
+    .. warning::
+       **Do not instantiate this class directly.** It is an internal extension
+       point used solely so that ``WSRL`` (via ``_CalQLRolloutTrainingShell``)
+       can attach the CQL loss core to an off-policy rollout/replay/eval loop.
+       For standalone offline pretraining use :class:`CQL`; for the WSRL
+       offline→online warm-start use :class:`~rl_garden.algorithms.WSRL`. The
+       shape and arguments of this shell may change without notice.
+    """
 
     def __init__(
         self,
@@ -885,7 +894,7 @@ class CQL(CQLCore, OffPolicyAlgorithm):
         self._setup_model()
 
 
-class OfflineCQL(CQLCore, OfflineRLAlgorithm):
+class CQL(CQLCore, OfflineRLAlgorithm):
     """Pure offline CQL over a static replay buffer."""
 
     def __init__(
