@@ -178,11 +178,20 @@ the shared extractor with `stop_gradient=True` on actor updates, so image
 encodings do not receive actor-loss gradients. Critic updates call the extractor
 with `stop_gradient=False`, so the image encoder/head is updated by critic loss.
 
-Shell launcher:
+Shell launchers:
 
 ```bash
-scripts/train_sac_state.sh
+scripts/train_sac_state.sh                       # state SAC, PickCube-v1
+scripts/train_sac_rgbd.sh --encoder resnet10     # RGB SAC, PickCube-v1
+scripts/train_sac_rgbd_peg.sh                    # RGB SAC, PegInsertionSidePegOnly-v1
 ```
+
+Shell launchers wrap `python examples/train_sac_*.py` with env-specific
+flag presets (`--env_id`, `--num_envs`, `--total_timesteps`, etc.) and
+logging environment variables (`RLG_LOG_TYPE`, `RLG_LOG_KEYWORDS`).
+Algorithm hyperparameters (`batch_size`, `utd`, learning rates, ...) live
+in `SACTrainingArgs` / `VisionSACTrainingArgs` and are not duplicated in
+the shell.
 
 Logging backend selection:
 
@@ -190,10 +199,11 @@ Logging backend selection:
 # Default: tensorboard
 scripts/train_sac_state.sh --log_type tensorboard
 
-# Weights & Biases
-scripts/train_sac_state.sh \
+# Weights & Biases (RGBD)
+scripts/train_sac_rgbd.sh \
   --log_type wandb \
   --wandb_project rl-garden \
+  --encoder resnet10 \
   --log_keywords debug,pickcube
 
 # Stdout only (no tensorboard/wandb artifacts)

@@ -62,14 +62,14 @@ scripts/train_sac_state.sh
 Generic RGB SAC:
 
 ```bash
-python examples/train_sac_rgbd.py --encoder plain_conv
-python examples/train_sac_rgbd.py --encoder resnet10
+scripts/train_sac_rgbd.sh --encoder plain_conv
+scripts/train_sac_rgbd.sh --encoder resnet10
 ```
 
 Peg-only RGB SAC with GPU defaults:
 
 ```bash
-python examples/train_sac_rgbd_peg.py
+scripts/train_sac_rgbd_peg.sh
 ```
 
 The peg launcher uses:
@@ -161,6 +161,7 @@ The generic RGBD trainer should remain independent of this env. Use:
 
 ```bash
 examples/train_sac_rgbd_peg.py
+scripts/train_sac_rgbd_peg.sh
 ```
 
 for peg-only experiments.
