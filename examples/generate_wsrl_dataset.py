@@ -68,8 +68,8 @@ class Args:
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
 
-    policy_mix: tuple[float, float, float] = (0.3, 0.3, 0.4)
-    tier_thresholds: tuple[float, float] = (0.2, 0.8)
+    policy_mix: tuple[float, float, float, float] = (0.3, 0.3, 0.3, 0.1)
+    tier_thresholds: tuple[float, float, float] = (0.2, 0.6, 0.8)
     eval_episodes: int = 20
     stochastic_collect: bool = False
     use_random_failure_fallback: bool = True

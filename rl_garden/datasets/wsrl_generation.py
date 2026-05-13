@@ -15,11 +15,12 @@ import torch
 
 from rl_garden.common.types import Obs
 
-TierName = Literal["failure", "near_success", "success"]
-TIERS: tuple[TierName, ...] = ("failure", "near_success", "success")
+TierName = Literal["failure", "middle", "near_success", "success"]
+TIERS: tuple[TierName, ...] = ("failure", "middle", "near_success", "success")
 TIER_TARGETS: dict[TierName, float] = {
     "failure": 0.0,
-    "near_success": 0.5,
+    "middle": 0.5,
+    "near_success": 0.75,
     "success": 1.0,
 }
 
@@ -54,10 +55,10 @@ class CollectionStats:
         return self.successes / self.episodes if self.episodes else 0.0
 
 
-def normalize_mix(mix: Iterable[float]) -> tuple[float, float, float]:
+def normalize_mix(mix: Iterable[float]) -> tuple[float, float, float, float]:
     values = tuple(float(v) for v in mix)
-    if len(values) != 3:
-        raise ValueError("policy_mix must contain exactly three values.")
+    if len(values) != 4:
+        raise ValueError("policy_mix must contain exactly four values.")
     if any(v < 0 for v in values):
         raise ValueError("policy_mix values must be non-negative.")
     total = sum(values)
@@ -82,23 +83,25 @@ def discover_checkpoints(checkpoint_dir: str | Path) -> list[Path]:
     return out
 
 
-def _tier_for_rate(success_rate: float, thresholds: tuple[float, float]) -> TierName:
-    failure_max, success_min = thresholds
+def _tier_for_rate(success_rate: float, thresholds: tuple[float, float, float]) -> TierName:
+    failure_max, middle_max, success_min = thresholds
     if not 0 <= failure_max < success_min <= 1:
         raise ValueError("tier thresholds must satisfy 0 <= failure < success <= 1.")
     if success_rate <= failure_max:
         return "failure"
     if success_rate >= success_min:
         return "success"
-    return "near_success"
+    elif middle_max <= success_rate < success_min:
+        return "near_success"
+    return "middle"
 
 
 def select_policy_sources(
     scores: list[CheckpointScore],
     *,
     total_transitions: int,
-    policy_mix: Iterable[float] = (0.3, 0.3, 0.4),
-    thresholds: tuple[float, float] = (0.2, 0.8),
+    policy_mix: Iterable[float] = (0.3, 0.3, 0.3, 0.1),
+    thresholds: tuple[float, float, float] = (0.2, 0.6, 0.8),
     use_random_failure_fallback: bool = True,
 ) -> list[PolicySource]:
     """Pick one checkpoint per tier and assign normalized transition quotas."""
@@ -404,6 +407,7 @@ def collect_policy_dataset(
     episode_terminated: list[list[torch.Tensor | bool]] = [[] for _ in range(env.num_envs)]
     episode_truncated: list[list[torch.Tensor | bool]] = [[] for _ in range(env.num_envs)]
     stats = CollectionStats()
+    print(f"[collect] starting collection for source {source.name}")
 
     while stats.transitions < target:
         if agent is None:
@@ -453,5 +457,8 @@ def collect_policy_dataset(
             episode_truncated[env_idx] = []
 
         obs = next_obs
+    print(f"[collect] finished collection for source {source.name}: "
+          f"{stats.episodes} episodes, {stats.transitions} transitions, "
+          f"success rate {stats.success_rate:.2%}")
 
     return stats
