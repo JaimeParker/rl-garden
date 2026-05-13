@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from rl_garden.algorithms import RGBDSAC, SAC
+from rl_garden.algorithms import SAC
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
 pytestmark = pytest.mark.skipif(
@@ -53,7 +53,7 @@ def test_rgbd_sac_smoke():
     )
     env = make_maniskill_env(cfg)
     try:
-        agent = RGBDSAC(
+        agent = SAC(
             env=env, eval_env=None,
             buffer_size=512, learning_starts=128, training_freq=64, utd=0.25,
             batch_size=32, eval_freq=0, log_freq=128,

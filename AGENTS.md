@@ -36,7 +36,7 @@ Core design constraints:
 
 ## Code Structure
 
-- `rl_garden/algorithms/` - `BaseAlgorithm`, `OffPolicyAlgorithm`, `SAC`, `RGBDSAC`.
+- `rl_garden/algorithms/` - `BaseAlgorithm`, `OffPolicyAlgorithm`, `SAC`.
 - `rl_garden/policies/` - SAC actor/critic policy modules.
 - `rl_garden/buffers/` - GPU-native tensor and dict replay buffers.
 - `rl_garden/encoders/` - flatten, plain CNN, combined RGBD/proprio, pooling, FiLM, augmentation, and ResNet encoders.
@@ -62,14 +62,14 @@ scripts/train_sac_state.sh
 Generic RGB SAC:
 
 ```bash
-scripts/train_sac_rgbd.sh --encoder plain_conv
-scripts/train_sac_rgbd.sh --encoder resnet10
+python examples/train_sac_rgbd.py --encoder plain_conv
+python examples/train_sac_rgbd.py --encoder resnet10
 ```
 
 Peg-only RGB SAC with GPU defaults:
 
 ```bash
-scripts/train_sac_rgbd_peg.sh
+python examples/train_sac_rgbd_peg.py
 ```
 
 The peg launcher uses:
@@ -161,7 +161,6 @@ The generic RGBD trainer should remain independent of this env. Use:
 
 ```bash
 examples/train_sac_rgbd_peg.py
-scripts/train_sac_rgbd_peg.sh
 ```
 
 for peg-only experiments.

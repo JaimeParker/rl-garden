@@ -5,7 +5,8 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import RGBDSAC, SAC
+from rl_garden.algorithms import SAC
+from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.encoders import BaseFeaturesExtractor, CombinedExtractor, FlattenExtractor
 
 
@@ -64,6 +65,27 @@ def _rgbd_env() -> DummyVecEnv:
     return DummyVecEnv(obs_space, act_space)
 
 
+def _image_only_env() -> DummyVecEnv:
+    obs_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+        }
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    return DummyVecEnv(obs_space, act_space)
+
+
+def _dict_vector_env() -> DummyVecEnv:
+    obs_space = spaces.Dict(
+        {
+            "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+            "extra": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+        }
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    return DummyVecEnv(obs_space, act_space)
+
+
 def _agent_kwargs() -> dict[str, object]:
     return {
         "device": "cpu",
@@ -77,6 +99,7 @@ def _agent_kwargs() -> dict[str, object]:
 def test_sac_uses_flatten_extractor_by_default():
     agent = SAC(env=_state_env(), **_agent_kwargs())
     assert isinstance(agent.policy.features_extractor, FlattenExtractor)
+    assert isinstance(agent.replay_buffer, TensorReplayBuffer)
 
 
 def test_rollout_obs_on_policy_device_is_noop_for_tensor_obs():
@@ -88,7 +111,7 @@ def test_rollout_obs_on_policy_device_is_noop_for_tensor_obs():
 
 
 def test_rollout_obs_on_policy_device_is_noop_for_dict_obs():
-    agent = RGBDSAC(
+    agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
         image_keys=("rgb",),
@@ -127,20 +150,41 @@ def test_sac_policy_kwargs_can_build_custom_extractor():
     assert extractor.marker == "state-custom"
 
 
-def test_rgbdsac_uses_combined_extractor_by_default():
-    agent = RGBDSAC(
+def test_sac_dict_obs_uses_combined_extractor_by_default():
+    agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
         image_keys=("rgb", "depth"),
     )
     assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert isinstance(agent.replay_buffer, DictReplayBuffer)
 
 
-def test_rgbdsac_legacy_image_encoder_factory_still_works():
+def test_sac_image_only_dict_obs_uses_combined_extractor():
+    agent = SAC(
+        env=_image_only_env(),
+        **_agent_kwargs(),
+        image_keys=("rgb",),
+    )
+    extractor = agent.policy.features_extractor
+    assert isinstance(extractor, CombinedExtractor)
+    assert extractor.image_keys == ("rgb",)
+    assert extractor.has_state is False
+
+
+def test_sac_dict_vector_keys_are_flattened():
+    agent = SAC(env=_dict_vector_env(), **_agent_kwargs())
+    extractor = agent.policy.features_extractor
+    assert isinstance(extractor, CombinedExtractor)
+    assert "extra" in extractor.vector_extractors
+    assert extractor.features_dim == 64 + 3
+
+
+def test_sac_image_encoder_factory_still_works():
     def factory(img_space):
         return RecordingImageExtractor(img_space, features_dim=19, marker="legacy")
 
-    agent = RGBDSAC(
+    agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
         image_keys=("rgb",),
@@ -153,8 +197,8 @@ def test_rgbdsac_legacy_image_encoder_factory_still_works():
     assert extractor.image_keys == ("rgb",)
 
 
-def test_rgbdsac_policy_kwargs_can_override_with_custom_extractor():
-    agent = RGBDSAC(
+def test_sac_dict_policy_kwargs_can_override_with_custom_extractor():
+    agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
         policy_kwargs={
@@ -168,14 +212,14 @@ def test_rgbdsac_policy_kwargs_can_override_with_custom_extractor():
     assert extractor.marker == "rgbd-custom"
 
 
-def test_rgbdsac_policy_kwargs_win_over_legacy_extractor_args():
+def test_sac_dict_policy_kwargs_win_over_extractor_args():
     def legacy_factory(img_space):
         return RecordingImageExtractor(img_space, features_dim=19, marker="legacy")
 
     def new_factory(img_space):
         return RecordingImageExtractor(img_space, features_dim=31, marker="policy")
 
-    agent = RGBDSAC(
+    agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
         image_keys=("rgb", "depth"),
@@ -239,10 +283,39 @@ def test_sac_net_arch_missing_keys_raises():
         )
 
 
-def test_rgbdsac_rejects_actor_encoder_updates():
+def test_sac_dict_obs_rejects_actor_encoder_updates():
     with pytest.raises(ValueError, match="trained only by critic loss"):
-        RGBDSAC(
+        SAC(
             env=_rgbd_env(),
             **_agent_kwargs(),
             detach_encoder_on_actor=False,
         )
+
+
+def test_sac_box_obs_rejects_image_kwargs():
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        SAC(env=_state_env(), **_agent_kwargs(), image_keys=("rgb",))
+
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        SAC(env=_state_env(), **_agent_kwargs(), use_proprio=False)
+
+
+def test_sac_box_checkpoint_metadata_omits_image_fields():
+    agent = SAC(env=_state_env(), **_agent_kwargs())
+    meta = agent._checkpoint_metadata()
+    for key in (
+        "image_keys",
+        "state_key",
+        "use_proprio",
+        "proprio_latent_dim",
+        "image_fusion_mode",
+        "enable_stacking",
+    ):
+        assert key not in meta
+
+
+def test_sac_dict_checkpoint_metadata_includes_image_fields():
+    agent = SAC(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+    meta = agent._checkpoint_metadata()
+    assert meta["image_keys"] == ("rgb",)
+    assert meta["use_proprio"] is True

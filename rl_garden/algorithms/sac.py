@@ -1,13 +1,10 @@
-"""State-based SAC (base algorithm).
+"""SAC algorithm for Box and Dict observations.
 
 Template: ManiSkill's ``examples/baselines/sac/sac.py``, restructured as
 an ``OffPolicyAlgorithm`` subclass with a ``SACPolicy`` that owns a
-``FlattenExtractor`` (state obs go through an identity flatten and the
-actor/critic MLPs handle the rest).
-
-RGBD SAC subclasses this and only overrides:
-  - ``_build_features_extractor`` (to use a CombinedExtractor with images)
-  - actor loss feature extraction (to stop gradients through image encodings)
+features extractor. Like Stable-Baselines3, input modality is handled by the
+extractor: Box observations use ``FlattenExtractor`` and Dict observations use
+``CombinedExtractor``.
 """
 from __future__ import annotations
 
@@ -21,10 +18,16 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
+from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import (
+    CombinedExtractor,
+    ImageEncoderFactory,
+    default_image_encoder_factory,
+)
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.sac_policy import SACPolicy
 
@@ -64,6 +67,14 @@ class SAC(SACCore, OffPolicyAlgorithm):
         critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        image_keys: Optional[tuple[str, ...]] = None,
+        state_key: Optional[str] = None,
+        use_proprio: Optional[bool] = None,
+        proprio_latent_dim: Optional[int] = None,
+        image_fusion_mode: Optional[str] = None,
+        enable_stacking: Optional[bool] = None,
+        detach_encoder_on_actor: bool = True,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -124,12 +135,58 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
+
+        obs_space = self.env.single_observation_space
+        image_kwargs_explicit = {
+            "image_encoder_factory": image_encoder_factory,
+            "image_keys": image_keys,
+            "state_key": state_key,
+            "use_proprio": use_proprio,
+            "proprio_latent_dim": proprio_latent_dim,
+            "image_fusion_mode": image_fusion_mode,
+            "enable_stacking": enable_stacking,
+        }
+        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
+
+        if isinstance(obs_space, spaces.Box):
+            if explicitly_set:
+                raise ValueError(
+                    f"SAC with Box observation space does not accept image-related "
+                    f"kwargs (got {explicitly_set}). Use a Dict observation space, "
+                    f"or remove these kwargs."
+                )
+            self._is_dict_obs = False
+        elif isinstance(obs_space, spaces.Dict):
+            if not detach_encoder_on_actor:
+                raise ValueError(
+                    "SAC always uses stop_gradient=True on the actor image path for "
+                    "Dict observations so image encoders are trained only by critic loss."
+                )
+            self._is_dict_obs = True
+            self._image_encoder_factory = (
+                image_encoder_factory or default_image_encoder_factory()
+            )
+            self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
+            self._state_key = state_key if state_key is not None else "state"
+            self._use_proprio = use_proprio if use_proprio is not None else True
+            self._proprio_latent_dim = (
+                proprio_latent_dim if proprio_latent_dim is not None else 64
+            )
+            self._image_fusion_mode = (
+                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
+            )
+            self._enable_stacking = enable_stacking if enable_stacking is not None else False
+        else:
+            raise TypeError(
+                f"SAC supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
+
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
         self._setup_model()
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
+        meta = {
             **super()._checkpoint_metadata(),
             "policy_lr": self.policy_lr,
             "q_lr": self.q_lr,
@@ -150,6 +207,18 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
         }
+        if self._is_dict_obs:
+            meta.update(
+                {
+                    "image_keys": self._image_keys,
+                    "state_key": self._state_key,
+                    "use_proprio": self._use_proprio,
+                    "proprio_latent_dim": self._proprio_latent_dim,
+                    "image_fusion_mode": self._image_fusion_mode,
+                    "enable_stacking": self._enable_stacking,
+                }
+            )
+        return meta
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {
@@ -178,16 +247,30 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 if sched is not None and sched_state is not None:
                     sched.load_state_dict(sched_state)
 
-    # --- construction hooks (RGBDSAC overrides defaults only) ---
+    # --- construction hooks ---
 
     def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        assert isinstance(self.env.single_observation_space, spaces.Box), (
-            "SAC base class expects a flat Box observation space; "
-            "use RGBDSAC for dict observations."
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Box):
+            return FlattenExtractor
+        if isinstance(obs_space, spaces.Dict):
+            return CombinedExtractor
+        raise TypeError(
+            "SAC supports Box or Dict observation spaces, got "
+            + str(type(obs_space))
         )
-        return FlattenExtractor
 
     def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        if self._is_dict_obs:
+            return {
+                "image_keys": self._image_keys,
+                "state_key": self._state_key,
+                "image_encoder_factory": self._image_encoder_factory,
+                "proprio_latent_dim": self._proprio_latent_dim,
+                "use_proprio": self._use_proprio,
+                "fusion_mode": self._image_fusion_mode,
+                "enable_stacking": self._enable_stacking,
+            }
         return {}
 
     def _normalize_policy_kwargs(
@@ -252,14 +335,27 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
 
     def _build_replay_buffer(self):
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Dict):
+            return DictReplayBuffer(
+                observation_space=obs_space,
+                action_space=self.env.single_action_space,
+                num_envs=self.num_envs,
+                buffer_size=self.buffer_size,
+                storage_device=self.buffer_device,
+                sample_device=self.device,
+            )
         return TensorReplayBuffer(
-            observation_space=self.env.single_observation_space,
+            observation_space=obs_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
             storage_device=self.buffer_device,
             sample_device=self.device,
         )
+
+    def _actor_stop_gradient(self) -> bool:
+        return self._is_dict_obs
 
     @staticmethod
     def _resolve_net_arch(

@@ -137,6 +137,15 @@ class CombinedExtractor(BaseFeaturesExtractor):
             )
             features_dim += proprio.features_dim
 
+        vector_extractors: nn.ModuleDict = nn.ModuleDict()
+        image_key_set = set(present_image_keys)
+        for key, subspace in observation_space.spaces.items():
+            if key in image_key_set or key == state_key:
+                continue
+            assert isinstance(subspace, spaces.Box), f"vector key {key!r} must be a Box"
+            vector_extractors[key] = nn.Flatten()
+            features_dim += int(np.prod(subspace.shape))
+
         assert features_dim > 0, "CombinedExtractor produced 0-dim output."
         super().__init__(observation_space, features_dim)
 
@@ -148,6 +157,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.image_encoder = image_encoder
         self.image_encoders = image_encoders
         self.proprio = proprio
+        self.vector_extractors = vector_extractors
 
     @staticmethod
     def _image_space_to_hwc(
@@ -221,6 +231,8 @@ class CombinedExtractor(BaseFeaturesExtractor):
         out.extend(self._encode_images(obs, stop_gradient=stop_gradient))
         if self.has_state:
             out.append(self._encode_proprio(obs[self.state_key]))
+        for key, extractor in self.vector_extractors.items():
+            out.append(extractor(obs[key]))
         return torch.cat(out, dim=-1)
 
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:

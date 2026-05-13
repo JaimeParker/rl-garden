@@ -1,4 +1,4 @@
-"""Generate WSRL-compatible H5 datasets from SAC/RGBDSAC checkpoints.
+"""Generate WSRL-compatible H5 datasets from SAC checkpoints.
 
 Example:
     python examples/generate_wsrl_dataset.py \
@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from rl_garden.algorithms import RGBDSAC, SAC
+from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
 from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_obs_mode
 from rl_garden.datasets import (
@@ -116,7 +116,7 @@ def _make_agent(args: Args, env):
         return SAC(**common_kwargs)
 
     factory = image_encoder_factory_from_args(args)
-    return RGBDSAC(
+    return SAC(
         **common_kwargs,
         image_keys=image_keys_from_obs_mode(args.obs_mode),
         image_encoder_factory=factory,

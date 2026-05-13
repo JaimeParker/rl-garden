@@ -24,7 +24,7 @@ training, WSRL dataset generation, and offline-to-online launch commands, see
 ## Key Features
 
 ### ✅ Algorithms Implemented
-- **SAC / RGBDSAC**: Online SAC using the shared SACCore update path
+- **SAC**: Online SAC using the shared SACCore update path for Box and Dict observations
 - **OfflineSAC**: Offline SAC scaffold over static replay buffers
 - **CQL / CalQL**: Pure offline CQL and Cal-QL pretraining algorithms
 - **WSRL**: State-based WSRL with CQL/Cal-QL
@@ -184,7 +184,7 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--critic_subsample_size 2`: Number of critics to subsample for target (default: 2)
 
 ### Network Architecture (`net_arch`)
-- `net_arch` is the primary network config interface for `SAC/RGBDSAC/WSRL/WSRLRGBD`.
+- `net_arch` is the primary network config interface for `SAC/WSRL/WSRLRGBD`.
 - Supported forms:
   - `list[int]`: shared architecture for actor and critic, e.g. `[256, 256, 256]`
   - `dict(pi=[...], qf=[...])`: separate actor/critic MLPs, e.g. `{"pi": [256, 256], "qf": [256, 256]}`
@@ -395,7 +395,6 @@ agent.learn(total_timesteps=1_000_000)
 ```
 OffPolicyAlgorithm
 ├── SAC(SACCore)
-│   └── RGBDSAC
 └── _CQLRolloutTrainingShell(CQLCore)
     └── _CalQLRolloutTrainingShell
         └── WSRL

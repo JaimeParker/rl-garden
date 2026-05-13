@@ -28,6 +28,13 @@ from rl_garden.encoders.combined import (
 class WSRLRGBD(WSRL):
     """WSRL with vision support (RGB/RGBD observations).
 
+    .. todo::
+       Pending the same merge as ``RGBDSAC → SAC``: WSRL should auto-route
+       on observation space (Box → state, Dict → vision) instead of having
+       a separate ``WSRLRGBD`` class. Deferred to a follow-up PR because
+       Cal-QL's ``MCDictReplayBuffer`` vs ``MCTensorReplayBuffer`` switch
+       needs additional checkpoint-metadata work.
+
     Extends WSRL to handle Dict observation spaces with image and state keys.
     Uses CombinedExtractor to process visual observations and proprioceptive state.
     Detaches encoder gradients on actor path for efficient training.

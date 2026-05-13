@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import RGBDSAC, SAC, WSRL
+from rl_garden.algorithms import SAC, WSRL
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
 
@@ -162,8 +162,8 @@ def test_learn_writes_periodic_and_final_checkpoints(tmp_path):
     assert (tmp_path / "replay_buffer_final.pt").exists()
 
 
-def test_rgbdsac_checkpoint_roundtrip(tmp_path):
-    agent = RGBDSAC(
+def test_sac_dict_checkpoint_roundtrip(tmp_path):
+    agent = SAC(
         env=_rgbd_env(),
         **_sac_kwargs(),
         image_keys=("rgb",),
@@ -174,7 +174,7 @@ def test_rgbdsac_checkpoint_roundtrip(tmp_path):
     path = tmp_path / "rgbd_final.pt"
     agent.save(path, include_replay_buffer=True)
 
-    loaded = RGBDSAC(env=_rgbd_env(), **_sac_kwargs(), image_keys=("rgb",))
+    loaded = SAC(env=_rgbd_env(), **_sac_kwargs(), image_keys=("rgb",))
     loaded.load(path)
 
     _assert_state_dict_equal(agent.policy.state_dict(), loaded.policy.state_dict())
