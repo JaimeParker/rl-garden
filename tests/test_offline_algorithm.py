@@ -145,3 +145,57 @@ def test_run_offline_pretraining_can_skip_final_checkpoint(tmp_path):
     assert (tmp_path / "checkpoint_1.pt").exists()
     assert (tmp_path / "checkpoint_2.pt").exists()
     assert not (tmp_path / "offline_pretrained.pt").exists()
+
+
+def test_pretrain_offline_accepts_wsrl_algorithm():
+    """Both ``--algorithm wsrl`` and the deprecated ``wsrl-calql`` build WSRL.
+
+    This exercises the CLI normalization in examples/pretrain_offline.py
+    indirectly: ``OfflinePretrainArgs.algorithm`` must accept both values and
+    ``build_offline_agent`` must dispatch them to the same code path.
+    """
+    import sys
+    import warnings as _warnings
+    from pathlib import Path
+
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    if str(examples_dir) not in sys.path:
+        sys.path.insert(0, str(examples_dir))
+    from pretrain_offline import build_offline_agent  # type: ignore[import-not-found]
+
+    from rl_garden.algorithms import OfflineEnvSpec, WSRL
+    from rl_garden.common.cli_args import OfflinePretrainArgs
+
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=float)
+    action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+    env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=1)
+
+    base_kwargs = dict(
+        offline_dataset_path="/tmp/unused.h5",
+        num_offline_steps=1,
+        buffer_size=64,
+        buffer_device="cpu",
+        batch_size=4,
+        n_critics=4,
+        critic_subsample_size=2,
+        cql_n_actions=4,
+        cql_alpha=1.0,
+        training_freq=1,
+        log_type="none",
+    )
+
+    class _NoopLogger:
+        def add_scalar(self, *a, **k): pass
+        def add_summary(self, *a, **k): pass
+        def add_text(self, *a, **k): pass
+        def close(self): pass
+
+    args_new = OfflinePretrainArgs(algorithm="wsrl", **base_kwargs)
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error", DeprecationWarning)
+        agent_new = build_offline_agent(args_new, env_spec, _NoopLogger(), "wsrl")
+    assert isinstance(agent_new, WSRL)
+
+    args_legacy = OfflinePretrainArgs(algorithm="wsrl-calql", **base_kwargs)
+    agent_legacy = build_offline_agent(args_legacy, env_spec, _NoopLogger(), "wsrl-calql")
+    assert isinstance(agent_legacy, WSRL)

@@ -1,6 +1,6 @@
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
-from rl_garden.algorithms.calql import CalQL, OfflineCalQL
-from rl_garden.algorithms.cql import CQL, OfflineCQL
+from rl_garden.algorithms.calql import CalQL
+from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
     OfflinePretrainResult,
@@ -19,8 +19,6 @@ __all__ = [
     "BaseAlgorithm",
     "CalQL",
     "CQL",
-    "OfflineCQL",
-    "OfflineCalQL",
     "OfflineEnvSpec",
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",

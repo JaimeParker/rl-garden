@@ -8,7 +8,9 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import CQL, CalQL, OfflineCQL, OfflineCalQL, OfflineEnvSpec, WSRL
+from rl_garden.algorithms import CQL, CalQL, OfflineEnvSpec, OfflineRLAlgorithm, WSRL
+from rl_garden.algorithms import __all__ as algorithm_exports
+from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
 from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
@@ -70,11 +72,12 @@ def _offline_env() -> OfflineEnvSpec:
 
 
 def test_cql_standalone_train_step_without_calql_bound():
-    agent = CQL(env=DummyVecEnv(), **_kwargs())
+    agent = CQL(env=_offline_env(), **_offline_kwargs())
     _fill(agent)
 
     info = agent.train(1)
 
+    assert isinstance(agent, OfflineRLAlgorithm)
     assert agent.use_cql_loss
     assert not agent.use_calql
     assert "cql_loss" in info
@@ -83,7 +86,7 @@ def test_cql_standalone_train_step_without_calql_bound():
 
 
 def test_cql_does_not_own_calql_or_wsrl_flow_state():
-    agent = CQL(env=DummyVecEnv(), **_kwargs())
+    agent = CQL(env=_offline_env(), **_offline_kwargs())
 
     assert isinstance(agent.replay_buffer, TensorReplayBuffer)
     assert not isinstance(agent.replay_buffer, MCTensorReplayBuffer)
@@ -92,8 +95,8 @@ def test_cql_does_not_own_calql_or_wsrl_flow_state():
     assert not hasattr(agent, "offline_data_ratio")
 
 
-def test_offline_cql_train_step_and_checkpoint(tmp_path):
-    agent = OfflineCQL(env=_offline_env(), checkpoint_dir=str(tmp_path), **_offline_kwargs())
+def test_cql_train_step_and_checkpoint(tmp_path):
+    agent = CQL(env=_offline_env(), checkpoint_dir=str(tmp_path), **_offline_kwargs())
     _fill(agent)
 
     info = agent.train(1)
@@ -108,11 +111,12 @@ def test_offline_cql_train_step_and_checkpoint(tmp_path):
 
 
 def test_calql_standalone_train_step_logs_bound_rate():
-    agent = CalQL(env=DummyVecEnv(), **_kwargs())
+    agent = CalQL(env=_offline_env(), **_offline_kwargs())
     _fill(agent)
 
     info = agent.train(1)
 
+    assert isinstance(agent, CQL)
     assert agent.use_calql
     assert "cql_loss" in info
     assert "calql_bound_rate" in info
@@ -120,7 +124,7 @@ def test_calql_standalone_train_step_logs_bound_rate():
 
 
 def test_calql_owns_mc_replay_without_wsrl_flow_state():
-    agent = CalQL(env=DummyVecEnv(), **_kwargs())
+    agent = CalQL(env=_offline_env(), **_offline_kwargs())
 
     assert isinstance(agent.replay_buffer, MCTensorReplayBuffer)
     assert not hasattr(agent, "switch_to_online_mode")
@@ -128,8 +132,8 @@ def test_calql_owns_mc_replay_without_wsrl_flow_state():
     assert not hasattr(agent, "offline_data_ratio")
 
 
-def test_offline_calql_train_step_logs_bound_rate():
-    agent = OfflineCalQL(
+def test_calql_train_step_logs_bound_rate():
+    agent = CalQL(
         env=_offline_env(),
         sparse_reward_mc=True,
         sparse_negative_reward=-1.0,
@@ -147,8 +151,14 @@ def test_offline_calql_train_step_logs_bound_rate():
     assert "calql_bound_rate" in info
 
 
-def test_wsrl_inherits_calql_layer():
-    assert issubclass(WSRL, CalQL)
+def test_wsrl_uses_private_rollout_shell_not_public_offline_calql():
+    assert issubclass(WSRL, _CalQLRolloutTrainingShell)
+    assert not issubclass(WSRL, CalQL)
+
+
+def test_offline_cql_names_are_not_public_exports():
+    assert "OfflineCQL" not in algorithm_exports
+    assert "OfflineCalQL" not in algorithm_exports
 
 
 def _write_demo_h5(path):

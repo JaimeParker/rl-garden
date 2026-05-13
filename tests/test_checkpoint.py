@@ -295,3 +295,60 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
     assert mc_target.gamma == 0.7
     assert mc_target._mc_table is not None
     assert torch.equal(mc_target._mc_table, mc_source._mc_table)
+
+
+def test_legacy_offline_cql_algorithm_class_alias_resolves_to_cql():
+    """Old ``OfflineCQL`` checkpoint metadata must validate under the current CQL class.
+
+    Mirrors the rename done in the algorithms package: previously-saved
+    pretrained checkpoints stored ``algorithm_class='OfflineCQL'``; loading them
+    into the new public ``CQL`` class must not trigger the strict mismatch path.
+    """
+    from gymnasium import spaces as gym_spaces
+
+    from rl_garden.common.checkpoint import (
+        _canonical_algorithm_class,
+        space_metadata,
+        validate_checkpoint_metadata,
+    )
+
+    assert _canonical_algorithm_class("OfflineCQL") == "CQL"
+    assert _canonical_algorithm_class("OfflineCalQL") == "CalQL"
+    assert _canonical_algorithm_class("CQL") == "CQL"  # passthrough
+    assert _canonical_algorithm_class(None) is None  # tolerate missing metadata
+
+    obs_space = gym_spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=float)
+    action_space = gym_spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+    legacy_ckpt = {
+        "format_version": 1,
+        "metadata": {
+            "algorithm_class": "OfflineCQL",
+            "observation_space": space_metadata(obs_space),
+            "action_space": space_metadata(action_space),
+        },
+    }
+
+    # Under strict=True the alias must let the legacy class pass as CQL.
+    validate_checkpoint_metadata(
+        legacy_ckpt,
+        algorithm_class="CQL",
+        observation_space=obs_space,
+        action_space=action_space,
+        strict=True,
+    )
+
+    legacy_calql_ckpt = {
+        "format_version": 1,
+        "metadata": {
+            "algorithm_class": "OfflineCalQL",
+            "observation_space": space_metadata(obs_space),
+            "action_space": space_metadata(action_space),
+        },
+    }
+    validate_checkpoint_metadata(
+        legacy_calql_ckpt,
+        algorithm_class="CalQL",
+        observation_space=obs_space,
+        action_space=action_space,
+        strict=True,
+    )

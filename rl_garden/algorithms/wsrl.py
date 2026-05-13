@@ -7,12 +7,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from rl_garden.algorithms.calql import CalQL
+from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
 from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 from rl_garden.common.logger import Logger
 
 
-class WSRL(CalQL):
+class WSRL(_CalQLRolloutTrainingShell):
     """Cal-QL plus offline→online replay switching and WSRL logging."""
 
     def __init__(

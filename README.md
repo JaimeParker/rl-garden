@@ -16,8 +16,8 @@ SB3-style, PyTorch-native, GPU-parallel SAC framework for ManiSkill.
 - `SAC` (state-based) as the base off-policy algorithm.
 - `RGBDSAC(SAC)` subclass for dict observations with image encoders.
 - `SACCore`, shared by online SAC, offline SAC, CQL, Cal-QL, and WSRL.
-- `CQL` / `CalQL` plus offline-only `OfflineCQL` / `OfflineCalQL` entrypoints.
-- `WSRL(CalQL)` as the offline→online warm-start flow layer.
+- `CQL` / `CalQL` as standalone offline pretraining algorithms.
+- `WSRL` as the Cal-QL-based offline→online warm-start flow layer.
 - GPU-native replay buffers:
   - `TensorReplayBuffer` for Box observations.
   - `DictReplayBuffer` for `{rgb, depth, state, ...}` observations.

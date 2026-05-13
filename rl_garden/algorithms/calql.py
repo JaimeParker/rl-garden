@@ -10,7 +10,7 @@ from typing import Any
 
 import torch
 
-from rl_garden.algorithms.cql import CQL, OfflineCQL
+from rl_garden.algorithms.cql import CQL, _CQLRolloutTrainingShell
 from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
 
 
@@ -84,8 +84,16 @@ class CalQLCore:
         return torch.maximum(q_ood, mc_lower_bound), bound_rate
 
 
-class CalQL(CalQLCore, CQL):
-    """Online/off-policy CQL with MC-return lower bounds."""
+class _CalQLRolloutTrainingShell(CalQLCore, _CQLRolloutTrainingShell):
+    """Internal rollout/eval shell that wires ``CalQLCore`` into ``OffPolicyAlgorithm``.
+
+    .. warning::
+       **Do not instantiate this class directly.** It exists only to back
+       :class:`~rl_garden.algorithms.WSRL` by attaching the Cal-QL loss core
+       to an off-policy rollout/replay/eval loop. For standalone offline
+       Cal-QL pretraining use :class:`CalQL`. The shape and arguments of this
+       shell may change without notice.
+    """
 
     def __init__(
         self,
@@ -108,7 +116,7 @@ class CalQL(CalQLCore, CQL):
         self.use_calql = use_calql
 
 
-class OfflineCalQL(CalQLCore, OfflineCQL):
+class CalQL(CalQLCore, CQL):
     """Pure offline CQL with Cal-QL MC lower bounds."""
 
     def __init__(

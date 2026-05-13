@@ -263,12 +263,12 @@ The codebase now exposes CQL and Cal-QL as standalone algorithms as well as
 WSRL flow components. Use one of two paths:
 
 - **Standalone offline pretrain**: `examples/pretrain_offline.py --algorithm cql`
-  or `--algorithm calql` trains `OfflineCQL` / `OfflineCalQL` without
+  or `--algorithm calql` trains `CQL` / `CalQL` without
   constructing a ManiSkill env. `--algorithm wsrl-calql` builds the
-  WSRL-compatible `WSRL(CalQL)` pretrain path. This mirrors the upstream idea
+  WSRL-compatible Cal-QL pretrain path. This mirrors the upstream idea
   that CQL and Cal-QL can be trained independently while keeping the example
   extensible to future offline algorithms.
-- **WSRL offline→online**: `examples/train_wsrl.py` builds `WSRL(CalQL)`, runs
+- **WSRL offline→online**: `examples/train_wsrl.py` builds `WSRL`, runs
   offline updates, switches replay mode, then continues online interaction.
 
 The smoke command below uses the WSRL offline→online path.

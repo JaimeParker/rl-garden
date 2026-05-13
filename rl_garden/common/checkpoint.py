@@ -17,6 +17,22 @@ from rl_garden.buffers.dict_buffer import DictArray
 
 FORMAT_VERSION = 1
 
+# Map legacy algorithm class names (from checkpoints saved before the
+# CQL/CalQL rename) to their current canonical class. Keeps existing
+# pretrained checkpoints loadable after the public API moved from
+# ``OfflineCQL`` / ``OfflineCalQL`` to ``CQL`` / ``CalQL``.
+_ALGORITHM_CLASS_ALIASES: dict[str, str] = {
+    "OfflineCQL": "CQL",
+    "OfflineCalQL": "CalQL",
+}
+
+
+def _canonical_algorithm_class(name: Any) -> Any:
+    """Resolve legacy algorithm class names to their current canonical form."""
+    if isinstance(name, str):
+        return _ALGORITHM_CLASS_ALIASES.get(name, name)
+    return name
+
 
 def space_metadata(space: spaces.Space) -> dict[str, Any]:
     """Return stable metadata for compatibility checks."""
@@ -50,7 +66,8 @@ def validate_checkpoint_metadata(
             f"format_version mismatch: checkpoint has {checkpoint.get('format_version')}, "
             f"expected {FORMAT_VERSION}"
         )
-    if metadata.get("algorithm_class") != algorithm_class:
+    checkpoint_algorithm = _canonical_algorithm_class(metadata.get("algorithm_class"))
+    if checkpoint_algorithm != algorithm_class:
         errors.append(
             f"algorithm mismatch: checkpoint has {metadata.get('algorithm_class')!r}, "
             f"current agent is {algorithm_class!r}"

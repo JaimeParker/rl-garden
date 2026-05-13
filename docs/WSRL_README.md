@@ -14,8 +14,8 @@ WSRL enables efficient offline→online training:
 - **Online phase**: Fine-tune with SAC or CQL without retaining offline data
 
 Standalone offline training is also available:
-- **OfflineCQL**: Pure offline CQL pretraining from flat H5 datasets
-- **OfflineCalQL**: Pure offline Cal-QL pretraining with MC return lower bounds
+- **CQL**: Pure offline CQL pretraining from flat H5 datasets
+- **CalQL**: Pure offline Cal-QL pretraining with MC return lower bounds
 
 For the end-to-end PickCube reproduction workflow, including SAC checkpoint
 training, WSRL dataset generation, and offline-to-online launch commands, see
@@ -26,8 +26,7 @@ training, WSRL dataset generation, and offline-to-online launch commands, see
 ### ✅ Algorithms Implemented
 - **SAC / RGBDSAC**: Online SAC using the shared SACCore update path
 - **OfflineSAC**: Offline SAC scaffold over static replay buffers
-- **CQL / CalQL**: Online/off-policy CQL and Cal-QL algorithm classes
-- **OfflineCQL / OfflineCalQL**: Pure offline CQL and Cal-QL pretraining
+- **CQL / CalQL**: Pure offline CQL and Cal-QL pretraining algorithms
 - **WSRL**: State-based WSRL with CQL/Cal-QL
 - **WSRLRGBD**: Vision-based WSRL for RGB/RGBD observations
 
@@ -128,13 +127,13 @@ default. The script infers obs/action specs from the H5, constructs an
 `OfflineEnvSpec`, loads the dataset into the algorithm replay buffer, and runs
 `run_offline_pretraining()`.
 
-For WSRL-specific offline pretraining, use `--algorithm wsrl-calql`. It builds
-a `WSRL(CalQL)` agent directly and is useful when the checkpoint will be
-resumed by WSRL's offline→online flow:
+For WSRL-specific offline pretraining, use `--algorithm wsrl`. It builds a
+`WSRL` agent directly (Cal-QL by definition) and is useful when the checkpoint
+will be resumed by WSRL's offline→online flow:
 
 ```bash
 python examples/pretrain_offline.py \
-    --algorithm wsrl-calql \
+    --algorithm wsrl \
     --offline_dataset_path /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/robot_pretrain \
@@ -143,13 +142,15 @@ python examples/pretrain_offline.py \
     --use_calql --cql_alpha 5.0
 ```
 
-The WSRL-compatible mode writes
-`runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt` by default,
-which contains the policy, critic ensemble, target critic, optimizer state,
-and Lagrange multipliers — everything needed to resume.
+The WSRL mode writes
+`runs/robot_pretrain/checkpoints/wsrl_offline_pretrained.pt` by default, which
+contains the policy, critic ensemble, target critic, optimizer state, and
+Lagrange multipliers — everything needed to resume.
 
-`examples/pretrain_cql_offline.py` and `examples/pretrain_wsrl_offline.py`
-remain as thin compatibility wrappers for older commands.
+`--algorithm wsrl-calql` is a deprecated alias for `--algorithm wsrl`; it still
+works but emits a `DeprecationWarning`. `examples/pretrain_cql_offline.py` and
+`examples/pretrain_wsrl_offline.py` remain as thin compatibility wrappers for
+older commands.
 
 **Online fine-tune on a deployment machine** (which does have an env):
 
@@ -212,10 +213,10 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--online_use_cql_loss False`: Disable CQL loss for online phase (optional)
 
 ### Standalone Offline CQL/Cal-QL Control
-- `--algorithm cql`: Use `OfflineCQL` with a normal tensor replay buffer.
-- `--algorithm calql`: Use `OfflineCalQL` with an MC replay buffer and Cal-QL bounds.
-- `--algorithm wsrl-calql`: Build `WSRL(CalQL)` for checkpoints intended for
-  the WSRL offline→online flow.
+- `--algorithm cql`: Use `CQL` with a normal tensor replay buffer.
+- `--algorithm calql`: Use `CalQL` with an MC replay buffer and Cal-QL bounds.
+- `--algorithm wsrl`: Build `WSRL` for checkpoints intended for the WSRL
+  offline→online flow. `wsrl-calql` is accepted as a deprecated alias.
 - `--agent cql|calql`: Backward-compatible alias accepted by the CQL wrapper.
 - `--save_filename`: Override the default
   `<algorithm>_offline_pretrained.pt` checkpoint name.
@@ -251,7 +252,7 @@ and `_target_q` with `torch.compile(mode="default")`. First step pays a
 ```bash
 # Enable compile-based acceleration
 python examples/pretrain_offline.py \
-    --algorithm wsrl-calql \
+    --algorithm wsrl \
     --offline_dataset_path real_robot.h5 \
     --num_offline_steps 100000 \
     --batch_size 1024 \
@@ -320,7 +321,7 @@ agent.learn(total_timesteps=50_000)
 import numpy as np
 from gymnasium import spaces
 
-from rl_garden.algorithms import OfflineCalQL, OfflineEnvSpec
+from rl_garden.algorithms import CalQL, OfflineEnvSpec
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 
 
@@ -328,7 +329,7 @@ obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(OBS_DIM,), dtype=np.floa
 action_space = spaces.Box(low=-1.0, high=1.0, shape=(ACT_DIM,), dtype=np.float32)
 env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=1)
 
-agent = OfflineCalQL(
+agent = CalQL(
     env=env_spec,
     n_critics=10,
     critic_subsample_size=2,
@@ -341,7 +342,7 @@ load_maniskill_h5_to_replay_buffer(agent.replay_buffer, "real_robot.h5")
 agent.learn_offline(num_steps=200_000, save_filename="calql_offline_pretrained.pt")
 ```
 
-Use `OfflineCQL` instead of `OfflineCalQL` for pure CQL without MC-return
+Use `CQL` instead of `CalQL` for pure CQL without MC-return
 lower bounds. To resume on a deployment host with a real env, construct a
 compatible `WSRL`, `CalQL`, or `SAC`-family agent against the live env and call
 `agent.load(checkpoint_path)`.
@@ -395,15 +396,15 @@ agent.learn(total_timesteps=1_000_000)
 OffPolicyAlgorithm
 ├── SAC(SACCore)
 │   └── RGBDSAC
-└── CQL(CQLCore)
-    └── CalQL
+└── _CQLRolloutTrainingShell(CQLCore)
+    └── _CalQLRolloutTrainingShell
         └── WSRL
             └── WSRLRGBD
 
 OfflineRLAlgorithm
 ├── OfflineSAC(SACCore)
-└── OfflineCQL(CQLCore)
-    └── OfflineCalQL
+└── CQL(CQLCore)
+    └── CalQL
 ```
 
 ### Key Components

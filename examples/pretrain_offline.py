@@ -4,11 +4,15 @@ Use ``--algorithm`` to choose the offline algorithm:
 
     python examples/pretrain_offline.py --algorithm calql --offline_dataset_path demos/demo.h5
     python examples/pretrain_offline.py --algorithm cql --offline_dataset_path demos/demo.h5
-    python examples/pretrain_offline.py --algorithm wsrl-calql --offline_dataset_path demos/demo.h5
+    python examples/pretrain_offline.py --algorithm wsrl --offline_dataset_path demos/demo.h5
 
-``wsrl-calql`` is a compatibility mode for producing checkpoints intended to
-resume through WSRL's offline→online flow. Standalone offline training should
-prefer ``cql`` or ``calql``.
+``wsrl`` produces a WSRL agent (Cal-QL-based by design) whose checkpoint is
+intended to resume through WSRL's offline→online flow on a deployment machine.
+Standalone offline training should prefer ``cql`` or ``calql``.
+
+``wsrl-calql`` is a deprecated alias for ``wsrl`` kept for backward
+compatibility; selecting it prints a one-time warning and otherwise behaves
+identically.
 """
 from __future__ import annotations
 
@@ -19,8 +23,8 @@ import torch
 import tyro
 
 from rl_garden.algorithms import (
-    OfflineCalQL,
-    OfflineCQL,
+    CalQL,
+    CQL,
     OfflineEnvSpec,
     WSRL,
     infer_box_specs_from_h5,
@@ -34,7 +38,7 @@ from rl_garden.common.cli_args import (
     resolve_checkpoint_dir,
 )
 
-OfflinePretrainAgent: TypeAlias = OfflineCQL | OfflineCalQL | WSRL
+OfflinePretrainAgent: TypeAlias = CQL | CalQL | WSRL
 
 
 def _algorithm(args: OfflinePretrainArgs) -> str:
@@ -135,9 +139,9 @@ def build_offline_agent(
 ) -> OfflinePretrainAgent:
     common_kwargs = _cql_kwargs(args, env_spec, logger)
     if algorithm == "cql":
-        return OfflineCQL(**common_kwargs)
+        return CQL(**common_kwargs)
     if algorithm == "calql":
-        return OfflineCalQL(
+        return CalQL(
             **common_kwargs,
             use_calql=args.use_calql,
             calql_bound_random_actions=args.calql_bound_random_actions,
@@ -145,7 +149,7 @@ def build_offline_agent(
             sparse_negative_reward=args.sparse_negative_reward,
             success_threshold=args.success_threshold,
         )
-    if algorithm == "wsrl-calql":
+    if algorithm in ("wsrl", "wsrl-calql"):
         return WSRL(
             **_wsrl_kwargs(args, env_spec, logger),
             use_calql=args.use_calql,
@@ -174,8 +178,18 @@ def main(
         raise SystemExit("--offline_dataset_path is required for offline pretraining.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
+    if algorithm == "wsrl-calql":
+        import warnings as _warnings
+        _warnings.warn(
+            "--algorithm wsrl-calql is deprecated; use --algorithm wsrl. "
+            "Both produce identical WSRL agents (Cal-QL-based by definition). "
+            "The legacy alias still writes ``wsrl_calql_offline_pretrained.pt`` "
+            "for backward-compatible output paths.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     if algorithm == "cql" and args.sparse_reward_mc:
-        raise SystemExit("--sparse_reward_mc requires --algorithm calql or wsrl-calql.")
+        raise SystemExit("--sparse_reward_mc requires --algorithm calql or wsrl.")
     if args.buffer_device == "cuda" and not torch.cuda.is_available():
         print("[pretrain] CUDA not available; falling back to CPU buffer.")
         args.buffer_device = "cpu"
