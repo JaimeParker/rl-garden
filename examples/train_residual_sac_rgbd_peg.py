@@ -28,6 +28,10 @@ class Args(ResidualRGBDArgs):
     robot_uids: str = "panda_wristcam_gripper_closed"
     fix_peg_pose: bool = False
     fix_box: bool = True
+    # Peg env has base + hand cameras. Keep them as separate image keys so
+    # per-key ResNet encoders remain 3-channel and can load ImageNet weights.
+    per_camera_rgbd: bool = True
+    image_fusion_mode: str = "per_key"
 
 
 def main() -> None:
@@ -47,6 +51,7 @@ def main() -> None:
         fix_box=args.fix_box,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     eval_cfg = ManiSkillEnvConfig(
         env_id=args.env_id,
@@ -67,6 +72,7 @@ def main() -> None:
         save_video=args.capture_video,
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     run_residual_rgbd_training(
         args,

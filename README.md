@@ -212,7 +212,9 @@ scripts/train_sac_rgbd.sh --encoder resnet10     # RGB SAC, PickCube-v1
 scripts/train_sac_rgbd_peg.sh                    # RGB SAC, PegInsertionSidePegOnly-v1
 ```
 
-Residual SAC debug training:
+### Residual SAC
+
+Debug training:
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd.sh \
@@ -222,7 +224,7 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd.sh \
   --log_type tensorboard
 ```
 
-Peg-only residual SAC uses the peg-specific launcher. In non-debug mode the
+Peg-only training uses the peg-specific launcher. In non-debug mode the
 base policy defaults to ACT and loads `pretrained_models/act-peg-only.pt` by
 name:
 
@@ -235,7 +237,7 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd_peg.sh \
   --log_type tensorboard
 ```
 
-State-observation peg residual SAC is also available:
+State-observation peg training is also available:
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_state_peg.sh \
@@ -259,30 +261,6 @@ selected with `--policy act --ckpt-path <name-or-path>`; names resolve under
 adding it to the normalized base action.
 Design details are in
 [`docs/RESIDUAL_SAC.md`](docs/RESIDUAL_SAC.md).
-
-Shell launchers wrap `python examples/train_sac_*.py` with env-specific
-flag presets (`--env_id`, `--num_envs`, `--total_timesteps`, etc.) and
-logging environment variables (`RLG_LOG_TYPE`, `RLG_LOG_KEYWORDS`).
-Algorithm hyperparameters (`batch_size`, `utd`, learning rates, ...) live
-in `SACTrainingArgs` / `VisionSACTrainingArgs` and are not duplicated in
-the shell.
-
-Logging backend selection:
-
-```bash
-# Default: tensorboard
-scripts/train_sac_state.sh --log_type tensorboard
-
-# Weights & Biases (RGBD)
-scripts/train_sac_rgbd.sh \
-  --log_type wandb \
-  --wandb_project rl-garden \
-  --encoder resnet10 \
-  --log_keywords debug,pickcube
-
-# Stdout only (no tensorboard/wandb artifacts)
-scripts/train_sac_state.sh --log_type none
-```
 
 ## Reward Classifiers
 

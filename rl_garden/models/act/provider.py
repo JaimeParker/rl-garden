@@ -341,8 +341,43 @@ class ACTBaseActionProvider(nn.Module):
             )
         if spec.visual and not isinstance(observation_space, spaces.Dict):
             raise ValueError("Visual ACT checkpoint requires Dict observations.")
-        if spec.visual and "rgb" not in observation_space.spaces:
-            raise ValueError("Visual ACT checkpoint requires an 'rgb' observation key.")
+        if spec.visual and not cls._has_visual_keys(
+            observation_space, legacy_key="rgb", prefix="rgb_", channels=3
+        ):
+            raise ValueError(
+                "Visual ACT checkpoint requires an 'rgb' observation key or "
+                "per-camera 'rgb_<camera>' observation keys."
+            )
+
+    @staticmethod
+    def _is_image_space(
+        space: spaces.Space, channels: int, *, allow_stacked: bool = False
+    ) -> bool:
+        if not isinstance(space, spaces.Box) or len(space.shape) != 3:
+            return False
+        image_channels = int(space.shape[-1])
+        if allow_stacked:
+            return image_channels > 0 and image_channels % channels == 0
+        return image_channels == channels
+
+    @classmethod
+    def _has_visual_keys(
+        cls,
+        observation_space: spaces.Dict,
+        *,
+        legacy_key: str,
+        prefix: str,
+        channels: int,
+    ) -> bool:
+        legacy_space = observation_space.spaces.get(legacy_key)
+        if legacy_space is not None and cls._is_image_space(
+            legacy_space, channels, allow_stacked=True
+        ):
+            return True
+        return any(
+            key.startswith(prefix) and cls._is_image_space(space, channels)
+            for key, space in observation_space.spaces.items()
+        )
 
     def to(self, *args, **kwargs):  # type: ignore[override]
         module = super().to(*args, **kwargs)
@@ -397,6 +432,52 @@ class ACTBaseActionProvider(nn.Module):
             .contiguous()
         )
 
+    @staticmethod
+    def _per_camera_keys(obs: dict[str, torch.Tensor], prefix: str) -> tuple[str, ...]:
+        return tuple(sorted(key for key in obs.keys() if key.startswith(prefix)))
+
+    def _per_camera_images_to_bnc_hw(
+        self,
+        obs: dict[str, torch.Tensor],
+        *,
+        prefix: str,
+        channels_per_camera: int,
+    ) -> torch.Tensor:
+        keys = self._per_camera_keys(obs, prefix)
+        if not keys:
+            raise ValueError(
+                f"ACT visual observations require '{prefix}<camera>' keys when "
+                f"the channel-stacked key is absent."
+            )
+        images = []
+        for key in keys:
+            image = obs[key].to(self.device)
+            if image.ndim != 4 or int(image.shape[-1]) != channels_per_camera:
+                raise ValueError(
+                    f"ACT per-camera observation {key!r} must have shape "
+                    f"(B,H,W,{channels_per_camera}); got {tuple(image.shape)}."
+                )
+            images.append(image.permute(0, 3, 1, 2))
+        return torch.stack(images, dim=1).contiguous()
+
+    def _camera_group_to_bnc_hw(
+        self,
+        obs: dict[str, torch.Tensor],
+        *,
+        legacy_key: str,
+        prefix: str,
+        channels_per_camera: int,
+    ) -> torch.Tensor:
+        if legacy_key in obs:
+            return self._image_to_bnc_hw(
+                obs[legacy_key].to(self.device), channels_per_camera
+            )
+        return self._per_camera_images_to_bnc_hw(
+            obs,
+            prefix=prefix,
+            channels_per_camera=channels_per_camera,
+        )
+
     def _resize_camera_tensor(self, image: torch.Tensor) -> torch.Tensor:
         batch, num_cams, channels, height, width = image.shape
         if height == self.config.image_size and width == self.config.image_size:
@@ -413,7 +494,9 @@ class ACTBaseActionProvider(nn.Module):
         )
 
     def _prepare_visual_obs(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        rgb = self._image_to_bnc_hw(obs["rgb"].to(self.device), 3)
+        rgb = self._camera_group_to_bnc_hw(
+            obs, legacy_key="rgb", prefix="rgb_", channels_per_camera=3
+        )
         rgb = self._resize_camera_tensor(rgb.float() / 255.0)
         rgb = (rgb - self._rgb_mean) / self._rgb_std
 
@@ -423,9 +506,9 @@ class ACTBaseActionProvider(nn.Module):
             "rgb": rgb,
         }
         if self.config.include_depth:
-            if "depth" not in obs:
-                raise ValueError("ACT checkpoint expects depth observations.")
-            depth = self._image_to_bnc_hw(obs["depth"].to(self.device), 1)
+            depth = self._camera_group_to_bnc_hw(
+                obs, legacy_key="depth", prefix="depth_", channels_per_camera=1
+            )
             prepared["depth"] = self._resize_camera_tensor(depth.float())
         return prepared
 
