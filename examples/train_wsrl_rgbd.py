@@ -73,7 +73,7 @@ def _log_offline_metrics(
 ) -> None:
     other_metrics, q_metrics = _split_q_metrics(metrics)
     for key, value in other_metrics.items():
-        logger.add_scalar(f"offline_losses/{key}", value, step)
+        logger.add_scalar(f"losses/{key}", value, step)
     for key, value in q_metrics.items():
         logger.add_scalar(f"q/{key}", value, step)
 

@@ -62,6 +62,18 @@ def _metric_summary(metrics: dict[str, float]) -> str:
     return " ".join(f"{k}={v:.4f}" for k, v in metrics.items())
 
 
+def _log_offline_metrics(
+    logger: Logger,
+    metrics: dict[str, float],
+    step: int,
+) -> None:
+    other_metrics, q_metrics = _split_q_metrics(metrics)
+    for key, value in other_metrics.items():
+        logger.add_scalar(f"losses/{key}", value, step)
+    for key, value in q_metrics.items():
+        logger.add_scalar(f"q/{key}", value, step)
+
+
 def _offline_update_loop(
     agent: WSRL,
     steps: int,
@@ -83,7 +95,7 @@ def _offline_update_loop(
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            agent._log_update_metrics(losses, global_step)
+            _log_offline_metrics(logger, losses, global_step)
             offline_update_fps = (
                 interval_update_steps / interval_update_time
                 if interval_update_time > 0
