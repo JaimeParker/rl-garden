@@ -354,6 +354,19 @@ class SAC(SACCore, OffPolicyAlgorithm):
             sample_device=self.device,
         )
 
+    def _policy_action_space(self) -> spaces.Box:
+        return self.env.single_action_space
+
+    def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> SACPolicy:
+        return SACPolicy(
+            observation_space=self.env.single_observation_space,
+            action_space=self._policy_action_space(),
+            features_extractor=features_extractor,
+            net_arch=self.net_arch,
+            n_critics=self.n_critics,
+            critic_subsample_size=self.critic_subsample_size,
+        )
+
     def _actor_stop_gradient(self) -> bool:
         return self._is_dict_obs
 
@@ -395,14 +408,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
 
     def _setup_model(self) -> None:
         features_extractor = self._build_features_extractor()
-        self.policy = SACPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-        ).to(self.device)
+        self.policy = self._build_policy(features_extractor).to(self.device)
 
         self.q_optimizer = make_optimizer(
             list(self.policy.critic_and_encoder_parameters()),

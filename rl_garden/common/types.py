@@ -28,6 +28,14 @@ class ReplayBufferSample:
 
 
 @dataclass
+class ResidualReplayBufferSample(ReplayBufferSample):
+    """Replay buffer sample with normalized base actions for residual RL."""
+
+    base_actions: torch.Tensor
+    next_base_actions: torch.Tensor
+
+
+@dataclass
 class MCReplayBufferSample(ReplayBufferSample):
     """Replay buffer sample with Monte Carlo returns for Cal-QL."""
 

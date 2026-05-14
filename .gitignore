@@ -36,6 +36,10 @@ wandb/
 runs/
 data/
 .idea
+3rd_party/residual-rl/
+3rd_party/resfit/
+pretrained_models/*
+prompts/
 
 # 默认忽略模型权重文件
 *.pt

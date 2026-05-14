@@ -120,6 +120,7 @@ Before finishing code changes:
 
 - Keep `examples/train_sac_rgbd.py` generic for standard ManiSkill RGBD SAC. Put peg-specific defaults in `examples/train_sac_rgbd_peg.py`.
 - Prefer extending `ManiSkillEnvConfig` and `make_maniskill_env()` for shared env features rather than duplicating wrapper logic in examples.
+- Prefer inheritance and method overrides in subclasses over modifying parent classes. When a new algorithm/policy/encoder needs a behavior the base does not yet expose, first try to satisfy it by overriding existing hooks. Only add a hook to the parent when it is generic-shaped (no algorithm-specific name or concept in its signature) and has a no-op or trivially correct default. Algorithm-specific field names (e.g., `base_actions`, `mc_returns`) belong in the subclass, not in mixin signatures or `hasattr` branches in parents. When parent-side variability is unavoidable, prefer a class attribute (e.g., `_extra_batch_slice_keys: tuple[str, ...] = ()`) that subclasses override, over special-case branches in the parent.
 - Preserve CUDA-first behavior. Do not introduce CPU copies on the normal GPU path.
 - Keep replay buffer storage/sample device behavior explicit: `buffer_device` controls storage, and samples move to the algorithm device.
 - Use lazy imports for heavy ManiSkill/SAPIEN custom env dependencies so basic package import remains usable when optional simulator deps are absent.

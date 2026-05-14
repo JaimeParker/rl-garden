@@ -21,6 +21,12 @@ from rl_garden.common.utils import polyak_update
 class SACCore:
     """Mixin containing SAC-family update logic."""
 
+    # Extra batch fields beyond the SAC standard (obs/next_obs/actions/rewards/
+    # dones) that subclasses want carried through ``_slice_batch``. Subclasses
+    # override this tuple to declare algorithm-specific replay fields without
+    # touching ``_slice_batch`` itself.
+    _extra_batch_slice_keys: tuple[str, ...] = ()
+
     # --- hooks subclasses may override ---
 
     def _sample_train_batch(self, batch_size: int):
@@ -65,6 +71,22 @@ class SACCore:
             self.tau,
         )
 
+    def _actor_action_log_prob(
+        self,
+        obs,
+        *,
+        stop_gradient: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.policy.actor_action_log_prob(obs, stop_gradient=stop_gradient)
+
+    def _target_action_log_prob(
+        self, data
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self._actor_action_log_prob(data.next_obs, stop_gradient=False)
+
+    def _actor_loss_from_batch(self, data) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._actor_loss(data.obs)
+
     # --- SAC losses ---
 
     def _critic_forward(self, obs, actions, target: bool = False):
@@ -74,9 +96,7 @@ class SACCore:
     def _target_q(self, data) -> torch.Tensor:
         alpha = self._current_alpha().detach()
         with torch.no_grad():
-            next_action, next_log_prob, next_features = self.policy.actor_action_log_prob(
-                data.next_obs, stop_gradient=False
-            )
+            next_action, next_log_prob, next_features = self._target_action_log_prob(data)
             min_q_next = self.policy.min_q_value(
                 next_features,
                 next_action,
@@ -108,7 +128,7 @@ class SACCore:
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(
+        action, log_prob, features = self._actor_action_log_prob(
             obs, stop_gradient=self._actor_stop_gradient()
         )
         min_q = self.policy.min_q_value(features, action, subsample_size=None, target=False)
@@ -165,7 +185,7 @@ class SACCore:
                 info_accum.setdefault(key, []).append(value)
 
             if self._global_update % self.policy_frequency == 0:
-                actor_loss, log_prob_detached = self._actor_loss(data.obs)
+                actor_loss, log_prob_detached = self._actor_loss_from_batch(data)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self._clip_grad_norm(self.policy.actor_parameters())
@@ -231,7 +251,7 @@ class SACCore:
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
 
-        actor_loss, log_prob_detached = self._actor_loss(full_batch.obs)
+        actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self._clip_grad_norm(self.policy.actor_parameters())
@@ -262,8 +282,7 @@ class SACCore:
             out[key] = float(np.mean(values))
         return out
 
-    @staticmethod
-    def _slice_batch(batch: Any, start: int, size: int):
+    def _slice_batch(self, batch: Any, start: int, size: int):
         end = start + size
 
         def _slice(x):
@@ -282,4 +301,6 @@ class SACCore:
         }
         if hasattr(batch, "mc_returns"):
             kwargs["mc_returns"] = _slice(batch.mc_returns)
+        for key in self._extra_batch_slice_keys:
+            kwargs[key] = _slice(getattr(batch, key))
         return type(batch)(**kwargs)

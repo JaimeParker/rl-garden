@@ -121,6 +121,39 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 self._obs_to_policy_device(obs), deterministic=True
             )
 
+    def _on_env_reset(self, obs) -> None:
+        del obs
+
+    def _rollout_action(
+        self, obs, learning_has_started: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, Optional[dict[str, Any]]]:
+        if not learning_has_started:
+            actions = self._explore_action(obs)
+        else:
+            actions = self._policy_action(obs)
+        return actions, actions, None
+
+    def _replay_buffer_add_kwargs(
+        self,
+        action_context: Optional[dict[str, Any]],
+        obs,
+        next_obs,
+        real_next_obs,
+        infos,
+        need_final_obs: torch.Tensor,
+    ) -> dict[str, Any]:
+        del action_context, obs, next_obs, real_next_obs, infos, need_final_obs
+        return {}
+
+    def _post_rollout_step(
+        self,
+        action_context: Optional[dict[str, Any]],
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+        infos,
+    ) -> None:
+        del action_context, terminations, truncations, infos
+
     # --- bootstrap bookkeeping ---
 
     def _compute_done_masks(
@@ -243,6 +276,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
     def learn(self, total_timesteps: int) -> "OffPolicyAlgorithm":
         obs, _ = self.env.reset(seed=self.seed)
+        self._on_env_reset(obs)
         learning_has_started = False
         cumulative = defaultdict(float)
         global_steps_per_iteration = self.num_envs * self.steps_per_env
@@ -282,12 +316,13 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             rollout_episode_metrics: dict[str, list[float]] = defaultdict(list)
             for _ in range(self.steps_per_env):
                 self._global_step += self.num_envs
-                if not learning_has_started:
-                    actions = self._explore_action(obs)
-                else:
-                    actions = self._policy_action(obs)
+                actions, env_actions, action_context = self._rollout_action(
+                    obs, learning_has_started
+                )
 
-                next_obs, rewards, terminations, truncations, infos = self.env.step(actions)
+                next_obs, rewards, terminations, truncations, infos = self.env.step(
+                    env_actions
+                )
                 rollout_reward_sum += float(rewards.float().sum().item())
                 rollout_reward_count += int(rewards.numel())
                 real_next_obs = self._clone_obs(next_obs)
@@ -317,7 +352,18 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                             float(done_values.float().mean().item())
                         )
 
-                self.replay_buffer.add(obs, real_next_obs, actions, rewards, stop_bootstrap)
+                replay_kwargs = self._replay_buffer_add_kwargs(
+                    action_context,
+                    obs,
+                    next_obs,
+                    real_next_obs,
+                    infos,
+                    need_final_obs,
+                )
+                self.replay_buffer.add(
+                    obs, real_next_obs, actions, rewards, stop_bootstrap, **replay_kwargs
+                )
+                self._post_rollout_step(action_context, terminations, truncations, infos)
                 obs = next_obs
             rollout_time = time.perf_counter() - rollout_t
             cumulative["rollout_time"] += rollout_time
