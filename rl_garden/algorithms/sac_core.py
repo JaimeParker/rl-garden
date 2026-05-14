@@ -21,6 +21,12 @@ from rl_garden.common.utils import polyak_update
 class SACCore:
     """Mixin containing SAC-family update logic."""
 
+    # Extra batch fields beyond the SAC standard (obs/next_obs/actions/rewards/
+    # dones) that subclasses want carried through ``_slice_batch``. Subclasses
+    # override this tuple to declare algorithm-specific replay fields without
+    # touching ``_slice_batch`` itself.
+    _extra_batch_slice_keys: tuple[str, ...] = ()
+
     # --- hooks subclasses may override ---
 
     def _sample_train_batch(self, batch_size: int):
@@ -69,10 +75,8 @@ class SACCore:
         self,
         obs,
         *,
-        base_actions: Optional[torch.Tensor] = None,
         stop_gradient: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        del base_actions
         return self.policy.actor_action_log_prob(obs, stop_gradient=stop_gradient)
 
     def _target_action_log_prob(
@@ -278,8 +282,7 @@ class SACCore:
             out[key] = float(np.mean(values))
         return out
 
-    @staticmethod
-    def _slice_batch(batch: Any, start: int, size: int):
+    def _slice_batch(self, batch: Any, start: int, size: int):
         end = start + size
 
         def _slice(x):
@@ -298,8 +301,6 @@ class SACCore:
         }
         if hasattr(batch, "mc_returns"):
             kwargs["mc_returns"] = _slice(batch.mc_returns)
-        if hasattr(batch, "base_actions"):
-            kwargs["base_actions"] = _slice(batch.base_actions)
-        if hasattr(batch, "next_base_actions"):
-            kwargs["next_base_actions"] = _slice(batch.next_base_actions)
+        for key in self._extra_batch_slice_keys:
+            kwargs[key] = _slice(getattr(batch, key))
         return type(batch)(**kwargs)

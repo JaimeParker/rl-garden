@@ -25,6 +25,8 @@ class ResidualSAC(SAC):
     normalized coordinates used by residual learning.
     """
 
+    _extra_batch_slice_keys = ("base_actions", "next_base_actions")
+
     def __init__(
         self,
         env: Any,
@@ -132,15 +134,13 @@ class ResidualSAC(SAC):
         residual_actions = unit_residual_actions * self.residual_action_scale
         return torch.clamp(base_actions + residual_actions, -1.0, 1.0)
 
-    def _actor_action_log_prob(
+    def _residual_actor_action_log_prob(
         self,
         obs,
+        base_actions: torch.Tensor,
         *,
-        base_actions: Optional[torch.Tensor] = None,
         stop_gradient: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if base_actions is None:
-            raise ValueError("ResidualSAC requires base_actions for actor action sampling.")
         unit_residual, log_prob, features = self.policy.actor_action_log_prob(
             obs,
             base_actions=base_actions,
@@ -152,18 +152,14 @@ class ResidualSAC(SAC):
     def _target_action_log_prob(
         self, data
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self._actor_action_log_prob(
-            data.next_obs,
-            base_actions=data.next_base_actions,
-            stop_gradient=False,
+        return self._residual_actor_action_log_prob(
+            data.next_obs, data.next_base_actions, stop_gradient=False,
         )
 
     def _actor_loss_from_batch(self, data) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self._actor_action_log_prob(
-            data.obs,
-            base_actions=data.base_actions,
-            stop_gradient=self._actor_stop_gradient(),
+        action, log_prob, features = self._residual_actor_action_log_prob(
+            data.obs, data.base_actions, stop_gradient=self._actor_stop_gradient(),
         )
         min_q = self.policy.min_q_value(features, action, subsample_size=None, target=False)
         return (alpha * log_prob - min_q).mean(), log_prob.detach()
