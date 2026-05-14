@@ -18,7 +18,7 @@ from rl_garden.common.cli_args import (
     VisionSACTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
-    image_keys_from_obs_mode,
+    image_keys_from_env,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
 )
@@ -67,6 +67,7 @@ def main() -> None:
         camera_width=args.camera_width,
         camera_height=args.camera_height,
         render_mode=args.render_mode,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     eval_record_dir = resolve_eval_record_dir(args, run_name)
     eval_cfg = ManiSkillEnvConfig(
@@ -83,12 +84,13 @@ def main() -> None:
         save_video=args.capture_video,
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
 
     factory = image_encoder_factory_from_args(args)
-    image_keys = image_keys_from_obs_mode(args.obs_mode)
+    image_keys = image_keys_from_env(env, args)
 
     agent = SAC(
         env=env,

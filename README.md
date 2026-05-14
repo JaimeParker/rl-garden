@@ -132,6 +132,14 @@ Image fusion modes:
   `stack_channels` are effectively equivalent at the tensor level: both feed the
   same `B x 3 x H x W` image into a ResNet/CNN. Differences matter when there
   are multiple visual keys (for example `rgb+depth` or multi-camera RGB).
+- Multi-camera envs (e.g. `PegInsertionSidePegOnly-v1` with `base_camera` +
+  `hand_camera`): ManiSkill's default `FlattenRGBDObservationWrapper` channel-
+  stacks all cameras into one `rgb` key, which collapses `per_key` back into a
+  single 6-channel encoder and breaks 3-channel ImageNet pretrained weights.
+  Pass `--per_camera_rgbd` (or set `per_camera_rgbd=True` on
+  `ManiSkillEnvConfig`) to keep each camera as its own `rgb_<camera>` key. The
+  `train_sac_rgbd_peg.py` entrypoint enables this by default and pairs it with
+  `--image_fusion_mode per_key`.
 
 Recommended visual training settings:
 
@@ -177,6 +185,23 @@ leaving the pooling/bottleneck head trainable. For Dict observations, SAC calls
 the shared extractor with `stop_gradient=True` on actor updates, so image
 encodings do not receive actor-loss gradients. Critic updates call the extractor
 with `stop_gradient=False`, so the image encoder/head is updated by critic loss.
+
+`ResNetEncoder` uses its own parameter naming (`stem_conv` / `stem_norm` /
+`blocks.<i>.{conv,norm,proj}*`), so torchvision-style checkpoints
+(`conv1`, `bn1`, `layer<N>.<block>.bn1/2`, `downsample.0/1`, ...) need to be
+re-keyed before `--pretrained_weights` can load them. Run the conversion once:
+
+```bash
+python scripts/convert_resnet_checkpoint.py \
+  --input pretrained_models/resnet10_pretrained.pt \
+  --output pretrained_models/resnet10_pretrained_converted.pt \
+  --arch resnet10
+```
+
+Then pass the converted name (without the `.pt` suffix) via
+`--pretrained_weights resnet10_pretrained_converted`. The script drops the
+ImageNet `fc.*` classification head, which is intentional — only backbone
+weights are loaded.
 
 Shell launchers:
 

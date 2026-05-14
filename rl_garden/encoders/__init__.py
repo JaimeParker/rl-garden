@@ -6,6 +6,7 @@ from rl_garden.encoders.combined import (
     ImageEncoderFactory,
     ProprioEncoder,
     default_image_encoder_factory,
+    discover_image_keys,
 )
 from rl_garden.encoders.film import FiLM
 from rl_garden.encoders.flatten import FlattenExtractor
@@ -29,5 +30,6 @@ __all__ = [
     "SpatialLearnedEmbeddings",
     "SpatialSoftmax",
     "default_image_encoder_factory",
+    "discover_image_keys",
     "resnet_encoder_factory",
 ]

@@ -72,6 +72,10 @@ class VisionArgs:
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
+    # Keep each camera as its own ``rgb_<cam>`` / ``depth_<cam>`` key instead of
+    # channel-stacking. Required for multi-camera envs (e.g. peg) when each
+    # camera should feed an independent encoder under ``per_key`` fusion.
+    per_camera_rgbd: bool = False
 
 
 @dataclass
@@ -329,3 +333,18 @@ def image_encoder_factory_from_args(args: VisionArgs):
 
 def image_keys_from_obs_mode(obs_mode: str) -> tuple[str, ...]:
     return ("rgb",) if obs_mode == "rgb" else ("rgb", "depth")
+
+
+def image_keys_from_env(env: Any, args: VisionArgs) -> tuple[str, ...]:
+    """Resolve image keys for ``CombinedExtractor`` from the built env.
+
+    When ``args.per_camera_rgbd`` is set the env emits one ``rgb_<cam>`` (and
+    optionally ``depth_<cam>``) key per camera; we discover them from the
+    observation space. Otherwise we fall back to the single-key default that
+    matches ``FlattenRGBDObservationWrapper``.
+    """
+    if args.per_camera_rgbd:
+        from rl_garden.encoders import discover_image_keys
+
+        return discover_image_keys(env.single_observation_space)
+    return image_keys_from_obs_mode(args.obs_mode)
