@@ -237,3 +237,22 @@ class CombinedExtractor(BaseFeaturesExtractor):
 
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.extract(obs, stop_gradient=False)
+
+
+def discover_image_keys(observation_space: spaces.Dict) -> tuple[str, ...]:
+    """Return all keys in ``observation_space`` whose names start with ``rgb``
+    or ``depth``.
+
+    RGB keys come before depth keys; within each group, keys are sorted
+    alphabetically for determinism. Used by per-camera training entrypoints
+    (e.g. peg) to discover ``rgb_<cam>`` / ``depth_<cam>`` keys produced by
+    :class:`PerCameraRGBDWrapper`.
+    """
+    if not isinstance(observation_space, spaces.Dict):
+        raise TypeError(
+            "discover_image_keys expects a Dict observation space, got "
+            f"{type(observation_space).__name__}"
+        )
+    rgb_keys = sorted(k for k in observation_space.spaces if k.startswith("rgb"))
+    depth_keys = sorted(k for k in observation_space.spaces if k.startswith("depth"))
+    return tuple(rgb_keys + depth_keys)

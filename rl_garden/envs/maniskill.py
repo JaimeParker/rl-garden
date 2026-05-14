@@ -39,6 +39,11 @@ class ManiSkillEnvConfig:
     record_metrics: bool = True
     reward_scale: float = 1.0
     reward_bias: float = 0.0
+    # When True, keep each camera as its own ``rgb_<cam>`` / ``depth_<cam>`` key
+    # instead of channel-stacking all cameras into a single ``rgb`` / ``depth``
+    # tensor. Required for multi-camera envs (e.g. peg) when each camera should
+    # feed an independent encoder under ``fusion_mode="per_key"``.
+    per_camera_rgbd: bool = False
     # Recording
     record_dir: Optional[str] = None
     save_video: bool = False
@@ -103,12 +108,22 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
 
     # RGBD dict -> flat {rgb(/depth), state} dict
     if _is_visual_obs_mode(cfg.obs_mode):
-        env = FlattenRGBDObservationWrapper(
-            env,
-            rgb=("rgb" in cfg.obs_mode),
-            depth=("depth" in cfg.obs_mode),
-            state=cfg.include_state,
-        )
+        if cfg.per_camera_rgbd:
+            from rl_garden.envs.wrappers import PerCameraRGBDWrapper
+
+            env = PerCameraRGBDWrapper(
+                env,
+                rgb=("rgb" in cfg.obs_mode),
+                depth=("depth" in cfg.obs_mode),
+                state=cfg.include_state,
+            )
+        else:
+            env = FlattenRGBDObservationWrapper(
+                env,
+                rgb=("rgb" in cfg.obs_mode),
+                depth=("depth" in cfg.obs_mode),
+                state=cfg.include_state,
+            )
 
     if isinstance(env.action_space, gym.spaces.Dict):
         env = FlattenActionSpaceWrapper(env)

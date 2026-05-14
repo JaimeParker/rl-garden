@@ -157,6 +157,8 @@ Before finishing code changes:
 
 `PegInsertionSidePegOnly-v1` is vendored from Residual_RL into `rl_garden/envs/custom/`. It depends on custom Panda wrist-camera/fixed-gripper agents and custom controller configs, also vendored under the same package.
 
+The peg env registers two cameras (`base_camera` + `hand_camera`). To avoid ManiSkill's default channel-stacked single `rgb` key, `examples/train_sac_rgbd_peg.py` enables `per_camera_rgbd=True` and `image_fusion_mode="per_key"` so each camera gets its own `rgb_<camera>` key and its own 3-channel encoder. This is what makes ResNet + ImageNet pretrained weights load without channel-shape mismatch.
+
 The generic RGBD trainer should remain independent of this env. Use:
 
 ```bash

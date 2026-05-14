@@ -18,7 +18,7 @@ from rl_garden.common.cli_args import (
     VisionSACTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
-    image_keys_from_obs_mode,
+    image_keys_from_env,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
 )
@@ -35,6 +35,11 @@ class Args(VisionSACTrainingArgs):
     robot_uids: str = "panda_wristcam_gripper_closed_wo_norm"
     fix_peg_pose: bool = False
     fix_box: bool = True
+    # Peg env has two cameras (base + hand): emit them as separate keys and
+    # encode independently under ``per_key`` so each gets a 3-channel ResNet
+    # that can load ImageNet pretrained weights without shape mismatch.
+    per_camera_rgbd: bool = True
+    image_fusion_mode: str = "per_key"
 
 
 def main() -> None:
@@ -80,6 +85,7 @@ def main() -> None:
         fix_box=args.fix_box,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     eval_cfg = ManiSkillEnvConfig(
         env_id=args.env_id,
@@ -101,12 +107,13 @@ def main() -> None:
         save_video=args.capture_video,
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
 
     factory = image_encoder_factory_from_args(args)
-    image_keys = image_keys_from_obs_mode(args.obs_mode)
+    image_keys = image_keys_from_env(env, args)
 
     agent = SAC(
         env=env,
