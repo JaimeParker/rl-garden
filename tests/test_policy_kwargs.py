@@ -319,3 +319,45 @@ def test_sac_dict_checkpoint_metadata_includes_image_fields():
     meta = agent._checkpoint_metadata()
     assert meta["image_keys"] == ("rgb",)
     assert meta["use_proprio"] is True
+
+
+def _multi_camera_env() -> DummyVecEnv:
+    obs_space = spaces.Dict(
+        {
+            "rgb_base_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_hand_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+        }
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    return DummyVecEnv(obs_space, act_space)
+
+
+def test_sac_per_camera_keys_build_separate_encoders():
+    agent = SAC(
+        env=_multi_camera_env(),
+        **_agent_kwargs(),
+        image_keys=("rgb_base_camera", "rgb_hand_camera"),
+        image_fusion_mode="per_key",
+    )
+    ext = agent.policy.features_extractor
+    assert isinstance(ext, CombinedExtractor)
+    assert set(ext.image_encoders.keys()) == {"rgb_base_camera", "rgb_hand_camera"}
+    for enc in ext.image_encoders.values():
+        # Each per-camera encoder is built from a 3-channel (C, H, W) Box.
+        assert enc._observation_space.shape[0] == 3
+
+
+def test_discover_image_keys_orders_rgb_before_depth():
+    from rl_garden.encoders import discover_image_keys
+
+    obs_space = spaces.Dict(
+        {
+            "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+            "rgb_hand_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_base_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "depth_base_camera": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
+        }
+    )
+    keys = discover_image_keys(obs_space)
+    assert keys == ("rgb_base_camera", "rgb_hand_camera", "depth_base_camera")
