@@ -10,6 +10,7 @@ from rl_garden.algorithms.offline import (
 )
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
+from rl_garden.algorithms.residual import ResidualSAC
 from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.wsrl import WSRL
 from rl_garden.algorithms.wsrl_rgbd import WSRLRGBD
@@ -23,6 +24,7 @@ __all__ = [
     "OfflineRLAlgorithm",
     "OfflineSAC",
     "OffPolicyAlgorithm",
+    "ResidualSAC",
     "SAC",
     "WSRL",
     "WSRLRGBD",

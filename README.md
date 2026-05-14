@@ -187,6 +187,54 @@ scripts/train_sac_rgbd.sh --encoder resnet10     # RGB SAC, PickCube-v1
 scripts/train_sac_rgbd_peg.sh                    # RGB SAC, PegInsertionSidePegOnly-v1
 ```
 
+Residual SAC debug training:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd.sh \
+  --control_mode pd_ee_twist \
+  --residual-action-scale 1 \
+  --debug \
+  --log_type tensorboard
+```
+
+Peg-only residual SAC uses the peg-specific launcher. In non-debug mode the
+base policy defaults to ACT and loads `pretrained_models/act-peg-only.pt` by
+name:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd_peg.sh \
+  --control_mode pd_ee_twist \
+  --residual-action-scale 1 \
+  --policy act \
+  --ckpt-path act-peg-only \
+  --log_type tensorboard
+```
+
+State-observation peg residual SAC is also available:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_state_peg.sh \
+  --control_mode pd_ee_twist \
+  --residual-action-scale 1 \
+  --policy act \
+  --ckpt-path act-peg-only \
+  --log_type tensorboard
+```
+
+`ResidualSAC` follows the resfit action convention: replay/critic actions are
+normalized to `[-1, 1]`, while the env receives raw actions via `ActionScaler`.
+In `--debug` mode the base-action provider returns all-zero raw actions, which
+is useful for testing the residual rollout/update path. ACT checkpoints are
+selected with `--policy act --ckpt-path <name-or-path>`; names resolve under
+`pretrained_models/`, so `--ckpt-path act-peg-only` loads
+`pretrained_models/act-peg-only.pt`. The generic launcher mirrors
+`train_sac_rgbd.py`; peg-only kwargs such as `--fix_box`, `--fix_peg_pose`,
+`--robot_uids`, and `--reward_mode` live only in the peg residual entrypoints.
+`--residual-action-scale` multiplies the actor's unit residual output before
+adding it to the normalized base action.
+Design details are in
+[`docs/RESIDUAL_SAC.md`](docs/RESIDUAL_SAC.md).
+
 Shell launchers wrap `python examples/train_sac_*.py` with env-specific
 flag presets (`--env_id`, `--num_envs`, `--total_timesteps`, etc.) and
 logging environment variables (`RLG_LOG_TYPE`, `RLG_LOG_KEYWORDS`).

@@ -65,6 +65,24 @@ class SACCore:
             self.tau,
         )
 
+    def _actor_action_log_prob(
+        self,
+        obs,
+        *,
+        base_actions: Optional[torch.Tensor] = None,
+        stop_gradient: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        del base_actions
+        return self.policy.actor_action_log_prob(obs, stop_gradient=stop_gradient)
+
+    def _target_action_log_prob(
+        self, data
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self._actor_action_log_prob(data.next_obs, stop_gradient=False)
+
+    def _actor_loss_from_batch(self, data) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._actor_loss(data.obs)
+
     # --- SAC losses ---
 
     def _critic_forward(self, obs, actions, target: bool = False):
@@ -74,9 +92,7 @@ class SACCore:
     def _target_q(self, data) -> torch.Tensor:
         alpha = self._current_alpha().detach()
         with torch.no_grad():
-            next_action, next_log_prob, next_features = self.policy.actor_action_log_prob(
-                data.next_obs, stop_gradient=False
-            )
+            next_action, next_log_prob, next_features = self._target_action_log_prob(data)
             min_q_next = self.policy.min_q_value(
                 next_features,
                 next_action,
@@ -108,7 +124,7 @@ class SACCore:
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(
+        action, log_prob, features = self._actor_action_log_prob(
             obs, stop_gradient=self._actor_stop_gradient()
         )
         min_q = self.policy.min_q_value(features, action, subsample_size=None, target=False)
@@ -165,7 +181,7 @@ class SACCore:
                 info_accum.setdefault(key, []).append(value)
 
             if self._global_update % self.policy_frequency == 0:
-                actor_loss, log_prob_detached = self._actor_loss(data.obs)
+                actor_loss, log_prob_detached = self._actor_loss_from_batch(data)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self._clip_grad_norm(self.policy.actor_parameters())
@@ -231,7 +247,7 @@ class SACCore:
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
 
-        actor_loss, log_prob_detached = self._actor_loss(full_batch.obs)
+        actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self._clip_grad_norm(self.policy.actor_parameters())
@@ -282,4 +298,8 @@ class SACCore:
         }
         if hasattr(batch, "mc_returns"):
             kwargs["mc_returns"] = _slice(batch.mc_returns)
+        if hasattr(batch, "base_actions"):
+            kwargs["base_actions"] = _slice(batch.base_actions)
+        if hasattr(batch, "next_base_actions"):
+            kwargs["next_base_actions"] = _slice(batch.next_base_actions)
         return type(batch)(**kwargs)

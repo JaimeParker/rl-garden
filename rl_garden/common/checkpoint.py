@@ -187,6 +187,10 @@ def replay_buffer_state_dict(buffer: BaseReplayBuffer) -> dict[str, Any]:
         "rewards": buffer.rewards,
         "dones": buffer.dones,
     }
+    if hasattr(buffer, "base_actions"):
+        state["base_actions"] = buffer.base_actions
+    if hasattr(buffer, "next_base_actions"):
+        state["next_base_actions"] = buffer.next_base_actions
     if hasattr(buffer, "gamma"):
         state["gamma"] = float(buffer.gamma)
     if hasattr(buffer, "_mc_table"):
@@ -234,6 +238,14 @@ def load_replay_buffer_state_dict(
     buffer.actions = state["actions"].to(storage_device)
     buffer.rewards = state["rewards"].to(storage_device)
     buffer.dones = state["dones"].to(storage_device)
+    for key in ("base_actions", "next_base_actions"):
+        if not hasattr(buffer, key):
+            continue
+        if key not in state:
+            if strict:
+                raise ValueError(f"Replay buffer checkpoint is missing {key!r}.")
+            continue
+        setattr(buffer, key, state[key].to(storage_device))
     buffer.sample_device = torch.device(buffer.sample_device)
 
     if hasattr(buffer, "gamma") and "gamma" in state:
