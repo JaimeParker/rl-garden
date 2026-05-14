@@ -261,6 +261,13 @@ class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
     action_high: float = 1.0
     spec_num_envs: int = 1
 
+    # --- offline eval (optional) ---
+    env_id: Optional[str] = None
+    num_eval_envs: int = 1
+    control_mode: str = "pd_joint_delta_pos"
+    sim_backend: str = "gpu"
+    render_backend: str = "gpu"
+
 
 CQLTrainingArgs = OfflinePretrainArgs
 

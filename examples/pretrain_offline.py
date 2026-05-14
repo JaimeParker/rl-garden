@@ -37,6 +37,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     resolve_checkpoint_dir,
 )
+from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
 OfflinePretrainAgent: TypeAlias = CQL | CalQL | WSRL
 
@@ -246,6 +247,23 @@ def main(
         if args.std_log:
             print(f"[pretrain] resumed_from={args.load_checkpoint}", flush=True)
 
+    # --- setup optional eval env ---
+    eval_env = None
+    if args.env_id is not None:
+        eval_env = make_maniskill_env(
+            ManiSkillEnvConfig(
+                env_id=args.env_id,
+                num_envs=args.num_eval_envs,
+                control_mode=args.control_mode,
+                sim_backend=args.sim_backend,
+                render_backend=args.render_backend,
+                reconfiguration_freq=1,
+            )
+        )
+        agent.eval_env = eval_env
+        agent.eval_freq = args.eval_freq
+        agent.num_eval_steps = args.num_eval_steps
+
     run_offline_pretraining(
         agent,
         num_steps=args.num_offline_steps,
@@ -256,8 +274,12 @@ def main(
         save_final_checkpoint=args.save_final_checkpoint,
         log_freq=args.log_freq,
         std_log=args.std_log,
+        eval_freq=agent.eval_freq if eval_env is not None else 0,
         desc=f"{algorithm}-offline",
     )
+
+    if eval_env is not None:
+        eval_env.close()
     logger.close()
 
 
