@@ -41,45 +41,14 @@ class Args(VisionWSRLTrainingArgs):
     pass
 
 
-_Q_METRIC_LABELS = {
-    "predicted_q": "predicted",
-    "target_q": "target",
-    "cql_ood_values": "cql_ood",
-    "cql_q_diff": "cql_diff",
-}
-
-
-def _split_q_metrics(metrics: dict[str, float]) -> tuple[dict[str, float], dict[str, float]]:
-    q_metrics: dict[str, float] = {}
-    other_metrics: dict[str, float] = {}
-    for key, value in metrics.items():
-        if not isinstance(value, (int, float)):
-            continue
-        if key in _Q_METRIC_LABELS:
-            q_metrics[_Q_METRIC_LABELS[key]] = float(value)
-        else:
-            other_metrics[key] = float(value)
-    return other_metrics, q_metrics
-
-
-def _metric_summary(metrics: dict[str, float]) -> str:
-    return " ".join(f"{k}={v:.4f}" for k, v in metrics.items())
-
-
-def _log_offline_metrics(
-    logger: Logger,
-    metrics: dict[str, float],
-    step: int,
-) -> None:
-    other_metrics, q_metrics = _split_q_metrics(metrics)
-    for key, value in other_metrics.items():
-        logger.add_scalar(f"losses/{key}", value, step)
-    for key, value in q_metrics.items():
-        logger.add_scalar(f"q/{key}", value, step)
-
-
 def _offline_update_loop(
-    agent: WSRLRGBD, steps: int, logger: Logger, log_freq: int, std_log: bool
+    agent: WSRLRGBD, 
+    steps: int, 
+    logger: Logger, 
+    log_freq: int, 
+    std_log: bool,
+    *,
+    start_step: int = 0,
 ) -> None:
     gradient_steps = (
         int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
@@ -92,7 +61,7 @@ def _offline_update_loop(
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            _log_offline_metrics(logger, losses, step + 1)
+            logger.log_offline_metrics(losses, step + 1)
             offline_update_fps = (
                 interval_update_steps / interval_update_time
                 if interval_update_time > 0
@@ -102,9 +71,7 @@ def _offline_update_loop(
             logger.add_scalar("time/offline_update_fps", offline_update_fps, step + 1)
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
-                other_metrics, q_metrics = _split_q_metrics(losses)
-                loss_summary = _metric_summary(other_metrics)
-                q_summary = _metric_summary(q_metrics)
+                loss_summary, q_summary = logger.format_offline_metrics(losses)
                 q_part = f" q={q_summary}" if q_summary else ""
                 print(
                     "[offline] "

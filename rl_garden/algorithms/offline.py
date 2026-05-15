@@ -182,8 +182,7 @@ class OfflineRLAlgorithm(BaseAlgorithm):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
             return
-        for key, value in metrics.items():
-            self.logger.add_scalar(f"losses/{key}", value, step)
+        self.logger.log_offline_metrics(metrics, step)
 
 
 def infer_box_specs_from_h5(
@@ -250,8 +249,7 @@ def _log_update_metrics(agent: Any, metrics: dict[str, float], step: int) -> Non
     logger = getattr(agent, "logger", None)
     if logger is None:
         return
-    for key, value in metrics.items():
-        logger.add_scalar(f"losses/{key}", value, step)
+    logger.log_offline_metrics(metrics, step)
 
 
 def _log_eval_stdout(agent: Any, metrics: dict[str, float], step: int) -> None:

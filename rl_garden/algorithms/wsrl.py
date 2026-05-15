@@ -264,37 +264,16 @@ class WSRL(_CalQLRolloutTrainingShell):
 
     @staticmethod
     def _update_metric_tags(metrics: dict[str, float]) -> dict[str, float]:
+        """Map raw metric keys to namespaced paths using Logger's mapping."""
         tagged: dict[str, float] = {}
-        loss_keys = {
-            "critic_loss",
-            "actor_loss",
-            "td_loss",
-            "cql_loss",
-            "alpha_loss",
-            "cql_alpha_loss",
-        }
-        for key, value in metrics.items():
-            if key in loss_keys:
-                tagged[f"losses/{key}"] = value
-            elif key == "predicted_q":
-                tagged["q/predicted"] = value
-            elif key == "target_q":
-                tagged["q/target"] = value
-            elif key == "cql_ood_values":
-                tagged["q/cql_ood"] = value
-            elif key == "cql_q_diff":
-                tagged["q/cql_diff"] = value
-            elif key == "cql_alpha":
-                tagged["cql/alpha"] = value
-            elif key == "calql_bound_rate":
-                tagged["cql/bound_rate"] = value
-            elif key == "alpha":
-                tagged["entropy/alpha"] = value
-            elif key == "utd_ratio":
-                tagged["train/utd_ratio"] = value
-            else:
-                tagged[f"losses/{key}"] = value
+        namespaces = Logger.OFFLINE_METRIC_NAMESPACES
 
+        for key, value in metrics.items():
+            # Use explicit mapping or default to losses namespace
+            full_path = namespaces.get(key, f"losses/{key}")
+            tagged[full_path] = value
+
+        # Derived metric: TD RMSE from TD loss
         if "td_loss" in metrics:
             tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
         return tagged
