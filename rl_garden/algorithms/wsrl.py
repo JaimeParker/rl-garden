@@ -266,7 +266,7 @@ class WSRL(_CalQLRolloutTrainingShell):
     def _update_metric_tags(metrics: dict[str, float]) -> dict[str, float]:
         """Map raw metric keys to namespaced paths using Logger's mapping."""
         tagged: dict[str, float] = {}
-        namespaces = Logger.OFFLINE_METRIC_NAMESPACES
+        namespaces = Logger.METRIC_NAMESPACES
 
         for key, value in metrics.items():
             # Use explicit mapping or default to losses namespace

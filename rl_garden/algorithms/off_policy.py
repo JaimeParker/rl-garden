@@ -101,7 +101,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
             return
-        self.logger.log_offline_metrics(metrics, step)
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"losses/{key}", value, step)
 
     def _explore_action(self, obs) -> torch.Tensor:
         """Random uniform action in [-1, 1] across all envs. Used pre-learning."""

@@ -52,6 +52,28 @@ class BaseAlgorithm(ABC):
     @abstractmethod
     def learn(self, total_timesteps: int) -> "BaseAlgorithm": ...
 
+    def _obs_to_policy_device(self, obs):
+        """Move CPU-backed env observations to the policy device for inference.
+
+        GPU ManiSkill envs already return tensors on ``self.device`` and this is
+        a no-op. This fallback exists for CPU simulator backends such as
+        ``physx_cpu``; model training and replay sampling remain CUDA-first.
+        """
+        if isinstance(obs, dict):
+            return {
+                k: v if v.device == self.device else v.to(self.device)
+                for k, v in obs.items()
+            }
+        if obs.device == self.device:
+            return obs
+        return obs.to(self.device)
+
+    def _eval_action(self, obs) -> torch.Tensor:
+        with torch.no_grad():
+            return self.policy.predict(
+                self._obs_to_policy_device(obs), deterministic=True
+            )
+
     # --- checkpointing ---
 
     def _optimizer_names(self) -> tuple[str, ...]:

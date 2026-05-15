@@ -114,10 +114,10 @@ class Logger:
         elif self.writer is not None:
             self.writer.add_text(tag, str(value))
 
-    # --- Offline RL logging utilities ---
+    # --- RL metric logging utilities ---
 
-    # Explicit namespace mapping for offline RL metrics
-    OFFLINE_METRIC_NAMESPACES = {
+    # Explicit namespace mapping for RL training metrics (shared by online and offline)
+    METRIC_NAMESPACES = {
         # Q-value metrics
         "predicted_q": "q/predicted",
         "target_q": "q/target",
@@ -139,7 +139,7 @@ class Logger:
         "utd_ratio": "train/utd_ratio",
     }
 
-    def log_offline_metrics(
+    def log_metrics(
         self,
         metrics: dict[str, float],
         step: int,
@@ -147,7 +147,7 @@ class Logger:
         metric_namespaces: dict[str, str] | None = None,
         default_namespace: str = "losses",
     ) -> None:
-        """Log offline RL training metrics with explicit namespace mapping.
+        """Log RL training metrics with explicit namespace mapping.
 
         Each metric is logged to its explicitly defined namespace path.
         Unknown metrics are logged to the default namespace.
@@ -157,11 +157,11 @@ class Logger:
             step: Global step for logging.
             metric_namespaces: Mapping from metric keys to full namespace paths.
                 Example: {"predicted_q": "q/predicted", "actor_loss": "losses/actor_loss"}
-                If None, uses Logger.OFFLINE_METRIC_NAMESPACES.
+                If None, uses Logger.METRIC_NAMESPACES.
             default_namespace: Namespace prefix for unmapped metrics (default: "losses").
         """
         if metric_namespaces is None:
-            metric_namespaces = self.OFFLINE_METRIC_NAMESPACES
+            metric_namespaces = self.METRIC_NAMESPACES
 
         for key, value in metrics.items():
             if not isinstance(value, (int, float)):
@@ -171,25 +171,25 @@ class Logger:
             self.add_scalar(full_path, value, step)
 
     @staticmethod
-    def format_offline_metrics(
+    def format_metrics(
         metrics: dict[str, float],
         *,
         metric_namespaces: dict[str, str] | None = None,
     ) -> tuple[str, str]:
-        """Format offline metrics for console output.
+        """Format training metrics for console output.
 
         Separates metrics into loss and Q-value groups based on their namespace.
 
         Args:
             metrics: Raw metric dict from training.
             metric_namespaces: Mapping from metric keys to full namespace paths.
-                If None, uses Logger.OFFLINE_METRIC_NAMESPACES.
+                If None, uses Logger.METRIC_NAMESPACES.
 
         Returns:
             (loss_summary, q_summary) as formatted strings.
         """
         if metric_namespaces is None:
-            metric_namespaces = Logger.OFFLINE_METRIC_NAMESPACES
+            metric_namespaces = Logger.METRIC_NAMESPACES
 
         loss_parts: list[str] = []
         q_parts: list[str] = []

@@ -61,7 +61,7 @@ def _offline_update_loop(
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            logger.log_offline_metrics(losses, step + 1)
+            logger.log_metrics(losses, step + 1)
             offline_update_fps = (
                 interval_update_steps / interval_update_time
                 if interval_update_time > 0
@@ -71,7 +71,7 @@ def _offline_update_loop(
             logger.add_scalar("time/offline_update_fps", offline_update_fps, step + 1)
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
-                loss_summary, q_summary = logger.format_offline_metrics(losses)
+                loss_summary, q_summary = logger.format_metrics(losses)
                 q_part = f" q={q_summary}" if q_summary else ""
                 print(
                     "[offline] "

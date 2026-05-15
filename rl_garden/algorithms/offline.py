@@ -77,12 +77,13 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         log_freq: int = 1_000,
         eval_freq: int = 0,
         num_eval_steps: int = 50,
+        eval_env: Optional[Any] = None,
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
     ) -> None:
-        super().__init__(env=env, eval_env=None, seed=seed, device=device, logger=logger)
+        super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
         self.buffer_size = buffer_size
         self.buffer_device = buffer_device
         self.batch_size = batch_size
@@ -128,23 +129,6 @@ class OfflineRLAlgorithm(BaseAlgorithm):
 
     # --- eval ---
 
-    def _obs_to_policy_device(self, obs):
-        """Move CPU-backed env observations to the policy device for inference."""
-        if isinstance(obs, dict):
-            return {
-                k: v if v.device == self.device else v.to(self.device)
-                for k, v in obs.items()
-            }
-        if obs.device == self.device:
-            return obs
-        return obs.to(self.device)
-
-    def _eval_action(self, obs) -> torch.Tensor:
-        with torch.no_grad():
-            return self.policy.predict(
-                self._obs_to_policy_device(obs), deterministic=True
-            )
-
     def _evaluate(self) -> dict[str, float]:
         if self.eval_env is None:
             return {}
@@ -182,7 +166,7 @@ class OfflineRLAlgorithm(BaseAlgorithm):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
             return
-        self.logger.log_offline_metrics(metrics, step)
+        self.logger.log_metrics(metrics, step)
 
 
 def infer_box_specs_from_h5(
@@ -249,7 +233,7 @@ def _log_update_metrics(agent: Any, metrics: dict[str, float], step: int) -> Non
     logger = getattr(agent, "logger", None)
     if logger is None:
         return
-    logger.log_offline_metrics(metrics, step)
+    logger.log_metrics(metrics, step)
 
 
 def _log_eval_stdout(agent: Any, metrics: dict[str, float], step: int) -> None:
