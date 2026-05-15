@@ -114,6 +114,103 @@ class Logger:
         elif self.writer is not None:
             self.writer.add_text(tag, str(value))
 
+    # --- RL metric logging utilities ---
+
+    # Explicit namespace mapping for RL training metrics (shared by online and offline)
+    METRIC_NAMESPACES = {
+        # Q-value metrics
+        "predicted_q": "q/predicted",
+        "target_q": "q/target",
+        "cql_ood_values": "q/cql_ood",
+        "cql_q_diff": "q/cql_diff",
+        # Loss metrics
+        "actor_loss": "losses/actor_loss",
+        "critic_loss": "losses/critic_loss",
+        "td_loss": "losses/td_loss",
+        "cql_loss": "losses/cql_loss",
+        "alpha_loss": "losses/alpha_loss",
+        "cql_alpha_loss": "losses/cql_alpha_loss",
+        # CQL-specific metrics
+        "cql_alpha": "cql/alpha",
+        "calql_bound_rate": "cql/bound_rate",
+        # Entropy metrics
+        "alpha": "entropy/alpha",
+        # Training metrics
+        "utd_ratio": "train/utd_ratio",
+    }
+
+    def log_metrics(
+        self,
+        metrics: dict[str, float],
+        step: int,
+        *,
+        metric_namespaces: dict[str, str] | None = None,
+        default_namespace: str = "losses",
+    ) -> None:
+        """Log RL training metrics with explicit namespace mapping.
+
+        Each metric is logged to its explicitly defined namespace path.
+        Unknown metrics are logged to the default namespace.
+
+        Args:
+            metrics: Raw metric dict from training.
+            step: Global step for logging.
+            metric_namespaces: Mapping from metric keys to full namespace paths.
+                Example: {"predicted_q": "q/predicted", "actor_loss": "losses/actor_loss"}
+                If None, uses Logger.METRIC_NAMESPACES.
+            default_namespace: Namespace prefix for unmapped metrics (default: "losses").
+        """
+        if metric_namespaces is None:
+            metric_namespaces = self.METRIC_NAMESPACES
+
+        for key, value in metrics.items():
+            if not isinstance(value, (int, float)):
+                continue
+            # Use explicit mapping or default namespace
+            full_path = metric_namespaces.get(key, f"{default_namespace}/{key}")
+            self.add_scalar(full_path, value, step)
+
+    @staticmethod
+    def format_metrics(
+        metrics: dict[str, float],
+        *,
+        metric_namespaces: dict[str, str] | None = None,
+    ) -> tuple[str, str]:
+        """Format training metrics for console output.
+
+        Separates metrics into loss and Q-value groups based on their namespace.
+
+        Args:
+            metrics: Raw metric dict from training.
+            metric_namespaces: Mapping from metric keys to full namespace paths.
+                If None, uses Logger.METRIC_NAMESPACES.
+
+        Returns:
+            (loss_summary, q_summary) as formatted strings.
+        """
+        if metric_namespaces is None:
+            metric_namespaces = Logger.METRIC_NAMESPACES
+
+        loss_parts: list[str] = []
+        q_parts: list[str] = []
+
+        for key, value in metrics.items():
+            if not isinstance(value, (int, float)):
+                continue
+
+            # Get the full namespace path
+            full_path = metric_namespaces.get(key, f"losses/{key}")
+            namespace, _, display_key = full_path.rpartition("/")
+
+            # Group by namespace for console output
+            if namespace == "q":
+                q_parts.append(f"{display_key}={value:.4f}")
+            elif namespace == "losses":
+                # For losses and other namespaces, show the key as-is
+                loss_parts.append(f"{key}={value:.4f}")
+
+        return " ".join(loss_parts), " ".join(q_parts)
+
     def close(self) -> None:
         if self.writer is not None:
             self.writer.close()

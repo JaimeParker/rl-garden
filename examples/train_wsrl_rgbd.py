@@ -42,28 +42,46 @@ class Args(VisionWSRLTrainingArgs):
 
 
 def _offline_update_loop(
-    agent: WSRLRGBD, steps: int, logger: Logger, log_freq: int, std_log: bool
+    agent: WSRLRGBD, 
+    steps: int, 
+    logger: Logger, 
+    log_freq: int, 
+    std_log: bool,
+    *,
+    start_step: int = 0,
 ) -> None:
     gradient_steps = (
         int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
     )
+    interval_update_time = 0.0
+    interval_update_steps = 0
     for step in trange(steps, desc="offline"):
+        update_t = time.perf_counter()
         losses = agent.train(gradient_steps)
+        interval_update_time += time.perf_counter() - update_t
+        interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            for key, value in losses.items():
-                logger.add_scalar(f"offline_losses/{key}", value, step + 1)
+            logger.log_metrics(losses, step + 1)
+            offline_update_fps = (
+                interval_update_steps / interval_update_time
+                if interval_update_time > 0
+                else float("nan")
+            )
+            logger.add_scalar("time/offline_update_time", interval_update_time, step + 1)
+            logger.add_scalar("time/offline_update_fps", offline_update_fps, step + 1)
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
-                loss_summary = " ".join(
-                    f"{k}={v:.4f}"
-                    for k, v in losses.items()
-                    if isinstance(v, (int, float))
-                )
+                loss_summary, q_summary = logger.format_metrics(losses)
+                q_part = f" q={q_summary}" if q_summary else ""
                 print(
                     "[offline] "
-                    f"step={step + 1}/{steps} ({progress:.2f}%) {loss_summary}",
+                    f"step={step + 1}/{steps} ({progress:.2f}%) "
+                    f"fps={offline_update_fps:.4f} "
+                    f"{loss_summary}{q_part}",
                     flush=True,
                 )
+            interval_update_time = 0.0
+            interval_update_steps = 0
 
 
 def main() -> None:

@@ -7,7 +7,9 @@ pretraining entrypoints.
 """
 from __future__ import annotations
 
+import time
 from abc import abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -73,12 +75,15 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         logger: Optional[Logger] = None,
         std_log: bool = True,
         log_freq: int = 1_000,
+        eval_freq: int = 0,
+        num_eval_steps: int = 50,
+        eval_env: Optional[Any] = None,
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
     ) -> None:
-        super().__init__(env=env, eval_env=None, seed=seed, device=device, logger=logger)
+        super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
         self.buffer_size = buffer_size
         self.buffer_device = buffer_device
         self.batch_size = batch_size
@@ -86,6 +91,8 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         self.offline_sampling = offline_sampling
         self.std_log = std_log
         self.log_freq = log_freq
+        self.eval_freq = eval_freq
+        self.num_eval_steps = num_eval_steps
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_freq = checkpoint_freq
         self.save_replay_buffer = save_replay_buffer
@@ -117,7 +124,34 @@ class OfflineRLAlgorithm(BaseAlgorithm):
             save_final_checkpoint=self.save_final_checkpoint,
             log_freq=self.log_freq,
             std_log=self.std_log,
+            eval_freq=self.eval_freq,
         )
+
+    # --- eval ---
+
+    def _evaluate(self) -> dict[str, float]:
+        if self.eval_env is None:
+            return {}
+        self.policy.eval()
+        obs, _ = self.eval_env.reset()
+        metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
+        for _ in range(self.num_eval_steps):
+            with torch.no_grad():
+                obs, _, _, _, infos = self.eval_env.step(self._eval_action(obs))
+                if "final_info" in infos:
+                    for k, v in infos["final_info"]["episode"].items():
+                        metrics[k].append(v)
+        self.policy.train()
+        out: dict[str, float] = {}
+        for k, vs in metrics.items():
+            out[k] = float(torch.stack(vs).float().mean().item())
+        return out
+
+    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"eval/{key}", value, step)
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
@@ -132,8 +166,7 @@ class OfflineRLAlgorithm(BaseAlgorithm):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
             return
-        for key, value in metrics.items():
-            self.logger.add_scalar(f"losses/{key}", value, step)
+        self.logger.log_metrics(metrics, step)
 
 
 def infer_box_specs_from_h5(
@@ -200,8 +233,27 @@ def _log_update_metrics(agent: Any, metrics: dict[str, float], step: int) -> Non
     logger = getattr(agent, "logger", None)
     if logger is None:
         return
-    for key, value in metrics.items():
-        logger.add_scalar(f"losses/{key}", value, step)
+    logger.log_metrics(metrics, step)
+
+
+def _log_eval_stdout(agent: Any, metrics: dict[str, float], step: int) -> None:
+    """Print a one-line eval summary to stdout in the style of
+    ``OffPolicyAlgorithm.learn``."""
+    # Use _first_metric if the agent provides it, otherwise fall back to dict.get.
+    first = getattr(agent, "_first_metric", None)
+    if first is not None:
+        eval_return = first(metrics, ("return",))
+        eval_success = first(metrics, ("success_at_end", "success_once"))
+    else:
+        eval_return = metrics.get("return", float("nan"))
+        eval_success = metrics.get("success_at_end", metrics.get("success_once", float("nan")))
+    fmt = getattr(agent, "_fmt_metric", lambda v: "nan" if v != v else f"{v:.4f}")
+    print(
+        f"[offline_eval] step={step} "
+        f"return={fmt(eval_return)} "
+        f"success_at_end={fmt(eval_success)}",
+        flush=True,
+    )
 
 
 def run_offline_pretraining(
@@ -216,12 +268,17 @@ def run_offline_pretraining(
     save_final_checkpoint: bool = True,
     log_freq: int = 1_000,
     std_log: bool = True,
+    eval_freq: int = 0,
     desc: str = "offline",
 ) -> OfflinePretrainResult:
     """Run an offline gradient loop for any agent exposing ``train()``.
 
     ``agent._global_step`` is advanced in offline update-step units. The agent's
     own ``train()`` method remains responsible for ``_global_update``.
+
+    When *eval_freq* > 0 and the agent provides ``_evaluate`` /
+    ``_log_eval_metrics``, the loop evaluates the current policy at regular
+    intervals.  The agent must have a real ``eval_env`` set beforehand.
     """
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}.")
@@ -235,10 +292,26 @@ def run_offline_pretraining(
     start_step = int(getattr(agent, "_global_step", 0))
     final_target = start_step + num_steps
 
+    _has_eval = (
+        eval_freq > 0
+        and hasattr(agent, "_evaluate")
+        and hasattr(agent, "_log_eval_metrics")
+    )
+
     for step in trange(start_step, final_target, desc=desc):
         last_metrics = agent.train(gradient_steps)
         global_step = step + 1
         agent._global_step = global_step
+
+        if _has_eval and global_step % eval_freq == 0 and getattr(agent, "eval_env", None) is not None:
+            t0 = time.perf_counter()
+            eval_metrics = agent._evaluate()
+            agent._log_eval_metrics(eval_metrics, global_step)
+            if std_log:
+                _log_eval_stdout(agent, eval_metrics, global_step)
+            logger = getattr(agent, "logger", None)
+            if logger is not None:
+                logger.add_scalar("time/eval_time", time.perf_counter() - t0, global_step)
 
         if log_freq > 0 and global_step % log_freq == 0:
             _log_update_metrics(agent, last_metrics, global_step)

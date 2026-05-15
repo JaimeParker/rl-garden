@@ -49,25 +49,38 @@ def _offline_update_loop(
     gradient_steps = (
         int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
     )
+    interval_update_time = 0.0
+    interval_update_steps = 0
     for step in trange(steps, desc="offline"):
         global_step = start_step + step + 1
+        update_t = time.perf_counter()
         losses = agent.train(gradient_steps)
+        interval_update_time += time.perf_counter() - update_t
+        interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            agent._log_update_metrics(losses, global_step)
+            logger.log_metrics(losses, global_step)
+            offline_update_fps = (
+                interval_update_steps / interval_update_time
+                if interval_update_time > 0
+                else float("nan")
+            )
+            logger.add_scalar("time/offline_update_time", interval_update_time, global_step)
+            logger.add_scalar("time/offline_update_fps", offline_update_fps, global_step)
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
-                loss_summary = " ".join(
-                    f"{k}={v:.4f}"
-                    for k, v in losses.items()
-                    if isinstance(v, (int, float))
-                )
+                loss_summary, q_summary = logger.format_metrics(losses)
+                q_part = f" q={q_summary}" if q_summary else ""
                 print(
                     "[offline] "
                     f"step={step + 1}/{steps} "
                     f"global_step={global_step} "
-                    f"({progress:.2f}%) {loss_summary}",
+                    f"({progress:.2f}%) "
+                    f"fps={offline_update_fps:.4f} "
+                    f"{loss_summary}{q_part}",
                     flush=True,
                 )
+            interval_update_time = 0.0
+            interval_update_steps = 0
     return start_step + steps
 
 
