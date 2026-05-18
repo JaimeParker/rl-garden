@@ -1,11 +1,14 @@
 """Utilities for loading ManiSkill trajectory H5 files into replay buffers."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
 import warnings
 
+import numpy as np
 import torch
+from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.types import Obs
@@ -29,6 +32,86 @@ def _read_node(node: Any) -> Any:
     if isinstance(node, h5py.Group):
         return {key: _read_node(node[key]) for key in node.keys()}
     raise TypeError(f"Unsupported H5 node type: {type(node)!r}")
+
+
+def infer_specs_from_h5(
+    path: str | Path,
+    *,
+    action_low: float = -1.0,
+    action_high: float = 1.0,
+) -> tuple[spaces.Box | spaces.Dict, spaces.Box]:
+    """Infer Box or Dict observation/action spaces from a trajectory H5 file."""
+    h5py = _require_h5py()
+
+    def _box_from_dataset(dataset: Any) -> spaces.Box:
+        shape = tuple(dataset.shape[1:])
+        dtype = np.dtype(dataset.dtype)
+        if dtype == np.dtype(np.uint8):
+            return spaces.Box(low=0, high=255, shape=shape, dtype=np.uint8)
+        if np.issubdtype(dtype, np.integer):
+            info = np.iinfo(dtype)
+            return spaces.Box(low=info.min, high=info.max, shape=shape, dtype=dtype)
+        return spaces.Box(low=-np.inf, high=np.inf, shape=shape, dtype=np.float32)
+
+    def _space_from_node(node: Any) -> spaces.Box | spaces.Dict:
+        if isinstance(node, h5py.Dataset):
+            return _box_from_dataset(node)
+        if isinstance(node, h5py.Group):
+            return spaces.Dict(
+                {key: _space_from_node(node[key]) for key in node.keys()}
+            )
+        raise TypeError(f"Unsupported H5 node type: {type(node)!r}")
+
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        traj_keys = sorted([key for key in f.keys() if key.startswith("traj_")])
+        if not traj_keys:
+            raise ValueError(f"No traj_* groups found in {path}.")
+        traj = f[traj_keys[0]]
+
+        if "obs" in traj:
+            obs_node = traj["obs"]
+        elif "observations" in traj:
+            obs_node = traj["observations"]
+        else:
+            raise ValueError(f"No obs/observations field in {traj_keys[0]}.")
+        obs_space = _space_from_node(obs_node)
+
+        if "actions" in traj:
+            action_node = traj["actions"]
+        elif "action" in traj:
+            action_node = traj["action"]
+        else:
+            raise ValueError(f"No actions/action field in {traj_keys[0]}.")
+        action_shape = tuple(action_node.shape[1:])
+
+    action_space = spaces.Box(
+        low=action_low,
+        high=action_high,
+        shape=action_shape,
+        dtype=np.float32,
+    )
+    return obs_space, action_space
+
+
+def infer_box_specs_from_h5(
+    path: str | Path,
+    *,
+    action_low: float = -1.0,
+    action_high: float = 1.0,
+) -> tuple[spaces.Box, spaces.Box]:
+    """Infer flat Box observation/action spaces from a trajectory H5 file."""
+    obs_space, action_space = infer_specs_from_h5(
+        path,
+        action_low=action_low,
+        action_high=action_high,
+    )
+    if isinstance(obs_space, spaces.Dict):
+        raise NotImplementedError(
+            "Dict observations detected. infer_box_specs_from_h5 supports flat "
+            "Box observations only. Use infer_specs_from_h5 for RGBD/offline IQL."
+        )
+    return obs_space, action_space
 
 
 def _first_existing(data: dict[str, Any], names: tuple[str, ...]) -> Any:
@@ -95,9 +178,18 @@ def _to_tensor(x: Any, device: torch.device) -> Any:
     return tensor
 
 
-def _transition_done(traj: dict[str, Any], length: int, device: torch.device) -> torch.Tensor:
+def _transition_done(
+    traj: dict[str, Any], length: int, device: torch.device
+) -> torch.Tensor:
     done_parts = []
-    for key in ("dones", "done", "terminated", "terminations", "truncated", "truncations"):
+    for key in (
+        "dones",
+        "done",
+        "terminated",
+        "terminations",
+        "truncated",
+        "truncations",
+    ):
         if key in traj:
             value = torch.as_tensor(traj[key][:length], device=device).bool()
             done_parts.append(value)
@@ -301,7 +393,11 @@ def load_maniskill_h5_to_replay_buffer(
             action_parts.append(actions)
             reward_parts.append(rewards)
             done_parts.append(dones)
-            if (not sparse_reward_mc) and hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma"):
+            if (
+                (not sparse_reward_mc)
+                and hasattr(buffer, "_mc_table")
+                and hasattr(buffer, "gamma")
+            ):
                 mc_parts.append(_mc_returns(rewards, dones, float(buffer.gamma)))
 
     if not action_parts:

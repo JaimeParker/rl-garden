@@ -113,8 +113,7 @@ class SquashedGaussianActor(nn.Module):
             )
         if log_std_mode not in ("clamp", "tanh"):
             raise ValueError(
-                "log_std_mode must be 'clamp' or 'tanh', "
-                f"got {log_std_mode!r}"
+                f"log_std_mode must be 'clamp' or 'tanh', got {log_std_mode!r}"
             )
 
         self.std_parameterization = std_parameterization
@@ -177,10 +176,41 @@ class SquashedGaussianActor(nn.Module):
         x_t = normal.rsample()
         y_t = torch.tanh(x_t)
         action = y_t * self.action_scale + self.action_bias
+        log_prob = self._squashed_log_prob(normal, x_t, y_t)
+        return action, log_prob
+
+    def evaluate_action_log_prob(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        """Evaluate log-probability for externally supplied env-space actions.
+
+        This complements ``action_log_prob()``: that method samples a new action
+        from the policy and returns its log-prob, while this method scores an
+        action that came from outside the policy, e.g. an offline dataset action
+        used by IQL/BC-style actor losses. ``actions`` are expected to already
+        be tanh-squashed and scaled into ``action_space`` bounds, so we map them
+        back through inverse tanh before applying the same squashing correction
+        used for sampled actions.
+        """
+        mean, log_std = self(features)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+
+        eps = 1e-6
+        y_t = (actions - self.action_bias) / self.action_scale
+        y_t = y_t.clamp(-1.0 + eps, 1.0 - eps)
+        x_t = 0.5 * (torch.log1p(y_t) - torch.log1p(-y_t))
+        return self._squashed_log_prob(normal, x_t, y_t)
+
+    def _squashed_log_prob(
+        self,
+        normal: torch.distributions.Normal,
+        x_t: torch.Tensor,
+        y_t: torch.Tensor,
+    ) -> torch.Tensor:
         log_prob = normal.log_prob(x_t)
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
-        log_prob = log_prob.sum(-1, keepdim=True)
-        return action, log_prob
+        return log_prob.sum(-1, keepdim=True)
 
     def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
         mean, _ = self(features)
@@ -235,7 +265,7 @@ def _safe_name(dotted: str, prefix: str) -> str:
 
 
 def _dotted_from_safe(safe: str, prefix: str) -> str:
-    return safe[len(prefix):].replace(_PARAM_SEP, ".")
+    return safe[len(prefix) :].replace(_PARAM_SEP, ".")
 
 
 class EnsembleQCritic(nn.Module):
@@ -353,7 +383,9 @@ class EnsembleQCritic(nn.Module):
     ) -> tuple[torch.Tensor, ...]:
         return tuple(self._vmapped_forward(features, actions).unbind(0))
 
-    def forward_all(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    def forward_all(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
         return self._vmapped_forward(features, actions)
 
     # ------------------------------------------------------------------
@@ -379,14 +411,12 @@ class EnsembleQCritic(nn.Module):
             grouped: dict[str, dict[int, torch.Tensor]] = {}
             for key in legacy_keys:
                 # key looks like "<prefix>q_nets.3.trunk.0.weight"
-                tail = key[len(legacy_prefix):]
+                tail = key[len(legacy_prefix) :]
                 idx_str, _, dotted = tail.partition(".")
                 idx = int(idx_str)
                 grouped.setdefault(dotted, {})[idx] = state_dict.pop(key)
             for dotted, by_idx in grouped.items():
-                stacked = torch.stack(
-                    [by_idx[i] for i in range(self.n_critics)], dim=0
-                )
+                stacked = torch.stack([by_idx[i] for i in range(self.n_critics)], dim=0)
                 state_dict[prefix + _safe_name(dotted, _PARAM_PREFIX)] = stacked
 
         # Migrate intermediate flat-sequential format: ``ens_p_{N}__weight``
@@ -405,8 +435,12 @@ class EnsembleQCritic(nn.Module):
                 if flat_idx == max_idx:
                     new_dotted = "head." + param_suffix.replace(_PARAM_SEP, ".")
                 else:
-                    new_dotted = f"trunk.{flat_idx}." + param_suffix.replace(_PARAM_SEP, ".")
-                state_dict[prefix + _safe_name(new_dotted, _PARAM_PREFIX)] = state_dict.pop(key)
+                    new_dotted = f"trunk.{flat_idx}." + param_suffix.replace(
+                        _PARAM_SEP, "."
+                    )
+                state_dict[prefix + _safe_name(new_dotted, _PARAM_PREFIX)] = (
+                    state_dict.pop(key)
+                )
 
         return super()._load_from_state_dict(
             state_dict,

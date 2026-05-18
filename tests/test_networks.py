@@ -83,6 +83,21 @@ def test_actor_uniform_std_parameterization():
     assert log_prob.shape == (4, 1)
 
 
+def test_actor_evaluate_action_log_prob_for_external_actions():
+    actor = SquashedGaussianActor(
+        features_dim=6,
+        action_space=_action_space(),
+        hidden_dims=[16],
+    )
+    features = torch.randn(4, 6)
+    actions = torch.randn(4, 3).clamp(-1.0, 1.0)
+
+    log_prob = actor.evaluate_action_log_prob(features, actions)
+
+    assert log_prob.shape == (4, 1)
+    assert torch.isfinite(log_prob).all()
+
+
 def test_ensemble_q_critic_forward_all_shape():
     critic = EnsembleQCritic(
         features_dim=11,
@@ -97,6 +112,7 @@ def test_ensemble_q_critic_forward_all_shape():
 
 
 # --- New: GroupNorm / Dropout / kernel_init / MLPResNet ---
+
 
 def test_create_mlp_layer_and_group_norm_mutually_exclusive():
     with pytest.raises(ValueError, match="cannot both be True"):
@@ -230,6 +246,7 @@ def test_actor_dropout_changes_outputs_in_train_mode():
 # vmap-fused EnsembleQCritic: numerical parity + checkpoint migration
 # ----------------------------------------------------------------------------
 
+
 class _LegacyEnsembleQCritic(torch.nn.Module):
     """Reference ModuleList implementation (pre-vmap) used to verify parity.
 
@@ -240,6 +257,7 @@ class _LegacyEnsembleQCritic(torch.nn.Module):
 
     def __init__(self, features_dim, action_space, hidden_dims, *, n_critics):
         from rl_garden.networks.actor_critic import _QHead
+
         super().__init__()
         act_dim = int(np.prod(action_space.shape))
         self.q_nets = torch.nn.ModuleList(
@@ -269,12 +287,14 @@ def test_ensemble_vmap_numerical_parity():
 
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=float)
     torch.manual_seed(0)
-    legacy = _LegacyEnsembleQCritic(features_dim=8, action_space=act_space,
-                                     hidden_dims=[32, 32], n_critics=4)
+    legacy = _LegacyEnsembleQCritic(
+        features_dim=8, action_space=act_space, hidden_dims=[32, 32], n_critics=4
+    )
 
     torch.manual_seed(99)  # different init seed for vmap version
-    vmap_critic = EnsembleQCritic(features_dim=8, action_space=act_space,
-                                  hidden_dims=[32, 32], n_critics=4)
+    vmap_critic = EnsembleQCritic(
+        features_dim=8, action_space=act_space, hidden_dims=[32, 32], n_critics=4
+    )
 
     # Copy legacy weights into vmap's stacked parameters.
     legacy_states = [head.state_dict() for head in legacy.q_nets]
@@ -310,10 +330,12 @@ def test_ensemble_vmap_polyak_update():
     from rl_garden.common.utils import polyak_update
 
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
-    src = EnsembleQCritic(features_dim=6, action_space=act_space,
-                          hidden_dims=[16], n_critics=3)
-    tgt = EnsembleQCritic(features_dim=6, action_space=act_space,
-                          hidden_dims=[16], n_critics=3)
+    src = EnsembleQCritic(
+        features_dim=6, action_space=act_space, hidden_dims=[16], n_critics=3
+    )
+    tgt = EnsembleQCritic(
+        features_dim=6, action_space=act_space, hidden_dims=[16], n_critics=3
+    )
     # Make src very different from tgt initially.
     for p in src.parameters():
         p.data.fill_(1.0)
@@ -331,8 +353,9 @@ def test_ensemble_load_legacy_modulelist_state_dict():
 
     # 1) Build a legacy ModuleList critic; capture its state_dict.
     torch.manual_seed(0)
-    legacy = _LegacyEnsembleQCritic(features_dim=5, action_space=act_space,
-                                     hidden_dims=[8], n_critics=3)
+    legacy = _LegacyEnsembleQCritic(
+        features_dim=5, action_space=act_space, hidden_dims=[8], n_critics=3
+    )
     features = torch.randn(4, 5)
     actions = torch.randn(4, 2)
     legacy_out = legacy.forward_all(features, actions)
@@ -343,8 +366,9 @@ def test_ensemble_load_legacy_modulelist_state_dict():
 
     # 3) Build a new vmap EnsembleQCritic (different init).
     torch.manual_seed(123)
-    vmap_critic = EnsembleQCritic(features_dim=5, action_space=act_space,
-                                  hidden_dims=[8], n_critics=3)
+    vmap_critic = EnsembleQCritic(
+        features_dim=5, action_space=act_space, hidden_dims=[8], n_critics=3
+    )
 
     # 4) Load: should detect q_nets.<i>.* keys and stack along axis 0.
     missing, unexpected = vmap_critic.load_state_dict(legacy_sd, strict=False)
@@ -363,8 +387,9 @@ def test_ensemble_load_intermediate_flat_state_dict():
 
     # 1) Build a current critic and snapshot its state_dict + forward output.
     torch.manual_seed(0)
-    source = EnsembleQCritic(features_dim=5, action_space=act_space,
-                             hidden_dims=[8, 8], n_critics=3)
+    source = EnsembleQCritic(
+        features_dim=5, action_space=act_space, hidden_dims=[8, 8], n_critics=3
+    )
     features = torch.randn(4, 5)
     actions = torch.randn(4, 2)
     source_out = source.forward_all(features, actions)
@@ -377,10 +402,10 @@ def test_ensemble_load_intermediate_flat_state_dict():
     flat_sd: dict[str, torch.Tensor] = {}
     for k, v in source.state_dict().items():
         if k.startswith("ens_p_trunk__"):
-            rest = k[len("ens_p_trunk__"):]  # e.g. "0__weight"
+            rest = k[len("ens_p_trunk__") :]  # e.g. "0__weight"
             flat_sd["ens_p_" + rest] = v.clone()
         elif k.startswith("ens_p_head__"):
-            suffix = k[len("ens_p_head__"):]  # "weight" or "bias"
+            suffix = k[len("ens_p_head__") :]  # "weight" or "bias"
             flat_sd[f"ens_p_{head_flat_index}__" + suffix] = v.clone()
         else:
             flat_sd[k] = v.clone()
@@ -394,8 +419,9 @@ def test_ensemble_load_intermediate_flat_state_dict():
     # 3) Build a fresh critic with a DIFFERENT init so any leftover params
     #    would show up as numerical mismatch in the forward check below.
     torch.manual_seed(123)
-    target = EnsembleQCritic(features_dim=5, action_space=act_space,
-                             hidden_dims=[8, 8], n_critics=3)
+    target = EnsembleQCritic(
+        features_dim=5, action_space=act_space, hidden_dims=[8, 8], n_critics=3
+    )
 
     # 4) Load: migration should rename keys 1:1 with no leftovers.
     missing, unexpected = target.load_state_dict(flat_sd, strict=False)
@@ -414,16 +440,18 @@ def test_ensemble_state_dict_roundtrip_no_false_migration():
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
 
     torch.manual_seed(0)
-    source = EnsembleQCritic(features_dim=6, action_space=act_space,
-                             hidden_dims=[16, 16], n_critics=4)
+    source = EnsembleQCritic(
+        features_dim=6, action_space=act_space, hidden_dims=[16, 16], n_critics=4
+    )
     features = torch.randn(3, 6)
     actions = torch.randn(3, 2)
     source_out = source.forward_all(features, actions)
     sd = {k: v.clone() for k, v in source.state_dict().items()}
 
     torch.manual_seed(999)  # different init so leftover params would diverge
-    target = EnsembleQCritic(features_dim=6, action_space=act_space,
-                             hidden_dims=[16, 16], n_critics=4)
+    target = EnsembleQCritic(
+        features_dim=6, action_space=act_space, hidden_dims=[16, 16], n_critics=4
+    )
     missing, unexpected = target.load_state_dict(sd, strict=False)
     assert not missing, f"Round-trip missed keys: {missing}"
     assert not unexpected, f"Round-trip produced unexpected keys: {unexpected}"
