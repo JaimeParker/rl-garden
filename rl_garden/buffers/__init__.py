@@ -14,17 +14,25 @@ from rl_garden.buffers.residual_buffer import (
     ResidualDictReplayBuffer,
     ResidualTensorReplayBuffer,
 )
+from rl_garden.buffers.rollout_buffer import (
+    DictRolloutBuffer,
+    RolloutBuffer,
+    RolloutBufferSample,
+)
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
 __all__ = [
     "BaseReplayBuffer",
     "DictArray",
+    "DictRolloutBuffer",
     "DictReplayBuffer",
     "MCDictReplayBuffer",
     "MCReplayBufferSample",
     "MCTensorReplayBuffer",
     "ResidualDictReplayBuffer",
     "ResidualTensorReplayBuffer",
+    "RolloutBuffer",
+    "RolloutBufferSample",
     "TensorReplayBuffer",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",

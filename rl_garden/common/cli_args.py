@@ -86,6 +86,53 @@ class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
 
 
 @dataclass
+class PPOTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
+    total_timesteps: int = 10_000_000
+    sim_backend: str = "gpu"
+    render_backend: str = "gpu"
+    num_steps: int = 50
+    gamma: float = 0.8
+    gae_lambda: float = 0.9
+    learning_rate: float = 3e-4
+    num_minibatches: int = 32
+    update_epochs: int = 4
+    norm_adv: bool = True
+    clip_coef: float = 0.2
+    clip_vloss: bool = False
+    ent_coef: float = 0.0
+    vf_coef: float = 0.5
+    max_grad_norm: float = 0.5
+    target_kl: Optional[float] = 0.1
+    anneal_lr: bool = False
+    finite_horizon_gae: bool = False
+    detach_encoder_on_actor: Optional[bool] = None
+    weight_decay: float = 0.0
+    use_adamw: bool = False
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
+    actor_use_layer_norm: bool = False
+    value_use_layer_norm: bool = False
+    actor_use_group_norm: bool = False
+    value_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    value_dropout_rate: Optional[float] = None
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
+    log_std_init: float = -0.5
+
+
+@dataclass
+class VisionPPOTrainingArgs(PPOTrainingArgs, VisionArgs):
+    camera_width: Optional[int] = 64
+    camera_height: Optional[int] = 64
+
+
+@dataclass
 class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     num_offline_steps: int = 0
     num_online_steps: int = 1_000_000
@@ -310,6 +357,7 @@ class OfflineEvalArgs:
     control_mode: str = "pd_joint_delta_pos"
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
+
 
 @dataclass
 class OfflinePretrainArgs(
