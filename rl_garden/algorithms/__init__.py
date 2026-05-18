@@ -10,8 +10,10 @@ from rl_garden.algorithms.offline import (
     infer_specs_from_h5,
     run_offline_pretraining,
 )
+from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
+from rl_garden.algorithms.ppo import PPO
 from rl_garden.algorithms.residual import ResidualSAC
 from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.wsrl import WSRL
@@ -26,6 +28,8 @@ __all__ = [
     "OfflineRLAlgorithm",
     "OfflineSAC",
     "OffPolicyAlgorithm",
+    "OnPolicyAlgorithm",
+    "PPO",
     "ResidualSAC",
     "SAC",
     "WSRL",

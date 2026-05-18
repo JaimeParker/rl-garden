@@ -359,9 +359,17 @@ pytest tests/test_sac_smoke.py
   - `3rd_party/ManiSkill/examples/baselines/sac/sac_rgbd.py`
 - SB3 architecture references:
   - `3rd_party/stable-baselines3/stable_baselines3/common/off_policy_algorithm.py`
+  - `3rd_party/stable-baselines3/stable_baselines3/common/on_policy_algorithm.py`
+  - `3rd_party/stable-baselines3/stable_baselines3/ppo/ppo.py`
   - `3rd_party/stable-baselines3/stable_baselines3/sac/sac.py`
   - `3rd_party/stable-baselines3/stable_baselines3/sac/policies.py`
   - `3rd_party/stable-baselines3/stable_baselines3/common/torch_layers.py`
+- ManiSkill PPO baselines:
+  - `3rd_party/ManiSkill/examples/baselines/ppo/ppo.py`
+  - `3rd_party/ManiSkill/examples/baselines/ppo/ppo_rgb.py`
+- PPO-family offline-to-online references:
+  - `3rd_party/BPPO/`
+  - `3rd_party/Uni-O4/`
 - hil-serl visual encoder references:
   - `3rd_party/hil-serl/serl_launcher/serl_launcher/vision/resnet_v1.py`
   - `3rd_party/hil-serl/serl_launcher/serl_launcher/common/encoding.py`
@@ -375,3 +383,10 @@ pytest tests/test_sac_smoke.py
 - [ ] Add Flax-vs-Torch parity validation for ResNet as a stretch goal.
 - [ ] Expand augmentation pipeline integration in training loop.
 - [ ] Add checkpoint/load examples and a lightweight benchmark script.
+- [ ] Add tanh-squashed PPO distributions while preserving SB3/ManiSkill-style
+      unsquashed Gaussian PPO as the default baseline.
+- [ ] Add separate actor/value feature extractors for PPO, including support for
+      different encoder architectures on each path.
+- [ ] Extend PPO toward BPPO/Uni-O4-style offline-to-online policy improvement,
+      including behavior-policy snapshots, external Q/V advantage providers,
+      ensemble policies, and KL-regularized behavior updates.
