@@ -22,14 +22,14 @@ from dataclasses import dataclass
 import tyro
 from tqdm import trange
 
-from rl_garden.algorithms import WSRLRGBD
+from rl_garden.algorithms import WSRL
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
     VisionWSRLTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
-    image_keys_from_obs_mode,
+    image_keys_from_env,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
 )
@@ -42,10 +42,10 @@ class Args(VisionWSRLTrainingArgs):
 
 
 def _offline_update_loop(
-    agent: WSRLRGBD, 
-    steps: int, 
-    logger: Logger, 
-    log_freq: int, 
+    agent: WSRL,
+    steps: int,
+    logger: Logger,
+    log_freq: int,
     std_log: bool,
     *,
     start_step: int = 0,
@@ -123,6 +123,7 @@ def main() -> None:
         render_mode=args.render_mode,
         reward_scale=args.reward_scale,
         reward_bias=args.reward_bias,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     eval_record_dir = resolve_eval_record_dir(args, run_name)
     eval_cfg = ManiSkillEnvConfig(
@@ -141,14 +142,15 @@ def main() -> None:
         max_steps_per_video=args.num_eval_steps,
         reward_scale=args.reward_scale,
         reward_bias=args.reward_bias,
+        per_camera_rgbd=args.per_camera_rgbd,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
 
     factory = image_encoder_factory_from_args(args)
-    image_keys = image_keys_from_obs_mode(args.obs_mode)
+    image_keys = image_keys_from_env(env, args)
 
-    agent = WSRLRGBD(
+    agent = WSRL(
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,

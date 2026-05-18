@@ -6,10 +6,22 @@ from typing import Any, Literal, Optional, Sequence
 import numpy as np
 import torch
 import torch.nn.functional as F
+from gymnasium import spaces
 
 from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
-from rl_garden.buffers.mc_buffer import MCReplayBufferSample
+from rl_garden.buffers.mc_buffer import (
+    MCDictReplayBuffer,
+    MCReplayBufferSample,
+    MCTensorReplayBuffer,
+)
 from rl_garden.common.logger import Logger
+from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import (
+    CombinedExtractor,
+    ImageEncoderFactory,
+    default_image_encoder_factory,
+)
+from rl_garden.encoders.flatten import FlattenExtractor
 
 
 class WSRL(_CalQLRolloutTrainingShell):
@@ -82,6 +94,15 @@ class WSRL(_CalQLRolloutTrainingShell):
         # Cal-QL parameters
         use_calql: bool = True,
         calql_bound_random_actions: bool = False,
+        # Dict observation encoding
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        image_keys: Optional[tuple[str, ...]] = None,
+        state_key: Optional[str] = None,
+        use_proprio: Optional[bool] = None,
+        proprio_latent_dim: Optional[int] = None,
+        image_fusion_mode: Optional[str] = None,
+        enable_stacking: Optional[bool] = None,
+        detach_encoder_on_actor: bool = True,
         # WSRL phase control
         use_td_loss: bool = True,
         online_cql_alpha: Optional[float] = None,
@@ -105,6 +126,51 @@ class WSRL(_CalQLRolloutTrainingShell):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
     ) -> None:
+        obs_space = env.single_observation_space
+        image_kwargs_explicit = {
+            "image_encoder_factory": image_encoder_factory,
+            "image_keys": image_keys,
+            "state_key": state_key,
+            "use_proprio": use_proprio,
+            "proprio_latent_dim": proprio_latent_dim,
+            "image_fusion_mode": image_fusion_mode,
+            "enable_stacking": enable_stacking,
+        }
+        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
+
+        if isinstance(obs_space, spaces.Box):
+            if explicitly_set:
+                raise ValueError(
+                    f"WSRL with Box observation space does not accept image-related "
+                    f"kwargs (got {explicitly_set}). Use a Dict observation space, "
+                    f"or remove these kwargs."
+                )
+            self._is_dict_obs = False
+        elif isinstance(obs_space, spaces.Dict):
+            if not detach_encoder_on_actor:
+                raise ValueError(
+                    "WSRL always uses stop_gradient=True on the actor image path for "
+                    "Dict observations so image encoders are trained only by critic loss."
+                )
+            self._is_dict_obs = True
+            self._image_encoder_factory = (
+                image_encoder_factory or default_image_encoder_factory()
+            )
+            self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
+            self._state_key = state_key if state_key is not None else "state"
+            self._use_proprio = use_proprio if use_proprio is not None else True
+            self._proprio_latent_dim = (
+                proprio_latent_dim if proprio_latent_dim is not None else 64
+            )
+            self._image_fusion_mode = (
+                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
+            )
+            self._enable_stacking = enable_stacking if enable_stacking is not None else False
+        else:
+            raise TypeError(
+                f"WSRL supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
+
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -190,12 +256,69 @@ class WSRL(_CalQLRolloutTrainingShell):
         self.offline_data_ratio: float = 0.0
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
+        meta = {
             **super()._checkpoint_metadata(),
             "online_cql_alpha": self.online_cql_alpha,
             "online_use_cql_loss": self.online_use_cql_loss,
             "offline_sampling": self.offline_sampling,
         }
+        if self._is_dict_obs:
+            meta.update(
+                {
+                    "image_keys": self._image_keys,
+                    "state_key": self._state_key,
+                    "use_proprio": self._use_proprio,
+                    "proprio_latent_dim": self._proprio_latent_dim,
+                    "image_fusion_mode": self._image_fusion_mode,
+                    "enable_stacking": self._enable_stacking,
+                }
+            )
+        return meta
+
+    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Box):
+            return FlattenExtractor
+        if isinstance(obs_space, spaces.Dict):
+            return CombinedExtractor
+        raise TypeError(
+            "WSRL supports Box or Dict observation spaces, got "
+            + str(type(obs_space))
+        )
+
+    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        if self._is_dict_obs:
+            return {
+                "image_keys": self._image_keys,
+                "state_key": self._state_key,
+                "image_encoder_factory": self._image_encoder_factory,
+                "proprio_latent_dim": self._proprio_latent_dim,
+                "use_proprio": self._use_proprio,
+                "fusion_mode": self._image_fusion_mode,
+                "enable_stacking": self._enable_stacking,
+            }
+        return {}
+
+    def _build_replay_buffer(self):
+        obs_space = self.env.single_observation_space
+        kwargs = {
+            "observation_space": obs_space,
+            "action_space": self.env.single_action_space,
+            "num_envs": self.num_envs,
+            "buffer_size": self.buffer_size,
+            "gamma": self.gamma,
+            "storage_device": self.buffer_device,
+            "sample_device": self.device,
+            "sparse_reward_mc": self.sparse_reward_mc,
+            "sparse_negative_reward": self.sparse_negative_reward,
+            "success_threshold": self.success_threshold,
+        }
+        if isinstance(obs_space, spaces.Dict):
+            return MCDictReplayBuffer(**kwargs)
+        return MCTensorReplayBuffer(**kwargs)
+
+    def _actor_stop_gradient(self) -> bool:
+        return self._is_dict_obs
 
     def _clear_replay_buffer(self) -> int:
         previous_len = len(self.replay_buffer)

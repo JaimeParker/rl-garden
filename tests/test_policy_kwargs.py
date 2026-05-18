@@ -5,8 +5,9 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import SAC
+from rl_garden.algorithms import SAC, WSRL
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
+from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 from rl_garden.encoders import BaseFeaturesExtractor, CombinedExtractor, FlattenExtractor
 
 
@@ -316,6 +317,43 @@ def test_sac_box_checkpoint_metadata_omits_image_fields():
 
 def test_sac_dict_checkpoint_metadata_includes_image_fields():
     agent = SAC(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+    meta = agent._checkpoint_metadata()
+    assert meta["image_keys"] == ("rgb",)
+    assert meta["use_proprio"] is True
+
+
+def test_wsrl_uses_flatten_extractor_by_default():
+    agent = WSRL(env=_state_env(), **_agent_kwargs())
+    assert isinstance(agent.policy.features_extractor, FlattenExtractor)
+    assert isinstance(agent.replay_buffer, MCTensorReplayBuffer)
+
+
+def test_wsrl_dict_obs_uses_combined_extractor_by_default():
+    agent = WSRL(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+    assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert isinstance(agent.replay_buffer, MCDictReplayBuffer)
+    assert agent._actor_stop_gradient() is True
+
+
+def test_wsrl_dict_obs_rejects_actor_encoder_updates():
+    with pytest.raises(ValueError, match="trained only by critic loss"):
+        WSRL(
+            env=_rgbd_env(),
+            **_agent_kwargs(),
+            detach_encoder_on_actor=False,
+        )
+
+
+def test_wsrl_box_obs_rejects_image_kwargs():
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        WSRL(env=_state_env(), **_agent_kwargs(), image_keys=("rgb",))
+
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        WSRL(env=_state_env(), **_agent_kwargs(), use_proprio=False)
+
+
+def test_wsrl_dict_checkpoint_metadata_includes_image_fields():
+    agent = WSRL(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
     meta = agent._checkpoint_metadata()
     assert meta["image_keys"] == ("rgb",)
     assert meta["use_proprio"] is True

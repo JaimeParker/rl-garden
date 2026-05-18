@@ -1,10 +1,10 @@
-"""Unit tests for WSRLRGBD with vision support."""
+"""Unit tests for WSRL with Dict vision observations."""
 import pytest
 import torch
 from gymnasium import spaces
 from unittest.mock import MagicMock
 
-from rl_garden.algorithms.wsrl_rgbd import WSRLRGBD
+from rl_garden.algorithms import WSRL
 
 
 @pytest.fixture
@@ -22,8 +22,8 @@ def rgbd_env():
 
 @pytest.fixture
 def wsrlrgbd_agent(rgbd_env):
-    """Create WSRLRGBD agent with small networks for testing."""
-    return WSRLRGBD(
+    """Create WSRL agent with small vision networks for testing."""
+    return WSRL(
         env=rgbd_env,
         buffer_size=100,
         buffer_device="cpu",
@@ -49,8 +49,8 @@ def wsrlrgbd_agent(rgbd_env):
     )
 
 
-class TestWSRLRGBDCreation:
-    """Test WSRLRGBD agent creation and initialization."""
+class TestWSRLDictCreation:
+    """Test WSRL Dict observation agent creation and initialization."""
 
     def test_agent_creation(self, wsrlrgbd_agent):
         assert wsrlrgbd_agent.n_critics == 4
@@ -74,7 +74,7 @@ class TestWSRLRGBDCreation:
 
     def test_actor_image_stop_gradient_required(self, rgbd_env):
         with pytest.raises(ValueError, match="stop_gradient=True"):
-            WSRLRGBD(
+            WSRL(
                 env=rgbd_env,
                 buffer_size=100,
                 buffer_device="cpu",
@@ -84,7 +84,7 @@ class TestWSRLRGBDCreation:
             )
 
 
-class TestWSRLRGBDObservations:
+class TestWSRLDictObservations:
     """Test handling of dict observations."""
 
     def test_dict_observation_forward(self, wsrlrgbd_agent):
@@ -143,8 +143,8 @@ class TestWSRLRGBDObservations:
         assert features.shape[0] == 4
 
 
-class TestWSRLRGBDTraining:
-    """Test WSRLRGBD training with dict observations."""
+class TestWSRLDictTraining:
+    """Test WSRL training with dict observations."""
 
     def test_add_dict_transitions(self, wsrlrgbd_agent):
         obs = {
@@ -221,8 +221,8 @@ class TestWSRLRGBDTraining:
         assert "alpha" in info
 
 
-class TestWSRLRGBDConfiguration:
-    """Test WSRLRGBD configuration options."""
+class TestWSRLDictConfiguration:
+    """Test WSRL Dict observation configuration options."""
 
     def test_custom_image_keys(self, rgbd_env):
         # Modify env to have depth with same size as rgb (HWC format)
@@ -232,7 +232,7 @@ class TestWSRLRGBDConfiguration:
             "state": spaces.Box(low=-1, high=1, shape=(4,), dtype=float),
         })
 
-        agent = WSRLRGBD(
+        agent = WSRL(
             env=rgbd_env,
             buffer_size=100,
             buffer_device="cpu",
@@ -246,7 +246,7 @@ class TestWSRLRGBDConfiguration:
         assert agent._state_key == "state"
 
     def test_without_proprio(self, rgbd_env):
-        agent = WSRLRGBD(
+        agent = WSRL(
             env=rgbd_env,
             buffer_size=100,
             buffer_device="cpu",
@@ -258,7 +258,7 @@ class TestWSRLRGBDConfiguration:
         assert not agent._use_proprio
 
     def test_custom_proprio_latent_dim(self, rgbd_env):
-        agent = WSRLRGBD(
+        agent = WSRL(
             env=rgbd_env,
             buffer_size=100,
             buffer_device="cpu",
