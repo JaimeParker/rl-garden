@@ -7,7 +7,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import SAC, WSRL
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
-from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 
 
 class DummyVecEnv:
@@ -202,6 +202,25 @@ def test_wsrl_checkpoint_restores_extra_state(tmp_path):
     assert loaded.use_cql_loss == agent.use_cql_loss
     assert loaded.use_td_loss == agent.use_td_loss
     assert torch.allclose(loaded._current_alpha(), agent._current_alpha())
+
+
+def test_wsrl_dict_checkpoint_roundtrip(tmp_path):
+    agent = WSRL(env=_rgbd_env(), **_wsrl_kwargs(), image_keys=("rgb",))
+    _add_rgbd_transitions(agent)
+    agent._global_step = 6
+
+    path = tmp_path / "wsrl_rgbd.pt"
+    agent.save(path, include_replay_buffer=True)
+
+    loaded = WSRL(env=_rgbd_env(), **_wsrl_kwargs(), image_keys=("rgb",))
+    loaded.load(path)
+
+    _assert_state_dict_equal(agent.policy.state_dict(), loaded.policy.state_dict())
+    assert loaded._global_step == 6
+    assert isinstance(loaded.replay_buffer, MCDictReplayBuffer)
+    assert loaded.replay_buffer.pos == agent.replay_buffer.pos
+    assert torch.equal(loaded.replay_buffer.obs["rgb"], agent.replay_buffer.obs["rgb"])
+    assert torch.equal(loaded.replay_buffer.obs["state"], agent.replay_buffer.obs["state"])
 
 
 def test_tensor_replay_buffer_file_roundtrip(tmp_path):

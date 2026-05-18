@@ -27,8 +27,7 @@ training, WSRL dataset generation, and offline-to-online launch commands, see
 - **SAC**: Online SAC using the shared SACCore update path for Box and Dict observations
 - **OfflineSAC**: Offline SAC scaffold over static replay buffers
 - **CQL / CalQL**: Pure offline CQL and Cal-QL pretraining algorithms
-- **WSRL**: State-based WSRL with CQL/Cal-QL
-- **WSRLRGBD**: Vision-based WSRL for RGB/RGBD observations
+- **WSRL**: Offline→online WSRL with CQL/Cal-QL for Box and Dict observations
 
 ### ✅ Core Components
 - **SACCore**: Shared actor/critic/temperature update mechanics
@@ -184,7 +183,7 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--critic_subsample_size 2`: Number of critics to subsample for target (default: 2)
 
 ### Network Architecture (`net_arch`)
-- `net_arch` is the primary network config interface for `SAC/WSRL/WSRLRGBD`.
+- `net_arch` is the primary network config interface for `SAC/WSRL`.
 - Supported forms:
   - `list[int]`: shared architecture for actor and critic, e.g. `[256, 256, 256]`
   - `dict(pi=[...], qf=[...])`: separate actor/critic MLPs, e.g. `{"pi": [256, 256], "qf": [256, 256]}`
@@ -358,10 +357,10 @@ agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
 agent.learn(total_timesteps=50_000)
 ```
 
-### Vision-Based WSRLRGBD
+### Vision-Based WSRL
 
 ```python
-from rl_garden.algorithms import WSRLRGBD
+from rl_garden.algorithms import WSRL
 from rl_garden.encoders import default_image_encoder_factory
 
 # Create environment with RGB observations
@@ -373,8 +372,8 @@ env_cfg = ManiSkillEnvConfig(
 )
 env = make_maniskill_env(env_cfg)
 
-# Create WSRLRGBD agent
-agent = WSRLRGBD(
+# Create WSRL agent
+agent = WSRL(
     env=env,
     net_arch={"pi": [256, 256], "qf": [256, 256]},
     n_critics=10,
@@ -398,7 +397,6 @@ OffPolicyAlgorithm
 └── _CQLRolloutTrainingShell(CQLCore)
     └── _CalQLRolloutTrainingShell
         └── WSRL
-            └── WSRLRGBD
 
 OfflineRLAlgorithm
 ├── OfflineSAC(SACCore)
@@ -436,15 +434,12 @@ OfflineRLAlgorithm
    - Supports flat state observations and dict/RGBD observation groups
 
 6. **WSRL Algorithm** (`rl_garden/algorithms/wsrl.py`)
-   - Inherits `CalQL`
+   - Inherits the Cal-QL rollout shell
+   - Auto-selects `FlattenExtractor`/`MCTensorReplayBuffer` for Box observations
+   - Auto-selects `CombinedExtractor`/`MCDictReplayBuffer` for Dict observations
    - Offline→online mode switching
    - Empty/append/mixed replay modes
    - Offline probe and WSRL phase logging
-
-7. **WSRLRGBD** (`rl_garden/algorithms/wsrl_rgbd.py`)
-   - Vision-based variant
-   - Encoder detachment on actor path
-   - Dict observation support
 
 ## Test Coverage
 

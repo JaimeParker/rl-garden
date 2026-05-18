@@ -688,7 +688,7 @@ class CQLCore(SACCore):
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
         action, log_prob, features = self.policy.actor_action_log_prob(
-            obs, stop_gradient=False
+            obs, stop_gradient=self._actor_stop_gradient()
         )
         min_q = self.policy.min_q_value(
             features, action, subsample_size=None, target=False
