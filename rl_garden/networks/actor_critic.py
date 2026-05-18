@@ -217,6 +217,77 @@ class SquashedGaussianActor(nn.Module):
         return torch.tanh(mean) * self.action_scale + self.action_bias
 
 
+class DiagGaussianActor(nn.Module):
+    """Unsquashed diagonal Gaussian actor used by PPO-style algorithms.
+
+    Actions are sampled in env action coordinates and may be clamped by the
+    training loop before stepping the environment. Log-probabilities are always
+    evaluated on the unclamped action tensor, matching SB3 and ManiSkill PPO.
+    """
+
+    def __init__(
+        self,
+        features_dim: int,
+        action_space: spaces.Box,
+        hidden_dims: Sequence[int],
+        *,
+        log_std_init: float = -0.5,
+        use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
+    ) -> None:
+        super().__init__()
+        act_dim = int(np.prod(action_space.shape))
+        self.trunk, trunk_dim = _build_trunk(
+            features_dim,
+            hidden_dims,
+            backbone_type=backbone_type,
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        self.mean = nn.Linear(trunk_dim, act_dim)
+        self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
+
+        high = torch.as_tensor(action_space.high, dtype=torch.float32)
+        low = torch.as_tensor(action_space.low, dtype=torch.float32)
+        self.register_buffer("action_high", high)
+        self.register_buffer("action_low", low)
+
+    def forward(self, features: torch.Tensor) -> torch.distributions.Normal:
+        mean = self.mean(self.trunk(features))
+        log_std = self.log_std.expand_as(mean)
+        return torch.distributions.Normal(mean, log_std.exp())
+
+    def action_log_prob(
+        self, features: torch.Tensor, deterministic: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        dist = self(features)
+        action = dist.mean if deterministic else dist.sample()
+        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        return action, log_prob, entropy
+
+    def evaluate_action_log_prob(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        dist = self(features)
+        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        return log_prob, entropy
+
+    def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
+        return self(features).mean
+
+    def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
+        return torch.max(torch.min(actions, self.action_high), self.action_low)
+
+
 class _QHead(nn.Module):
     """Single Q-network: trunk over (features, actions) -> scalar Q."""
 
