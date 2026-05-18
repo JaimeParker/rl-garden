@@ -176,17 +176,29 @@ class VisionWSRLTrainingArgs(WSRLTrainingArgs, VisionArgs):
 
 
 @dataclass
-class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
+class OfflineAlgorithmArgs:
     # ``wsrl-calql`` is a deprecated alias for ``wsrl`` kept so historical
     # commands keep working; both produce the same WSRL agent.
-    algorithm: Literal["cql", "calql", "wsrl", "wsrl-calql"] = "calql"
+    algorithm: Literal["cql", "calql", "wsrl", "wsrl-calql", "iql"] = "calql"
     # Backward-compatible alias used by examples/pretrain_cql_offline.py.
     agent: Optional[Literal["cql", "calql"]] = None
+
+
+@dataclass
+class OfflineDatasetArgs:
     num_offline_steps: int = 100_000
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
     save_filename: Optional[str] = None
+    reward_scale: float = 1.0
+    reward_bias: float = 0.0
+    action_low: float = -1.0
+    action_high: float = 1.0
+    spec_num_envs: int = 1
 
+
+@dataclass
+class OfflineBufferArgs:
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
     batch_size: int = 256
@@ -196,12 +208,9 @@ class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
     utd: float = 1.0
     offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
 
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    alpha_lr: float = 1e-4
-    cql_alpha_lr: float = 3e-4
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
+
+@dataclass
+class OfflineOptimizerArgs:
     weight_decay: float = 0.0
     use_adamw: bool = False
     lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
@@ -210,12 +219,17 @@ class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
     lr_min_ratio: float = 0.0
     grad_clip_norm: Optional[float] = None
 
+
+@dataclass
+class OfflineSACFamilyArgs:
+    policy_lr: float = 1e-4
+    q_lr: float = 3e-4
+    alpha_lr: float = 1e-4
+    cql_alpha_lr: float = 3e-4
+    policy_frequency: int = 1
+    target_network_frequency: int = 1
     use_compile: bool = False
     compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
-
-    n_critics: int = 10
-    critic_subsample_size: int = 2
-
     use_cql_loss: bool = True
     use_td_loss: bool = True
     cql_n_actions: int = 10
@@ -230,43 +244,94 @@ class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
     cql_clip_diff_min: float = float("-inf")
     cql_clip_diff_max: float = float("inf")
     backup_entropy: bool = False
-
     use_calql: bool = True
     calql_bound_random_actions: bool = False
+    sparse_reward_mc: bool = False
+    sparse_negative_reward: float = 0.0
+    success_threshold: float = 0.5
+    success_key: Optional[str] = None
 
+
+@dataclass
+class OfflineIQLArgs:
+    actor_lr: float = 3e-4
+    critic_value_lr: float = 3e-4
+    expectile: float = 0.7
+    temperature: float = 3.0
+    adv_clip_max: float = 100.0
+
+
+@dataclass
+class OfflineNetworkArgs:
+    n_critics: int = 10
+    critic_subsample_size: int = 2
     actor_use_layer_norm: bool = True
     critic_use_layer_norm: bool = True
+    value_use_layer_norm: bool = False
     actor_use_group_norm: bool = False
     critic_use_group_norm: bool = False
+    value_use_group_norm: bool = False
     num_groups: int = 32
     actor_dropout_rate: Optional[float] = None
     critic_dropout_rate: Optional[float] = None
+    value_dropout_rate: Optional[float] = None
     kernel_init: Optional[
         Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"
 
-    sparse_reward_mc: bool = False
-    sparse_negative_reward: float = 0.0
-    success_threshold: float = 0.5
-    success_key: Optional[str] = None
 
-    reward_scale: float = 1.0
-    reward_bias: float = 0.0
+@dataclass
+class OfflineVisionArgs:
+    # These mirror VisionArgs without requiring an online ManiSkill env to infer
+    # observation spaces.
+    obs_mode: str = "rgb"
+    include_state: bool = True
+    encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    encoder_features_dim: int = 256
+    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
+    pretrained_weights: Optional[str] = None
+    freeze_resnet_encoder: bool = False
+    freeze_resnet_backbone: bool = False
+    per_camera_rgbd: bool = False
+
+
+@dataclass
+class OfflineRuntimeArgs:
     seed: int = 1
     device: str = "auto"
 
-    action_low: float = -1.0
-    action_high: float = 1.0
-    spec_num_envs: int = 1
 
-    # --- offline eval (optional) ---
+@dataclass
+class OfflineEvalArgs:
     env_id: Optional[str] = None
     num_eval_envs: int = 1
     control_mode: str = "pd_joint_delta_pos"
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
+
+@dataclass
+class OfflinePretrainArgs(
+    OfflineEvalArgs,
+    OfflineRuntimeArgs,
+    OfflineVisionArgs,
+    OfflineNetworkArgs,
+    OfflineIQLArgs,
+    OfflineSACFamilyArgs,
+    OfflineOptimizerArgs,
+    OfflineBufferArgs,
+    OfflineDatasetArgs,
+    OfflineAlgorithmArgs,
+    LoggingArgs,
+    CheckpointArgs,
+):
+    """Generic offline pretraining CLI.
+
+    The CLI remains backward-compatible and flat, but fields are grouped above
+    by ownership so builders can consume only the parameters relevant to the
+    selected algorithm.
+    """
 
 
 CQLTrainingArgs = OfflinePretrainArgs

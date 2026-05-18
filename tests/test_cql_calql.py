@@ -176,7 +176,7 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
     dataset = tmp_path / "demo.h5"
     _write_demo_h5(dataset)
 
-    for algorithm in ("cql", "calql", "wsrl-calql"):
+    for algorithm in ("cql", "calql", "wsrl-calql", "iql"):
         checkpoint_dir = tmp_path / algorithm
         cmd = [
             sys.executable,

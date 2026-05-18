@@ -5,7 +5,11 @@ from rl_garden.buffers.mc_buffer import (
     MCReplayBufferSample,
     MCTensorReplayBuffer,
 )
-from rl_garden.buffers.maniskill_h5 import load_maniskill_h5_to_replay_buffer
+from rl_garden.buffers.maniskill_h5 import (
+    infer_box_specs_from_h5,
+    infer_specs_from_h5,
+    load_maniskill_h5_to_replay_buffer,
+)
 from rl_garden.buffers.residual_buffer import (
     ResidualDictReplayBuffer,
     ResidualTensorReplayBuffer,
@@ -22,5 +26,7 @@ __all__ = [
     "ResidualDictReplayBuffer",
     "ResidualTensorReplayBuffer",
     "TensorReplayBuffer",
+    "infer_box_specs_from_h5",
+    "infer_specs_from_h5",
     "load_maniskill_h5_to_replay_buffer",
 ]
