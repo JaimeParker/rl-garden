@@ -13,6 +13,10 @@ from rl_garden.envs.custom.agents.controllers.pd_ee_twist import (
 from rl_garden.envs.custom.agents.robots.panda.panda_gripper_closed import (
     PandaGripperClosed,
 )
+from robot_infra.controller.simulator.maniskill import (
+    ImpedanceEEDeltaPoseControllerConfig,
+    ImpedanceEETwistControllerConfig,
+)
 
 
 @register_agent()
@@ -58,7 +62,27 @@ class PandaGripperClosedWoNorm(PandaGripperClosed):
             urdf_path=self.urdf_path,
             normalize_action=False,
         )
+        arm_impedance_ee_delta_pose_raw = ImpedanceEEDeltaPoseControllerConfig(
+            joint_names=self.arm_joint_names,
+            action_lower=-0.1,
+            action_upper=0.1,
+            torque_limit=self.arm_force_limit,
+            ee_link=self.ee_link_name,
+            urdf_path=self.urdf_path,
+            normalize_action=False,
+        )
+        arm_impedance_ee_twist_raw = ImpedanceEETwistControllerConfig(
+            joint_names=self.arm_joint_names,
+            action_lower=-0.1,
+            action_upper=0.1,
+            torque_limit=self.arm_force_limit,
+            ee_link=self.ee_link_name,
+            urdf_path=self.urdf_path,
+            normalize_action=False,
+        )
         configs["pd_ee_delta_pose"]["arm"] = arm_pd_ee_delta_pose_raw
         configs["pd_joint_delta_pos"]["arm"] = arm_pd_joint_delta_pos_raw
         configs["pd_ee_twist"]["arm"] = arm_pd_ee_twist_raw
+        configs["impedance_ee_delta_pose"]["arm"] = arm_impedance_ee_delta_pose_raw
+        configs["impedance_ee_twist"]["arm"] = arm_impedance_ee_twist_raw
         return deepcopy_dict(configs)
