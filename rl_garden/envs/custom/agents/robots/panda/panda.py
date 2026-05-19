@@ -14,6 +14,10 @@ from mani_skill.utils.structs.actor import Actor
 from rl_garden.envs.custom.agents.controllers.pd_ee_twist import (
     PDEETwistControllerConfig,
 )
+from robot_infra.controller.simulator.maniskill import (
+    ImpedanceEEDeltaPoseControllerConfig,
+    ImpedanceEETwistControllerConfig,
+)
 
 
 @register_agent(override=True)
@@ -114,6 +118,22 @@ class Panda(BaseAgent):
             urdf_path=self.urdf_path,
             # normalize_action=False,
         )
+        arm_impedance_ee_delta_pose = ImpedanceEEDeltaPoseControllerConfig(
+            joint_names=self.arm_joint_names,
+            action_lower=-0.1,
+            action_upper=0.1,
+            torque_limit=self.arm_force_limit,
+            ee_link=self.ee_link_name,
+            urdf_path=self.urdf_path,
+        )
+        arm_impedance_ee_twist = ImpedanceEETwistControllerConfig(
+            joint_names=self.arm_joint_names,
+            action_lower=-0.1,
+            action_upper=0.1,
+            torque_limit=self.arm_force_limit,
+            ee_link=self.ee_link_name,
+            urdf_path=self.urdf_path,
+        )
         # PD ee position
         arm_pd_ee_delta_pos = PDEEPosControllerConfig(
             joint_names=self.arm_joint_names,
@@ -194,6 +214,12 @@ class Panda(BaseAgent):
             pd_joint_pos=dict(arm=arm_pd_joint_pos, gripper=gripper_pd_joint_pos),
             pd_ee_twist=dict(
                 arm=arm_pd_ee_twist, gripper=gripper_pd_joint_pos
+            ),
+            impedance_ee_delta_pose=dict(
+                arm=arm_impedance_ee_delta_pose, gripper=gripper_pd_joint_pos
+            ),
+            impedance_ee_twist=dict(
+                arm=arm_impedance_ee_twist, gripper=gripper_pd_joint_pos
             ),
             pd_ee_delta_pos=dict(arm=arm_pd_ee_delta_pos, gripper=gripper_pd_joint_pos),
             pd_ee_delta_pose=dict(
