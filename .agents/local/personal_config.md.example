@@ -18,4 +18,5 @@ Use these local bindings with those SOPs:
 - Container name: `<container-name>`
 - Container workspace path: `<container-workspace-path>`
 - Python environment bin path: `<python-env-bin-path>`
+- Container RoboTwin root path: `<container-robotwin-root-path>`
 - Mutagen session name: `<mutagen-session-name>`

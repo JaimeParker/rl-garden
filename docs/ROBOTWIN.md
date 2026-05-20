@@ -134,6 +134,8 @@ because SAPIEN scene creation/reset is not safe to run freely in many threads.
 - prepares RoboTwin task args, including camera, data type, domain
   randomization, embodiment files, and robot configs;
 - calls `setup_demo()` on reset;
+- retries reset with `seed + 1` if RoboTwin reports an unstable randomized
+  scene;
 - injects dense reward with `build_task_reward()` when `reward_mode="dense"`;
 - converts rl-garden actions to RoboTwin qpos+gripper commands;
 - tracks reward state needed by dense reward primitives;
@@ -239,6 +241,15 @@ success_once
 success_at_end   when ignore_terminations=True
 ```
 
+RoboTwin can raise `UnStableError` during `setup_demo()` when a sampled seed
+places objects in an unstable physical state. `RoboTwinTaskAdapter` handles
+that case the same way as the RLinf_support vector env: it logs a warning,
+clears the task cache, increments the seed, and retries until setup succeeds.
+Every reset records the final successful seed back into `reset_state_ids` and
+reset `infos["env_seed"]`, so experiment logs reflect the scene that actually
+ran. Non-`UnStableError` exceptions still fail fast because they usually
+indicate an import, asset, planner, or task configuration problem.
+
 ## SAC Replay Memory
 
 RoboTwin's native visual observations are much larger than the images normally
@@ -299,12 +310,20 @@ RoboTwin itself must be available separately. Either install it into the
 environment so `import envs.<task_name>` works, or pass `--robotwin-root` to a
 RoboTwin checkout.
 
+RoboTwin may load curobo/warp during reset. In containers, set `HOME=/tmp` and
+`XDG_CACHE_HOME=/tmp` so warp writes its kernel cache to a writable temporary
+directory instead of `/.cache` or a synced workspace. This avoids permission
+failures and root-owned cache files.
+
 Minimal PPO command:
 
 ```bash
-MPLCONFIGDIR=/tmp python examples/train_ppo_robotwin_rgbd.py \
+HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
+python examples/train_ppo_robotwin_rgbd.py \
   --env-id place_shoe \
   --robotwin-root /path/to/RoboTwin \
+  --camera-width 64 \
+  --camera-height 64 \
   --num-envs 4 \
   --num-eval-envs 2 \
   --total-timesteps 10000 \
@@ -313,14 +332,22 @@ MPLCONFIGDIR=/tmp python examples/train_ppo_robotwin_rgbd.py \
   --encoder plain_conv \
   --image-fusion-mode per_key \
   --reward-mode dense \
-  --control-mode delta_joint_pos \
-  --device cuda
+  --control-mode delta_joint_pos
+```
+
+Place-empty-cup PPO with the dedicated launcher:
+
+```bash
+RLG_ROBOTWIN_ROOT=/path/to/RoboTwin \
+HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
+scripts/train_ppo_robotwin_place_empty_cup_rgbd.sh
 ```
 
 Minimal SAC command:
 
 ```bash
-MPLCONFIGDIR=/tmp python examples/train_sac_robotwin_rgbd.py \
+HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
+python examples/train_sac_robotwin_rgbd.py \
   --env-id place_shoe \
   --robotwin-root /path/to/RoboTwin \
   --num-envs 4 \
@@ -338,43 +365,41 @@ MPLCONFIGDIR=/tmp python examples/train_sac_robotwin_rgbd.py \
   --buffer-device cuda
 ```
 
-Remote command pattern for `6017`:
+Generic remote/container command pattern:
 
 ```bash
-ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden bash -lc '
-  cd /workspace/rl-garden &&
-  export PATH=/opt/venv/openvla/bin:\$PATH &&
-  export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} &&
-  MPLCONFIGDIR=/tmp python -u examples/train_ppo_robotwin_rgbd.py \
-    --env-id place_shoe \
-    --robotwin-root /workspace/RoboTwin \
+ssh <ssh-alias> "docker exec \
+  -e CUDA_VISIBLE_DEVICES=<gpu-id> \
+  -e HOME=/tmp \
+  -e XDG_CACHE_HOME=/tmp \
+  <container-name> bash -lc '
+  cd <container-workspace-path> &&
+  export PATH=<python-env-bin-path>:\$PATH &&
+  export PYTHONPATH=<container-workspace-path>:<container-robotwin-root-path>:\${PYTHONPATH:-} &&
+  RLG_ROBOTWIN_ROOT=<container-robotwin-root-path> \
+  MPLCONFIGDIR=/tmp scripts/train_ppo_robotwin_place_empty_cup_rgbd.sh \
     --num-envs 4 \
     --num-eval-envs 2 \
-    --total-timesteps 10000 \
-    --num-steps 16 \
-    --step-lim 400 \
-    --encoder plain_conv \
-    --image-fusion-mode per_key \
-    --reward-mode dense \
-    --control-mode delta_joint_pos \
-    --device cuda
+    --total-timesteps 10000
 '"
 ```
 
-Adjust `--robotwin-root` to the actual RoboTwin path in the container. If
-RoboTwin is already importable in that Python environment, omit it.
+Adjust `<container-robotwin-root-path>` to the actual RoboTwin path in the
+container. Agents should read `.agents/rules/remote-training-sop.md` and their
+ignored `.agents/local/personal_config.md` for the concrete remote bindings.
 
 For long runs, use tmux and log to the remote host:
 
 ```bash
-ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
+ssh <ssh-alias> "mkdir -p <remote-project-path>/logs && \
   tmux new-session -d -s rlg_robotwin_place_shoe_ppo \
-  \"docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden bash -lc ' \
-    cd /workspace/rl-garden && \
-    export PATH=/opt/venv/openvla/bin:\\\$PATH && \
-    export PYTHONPATH=/workspace/rl-garden:\\\${PYTHONPATH:-} && \
+  \"docker exec -e CUDA_VISIBLE_DEVICES=<gpu-id> -e HOME=/tmp -e XDG_CACHE_HOME=/tmp <container-name> bash -lc ' \
+    cd <container-workspace-path> && \
+    export PATH=<python-env-bin-path>:\\\$PATH && \
+    export PYTHONPATH=<container-workspace-path>:<container-robotwin-root-path>:\\\${PYTHONPATH:-} && \
     MPLCONFIGDIR=/tmp python -u examples/train_ppo_robotwin_rgbd.py \
       --env-id place_shoe \
+      --robotwin-root <container-robotwin-root-path> \
       --num-envs 4 \
       --num-eval-envs 2 \
       --total-timesteps 200000 \
@@ -383,8 +408,7 @@ ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
       --encoder plain_conv \
       --image-fusion-mode per_key \
       --reward-mode dense \
-      --device cuda \
-  ' 2>&1 | tee /data0/liuzhaohong/Projects/rl-garden/logs/rlg_robotwin_place_shoe_ppo_\$(date +%Y%m%d_%H%M%S).log\""
+  ' 2>&1 | tee <remote-project-path>/logs/rlg_robotwin_place_shoe_ppo_\$(date +%Y%m%d_%H%M%S).log\""
 ```
 
 ## Tests
@@ -398,26 +422,21 @@ MPLCONFIGDIR=/tmp pytest -q \
   tests/test_policy_kwargs.py
 ```
 
-On `6017`, use `PYTHONPATH` if the package is not installed editable:
+In a remote/container environment, use `PYTHONPATH` if the package is not
+installed editable:
 
 ```bash
-ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden bash -lc '
-  cd /workspace/rl-garden &&
-  export PATH=/opt/venv/openvla/bin:\$PATH &&
-  export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} &&
+ssh <ssh-alias> "docker exec <container-name> bash -lc '
+  cd <container-workspace-path> &&
+  export PATH=<python-env-bin-path>:\$PATH &&
+  export PYTHONPATH=<container-workspace-path>:\${PYTHONPATH:-} &&
   MPLCONFIGDIR=/tmp pytest -q tests/test_robotwin_env.py tests/test_ppo.py tests/test_policy_kwargs.py
 '"
 ```
 
-This passed remotely with:
-
-```text
-35 passed, 3 warnings in 10.20s
-```
-
 Two operational notes from remote testing:
 
-- Without `PYTHONPATH=/workspace/rl-garden`, tests can fail with
+- Without `PYTHONPATH=<container-workspace-path>`, tests can fail with
   `ModuleNotFoundError: No module named 'rl_garden'` if the package is not
   installed editable in the container.
 - On crowded GPUs, CUDA tests can fail with out-of-memory. Re-run on a less
@@ -427,13 +446,14 @@ When running tests inside the container as root, clean generated caches after
 the command so Mutagen does not have to sync root-owned artifacts:
 
 ```bash
-find /workspace/rl-garden -name __pycache__ -type d -prune -exec rm -rf {} +
-rm -rf /workspace/rl-garden/.pytest_cache
+find <container-workspace-path>/rl_garden <container-workspace-path>/examples <container-workspace-path>/tests \
+  -name __pycache__ -type d -prune -exec rm -rf {} +
+rm -rf <container-workspace-path>/.pytest_cache
 ```
 
 ## Current Limits
 
 This is the v1 integration. The env contract and PPO unit path are in place,
-but a full RoboTwin/SAPIEN training smoke has not yet been completed locally.
-The next validation step is a short remote `place_shoe` PPO run in a container
-where RoboTwin is importable and assets are available.
+and a short remote PPO smoke has completed for `place_empty_cup` with two
+parallel RoboTwin envs and `64x64` image observations. Broader validation is
+still needed for long runs, larger vector sizes, and additional tasks.
