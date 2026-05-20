@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import sys
 import types
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 
 from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
 from rl_garden.envs.robotwin.rewards import build_task_reward
+
+
+LOGGER = logging.getLogger(__name__)
+UNSTABLE_RETRY_WARNING_INTERVAL = 20
 
 
 @dataclass
@@ -31,10 +37,24 @@ def ensure_robotwin_importable(robotwin_root: Optional[str]) -> None:
             sys.path.insert(0, root)
 
 
+@contextmanager
+def robotwin_workdir(robotwin_root: Optional[str]) -> Iterator[None]:
+    if robotwin_root is None:
+        yield
+        return
+    previous = os.getcwd()
+    os.chdir(os.path.abspath(robotwin_root))
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
 def make_task(task_name: str, robotwin_root: Optional[str] = None):
     ensure_robotwin_importable(robotwin_root)
     try:
-        module = importlib.import_module(f"envs.{task_name}")
+        with robotwin_workdir(robotwin_root):
+            module = importlib.import_module(f"envs.{task_name}")
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
             "Could not import RoboTwin task module. Install RoboTwin or set "
@@ -90,7 +110,38 @@ class RoboTwinTaskAdapter:
         args.setdefault("save_path", "./data")
         args.setdefault("clear_cache_freq", self.cfg.clear_cache_freq)
         _prepare_robotwin_task_args(args)
-        self.task.setup_demo(now_ep_num=self.env_seed, seed=self.env_seed, **args)
+        trial_seed = self.env_seed
+        retry_count = 0
+        while True:
+            try:
+                with robotwin_workdir(self.cfg.robotwin_root):
+                    self.task.setup_demo(now_ep_num=trial_seed, seed=trial_seed, **args)
+                break
+            except Exception as exc:
+                if type(exc).__name__ != "UnStableError":
+                    raise
+                retry_count += 1
+                LOGGER.warning(
+                    "RoboTwin reset hit UnStableError; env_id=%s task=%s "
+                    "seed=%s next_seed=%s error=%s",
+                    self.env_id,
+                    self.task_name,
+                    trial_seed,
+                    trial_seed + 1,
+                    exc,
+                )
+                self.task.close_env(clear_cache=True)
+                if retry_count % UNSTABLE_RETRY_WARNING_INTERVAL == 0:
+                    LOGGER.warning(
+                        "RoboTwin reset is still retrying after %s unstable seeds; "
+                        "env_id=%s task=%s current_seed=%s",
+                        retry_count,
+                        self.env_id,
+                        self.task_name,
+                        trial_seed,
+                    )
+                trial_seed += 1
+        self.env_seed = trial_seed
         self.task.step_lim = int(args["step_lim"])
         self.task.take_action_cnt = 0
         self.task.run_steps = 0
@@ -101,7 +152,9 @@ class RoboTwinTaskAdapter:
             build_task_reward(self.task_name, self.task)
         self.elapsed_steps = 0
         self.last_dense_reward = 0.0
-        return self.get_obs()
+        obs = self.get_obs()
+        obs["_env_seed"] = self.env_seed
+        return obs
 
     def step(self, action: np.ndarray) -> StepResult:
         if self.task is None:

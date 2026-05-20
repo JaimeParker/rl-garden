@@ -41,6 +41,10 @@ class Args(VisionPPOTrainingArgs):
 
 
 def _make_env(args: Args, num_envs: int, is_eval: bool = False):
+    image_size = (
+        int(args.camera_height or 64),
+        int(args.camera_width or 64),
+    )
     task_cfg = {
         "task_name": args.env_id,
         "step_lim": args.step_lim,
@@ -78,9 +82,10 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             control_mode=args.control_mode,  # type: ignore[arg-type]
             joint_delta_scale=args.joint_delta_scale,
             gripper_delta_scale=args.gripper_delta_scale,
+            image_size=image_size,
             auto_reset=True,
             ignore_terminations=False,
-            device=args.device,
+            device="auto",
         )
     )
 

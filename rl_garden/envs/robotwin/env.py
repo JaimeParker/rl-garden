@@ -80,8 +80,12 @@ class RoboTwinEnv(gym.Env):
             self._generator.manual_seed(seed)
         self.reset_state_ids = self._next_reset_state_ids()
         raw_obs = self.executor.reset(env_seeds=self.reset_state_ids.tolist())
+        self._sync_actual_reset_state_ids(raw_obs)
         self._reset_metrics()
-        return self._tensor_obs(raw_obs), {"instructions": [o.get("instruction") for o in raw_obs]}
+        return self._tensor_obs(raw_obs), {
+            "instructions": [o.get("instruction") for o in raw_obs],
+            "env_seed": self.reset_state_ids.clone(),
+        }
 
     def step(self, actions):
         actions_np = self._actions_to_numpy(actions)
@@ -167,6 +171,7 @@ class RoboTwinEnv(gym.Env):
         self._update_reset_state_ids(env_idx)
         seeds = [int(self.reset_state_ids[idx].item()) for idx in env_idx]
         raw_obs = self.executor.reset(env_indices=env_idx, env_seeds=seeds)
+        self._sync_actual_reset_state_ids(raw_obs, env_idx)
         reset_obs = self._tensor_obs(raw_obs)
         for key, value in obs.items():
             value[dones] = reset_obs[key][dones]
@@ -242,6 +247,20 @@ class RoboTwinEnv(gym.Env):
         new_ids = self._next_reset_state_ids()
         for idx in env_idx:
             self.reset_state_ids[idx] = new_ids[idx]
+
+    def _sync_actual_reset_state_ids(
+        self,
+        raw_obs: list[dict[str, Any]],
+        env_idx: Optional[list[int]] = None,
+    ) -> None:
+        indices = list(range(self.num_envs)) if env_idx is None else list(env_idx)
+        for offset, idx in enumerate(indices):
+            source_idx = idx if len(raw_obs) == self.num_envs else offset
+            if source_idx >= len(raw_obs):
+                continue
+            actual_seed = raw_obs[source_idx].get("_env_seed")
+            if actual_seed is not None:
+                self.reset_state_ids[idx] = int(actual_seed)
 
 
 def make_robotwin_env(cfg: RoboTwinEnvConfig) -> RoboTwinEnv:

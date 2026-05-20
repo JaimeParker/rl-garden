@@ -95,6 +95,25 @@ def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch)
     assert cfg.task_config["eval_video_log"] is True
 
 
+def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.num_envs == 2
+    assert cfg.device == "auto"
+    assert cfg.image_size == (64, 64)
+
+
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
     args = _args("train_sac_rgbd_peg.py")
 
