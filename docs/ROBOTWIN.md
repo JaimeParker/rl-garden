@@ -189,7 +189,7 @@ Dense reward primitives are adapted from RoboTwin `RLinf_support`:
 
 Task-specific reward factories live in
 `rl_garden/envs/robotwin/rewards/registry.py`. The current registry covers the
-10 RoboTwin env configs that exist in RLinf:
+RoboTwin env configs that rl-garden supports for dense rewards:
 
 ```text
 adjust_bottle
@@ -202,6 +202,7 @@ pick_dual_bottles
 place_container_plate
 place_empty_cup
 place_shoe
+stack_bowls_three
 ```
 
 If a task is not in the registry and `reward_mode="dense"`, reset will fail

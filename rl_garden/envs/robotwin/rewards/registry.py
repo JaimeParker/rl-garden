@@ -16,6 +16,7 @@ from rl_garden.envs.robotwin.reward import (
     Pick,
     Place,
     Reward,
+    Stack,
     Success,
 )
 
@@ -239,6 +240,27 @@ def build_place_shoe(task):
     )
 
 
+def build_stack_bowls_three(task):
+    return Reward.build_top(
+        {
+            "type": "Serial",
+            "subtasks": [
+                Stack(
+                    task,
+                    max_reward=8.0,
+                    entities=[task.bowl1, task.bowl2, task.bowl3],
+                    eps=[0.13, 0.03],
+                    a_ds=[2, 2],
+                    c_ds=[3, 5],
+                    target_pose=[0, -0.1],
+                ),
+                Success(),
+            ],
+            "transition_rewards": [2.0],
+        }
+    )
+
+
 REWARD_BUILDERS: dict[str, RewardBuilder] = {
     "adjust_bottle": build_adjust_bottle,
     "beat_block_hammer": build_beat_block_hammer,
@@ -250,6 +272,7 @@ REWARD_BUILDERS: dict[str, RewardBuilder] = {
     "place_container_plate": build_place_container_plate,
     "place_empty_cup": build_place_empty_cup,
     "place_shoe": build_place_shoe,
+    "stack_bowls_three": build_stack_bowls_three,
 }
 
 
