@@ -75,7 +75,9 @@ exec env \
     --num-eval-envs 2 \
     --total-timesteps 1000000 \
     --num-steps 16 \
-    --step-lim 400 \
+    --step-lim 200 \
+    --embodiment piper piper 0.6 \
+    --no-collect-wrist-camera \
     --encoder plain_conv \
     --image-fusion-mode per_key \
     --reward-mode dense \

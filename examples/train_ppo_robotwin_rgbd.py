@@ -38,6 +38,7 @@ class Args(VisionPPOTrainingArgs):
     control_mode: str = "delta_joint_pos"
     joint_delta_scale: float = 0.05
     gripper_delta_scale: float = 0.2
+    collect_wrist_camera: bool = True
 
 
 def _make_env(args: Args, num_envs: int, is_eval: bool = False):
@@ -58,7 +59,7 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             "head_camera_type": "D435",
             "wrist_camera_type": "D435",
             "collect_head_camera": True,
-            "collect_wrist_camera": True,
+            "collect_wrist_camera": args.collect_wrist_camera,
         },
         "data_type": {"rgb": True, "qpos": True},
         "save_path": "./data",
@@ -83,6 +84,7 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             joint_delta_scale=args.joint_delta_scale,
             gripper_delta_scale=args.gripper_delta_scale,
             image_size=image_size,
+            include_wrist_cameras=args.collect_wrist_camera,
             auto_reset=True,
             ignore_terminations=False,
             device="auto",
