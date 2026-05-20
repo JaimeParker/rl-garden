@@ -5,7 +5,7 @@ import torch
 
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
-from rl_garden.envs.robotwin.rewards import supported_reward_tasks
+from rl_garden.envs.robotwin.rewards import build_task_reward, supported_reward_tasks
 
 
 class FakeExecutor:
@@ -52,6 +52,26 @@ class _Robot:
 
     def get_right_arm_jointState(self):
         return [0.5] * 7
+
+
+class _Pose:
+    def __init__(self, p):
+        self.p = np.array(p, dtype=np.float32)
+
+
+class _Actor:
+    def __init__(self, p):
+        self._pose = _Pose(p)
+
+    def get_pose(self):
+        return self._pose
+
+
+class _StackBowlsTask:
+    def __init__(self):
+        self.bowl1 = _Actor([0.0, -0.1, 0.76])
+        self.bowl2 = _Actor([0.0, -0.1, 0.79])
+        self.bowl3 = _Actor([0.0, -0.1, 0.82])
 
 
 def test_robotwin_env_reset_step_and_auto_reset_contract():
@@ -102,4 +122,13 @@ def test_reward_registry_covers_rlinf_robotwin_env_configs():
         "place_container_plate",
         "place_empty_cup",
         "place_shoe",
+        "stack_bowls_three",
     )
+
+
+def test_stack_bowls_three_dense_reward_factory_builds():
+    task = _StackBowlsTask()
+    reward = build_task_reward("stack_bowls_three", task)
+    reward.update()
+    assert reward.compute_reward() > 0.0
+    assert task.reward is reward
