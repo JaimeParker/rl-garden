@@ -10,5 +10,12 @@ def register_custom_envs() -> None:
 register_custom_envs()
 
 from rl_garden.envs.maniskill import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.envs.robotwin import RoboTwinEnvConfig, make_robotwin_env
 
-__all__ = ["ManiSkillEnvConfig", "make_maniskill_env", "register_custom_envs"]
+__all__ = [
+    "ManiSkillEnvConfig",
+    "RoboTwinEnvConfig",
+    "make_maniskill_env",
+    "make_robotwin_env",
+    "register_custom_envs",
+]
