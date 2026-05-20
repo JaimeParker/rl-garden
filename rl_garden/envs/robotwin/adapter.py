@@ -412,6 +412,8 @@ def _prepare_robotwin_task_args(args: dict[str, Any]) -> None:
         args["dual_arm_embodied"] = True
     elif len(embodiment) == 3:
         left_name, right_name, args["embodiment_dis"] = embodiment
+        if isinstance(args["embodiment_dis"], str):
+            args["embodiment_dis"] = float(args["embodiment_dis"])
         args["dual_arm_embodied"] = False
     else:
         raise ValueError(

@@ -104,14 +104,15 @@ The observation keys are:
 
 ```text
 rgb              head camera, uint8, B x H x W x 3
-rgb_left_wrist   left wrist camera, uint8, B x H x W x 3
-rgb_right_wrist  right wrist camera, uint8, B x H x W x 3
 state            14D qpos/proprio vector, float32
+rgb_left_wrist   optional left wrist camera, uint8, B x H x W x 3
+rgb_right_wrist  optional right wrist camera, uint8, B x H x W x 3
 ```
 
-If a wrist image is absent, the env fills that image key with zeros so the
-observation space remains stable. Task instruction text is returned in
-`infos`, not in the observation dict.
+When `include_wrist_cameras=True`, missing wrist images are filled with zeros so
+the observation space remains stable. When wrist cameras are disabled, those
+keys are omitted entirely, and RoboTwin is also configured not to render them.
+Task instruction text is returned in `infos`, not in the observation dict.
 
 The internal execution stack is:
 
@@ -298,6 +299,14 @@ python examples/train_sac_robotwin_rgbd.py \
   --buffer-size 50000
 ```
 
+The same camera cost matters for on-policy PPO throughput. `place_empty_cup`
+in RLinf's RoboTwin configs uses the head camera only and the
+`[piper, piper, 0.6]` embodiment. The dedicated rl-garden
+`place_empty_cup` launcher follows that setup. Enabling wrist cameras triples
+the rendered image streams, adds CPU resize and CUDA tensor transfer work, and
+adds encoder work for every rollout step, so it should be treated as an
+explicit visual-ablation setting rather than the default for this task.
+
 ## Training
 
 Install optional helpers:
@@ -334,6 +343,32 @@ python examples/train_ppo_robotwin_rgbd.py \
   --reward-mode dense \
   --control-mode delta_joint_pos
 ```
+
+For `place_empty_cup`, prefer the RLinf-aligned defaults:
+
+```bash
+HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
+python examples/train_ppo_robotwin_rgbd.py \
+  --env-id place_empty_cup \
+  --robotwin-root /path/to/RoboTwin \
+  --camera-width 64 \
+  --camera-height 64 \
+  --num-envs 4 \
+  --num-eval-envs 2 \
+  --total-timesteps 10000 \
+  --num-steps 16 \
+  --step-lim 200 \
+  --embodiment piper piper 0.6 \
+  --no-collect-wrist-camera \
+  --encoder plain_conv \
+  --image-fusion-mode per_key \
+  --reward-mode dense \
+  --control-mode delta_joint_pos
+```
+
+The `fps` printed by PPO is rollout action FPS. One RoboTwin action can run
+TOPP plus many internal SAPIEN physics/render steps, so this number is not
+comparable to ManiSkill GPU-vectorized simulator FPS.
 
 Place-empty-cup PPO with the dedicated launcher:
 

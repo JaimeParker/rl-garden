@@ -112,6 +112,27 @@ def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch)
     assert cfg.num_envs == 2
     assert cfg.device == "auto"
     assert cfg.image_size == (64, 64)
+    assert cfg.include_wrist_cameras is True
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is True
+
+
+def test_robotwin_ppo_make_env_can_disable_wrist_cameras(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.collect_wrist_camera = False
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.include_wrist_cameras is False
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is False
 
 
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
