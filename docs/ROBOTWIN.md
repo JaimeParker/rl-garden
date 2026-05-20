@@ -239,6 +239,54 @@ success_once
 success_at_end   when ignore_terminations=True
 ```
 
+## SAC Replay Memory
+
+RoboTwin's native visual observations are much larger than the images normally
+used by ManiSkill SAC. The default RoboTwin camera size is `224x224`, and
+rl-garden exposes three RGB views when wrist cameras are enabled:
+
+```text
+rgb
+rgb_left_wrist
+rgb_right_wrist
+```
+
+Off-policy SAC stores both `obs` and `next_obs` in replay. Even though
+rl-garden stores image observations as `uint8`, not `float32`, three `224x224`
+RGB views are still too large for a CUDA-resident replay buffer. For example,
+`200_000` transitions require roughly 168 GiB for image `obs + next_obs` alone:
+
+```text
+200000 * 2 * 3 views * 224 * 224 * 3 bytes ~= 168 GiB
+```
+
+ManiSkill's SAC RGBD baseline handles this by keeping replay on CUDA for
+throughput, but using `uint8` image storage, `64x64` or `128x128` observations,
+and tuned visual buffer sizes. RLinf's RoboTwin SAC/RLPD path makes a different
+tradeoff: it moves trajectories to CPU replay (`.cpu().contiguous()`), avoiding
+large GPU replay memory at the cost of CPU-to-GPU transfer during sampling.
+
+rl-garden follows the ManiSkill-style default for RoboTwin SAC because the
+framework is GPU-first and CPU replay can become a bottleneck with parallel
+sampling. The RoboTwin SAC entrypoint therefore defaults to:
+
+```text
+image_size = 64x64
+buffer_device = cuda
+buffer_size = 100000
+```
+
+Use larger images only with a smaller buffer or explicit CPU replay:
+
+```bash
+python examples/train_sac_robotwin_rgbd.py \
+  --env-id place_shoe \
+  --camera-width 224 \
+  --camera-height 224 \
+  --buffer-device cpu \
+  --buffer-size 50000
+```
+
 ## Training
 
 Install optional helpers:
@@ -251,7 +299,7 @@ RoboTwin itself must be available separately. Either install it into the
 environment so `import envs.<task_name>` works, or pass `--robotwin-root` to a
 RoboTwin checkout.
 
-Minimal local command:
+Minimal PPO command:
 
 ```bash
 MPLCONFIGDIR=/tmp python examples/train_ppo_robotwin_rgbd.py \
@@ -267,6 +315,27 @@ MPLCONFIGDIR=/tmp python examples/train_ppo_robotwin_rgbd.py \
   --reward-mode dense \
   --control-mode delta_joint_pos \
   --device cuda
+```
+
+Minimal SAC command:
+
+```bash
+MPLCONFIGDIR=/tmp python examples/train_sac_robotwin_rgbd.py \
+  --env-id place_shoe \
+  --robotwin-root /path/to/RoboTwin \
+  --num-envs 4 \
+  --num-eval-envs 2 \
+  --total-timesteps 10000 \
+  --learning-starts 128 \
+  --training-freq 8 \
+  --batch-size 32 \
+  --buffer-size 1024 \
+  --step-lim 400 \
+  --encoder plain_conv \
+  --image-fusion-mode per_key \
+  --reward-mode dense \
+  --control-mode delta_joint_pos \
+  --buffer-device cuda
 ```
 
 Remote command pattern for `6017`:
