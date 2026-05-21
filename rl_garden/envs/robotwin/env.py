@@ -32,9 +32,10 @@ class RoboTwinEnv(gym.Env):
         self.cfg = cfg
         self.num_envs = cfg.num_envs
         self.device = get_device(cfg.device)
+        bounded_action = cfg.control_mode in {"delta_joint_pos", "ee_delta_pose"}
         self.single_action_space = spaces.Box(
-            low=-1.0 if cfg.control_mode == "delta_joint_pos" else -np.inf,
-            high=1.0 if cfg.control_mode == "delta_joint_pos" else np.inf,
+            low=-1.0 if bounded_action else -np.inf,
+            high=1.0 if bounded_action else np.inf,
             shape=(cfg.action_dim,),
             dtype=np.float32,
         )

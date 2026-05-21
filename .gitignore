@@ -38,6 +38,8 @@ data/
 .idea
 3rd_party/residual-rl/
 3rd_party/resfit/
+3rd_party/RLinf/
+3rd_party/RoboTwin
 pretrained_models/*
 prompts/
 

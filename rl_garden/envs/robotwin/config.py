@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 
-ControlMode = Literal["delta_joint_pos", "joint_pos"]
+ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose"]
 RewardMode = Literal["dense", "sparse"]
 
 
@@ -44,6 +44,8 @@ class RoboTwinEnvConfig:
     control_mode: ControlMode = "delta_joint_pos"
     action_dim: int = 14
     joint_delta_scale: float = 0.05
+    ee_delta_pos_scale: float = 0.03
+    ee_delta_rot_scale: float = 0.15
     gripper_delta_scale: float = 0.2
 
     # Reward behavior.
@@ -57,3 +59,7 @@ class RoboTwinEnvConfig:
     embodiment: list[str] = field(default_factory=lambda: ["aloha-agilex"])
     instruction_type: str = "seen"
     clear_cache_freq: int = 8
+
+    def __post_init__(self) -> None:
+        if self.control_mode == "ee_delta_pose" and self.action_dim != 14:
+            raise ValueError("ee_delta_pose control mode requires action_dim=14.")
