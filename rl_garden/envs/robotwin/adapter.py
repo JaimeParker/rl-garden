@@ -120,6 +120,8 @@ class RoboTwinTaskAdapter:
         task_args: dict[str, Any],
         env_seed: Optional[int] = None,
         topp_pool=None,
+        ctrl_gate=None,
+        coordinator=None,
     ) -> None:
         self.env_id = env_id
         self.cfg = cfg
@@ -132,6 +134,8 @@ class RoboTwinTaskAdapter:
         self._eval_video_index = 0
         self._topp_pool = topp_pool
         self._topp_initialized = False
+        self._ctrl_gate = ctrl_gate
+        self._coordinator = coordinator
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
@@ -225,6 +229,8 @@ class RoboTwinTaskAdapter:
             )
         self._install_helpers()
         self._install_topp_proxies()
+        self._install_ctrl_gate(None if self._coordinator is not None else self._ctrl_gate)
+        self._install_topp_ctrl_coordinator()
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
         self.elapsed_steps = 0
@@ -407,6 +413,21 @@ class RoboTwinTaskAdapter:
         if not hasattr(self.task, "is_in_hand"):
             self.task.is_in_hand = types.MethodType(_is_in_hand, self.task)
 
+    def _install_ctrl_gate(self, gate) -> None:
+        """Install shared ctrl-loop serialization gate on the task object.
+
+        When set to a threading.Semaphore, take_action() acquires it before
+        entering the scene.step() control loop, limiting how many envs can
+        hammer the SAPIEN GPU simultaneously.
+        """
+        if self.task is not None:
+            self.task._ctrl_gate = gate
+
+    def _install_topp_ctrl_coordinator(self) -> None:
+        if self._coordinator is not None and self.task is not None:
+            self.task._topp_ctrl_coordinator = self._coordinator
+            self.task._ctrl_gate = None
+
     def _install_topp_proxies(self) -> None:
         """Replace task.robot's mplib planners with RemoteToppPlanner proxies.
 
@@ -420,7 +441,6 @@ class RoboTwinTaskAdapter:
         if not self._topp_initialized:
             self._topp_pool.init_env(self.env_id, config)
             self._topp_initialized = True
-        from rl_garden.envs.robotwin.topp_worker import RemoteToppPlanner  # noqa: PLC0415
         left_proxy, right_proxy = self._topp_pool.make_planners(self.env_id)
         self.task.robot.left_mplib_planner = left_proxy
         self.task.robot.right_mplib_planner = right_proxy

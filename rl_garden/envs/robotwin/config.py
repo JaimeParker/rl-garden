@@ -86,6 +86,11 @@ class RoboTwinEnvConfig:
     parallel_topp: bool = False
     # Pin each TOPP worker process to a dedicated CPU core.
     topp_cpu_affinity: bool = False
+    # Max envs allowed to run scene.step() ctrl loop simultaneously.
+    # 0 = auto (1 when parallel_topp=True, unlimited otherwise).
+    # 1 = fully serial (eliminates GPU thundering herd with parallel_topp).
+    # N = allow N concurrent ctrl loops (experiment with intermediate values).
+    ctrl_concurrency: int = 0
 
     def __post_init__(self) -> None:
         if self.control_mode == "ee_delta_pose" and self.action_dim != 14:

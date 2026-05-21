@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
-from typing import Any, Optional
+import signal
+import threading
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +172,26 @@ class ToppWorkerPool:
         conn = self._conns[env_id]
         return RemoteToppPlanner(conn, "left"), RemoteToppPlanner(conn, "right")
 
+    def suspend_all(self) -> None:
+        """Freeze all alive TOPP worker processes before entering ctrl loops."""
+        for proc in self._procs:
+            if proc.is_alive() and proc.pid is not None:
+                try:
+                    os.kill(proc.pid, signal.SIGSTOP)
+                except ProcessLookupError:
+                    pass
+
+    def resume_all(self) -> None:
+        """Resume all alive TOPP worker processes before TOPP planning."""
+        for proc in self._procs:
+            if proc.is_alive() and proc.pid is not None:
+                try:
+                    os.kill(proc.pid, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
+
     def close(self) -> None:
+        self.resume_all()
         for conn in self._conns:
             try:
                 conn.close()
@@ -180,3 +201,25 @@ class ToppWorkerPool:
             proc.join(timeout=10)
             if proc.is_alive():
                 proc.terminate()
+                proc.join(timeout=5)
+            if proc.is_alive():
+                proc.kill()
+
+
+class ToppCtrlCoordinator:
+    """Coordinate TOPP worker lifecycle around env thread phases.
+
+    All env threads synchronize before TOPP so workers are resumed together,
+    then synchronize again before ctrl so workers are frozen while SAPIEN
+    ``scene.step()`` runs in the main process.
+    """
+
+    def __init__(self, num_envs: int, pool: ToppWorkerPool) -> None:
+        self._pre_topp = threading.Barrier(num_envs, action=pool.resume_all)
+        self._pre_ctrl = threading.Barrier(num_envs, action=pool.suspend_all)
+
+    def pre_topp(self) -> None:
+        self._pre_topp.wait()
+
+    def pre_ctrl(self) -> None:
+        self._pre_ctrl.wait()

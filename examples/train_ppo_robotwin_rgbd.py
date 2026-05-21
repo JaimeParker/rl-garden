@@ -55,6 +55,7 @@ class Args(VisionPPOTrainingArgs):
     cpu_affinity: bool = False
     parallel_topp: bool = False
     topp_cpu_affinity: bool = False
+    ctrl_concurrency: int = 0
 
 
 def _make_env(
@@ -136,6 +137,7 @@ def _make_env(
             cpu_affinity=args.cpu_affinity,
             parallel_topp=args.parallel_topp,
             topp_cpu_affinity=args.topp_cpu_affinity,
+            ctrl_concurrency=args.ctrl_concurrency,
         )
     )
 

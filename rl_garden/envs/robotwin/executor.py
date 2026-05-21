@@ -21,8 +21,18 @@ class SubEnv:
         env_seed: Optional[int],
         global_lock: threading.Lock,
         topp_pool=None,
+        ctrl_gate=None,
+        coordinator=None,
     ) -> None:
-        self.adapter = RoboTwinTaskAdapter(env_id, cfg, task_args, env_seed, topp_pool=topp_pool)
+        self.adapter = RoboTwinTaskAdapter(
+            env_id,
+            cfg,
+            task_args,
+            env_seed,
+            topp_pool=topp_pool,
+            ctrl_gate=ctrl_gate,
+            coordinator=coordinator,
+        )
         self.lock = threading.Lock()
         self.global_lock = global_lock
 
@@ -65,12 +75,25 @@ class ThreadedRoboTwinExecutor:
         if cfg.parallel_topp:
             from rl_garden.envs.robotwin.topp_worker import ToppWorkerPool
             self._topp_pool = ToppWorkerPool(cfg.num_envs, cpu_affinity=cfg.topp_cpu_affinity)
+        self._coordinator = None
+        if cfg.parallel_topp and self._topp_pool is not None:
+            from rl_garden.envs.robotwin.topp_worker import ToppCtrlCoordinator
+            self._coordinator = ToppCtrlCoordinator(cfg.num_envs, self._topp_pool)
+
+        concurrency = cfg.ctrl_concurrency
+        if concurrency == 0:
+            concurrency = 1 if cfg.parallel_topp else 0
+        self._ctrl_gate = threading.Semaphore(concurrency) if concurrency > 0 else None
+        ctrl_gate = self._ctrl_gate if self._coordinator is None else None
+
         self.envs = [
             SubEnv(
                 i, cfg, task_args,
                 env_seeds[i] if i < len(env_seeds) else None,
                 self.global_lock,
                 topp_pool=self._topp_pool,
+                ctrl_gate=ctrl_gate,
+                coordinator=self._coordinator,
             )
             for i in range(cfg.num_envs)
         ]
