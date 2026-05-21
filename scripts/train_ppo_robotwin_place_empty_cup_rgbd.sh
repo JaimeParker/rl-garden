@@ -14,6 +14,7 @@ if [[ -z "$ROBOTWIN_ROOT" ]]; then
     echo "Error: set RLG_ROBOTWIN_ROOT to the RoboTwin checkout path." >&2
     exit 1
 fi
+ASSETS_PATH_ARG="${RLG_ROBOTWIN_ASSETS_PATH:-$ROBOTWIN_ROOT}"
 STD_LOG="${RLG_STD_LOG:-1}"
 LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
 LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
@@ -52,6 +53,18 @@ while [[ $# -gt 0 ]]; do
             LOG_KEYWORDS="${1#*=}"
             shift
             ;;
+        --assets_path|--assets-path)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a value." >&2
+                exit 1
+            fi
+            ASSETS_PATH_ARG="$2"
+            shift 2
+            ;;
+        --assets_path=*|--assets-path=*)
+            ASSETS_PATH_ARG="${1#*=}"
+            shift
+            ;;
         *)
             FORWARD_ARGS+=("$1")
             shift
@@ -66,9 +79,11 @@ exec env \
     RLG_STD_LOG="$STD_LOG" \
     RLG_LOG_TYPE="$LOG_TYPE" \
     RLG_LOG_KEYWORDS="$LOG_KEYWORDS" \
+    ROBOT_PLATFORM="${ROBOT_PLATFORM:-ALOHA}" \
     "$PYTHON_BIN" -u "$REPO_DIR/examples/train_ppo_robotwin_rgbd.py" \
     --env-id place_empty_cup \
     --robotwin-root "$ROBOTWIN_ROOT" \
+    --assets-path "$ASSETS_PATH_ARG" \
     --camera-width 64 \
     --camera-height 64 \
     --num-envs 4 \
