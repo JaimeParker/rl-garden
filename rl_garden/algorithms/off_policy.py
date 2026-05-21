@@ -55,6 +55,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.buffer_size = buffer_size
         self.buffer_device = buffer_device
         self.learning_starts = learning_starts
+        self._learning_starts_step = learning_starts
         self.batch_size = batch_size
         self.gamma = gamma
         self.tau = tau
@@ -392,7 +393,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 else float("nan")
             )
 
-            if self._global_step < self.learning_starts:
+            if self._global_step < self._learning_starts_step:
                 self._maybe_save_periodic_checkpoint(previous_step)
                 if self.std_log and should_log:
                     progress = 100.0 * self._global_step / total_timesteps

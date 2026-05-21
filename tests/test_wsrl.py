@@ -172,8 +172,12 @@ class TestWSRLHelperMethods:
         assert wsrl_agent.cql_alpha == 0.5
         assert not wsrl_agent.use_cql_loss
         assert wsrl_agent._online_start_step == 123
+        assert wsrl_agent.learning_starts == 10
+        assert wsrl_agent._learning_starts_step == 133
         assert logger.scalars == []
         assert ("wsrl/online_start_step", 123) in logger.summaries
+        assert ("wsrl/online_warmup_steps", 10) in logger.summaries
+        assert ("wsrl/online_learning_starts_step", 133) in logger.summaries
 
     def test_switch_to_online_mode_empty_clears_replay(self, wsrl_agent):
         for _ in range(5):
