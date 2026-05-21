@@ -86,12 +86,22 @@ def _attach_shm(specs: dict[str, tuple]) -> tuple[dict, dict]:
 
 
 def _write_obs_to_shm(views: dict[str, np.ndarray], obs_list: list[dict[str, Any]]) -> None:
-    """Write numpy obs fields from obs_list into shm views (worker-side only)."""
+    """Write numpy obs fields from obs_list into shm views (worker-side only).
+
+    Images are resized to the shm slot shape when the raw obs resolution differs
+    from the target (e.g. RoboTwin returns 240×320 but shm is sized for 64×64).
+    """
     for i, obs in enumerate(obs_list):
         for key, view in views.items():
             src = obs.get(key)
             if src is not None:
-                view[i] = np.asarray(src, dtype=view.dtype)
+                arr = np.asarray(src)
+                slot = view[i]
+                if arr.shape != slot.shape:
+                    h, w = slot.shape[:2]
+                    from PIL import Image
+                    arr = np.asarray(Image.fromarray(arr.astype(np.uint8)).resize((w, h)))
+                slot[:] = arr.astype(view.dtype, copy=False)
             else:
                 view[i] = 0
 
