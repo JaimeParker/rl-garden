@@ -319,10 +319,20 @@ RoboTwin itself must be available separately. Either install it into the
 environment so `import envs.<task_name>` works, or pass `--robotwin-root` to a
 RoboTwin checkout.
 
+The default PPO path is compatible with RoboTwin `main` and uses RoboTwin's
+standard `take_action()` API. We also tested RoboTwin's `RLinf_support` branch
+and its `gen_sparse_reward_data()` step API, but single-action PPO did not show
+a meaningful FPS improvement. rl-garden therefore keeps the main-compatible
+`take_action()` path as the training interface.
+
 RoboTwin may load curobo/warp during reset. In containers, set `HOME=/tmp` and
 `XDG_CACHE_HOME=/tmp` so warp writes its kernel cache to a writable temporary
 directory instead of `/.cache` or a synced workspace. This avoids permission
 failures and root-owned cache files.
+
+When using `RLinf_support`, pass `--assets-path` as the RoboTwin repository
+root, not the `assets/` subdirectory. That branch resolves assets as
+`$ASSETS_PATH/assets/...`.
 
 Minimal PPO command:
 
@@ -358,6 +368,7 @@ python examples/train_ppo_robotwin_rgbd.py \
   --total-timesteps 10000 \
   --num-steps 16 \
   --step-lim 200 \
+  --assets-path /path/to/RoboTwin \
   --embodiment piper piper 0.6 \
   --no-collect-wrist-camera \
   --encoder plain_conv \
@@ -407,6 +418,7 @@ ssh <ssh-alias> "docker exec \
   -e CUDA_VISIBLE_DEVICES=<gpu-id> \
   -e HOME=/tmp \
   -e XDG_CACHE_HOME=/tmp \
+  -e ROBOT_PLATFORM=ALOHA \
   <container-name> bash -lc '
   cd <container-workspace-path> &&
   export PATH=<python-env-bin-path>:\$PATH &&
