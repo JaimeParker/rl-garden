@@ -91,6 +91,12 @@ def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch)
     assert cfg.num_envs == 3
     assert cfg.image_size == (64, 64)
     assert cfg.include_wrist_cameras is True
+    assert cfg.render_every_control_step is False
+    assert cfg.control_step_cap is None
+    assert cfg.random_light is False
+    assert cfg.crazy_random_light_rate == 0.0
+    assert cfg.head_camera_type == "D435"
+    assert cfg.task_config["camera"]["head_camera_type"] == "D435"
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
     assert cfg.task_config["eval_video_log"] is True
 
@@ -113,6 +119,13 @@ def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch)
     assert cfg.device == "auto"
     assert cfg.image_size == (64, 64)
     assert cfg.include_wrist_cameras is True
+    assert cfg.render_every_control_step is False
+    assert cfg.control_step_cap is None
+    assert cfg.random_light is False
+    assert cfg.crazy_random_light_rate == 0.0
+    assert cfg.head_camera_type == "D435"
+    assert cfg.task_config["camera"]["head_camera_type"] == "D435"
+    assert cfg.task_config["domain_randomization"]["random_light"] is False
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
 
 
@@ -133,6 +146,39 @@ def test_robotwin_ppo_make_env_can_disable_wrist_cameras(monkeypatch: pytest.Mon
     assert cfg is captured["cfg"]
     assert cfg.include_wrist_cameras is False
     assert cfg.task_config["camera"]["collect_wrist_camera"] is False
+
+
+def test_robotwin_ppo_make_env_forwards_profile_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.profile_timing = True
+    args.profile_interval = 7
+    args.render_every_control_step = True
+    args.control_step_cap = 16
+    args.random_light = True
+    args.crazy_random_light_rate = 0.1
+    args.head_camera_type = "Train_D435_128x96"
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.profile_timing is True
+    assert cfg.profile_interval == 7
+    assert cfg.render_every_control_step is True
+    assert cfg.control_step_cap == 16
+    assert cfg.random_light is True
+    assert cfg.crazy_random_light_rate == 0.1
+    assert cfg.head_camera_type == "Train_D435_128x96"
+    assert cfg.task_config["render_every_control_step"] is True
+    assert cfg.task_config["control_step_cap"] == 16
+    assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"
 
 
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:

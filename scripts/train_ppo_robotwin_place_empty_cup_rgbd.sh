@@ -84,6 +84,7 @@ exec env \
     --env-id place_empty_cup \
     --robotwin-root "$ROBOTWIN_ROOT" \
     --assets-path "$ASSETS_PATH_ARG" \
+    --head-camera-type Train_D435_128x96 \
     --camera-width 64 \
     --camera-height 64 \
     --num-envs 4 \

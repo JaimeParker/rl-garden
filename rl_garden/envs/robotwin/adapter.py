@@ -112,7 +112,33 @@ class RoboTwinTaskAdapter:
         args.setdefault("eval_video_log", False)
         args.setdefault("save_path", "./data")
         args.setdefault("clear_cache_freq", self.cfg.clear_cache_freq)
+        args.setdefault("render_every_control_step", self.cfg.render_every_control_step)
+        if (
+            self.cfg.control_step_cap is not None
+            and args.get("control_step_cap") is None
+        ):
+            args["control_step_cap"] = self.cfg.control_step_cap
+        has_domain_randomization = "domain_randomization" in args
+        has_camera_config = "camera" in args
         _prepare_robotwin_task_args(args)
+        domain_randomization = args["domain_randomization"]
+        if has_domain_randomization:
+            domain_randomization.setdefault("random_light", self.cfg.random_light)
+            domain_randomization.setdefault(
+                "crazy_random_light_rate", self.cfg.crazy_random_light_rate
+            )
+        else:
+            domain_randomization["random_light"] = self.cfg.random_light
+            domain_randomization["crazy_random_light_rate"] = (
+                self.cfg.crazy_random_light_rate
+            )
+        camera_cfg = args["camera"]
+        if has_camera_config:
+            camera_cfg.setdefault("head_camera_type", self.cfg.head_camera_type)
+            camera_cfg.setdefault("wrist_camera_type", self.cfg.wrist_camera_type)
+        else:
+            camera_cfg["head_camera_type"] = self.cfg.head_camera_type
+            camera_cfg["wrist_camera_type"] = self.cfg.wrist_camera_type
         trial_seed = self.env_seed
         retry_count = 0
         while True:
@@ -150,6 +176,11 @@ class RoboTwinTaskAdapter:
         self.task.run_steps = 0
         self.task.reward_step = 0
         self.task.eval_success = False
+        if self.cfg.profile_timing:
+            from envs.utils.step_timer import StepTimer
+            self.task._step_timer = StepTimer(
+                enabled=True, log_interval=self.cfg.profile_interval
+            )
         self._install_helpers()
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
@@ -486,8 +517,8 @@ def _prepare_robotwin_task_args(args: dict[str, Any]) -> None:
             "clean_background_rate": 0.02,
             "random_head_camera_dis": 0,
             "random_table_height": 0.03,
-            "random_light": True,
-            "crazy_random_light_rate": 0.02,
+            "random_light": False,
+            "crazy_random_light_rate": 0.0,
         },
     )
     args.setdefault(

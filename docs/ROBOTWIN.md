@@ -359,6 +359,7 @@ HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
 python examples/train_ppo_robotwin_rgbd.py \
   --env-id place_shoe \
   --robotwin-root /path/to/RoboTwin \
+  --head-camera-type Train_D435_128x96 \
   --camera-width 64 \
   --camera-height 64 \
   --num-envs 4 \
@@ -379,6 +380,7 @@ HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
 python examples/train_ppo_robotwin_rgbd.py \
   --env-id place_empty_cup \
   --robotwin-root /path/to/RoboTwin \
+  --head-camera-type Train_D435_128x96 \
   --camera-width 64 \
   --camera-height 64 \
   --num-envs 4 \
@@ -398,6 +400,31 @@ python examples/train_ppo_robotwin_rgbd.py \
 The `fps` printed by PPO is rollout action FPS. One RoboTwin action can run
 TOPP plus many internal SAPIEN physics/render steps, so this number is not
 comparable to ManiSkill GPU-vectorized simulator FPS.
+
+### Training-Speed Knobs
+
+RoboTwin renders camera frames at its own camera-config resolution before
+rl-garden resizes observations for the policy. For the 64x64 place-empty-cup
+launcher, rl-garden asks RoboTwin to use `Train_D435_128x96` and then resizes
+the resulting head-camera RGB to `64x64`. This is different from only setting
+`--camera-width 64 --camera-height 64`, which controls the policy input size.
+
+For RL training, rl-garden defaults RoboTwin's per-substep render update off:
+`render_every_control_step=False`. RoboTwin only needs a camera frame after one
+high-level action finishes, so updating the renderer inside every low-level
+control substep wastes time. Keep the flag on only for debugging or workflows
+that need substep-level frames.
+
+`--control-step-cap` can cap/downsample the low-level TOPP trajectory executed
+for each RoboTwin action. This can improve FPS substantially but changes the
+smoothness of the physical motion, so it is an explicit experiment knob rather
+than a default. Start with `--control-step-cap 16`, then compare `8` only if the
+task remains stable.
+
+The RL launchers also leave `random_light=False` and
+`crazy_random_light_rate=0.0` by default. Random lighting is useful for
+robustness experiments, but it is unnecessary for speed profiling and can add
+variance to render timing.
 
 Place-empty-cup PPO with the dedicated launcher:
 
