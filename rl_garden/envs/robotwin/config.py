@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional
 
 ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose"]
 RewardMode = Literal["dense", "sparse"]
-ExecutorType = Literal["thread", "process"]
+ExecutorType = Literal["thread", "process", "shard"]
 
 
 @dataclass
@@ -74,8 +74,8 @@ class RoboTwinEnvConfig:
     clear_cache_freq: int = 8
 
     # Executor backend: "thread" (default) uses ThreadPoolExecutor; "process"
-    # spawns one OS process per env so mplib TOPP planners run on separate CPU
-    # cores without contention.
+    # spawns one OS process per env; "shard" spawns one process per group of
+    # threaded envs so each shard has its own SAPIEN/CUDA context.
     executor_type: ExecutorType = "thread"
     # Pin each worker process to a dedicated CPU core (process executor only).
     cpu_affinity: bool = False
@@ -91,7 +91,13 @@ class RoboTwinEnvConfig:
     # 1 = fully serial (eliminates GPU thundering herd with parallel_topp).
     # N = allow N concurrent ctrl loops (experiment with intermediate values).
     ctrl_concurrency: int = 0
+    # Number of envs per shard when executor_type="shard". The recommended
+    # RoboTwin throughput setting is 4 envs per shard, with parallel TOPP and a
+    # serial ctrl loop inside each shard.
+    shard_size: int = 4
 
     def __post_init__(self) -> None:
         if self.control_mode == "ee_delta_pose" and self.action_dim != 14:
             raise ValueError("ee_delta_pose control mode requires action_dim=14.")
+        if self.executor_type == "shard" and self.shard_size <= 0:
+            raise ValueError(f"shard_size must be positive, got {self.shard_size}.")

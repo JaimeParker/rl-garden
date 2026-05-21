@@ -56,6 +56,7 @@ class Args(VisionPPOTrainingArgs):
     parallel_topp: bool = False
     topp_cpu_affinity: bool = False
     ctrl_concurrency: int = 0
+    shard_size: int = 4
 
 
 def _make_env(
@@ -138,6 +139,7 @@ def _make_env(
             parallel_topp=args.parallel_topp,
             topp_cpu_affinity=args.topp_cpu_affinity,
             ctrl_concurrency=args.ctrl_concurrency,
+            shard_size=args.shard_size,
         )
     )
 

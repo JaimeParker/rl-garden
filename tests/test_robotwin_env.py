@@ -7,6 +7,7 @@ from examples import train_ppo_robotwin_rgbd
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
+from rl_garden.envs.robotwin.executor_shard import ShardedRoboTwinExecutor
 from rl_garden.envs.robotwin.rewards import build_task_reward, supported_reward_tasks
 
 
@@ -46,6 +47,74 @@ class FakeExecutor:
             "rgb_right_wrist": None,
             "state": np.ones(14, dtype=np.float32) * i,
             "instruction": f"task {i}",
+            "_env_seed": seed,
+        }
+
+
+class _FakeShard:
+    instances = []
+
+    def __init__(self, *, ctx, shard_id, cfg, task_args, env_seeds):
+        del ctx, task_args
+        self.shard_id = shard_id
+        self.cfg = cfg
+        self.env_seeds = list(env_seeds)
+        self.closed = False
+        self.obs = [self._obs(i, seed) for i, seed in enumerate(self.env_seeds)]
+        self.pending = None
+        self.step_actions = None
+        self.start_step_called = False
+        _FakeShard.instances.append(self)
+
+    def start_reset(self, env_indices, env_seeds):
+        self.pending = (env_indices, env_seeds)
+
+    def finish_reset(self):
+        env_indices, env_seeds = self.pending
+        if env_indices is None:
+            seeds = list(range(self.cfg.num_envs)) if env_seeds is None else env_seeds
+            self.obs = [self._obs(i, seed) for i, seed in enumerate(seeds)]
+        else:
+            for offset, local_idx in enumerate(env_indices):
+                seed = None if env_seeds is None else env_seeds[offset]
+                self.obs[local_idx] = self._obs(local_idx, seed)
+        self.pending = None
+        return self.obs
+
+    def start_step(self, actions):
+        self.start_step_called = True
+        self.step_actions = np.array(actions, copy=True)
+
+    def finish_step(self):
+        return [
+            StepResult(
+                obs=self._obs(i),
+                reward=float(self.shard_id * 10 + i),
+                terminated=False,
+                truncated=False,
+                info={"success": False, "instruction": f"shard {self.shard_id} env {i}"},
+            )
+            for i in range(self.cfg.num_envs)
+        ]
+
+    def start_get_obs(self):
+        return None
+
+    def finish_get_obs(self):
+        return self.obs
+
+    def close(self, clear_cache=True):
+        del clear_cache
+        self.closed = True
+
+    def _obs(self, local_idx, seed=None):
+        value = self.shard_id * 10 + local_idx
+        return {
+            "rgb": np.full((8, 8, 3), value, dtype=np.uint8),
+            "rgb_left_wrist": None,
+            "rgb_right_wrist": None,
+            "state": np.ones(14, dtype=np.float32) * value,
+            "instruction": f"shard {self.shard_id} env {local_idx}",
             "_env_seed": seed,
         }
 
@@ -227,6 +296,45 @@ def test_robotwin_env_syncs_actual_reset_seed_from_executor():
     assert env.reset_state_ids.tolist() == [12345, 12345]
     assert infos["env_seed"].tolist() == [12345, 12345]
     env.close()
+
+
+def test_sharded_robotwin_executor_routes_reset_and_step_in_global_order():
+    _FakeShard.instances = []
+    cfg = RoboTwinEnvConfig(
+        num_envs=5,
+        device="cpu",
+        image_size=(8, 8),
+        executor_type="shard",
+        shard_size=2,
+    )
+    executor = ShardedRoboTwinExecutor(
+        cfg,
+        task_args={"task_name": "fake"},
+        env_seeds=[10, 11, 12, 13, 14],
+        shard_factory=_FakeShard,
+    )
+
+    assert [shard.cfg.num_envs for shard in _FakeShard.instances] == [2, 2, 1]
+    assert all(shard.cfg.executor_type == "thread" for shard in _FakeShard.instances)
+    assert all(shard.cfg.parallel_topp is True for shard in _FakeShard.instances)
+    assert all(shard.cfg.ctrl_concurrency == 1 for shard in _FakeShard.instances)
+
+    obs = executor.reset(env_seeds=[20, 21, 22, 23, 24])
+    assert [item["_env_seed"] for item in obs] == [20, 21, 22, 23, 24]
+    assert [float(item["state"][0]) for item in obs] == [0.0, 1.0, 10.0, 11.0, 20.0]
+
+    obs = executor.reset(env_indices=[1, 3, 4], env_seeds=[101, 103, 104])
+    assert [item["_env_seed"] for item in obs] == [20, 101, 22, 103, 104]
+
+    actions = np.arange(5 * 14, dtype=np.float32).reshape(5, 14)
+    results = executor.step(actions)
+    assert [res.reward for res in results] == [0.0, 1.0, 10.0, 11.0, 20.0]
+    np.testing.assert_array_equal(_FakeShard.instances[0].step_actions, actions[:2])
+    np.testing.assert_array_equal(_FakeShard.instances[1].step_actions, actions[2:4])
+    np.testing.assert_array_equal(_FakeShard.instances[2].step_actions, actions[4:5])
+
+    executor.close()
+    assert all(shard.closed for shard in _FakeShard.instances)
 
 
 def test_delta_joint_pos_action_conversion():

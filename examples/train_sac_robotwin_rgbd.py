@@ -45,6 +45,12 @@ class Args(VisionSACTrainingArgs):
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"
+    executor_type: str = "thread"
+    cpu_affinity: bool = False
+    parallel_topp: bool = False
+    topp_cpu_affinity: bool = False
+    ctrl_concurrency: int = 0
+    shard_size: int = 4
     buffer_size: int = 100_000
 
 
@@ -109,6 +115,12 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             auto_reset=True,
             ignore_terminations=False,
             device="auto",
+            executor_type=args.executor_type,  # type: ignore[arg-type]
+            cpu_affinity=args.cpu_affinity,
+            parallel_topp=args.parallel_topp,
+            topp_cpu_affinity=args.topp_cpu_affinity,
+            ctrl_concurrency=args.ctrl_concurrency,
+            shard_size=args.shard_size,
         )
     )
 

@@ -268,6 +268,9 @@ def _make_executor(cfg: RoboTwinEnvConfig, task_args, env_seeds):
     if cfg.executor_type == "process":
         from rl_garden.envs.robotwin.executor_process import ProcessRoboTwinExecutor
         return ProcessRoboTwinExecutor(cfg, task_args=task_args, env_seeds=env_seeds)
+    if cfg.executor_type == "shard":
+        from rl_garden.envs.robotwin.executor_shard import ShardedRoboTwinExecutor
+        return ShardedRoboTwinExecutor(cfg, task_args=task_args, env_seeds=env_seeds)
     return ThreadedRoboTwinExecutor(cfg, task_args=task_args, env_seeds=env_seeds)
 
 

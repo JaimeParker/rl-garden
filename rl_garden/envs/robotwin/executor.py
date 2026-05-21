@@ -84,7 +84,6 @@ class ThreadedRoboTwinExecutor:
         if concurrency == 0:
             concurrency = 1 if cfg.parallel_topp else 0
         self._ctrl_gate = threading.Semaphore(concurrency) if concurrency > 0 else None
-        ctrl_gate = self._ctrl_gate if self._coordinator is None else None
 
         self.envs = [
             SubEnv(
@@ -92,7 +91,7 @@ class ThreadedRoboTwinExecutor:
                 env_seeds[i] if i < len(env_seeds) else None,
                 self.global_lock,
                 topp_pool=self._topp_pool,
-                ctrl_gate=ctrl_gate,
+                ctrl_gate=self._ctrl_gate,
                 coordinator=self._coordinator,
             )
             for i in range(cfg.num_envs)

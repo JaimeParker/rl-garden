@@ -40,6 +40,9 @@ sync:
         - "*.swp"
         - "*.swo"
 
+        # Model weights
+        - "*.pt"
+
     permissions:
       defaultFileMode: 0644
       defaultDirectoryMode: 0755
