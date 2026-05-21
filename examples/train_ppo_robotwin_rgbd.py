@@ -45,7 +45,12 @@ class Args(VisionPPOTrainingArgs):
     collect_wrist_camera: bool = True
 
 
-def _make_env(args: Args, num_envs: int, is_eval: bool = False):
+def _make_env(
+    args: Args,
+    num_envs: int,
+    is_eval: bool = False,
+    eval_record_dir: Optional[str] = None,
+):
     image_size = (
         int(args.camera_height or 64),
         int(args.camera_width or 64),
@@ -87,7 +92,6 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             embodiment=args.embodiment,
             reward_mode=args.reward_mode,  # type: ignore[arg-type]
             control_mode=args.control_mode,  # type: ignore[arg-type]
-            image_size=(image_height, image_width),
             joint_delta_scale=args.joint_delta_scale,
             ee_delta_pos_scale=args.ee_delta_pos_scale,
             ee_delta_rot_scale=args.ee_delta_rot_scale,
@@ -96,7 +100,7 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             include_wrist_cameras=args.collect_wrist_camera,
             auto_reset=True,
             ignore_terminations=False,
-            device="auto",
+            device=args.device,
         )
     )
 
