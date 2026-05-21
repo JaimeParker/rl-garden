@@ -39,6 +39,12 @@ class Args(VisionSACTrainingArgs):
     joint_delta_scale: float = 0.05
     gripper_delta_scale: float = 0.2
     include_wrist_cameras: bool = True
+    render_every_control_step: bool = False
+    control_step_cap: Optional[int] = None
+    random_light: bool = False
+    crazy_random_light_rate: float = 0.0
+    head_camera_type: str = "D435"
+    wrist_camera_type: str = "D435"
     buffer_size: int = 100_000
 
 
@@ -50,14 +56,25 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
         "planner_backend": args.planner_backend,
         "embodiment": args.embodiment,
         "render_freq": 0,
+        "render_every_control_step": args.render_every_control_step,
+        "control_step_cap": args.control_step_cap,
         "episode_num": 100,
         "use_seed": False,
         "save_freq": 15,
         "camera": {
-            "head_camera_type": "D435",
-            "wrist_camera_type": "D435",
+            "head_camera_type": args.head_camera_type,
+            "wrist_camera_type": args.wrist_camera_type,
             "collect_head_camera": True,
             "collect_wrist_camera": args.include_wrist_cameras,
+        },
+        "domain_randomization": {
+            "random_background": True,
+            "cluttered_table": True,
+            "clean_background_rate": 0.02,
+            "random_head_camera_dis": 0,
+            "random_table_height": 0.03,
+            "random_light": args.random_light,
+            "crazy_random_light_rate": args.crazy_random_light_rate,
         },
         "data_type": {"rgb": True, "qpos": True},
         "save_path": "./data",
@@ -81,6 +98,12 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             control_mode=args.control_mode,  # type: ignore[arg-type]
             joint_delta_scale=args.joint_delta_scale,
             gripper_delta_scale=args.gripper_delta_scale,
+            render_every_control_step=args.render_every_control_step,
+            control_step_cap=args.control_step_cap,
+            random_light=args.random_light,
+            crazy_random_light_rate=args.crazy_random_light_rate,
+            head_camera_type=args.head_camera_type,
+            wrist_camera_type=args.wrist_camera_type,
             include_wrist_cameras=args.include_wrist_cameras,
             image_size=image_size,
             auto_reset=True,
