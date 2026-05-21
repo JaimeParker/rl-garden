@@ -54,8 +54,8 @@ class FakeExecutor:
 class _FakeShard:
     instances = []
 
-    def __init__(self, *, ctx, shard_id, cfg, task_args, env_seeds):
-        del ctx, task_args
+    def __init__(self, *, ctx, shard_id, cfg, task_args, env_seeds, shm=None):
+        del ctx, task_args, shm
         self.shard_id = shard_id
         self.cfg = cfg
         self.env_seeds = list(env_seeds)
@@ -97,10 +97,7 @@ class _FakeShard:
             for i in range(self.cfg.num_envs)
         ]
 
-    def start_get_obs(self):
-        return None
-
-    def finish_get_obs(self):
+    def get_obs(self):
         return self.obs
 
     def close(self, clear_cache=True):
