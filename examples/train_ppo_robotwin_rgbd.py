@@ -51,6 +51,10 @@ class Args(VisionPPOTrainingArgs):
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"
+    executor_type: str = "thread"
+    cpu_affinity: bool = False
+    parallel_topp: bool = False
+    topp_cpu_affinity: bool = False
 
 
 def _make_env(
@@ -128,6 +132,10 @@ def _make_env(
             auto_reset=True,
             ignore_terminations=False,
             device=args.device,
+            executor_type=args.executor_type,  # type: ignore[arg-type]
+            cpu_affinity=args.cpu_affinity,
+            parallel_topp=args.parallel_topp,
+            topp_cpu_affinity=args.topp_cpu_affinity,
         )
     )
 

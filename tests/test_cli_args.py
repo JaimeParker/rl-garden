@@ -181,6 +181,65 @@ def test_robotwin_ppo_make_env_forwards_profile_timing(monkeypatch: pytest.Monke
     assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"
 
 
+def test_robotwin_ppo_make_env_forwards_executor_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.executor_type = "process"
+    args.cpu_affinity = True
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.executor_type == "process"
+    assert cfg.cpu_affinity is True
+
+
+def test_robotwin_ppo_executor_type_default_is_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+
+    cfg = module._make_env(args, num_envs=1)
+
+    assert cfg.executor_type == "thread"
+    assert cfg.cpu_affinity is False
+    assert cfg.parallel_topp is False
+    assert cfg.topp_cpu_affinity is False
+
+
+def test_robotwin_ppo_make_env_forwards_parallel_topp(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.parallel_topp = True
+    args.topp_cpu_affinity = True
+
+    cfg = module._make_env(args, num_envs=4)
+
+    assert cfg is captured["cfg"]
+    assert cfg.parallel_topp is True
+    assert cfg.topp_cpu_affinity is True
+
+
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
     args = _args("train_sac_rgbd_peg.py")
 

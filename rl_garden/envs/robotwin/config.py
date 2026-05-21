@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose"]
 RewardMode = Literal["dense", "sparse"]
+ExecutorType = Literal["thread", "process"]
 
 
 @dataclass
@@ -71,6 +72,20 @@ class RoboTwinEnvConfig:
     embodiment: list[str] = field(default_factory=lambda: ["aloha-agilex"])
     instruction_type: str = "seen"
     clear_cache_freq: int = 8
+
+    # Executor backend: "thread" (default) uses ThreadPoolExecutor; "process"
+    # spawns one OS process per env so mplib TOPP planners run on separate CPU
+    # cores without contention.
+    executor_type: ExecutorType = "thread"
+    # Pin each worker process to a dedicated CPU core (process executor only).
+    cpu_affinity: bool = False
+
+    # Offload mplib TOPP planning to N dedicated worker processes (one per env)
+    # so TOPP calls from different threads run truly in parallel without GIL
+    # contention.  SAPIEN stays in the main process — no GPU OOM.
+    parallel_topp: bool = False
+    # Pin each TOPP worker process to a dedicated CPU core.
+    topp_cpu_affinity: bool = False
 
     def __post_init__(self) -> None:
         if self.control_mode == "ee_delta_pose" and self.action_dim != 14:

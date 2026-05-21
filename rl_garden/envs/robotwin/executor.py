@@ -20,8 +20,9 @@ class SubEnv:
         task_args: dict[str, Any],
         env_seed: Optional[int],
         global_lock: threading.Lock,
+        topp_pool=None,
     ) -> None:
-        self.adapter = RoboTwinTaskAdapter(env_id, cfg, task_args, env_seed)
+        self.adapter = RoboTwinTaskAdapter(env_id, cfg, task_args, env_seed, topp_pool=topp_pool)
         self.lock = threading.Lock()
         self.global_lock = global_lock
 
@@ -60,8 +61,17 @@ class ThreadedRoboTwinExecutor:
         self.num_envs = cfg.num_envs
         self.global_lock = threading.Lock()
         self.pool = ThreadPoolExecutor(max_workers=cfg.num_envs)
+        self._topp_pool = None
+        if cfg.parallel_topp:
+            from rl_garden.envs.robotwin.topp_worker import ToppWorkerPool
+            self._topp_pool = ToppWorkerPool(cfg.num_envs, cpu_affinity=cfg.topp_cpu_affinity)
         self.envs = [
-            SubEnv(i, cfg, task_args, env_seeds[i] if i < len(env_seeds) else None, self.global_lock)
+            SubEnv(
+                i, cfg, task_args,
+                env_seeds[i] if i < len(env_seeds) else None,
+                self.global_lock,
+                topp_pool=self._topp_pool,
+            )
             for i in range(cfg.num_envs)
         ]
 
@@ -88,3 +98,5 @@ class ThreadedRoboTwinExecutor:
         for env in self.envs:
             env.close(clear_cache=clear_cache)
         self.pool.shutdown(wait=True)
+        if self._topp_pool is not None:
+            self._topp_pool.close()

@@ -52,6 +52,45 @@ def robotwin_workdir(robotwin_root: Optional[str]) -> Iterator[None]:
         os.chdir(previous)
 
 
+def _extract_planner_config(robot) -> dict:
+    """Extract serialisable mplib planner config from a live RoboTwin Robot object.
+
+    The returned dict can be sent to a worker process via Pipe to reconstruct
+    an equivalent ``mplib.Planner`` without a SAPIEN scene.
+    """
+
+    def _arm(entity, urdf, srdf, move_group, pose, planner_type):
+        return {
+            "urdf_path": urdf,
+            "srdf_path": srdf,
+            "move_group": move_group,
+            "link_names": [lk.get_name() for lk in entity.get_links()],
+            "joint_names": [jt.get_name() for jt in entity.get_active_joints()],
+            "origin_pose_p": pose.p.tolist(),
+            "origin_pose_q": pose.q.tolist(),
+            "planner_type": planner_type,
+        }
+
+    return {
+        "left": _arm(
+            robot.left_entity,
+            robot.left_urdf_path,
+            robot.left_srdf_path,
+            robot.left_move_group,
+            robot.left_entity_origion_pose,
+            robot.left_planner_type,
+        ),
+        "right": _arm(
+            robot.right_entity,
+            robot.right_urdf_path,
+            robot.right_srdf_path,
+            robot.right_move_group,
+            robot.right_entity_origion_pose,
+            robot.right_planner_type,
+        ),
+    }
+
+
 def make_task(task_name: str, robotwin_root: Optional[str] = None):
     ensure_robotwin_importable(robotwin_root)
     try:
@@ -80,6 +119,7 @@ class RoboTwinTaskAdapter:
         cfg: RoboTwinEnvConfig,
         task_args: dict[str, Any],
         env_seed: Optional[int] = None,
+        topp_pool=None,
     ) -> None:
         self.env_id = env_id
         self.cfg = cfg
@@ -90,6 +130,8 @@ class RoboTwinTaskAdapter:
         self.elapsed_steps = 0
         self.last_dense_reward = 0.0
         self._eval_video_index = 0
+        self._topp_pool = topp_pool
+        self._topp_initialized = False
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
@@ -182,6 +224,7 @@ class RoboTwinTaskAdapter:
                 enabled=True, log_interval=self.cfg.profile_interval
             )
         self._install_helpers()
+        self._install_topp_proxies()
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
         self.elapsed_steps = 0
@@ -363,6 +406,24 @@ class RoboTwinTaskAdapter:
         assert self.task is not None
         if not hasattr(self.task, "is_in_hand"):
             self.task.is_in_hand = types.MethodType(_is_in_hand, self.task)
+
+    def _install_topp_proxies(self) -> None:
+        """Replace task.robot's mplib planners with RemoteToppPlanner proxies.
+
+        Called after every reset() because make_task() creates a fresh task
+        instance each episode.  The worker process keeps its planners alive
+        across resets (planner config is episode-independent).
+        """
+        if self._topp_pool is None or self.task is None:
+            return
+        config = _extract_planner_config(self.task.robot)
+        if not self._topp_initialized:
+            self._topp_pool.init_env(self.env_id, config)
+            self._topp_initialized = True
+        from rl_garden.envs.robotwin.topp_worker import RemoteToppPlanner  # noqa: PLC0415
+        left_proxy, right_proxy = self._topp_pool.make_planners(self.env_id)
+        self.task.robot.left_mplib_planner = left_proxy
+        self.task.robot.right_mplib_planner = right_proxy
 
     def _start_eval_video_if_needed(self, rgb: Any) -> None:
         assert self.task is not None

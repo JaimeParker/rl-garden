@@ -64,7 +64,7 @@ class RoboTwinEnv(gym.Env):
         self.reset_state_ids = self._next_reset_state_ids()
 
         task_args = self._task_args()
-        self.executor = executor or ThreadedRoboTwinExecutor(
+        self.executor = executor or _make_executor(
             cfg,
             task_args=task_args,
             env_seeds=self.reset_state_ids.tolist(),
@@ -262,6 +262,13 @@ class RoboTwinEnv(gym.Env):
             actual_seed = raw_obs[source_idx].get("_env_seed")
             if actual_seed is not None:
                 self.reset_state_ids[idx] = int(actual_seed)
+
+
+def _make_executor(cfg: RoboTwinEnvConfig, task_args, env_seeds):
+    if cfg.executor_type == "process":
+        from rl_garden.envs.robotwin.executor_process import ProcessRoboTwinExecutor
+        return ProcessRoboTwinExecutor(cfg, task_args=task_args, env_seeds=env_seeds)
+    return ThreadedRoboTwinExecutor(cfg, task_args=task_args, env_seeds=env_seeds)
 
 
 def make_robotwin_env(cfg: RoboTwinEnvConfig) -> RoboTwinEnv:
