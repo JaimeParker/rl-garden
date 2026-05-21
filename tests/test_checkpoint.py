@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import SAC, WSRL
+from rl_garden.algorithms import CalQL, OfflineEnvSpec, SAC, WSRL
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 
@@ -49,6 +50,15 @@ def _state_step_env() -> DummyStepVecEnv:
     )
 
 
+def _offline_state_env() -> OfflineEnvSpec:
+    env = _state_env()
+    return OfflineEnvSpec(
+        env.single_observation_space,
+        env.single_action_space,
+        num_envs=env.num_envs,
+    )
+
+
 def _rgbd_env() -> DummyVecEnv:
     return DummyVecEnv(
         spaces.Dict(
@@ -89,6 +99,13 @@ def _wsrl_kwargs() -> dict[str, object]:
         "cql_n_actions": 2,
         "cql_alpha": 1.5,
     }
+
+
+def _calql_kwargs() -> dict[str, object]:
+    kwargs = _wsrl_kwargs()
+    for key in ("learning_starts", "training_freq", "eval_freq"):
+        kwargs.pop(key)
+    return kwargs
 
 
 def _add_state_transitions(agent, steps: int = 4) -> None:
@@ -202,6 +219,38 @@ def test_wsrl_checkpoint_restores_extra_state(tmp_path):
     assert loaded.use_cql_loss == agent.use_cql_loss
     assert loaded.use_td_loss == agent.use_td_loss
     assert torch.allclose(loaded._current_alpha(), agent._current_alpha())
+
+
+def test_wsrl_loads_legacy_offline_calql_checkpoint(tmp_path):
+    agent = CalQL(env=_offline_state_env(), **_calql_kwargs())
+    _add_state_transitions(agent)
+    agent.train(1)
+    agent._global_step = 12
+
+    path = tmp_path / "offline_calql.pt"
+    agent.save(path)
+    checkpoint = torch.load(path, map_location="cpu")
+    checkpoint["metadata"]["algorithm_class"] = "OfflineCalQL"
+    torch.save(checkpoint, path)
+
+    loaded = WSRL(env=_state_env(), **_wsrl_kwargs())
+    loaded.load(path, load_replay_buffer=False)
+
+    _assert_state_dict_equal(agent.policy.state_dict(), loaded.policy.state_dict())
+    assert loaded._global_step == 12
+    assert loaded._global_update == agent._global_update
+    assert loaded.use_cql_loss == agent.use_cql_loss
+    assert loaded.use_td_loss == agent.use_td_loss
+
+
+def test_wsrl_rejects_sac_checkpoint(tmp_path):
+    agent = SAC(env=_state_env(), **_sac_kwargs())
+    path = tmp_path / "sac.pt"
+    agent.save(path)
+
+    loaded = WSRL(env=_state_env(), **_wsrl_kwargs())
+    with pytest.raises(ValueError, match="algorithm mismatch"):
+        loaded.load(path, load_replay_buffer=False)
 
 
 def test_wsrl_dict_checkpoint_roundtrip(tmp_path):
@@ -326,15 +375,15 @@ def test_legacy_offline_cql_algorithm_class_alias_resolves_to_cql():
     from gymnasium import spaces as gym_spaces
 
     from rl_garden.common.checkpoint import (
-        _canonical_algorithm_class,
+        canonical_algorithm_class,
         space_metadata,
         validate_checkpoint_metadata,
     )
 
-    assert _canonical_algorithm_class("OfflineCQL") == "CQL"
-    assert _canonical_algorithm_class("OfflineCalQL") == "CalQL"
-    assert _canonical_algorithm_class("CQL") == "CQL"  # passthrough
-    assert _canonical_algorithm_class(None) is None  # tolerate missing metadata
+    assert canonical_algorithm_class("OfflineCQL") == "CQL"
+    assert canonical_algorithm_class("OfflineCalQL") == "CalQL"
+    assert canonical_algorithm_class("CQL") == "CQL"  # passthrough
+    assert canonical_algorithm_class(None) is None  # tolerate missing metadata
 
     obs_space = gym_spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=float)
     action_space = gym_spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)

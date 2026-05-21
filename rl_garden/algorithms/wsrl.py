@@ -34,12 +34,12 @@ class WSRL(_CalQLRolloutTrainingShell):
         # Buffer and training
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
-        learning_starts: int = 4_000,
+        learning_starts: int = 5_000,
         batch_size: int = 256,
         gamma: float = 0.99,
         tau: float = 0.005,
         training_freq: int = 64,
-        utd: float = 1.0,
+        utd: float = 4.0,
         bootstrap_at_done: str = "always",
         # Optimizers
         policy_lr: float = 1e-4,
@@ -254,6 +254,9 @@ class WSRL(_CalQLRolloutTrainingShell):
         self._offline_probe_batch: MCReplayBufferSample | None = None
         self.offline_replay_buffer: Optional[Any] = None
         self.offline_data_ratio: float = 0.0
+
+    def _compatible_checkpoint_algorithms(self) -> tuple[str, ...]:
+        return ("WSRL", "CalQL")
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {

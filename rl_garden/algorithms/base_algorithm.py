@@ -12,6 +12,7 @@ from typing import Any, Optional
 import torch
 
 from rl_garden.common.checkpoint import (
+    canonical_algorithm_class,
     checkpoint_dict,
     load_checkpoint_file,
     load_replay_buffer_file,
@@ -45,6 +46,7 @@ class BaseAlgorithm(ABC):
         seed_everything(seed)
         self._global_step = 0
         self._global_update = 0
+        self._loaded_checkpoint_algorithm_class: Any = None
 
     @abstractmethod
     def _setup_model(self) -> None: ...
@@ -103,6 +105,9 @@ class BaseAlgorithm(ABC):
             "seed": self.seed,
             "device": str(self.device),
         }
+
+    def _compatible_checkpoint_algorithms(self) -> tuple[str, ...]:
+        return (type(self).__name__,)
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
         return {}
@@ -170,9 +175,13 @@ class BaseAlgorithm(ABC):
         """Load a checkpoint in-place into an already constructed agent."""
         checkpoint_path = Path(path)
         checkpoint = load_checkpoint_file(checkpoint_path, map_location=self.device)
+        self._loaded_checkpoint_algorithm_class = canonical_algorithm_class(
+            checkpoint.get("metadata", {}).get("algorithm_class")
+        )
         validate_checkpoint_metadata(
             checkpoint,
             algorithm_class=type(self).__name__,
+            compatible_algorithm_classes=self._compatible_checkpoint_algorithms(),
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             strict=strict,

@@ -144,9 +144,9 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
     batch_size: int = 256
-    learning_starts: int = 4_000
+    learning_starts: int = 5_000
     training_freq: int = 64
-    utd: float = 1.0
+    utd: float = 4.0
     gamma: float = 0.99
     tau: float = 0.005
 
@@ -219,7 +219,6 @@ class VisionWSRLTrainingArgs(WSRLTrainingArgs, VisionArgs):
     camera_height: Optional[int] = 128
     buffer_size: int = 200_000
     batch_size: int = 512
-    utd: float = 0.25
 
 
 @dataclass

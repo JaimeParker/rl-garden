@@ -27,11 +27,14 @@ _ALGORITHM_CLASS_ALIASES: dict[str, str] = {
 }
 
 
-def _canonical_algorithm_class(name: Any) -> Any:
+def canonical_algorithm_class(name: Any) -> Any:
     """Resolve legacy algorithm class names to their current canonical form."""
     if isinstance(name, str):
         return _ALGORITHM_CLASS_ALIASES.get(name, name)
     return name
+
+
+_canonical_algorithm_class = canonical_algorithm_class
 
 
 def space_metadata(space: spaces.Space) -> dict[str, Any]:
@@ -54,6 +57,7 @@ def validate_checkpoint_metadata(
     checkpoint: dict[str, Any],
     *,
     algorithm_class: str,
+    compatible_algorithm_classes: tuple[str, ...] | None = None,
     observation_space: spaces.Space,
     action_space: spaces.Space,
     strict: bool,
@@ -66,11 +70,16 @@ def validate_checkpoint_metadata(
             f"format_version mismatch: checkpoint has {checkpoint.get('format_version')}, "
             f"expected {FORMAT_VERSION}"
         )
-    checkpoint_algorithm = _canonical_algorithm_class(metadata.get("algorithm_class"))
-    if checkpoint_algorithm != algorithm_class:
+    checkpoint_algorithm = canonical_algorithm_class(metadata.get("algorithm_class"))
+    expected_algorithms = (
+        tuple(canonical_algorithm_class(name) for name in compatible_algorithm_classes)
+        if compatible_algorithm_classes is not None
+        else (canonical_algorithm_class(algorithm_class),)
+    )
+    if checkpoint_algorithm not in expected_algorithms:
         errors.append(
             f"algorithm mismatch: checkpoint has {metadata.get('algorithm_class')!r}, "
-            f"current agent is {algorithm_class!r}"
+            f"current agent accepts {expected_algorithms!r}"
         )
 
     current_obs = space_metadata(observation_space)

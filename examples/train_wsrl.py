@@ -269,6 +269,8 @@ def main() -> None:
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
 
+    switched_to_online = False
+
     # Offline training phase
     if args.num_offline_steps > 0:
         if args.offline_dataset_path is None:
@@ -309,11 +311,23 @@ def main() -> None:
             online_replay_mode=args.online_replay_mode,
             offline_data_ratio=args.offline_data_ratio,
         )
+        switched_to_online = True
         if args.std_log:
             print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
 
     # Online training phase
     if args.num_online_steps > 0:
+        if (
+            not switched_to_online
+            and args.load_checkpoint is not None
+            and agent._loaded_checkpoint_algorithm_class == "CalQL"
+        ):
+            agent.switch_to_online_mode(
+                online_replay_mode=args.online_replay_mode,
+                offline_data_ratio=args.offline_data_ratio,
+            )
+            if args.std_log:
+                print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
         online_target_step = agent._global_step + args.num_online_steps
         agent.learn(total_timesteps=online_target_step)
 
