@@ -461,6 +461,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         self._online_start_step = self._global_step
         online_warmup_steps = self.learning_starts
         self._learning_starts_step = self._global_step + online_warmup_steps
+        self._use_policy_action_during_warmup = True
         if self.online_use_cql_loss is not None:
             self.use_cql_loss = self.online_use_cql_loss
         if self.online_cql_alpha is not None:
@@ -487,6 +488,10 @@ class WSRL(_CalQLRolloutTrainingShell):
             self.logger.add_summary("wsrl/online_warmup_steps", online_warmup_steps)
             self.logger.add_summary(
                 "wsrl/online_learning_starts_step", self._learning_starts_step
+            )
+            self.logger.add_summary(
+                "wsrl/online_warmup_uses_policy_action",
+                self._use_policy_action_during_warmup,
             )
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)

@@ -174,10 +174,29 @@ class TestWSRLHelperMethods:
         assert wsrl_agent._online_start_step == 123
         assert wsrl_agent.learning_starts == 10
         assert wsrl_agent._learning_starts_step == 133
+        assert wsrl_agent._use_policy_action_during_warmup
         assert logger.scalars == []
         assert ("wsrl/online_start_step", 123) in logger.summaries
         assert ("wsrl/online_warmup_steps", 10) in logger.summaries
         assert ("wsrl/online_learning_starts_step", 133) in logger.summaries
+        assert ("wsrl/online_warmup_uses_policy_action", True) in logger.summaries
+
+    def test_online_warmup_uses_policy_action(self, wsrl_agent):
+        obs = torch.randn(2, 4)
+        random_action = torch.full((2, 2), -0.5)
+        policy_action = torch.full((2, 2), 0.5)
+        wsrl_agent._explore_action = MagicMock(return_value=random_action)
+        wsrl_agent._policy_action = MagicMock(return_value=policy_action)
+
+        wsrl_agent.switch_to_online_mode()
+        actions, env_actions, _ = wsrl_agent._rollout_action(
+            obs, learning_has_started=False
+        )
+
+        wsrl_agent._policy_action.assert_called_once_with(obs)
+        wsrl_agent._explore_action.assert_not_called()
+        torch.testing.assert_close(actions, policy_action)
+        torch.testing.assert_close(env_actions, policy_action)
 
     def test_switch_to_online_mode_empty_clears_replay(self, wsrl_agent):
         for _ in range(5):

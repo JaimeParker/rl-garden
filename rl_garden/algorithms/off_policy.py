@@ -72,6 +72,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.save_replay_buffer = save_replay_buffer
         self.save_final_checkpoint = save_final_checkpoint
         self._last_checkpoint_step = -1
+        self._use_policy_action_during_warmup = False
 
         self.num_envs = env.num_envs
         self.steps_per_env = max(1, training_freq // self.num_envs)
@@ -128,10 +129,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def _rollout_action(
         self, obs, learning_has_started: bool
     ) -> tuple[torch.Tensor, torch.Tensor, Optional[dict[str, Any]]]:
-        if not learning_has_started:
-            actions = self._explore_action(obs)
-        else:
+        if learning_has_started or self._use_policy_action_during_warmup:
             actions = self._policy_action(obs)
+        else:
+            actions = self._explore_action(obs)
         return actions, actions, None
 
     def _replay_buffer_add_kwargs(
@@ -278,7 +279,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def learn(self, total_timesteps: int) -> "OffPolicyAlgorithm":
         obs, _ = self.env.reset(seed=self.seed)
         self._on_env_reset(obs)
-        learning_has_started = False
+        learning_has_started = self._global_step >= self._learning_starts_step
         cumulative = defaultdict(float)
         global_steps_per_iteration = self.num_envs * self.steps_per_env
 
