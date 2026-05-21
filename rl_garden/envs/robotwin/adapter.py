@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import types
 from contextlib import contextmanager
@@ -87,6 +89,7 @@ class RoboTwinTaskAdapter:
         self.task = None
         self.elapsed_steps = 0
         self.last_dense_reward = 0.0
+        self._eval_video_index = 0
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
@@ -154,6 +157,7 @@ class RoboTwinTaskAdapter:
         self.last_dense_reward = 0.0
         obs = self.get_obs()
         obs["_env_seed"] = self.env_seed
+        self._start_eval_video_if_needed(obs.get("rgb"))
         return obs
 
     def step(self, action: np.ndarray) -> StepResult:
@@ -162,7 +166,7 @@ class RoboTwinTaskAdapter:
         assert self.task is not None
         action = self._to_robotwin_action(action)
         self._begin_reward_trace()
-        self.task.take_action(action, action_type="qpos")
+        self.task.take_action(action, action_type=self._robotwin_action_type())
         self._end_reward_trace()
         self.elapsed_steps += 1
         success = bool(self.task.check_success())
@@ -175,6 +179,9 @@ class RoboTwinTaskAdapter:
             "instruction": self._instruction(),
             "env_seed": self.env_seed,
         }
+        if success or bool(truncated):
+            self._stop_eval_video_if_needed()
+
         return StepResult(
             obs=self.get_obs(),
             reward=reward,
@@ -190,6 +197,7 @@ class RoboTwinTaskAdapter:
 
     def close(self, clear_cache: bool = True) -> None:
         if self.task is not None:
+            self._stop_eval_video_if_needed()
             self.task.close_env(clear_cache=clear_cache)
             self.task = None
 
@@ -201,6 +209,8 @@ class RoboTwinTaskAdapter:
             )
         if self.cfg.control_mode == "joint_pos":
             return action
+        if self.cfg.control_mode == "ee_delta_pose":
+            return self._to_robotwin_delta_ee_action(action)
         if self.cfg.control_mode != "delta_joint_pos":
             raise ValueError(
                 f"Unsupported RoboTwin control mode {self.cfg.control_mode!r}."
@@ -233,6 +243,38 @@ class RoboTwinTaskAdapter:
             right[-1] + action[-1] * self.cfg.gripper_delta_scale, 0.0, 1.0
         )
         return out
+
+    def _to_robotwin_delta_ee_action(self, action: np.ndarray) -> np.ndarray:
+        if action.shape[0] != 14:
+            raise ValueError(
+                "ee_delta_pose expects 14 dims: "
+                "left xyz+rotvec+gripper and right xyz+rotvec+gripper."
+            )
+        assert self.task is not None
+        robot = self.task.robot
+        left_gripper = _get_gripper_val(robot, "left")
+        right_gripper = _get_gripper_val(robot, "right")
+        out = np.empty(16, dtype=np.float32)
+        out[0:3] = action[0:3] * self.cfg.ee_delta_pos_scale
+        out[3:7] = _rotvec_to_wxyz(action[3:6] * self.cfg.ee_delta_rot_scale)
+        out[7] = np.clip(
+            left_gripper + action[6] * self.cfg.gripper_delta_scale,
+            0.0,
+            1.0,
+        )
+        out[8:11] = action[7:10] * self.cfg.ee_delta_pos_scale
+        out[11:15] = _rotvec_to_wxyz(action[10:13] * self.cfg.ee_delta_rot_scale)
+        out[15] = np.clip(
+            right_gripper + action[13] * self.cfg.gripper_delta_scale,
+            0.0,
+            1.0,
+        )
+        return out
+
+    def _robotwin_action_type(self) -> str:
+        if self.cfg.control_mode == "ee_delta_pose":
+            return "ee"
+        return "qpos"
 
     def _compute_reward(self, success: bool) -> float:
         if self.cfg.reward_mode == "sparse":
@@ -290,6 +332,57 @@ class RoboTwinTaskAdapter:
         assert self.task is not None
         if not hasattr(self.task, "is_in_hand"):
             self.task.is_in_hand = types.MethodType(_is_in_hand, self.task)
+
+    def _start_eval_video_if_needed(self, rgb: Any) -> None:
+        assert self.task is not None
+        video_dir = getattr(self.task, "eval_video_path", None)
+        if video_dir is None:
+            return
+
+        rgb_array = np.asarray(rgb)
+        if rgb_array.ndim != 3 or rgb_array.shape[-1] != 3:
+            raise ValueError(
+                "RoboTwin eval video expects an RGB head-camera image with shape HxWx3."
+            )
+        os.makedirs(os.fspath(video_dir), exist_ok=True)
+        h, w = rgb_array.shape[:2]
+        out_path = os.path.join(
+            os.fspath(video_dir),
+            f"episode_env{self.env_id}_seed{self.env_seed}_{self._eval_video_index}.mp4",
+        )
+        self._eval_video_index += 1
+        ffmpeg = subprocess.Popen(
+            [
+                _ffmpeg_executable(),
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "rgb24",
+                "-video_size",
+                f"{w}x{h}",
+                "-framerate",
+                "10",
+                "-i",
+                "-",
+                "-pix_fmt",
+                "yuv420p",
+                "-vcodec",
+                "libx264",
+                "-crf",
+                "23",
+                out_path,
+            ],
+            stdin=subprocess.PIPE,
+        )
+        self.task._set_eval_video_ffmpeg(ffmpeg)
+
+    def _stop_eval_video_if_needed(self) -> None:
+        assert self.task is not None
+        if hasattr(self.task, "eval_video_ffmpeg"):
+            self.task._del_eval_video_ffmpeg()
 
     def _instruction(self) -> Optional[str]:
         if self.task is None:
@@ -351,6 +444,37 @@ def _is_in_hand(task, actor):
         left_count >= 2 and task.robot.is_left_gripper_close(),
         right_count >= 2 and task.robot.is_right_gripper_close(),
     )
+
+
+def _get_gripper_val(robot, arm: str) -> float:
+    getter = getattr(robot, f"get_{arm}_gripper_val", None)
+    if callable(getter):
+        return float(getter())
+    joint_state = getattr(robot, f"get_{arm}_arm_jointState")()
+    return float(joint_state[-1])
+
+
+def _rotvec_to_wxyz(rotvec: np.ndarray) -> np.ndarray:
+    angle = float(np.linalg.norm(rotvec))
+    if angle < 1e-8:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    axis = rotvec / angle
+    half_angle = 0.5 * angle
+    quat = np.empty(4, dtype=np.float32)
+    quat[0] = np.cos(half_angle)
+    quat[1:] = axis * np.sin(half_angle)
+    return quat
+
+
+def _ffmpeg_executable() -> str:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is not None:
+        return ffmpeg
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return "ffmpeg"
+    return imageio_ffmpeg.get_ffmpeg_exe()
 
 
 def _prepare_robotwin_task_args(args: dict[str, Any]) -> None:

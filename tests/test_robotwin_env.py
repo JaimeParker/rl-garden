@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from examples import train_ppo_robotwin_rgbd
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
@@ -56,6 +57,12 @@ class _Robot:
     def get_right_arm_jointState(self):
         return [0.5] * 7
 
+    def get_left_gripper_val(self):
+        return 0.25
+
+    def get_right_gripper_val(self):
+        return 0.75
+
 
 class _Pose:
     def __init__(self, p):
@@ -75,6 +82,53 @@ class _StackBowlsTask:
         self.bowl1 = _Actor([0.0, -0.1, 0.76])
         self.bowl2 = _Actor([0.0, -0.1, 0.79])
         self.bowl3 = _Actor([0.0, -0.1, 0.82])
+
+
+class _VideoTask:
+    def __init__(self):
+        self.eval_video_path = None
+        self.ffmpeg = None
+        self.closed_video = False
+        self.closed_env = False
+
+    def setup_demo(self, **kwargs):
+        self.eval_video_path = kwargs.get("eval_video_save_dir")
+        self.step_lim = kwargs["step_lim"]
+        self.take_action_cnt = 0
+        self.run_steps = 0
+        self.reward_step = 0
+        self.eval_success = False
+
+    def get_obs(self):
+        rgb = np.zeros((8, 12, 3), dtype=np.uint8)
+        return {
+            "observation": {
+                "head_camera": {"rgb": rgb},
+                "left_camera": {"rgb": rgb},
+                "right_camera": {"rgb": rgb},
+            },
+            "joint_action": {"vector": np.zeros(14, dtype=np.float32)},
+        }
+
+    def get_instruction(self):
+        return None
+
+    def _set_eval_video_ffmpeg(self, ffmpeg):
+        self.ffmpeg = ffmpeg
+        self.eval_video_ffmpeg = ffmpeg
+
+    def _del_eval_video_ffmpeg(self):
+        self.closed_video = True
+        del self.eval_video_ffmpeg
+
+    def close_env(self, clear_cache=True):
+        del clear_cache
+        self.closed_env = True
+
+
+class _FakeFFmpeg:
+    def __init__(self):
+        self.stdin = object()
 
 
 def test_robotwin_env_reset_step_and_auto_reset_contract():
@@ -186,6 +240,42 @@ def test_delta_joint_pos_action_conversion():
     assert raw[13] == 0.75
 
 
+def test_ee_delta_pose_action_space_and_conversion():
+    cfg = RoboTwinEnvConfig(
+        control_mode="ee_delta_pose",
+        device="cpu",
+        image_size=(8, 8),
+        ee_delta_pos_scale=0.01,
+        ee_delta_rot_scale=0.2,
+        gripper_delta_scale=0.1,
+    )
+    env = RoboTwinEnv(cfg, executor=FakeExecutor(num_envs=1))
+    assert env.single_action_space.shape == (14,)
+    assert np.all(env.single_action_space.low == -1.0)
+    assert np.all(env.single_action_space.high == 1.0)
+    env.close()
+
+    adapter = RoboTwinTaskAdapter(0, cfg, {}, env_seed=0)
+    adapter.task = type("Task", (), {"robot": _Robot()})()
+    action = np.zeros(14, dtype=np.float32)
+    action[0] = 1.0
+    action[5] = 1.0
+    action[6] = 1.0
+    action[7] = -1.0
+    action[13] = -1.0
+    raw = adapter._to_robotwin_action(action)
+    assert adapter._robotwin_action_type() == "ee"
+    assert raw.shape == (16,)
+    np.testing.assert_allclose(raw[0:3], [0.01, 0.0, 0.0])
+    np.testing.assert_allclose(
+        raw[3:7], [np.cos(0.1), 0.0, 0.0, np.sin(0.1)], atol=1e-6
+    )
+    np.testing.assert_allclose(raw[7], 0.35)
+    np.testing.assert_allclose(raw[8:11], [-0.01, 0.0, 0.0])
+    np.testing.assert_allclose(raw[11:15], [1.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(raw[15], 0.65)
+
+
 def test_reward_registry_covers_rlinf_robotwin_env_configs():
     assert supported_reward_tasks() == (
         "adjust_bottle",
@@ -208,3 +298,78 @@ def test_stack_bowls_three_dense_reward_factory_builds():
     reward.update()
     assert reward.compute_reward() > 0.0
     assert task.reward is reward
+
+
+def test_robotwin_ppo_eval_env_wires_video_dir(monkeypatch, tmp_path):
+    captured = []
+
+    def fake_make_robotwin_env(cfg):
+        captured.append(cfg)
+        return cfg
+
+    monkeypatch.setattr(train_ppo_robotwin_rgbd, "make_robotwin_env", fake_make_robotwin_env)
+    args = train_ppo_robotwin_rgbd.Args(log_type="none")
+    train_ppo_robotwin_rgbd._make_env(
+        args,
+        num_envs=1,
+        is_eval=True,
+        eval_record_dir=str(tmp_path),
+    )
+    train_ppo_robotwin_rgbd._make_env(
+        args,
+        num_envs=1,
+        is_eval=False,
+        eval_record_dir=str(tmp_path),
+    )
+
+    eval_cfg = captured[0].task_config
+    train_cfg = captured[1].task_config
+    assert eval_cfg["eval_video_log"] is True
+    assert eval_cfg["eval_video_save_dir"] == str(tmp_path)
+    assert train_cfg["eval_video_log"] is False
+    assert "eval_video_save_dir" not in train_cfg
+
+
+def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
+    task = _VideoTask()
+    popen_calls = []
+
+    def fake_make_task(task_name, robotwin_root=None):
+        del task_name, robotwin_root
+        return task
+
+    def fake_popen(args, stdin):
+        popen_calls.append((args, stdin))
+        return _FakeFFmpeg()
+
+    monkeypatch.setattr(robotwin_adapter, "make_task", fake_make_task)
+    monkeypatch.setattr(robotwin_adapter, "_ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr(robotwin_adapter.subprocess, "Popen", fake_popen)
+
+    cfg = RoboTwinEnvConfig(
+        task_name="place_shoe",
+        reward_mode="sparse",
+        device="cpu",
+        image_size=(8, 8),
+        task_config={
+            "step_lim": 2,
+            "eval_video_log": True,
+            "eval_video_save_dir": str(tmp_path),
+            "left_robot_file": "left.yml",
+            "right_robot_file": "right.yml",
+        },
+    )
+    adapter = RoboTwinTaskAdapter(0, cfg, cfg.task_config, env_seed=123)
+    obs = adapter.reset()
+
+    assert obs["rgb"].shape == (8, 12, 3)
+    assert task.ffmpeg is not None
+    assert popen_calls
+    args, stdin = popen_calls[0]
+    assert stdin is robotwin_adapter.subprocess.PIPE
+    assert "12x8" in args
+    assert str(tmp_path / "episode_env0_seed123_0.mp4") in args
+
+    adapter.close()
+    assert task.closed_video is True
+    assert task.closed_env is True

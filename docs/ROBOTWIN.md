@@ -140,7 +140,7 @@ because SAPIEN scene creation/reset is not safe to run freely in many threads.
 - injects dense reward with `build_task_reward()` when `reward_mode="dense"`;
 - converts rl-garden actions to RoboTwin qpos+gripper commands;
 - tracks reward state needed by dense reward primitives;
-- calls `take_action(action, action_type="qpos")`;
+- calls `take_action()` with RoboTwin's matching action type;
 - returns `StepResult` with obs, reward, termination, truncation, and info.
 
 ## Actions
@@ -171,8 +171,26 @@ The adapter reads the current RoboTwin joint state, applies
 dimensions, clamps grippers to `[0, 1]`, then passes the resulting absolute
 qpos+gripper target into RoboTwin.
 
-`control_mode="joint_pos"` is also present for direct qpos-style actions, but
-the default and intended v1 training mode is `delta_joint_pos`.
+`control_mode="joint_pos"` is also present for direct qpos-style actions.
+
+`control_mode="ee_delta_pose"` exposes a bounded 14D Cartesian delta action:
+
+```text
+left dxyz:            3 dims
+left drotvec:         3 dims
+left gripper delta:   1 dim
+right dxyz:           3 dims
+right drotvec:        3 dims
+right gripper delta:  1 dim
+```
+
+The adapter scales translation by `ee_delta_pos_scale` (default `0.03`),
+rotation-vector deltas by `ee_delta_rot_scale` (default `0.15`), converts
+rotvecs to RoboTwin's `[w, x, y, z]` quaternion delta format, clamps grippers
+to `[0, 1]`, and calls RoboTwin with `action_type="ee"`.
+
+The default and baseline mode remains `delta_joint_pos`; use
+`ee_delta_pose` for RL with RoboTwin's native end-effector planner.
 
 ## Rewards
 

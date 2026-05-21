@@ -20,6 +20,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     resolve_checkpoint_dir,
+    resolve_eval_record_dir,
 )
 from rl_garden.encoders import discover_image_keys
 from rl_garden.envs import RoboTwinEnvConfig, make_robotwin_env
@@ -31,12 +32,15 @@ class Args(VisionPPOTrainingArgs):
     robotwin_root: Optional[str] = None
     assets_path: Optional[str] = None
     seeds_path: Optional[str] = None
+    device: str = "auto"
     step_lim: int = 400
     planner_backend: str = "mplib"
     embodiment: list[str] = field(default_factory=lambda: ["aloha-agilex"])
     reward_mode: str = "dense"
     control_mode: str = "delta_joint_pos"
     joint_delta_scale: float = 0.05
+    ee_delta_pos_scale: float = 0.03
+    ee_delta_rot_scale: float = 0.15
     gripper_delta_scale: float = 0.2
     collect_wrist_camera: bool = True
 
@@ -66,6 +70,8 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
         "collect_data": False,
         "eval_video_log": bool(is_eval and args.capture_video),
     }
+    if is_eval and args.capture_video and eval_record_dir is not None:
+        task_cfg["eval_video_save_dir"] = eval_record_dir
     return make_robotwin_env(
         RoboTwinEnvConfig(
             task_name=args.env_id,
@@ -81,7 +87,10 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             embodiment=args.embodiment,
             reward_mode=args.reward_mode,  # type: ignore[arg-type]
             control_mode=args.control_mode,  # type: ignore[arg-type]
+            image_size=(image_height, image_width),
             joint_delta_scale=args.joint_delta_scale,
+            ee_delta_pos_scale=args.ee_delta_pos_scale,
+            ee_delta_rot_scale=args.ee_delta_rot_scale,
             gripper_delta_scale=args.gripper_delta_scale,
             image_size=image_size,
             include_wrist_cameras=args.collect_wrist_camera,
@@ -100,6 +109,7 @@ def main() -> None:
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = args.exp_name or f"robotwin_{args.env_id}__ppo_rgbd_{args.encoder}__{args.seed}__{int(time.time())}"
     checkpoint_dir = resolve_checkpoint_dir(args, run_name)
+    eval_record_dir = resolve_eval_record_dir(args, run_name)
     logger = Logger.create(
         log_type=args.log_type,
         log_dir=args.log_dir,
@@ -113,7 +123,12 @@ def main() -> None:
     )
 
     env = _make_env(args, args.num_envs)
-    eval_env = _make_env(args, args.num_eval_envs, is_eval=True)
+    eval_env = _make_env(
+        args,
+        args.num_eval_envs,
+        is_eval=True,
+        eval_record_dir=eval_record_dir,
+    )
     factory = image_encoder_factory_from_args(args)
     image_keys = discover_image_keys(env.single_observation_space)
 
