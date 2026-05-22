@@ -523,14 +523,14 @@ class CQLCore(SACCore):
         mc_returns: torch.Tensor,
         n_samples: int,
         batch_size: int,
-    ) -> tuple[torch.Tensor, float]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         del q_ood, mc_returns, n_samples, batch_size
         raise RuntimeError("Cal-QL lower bounds require the CalQL algorithm class.")
 
-    def _cql_regularizer(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def _cql_regularizer(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         batch_size = data.rewards.shape[0]
         action_dim = self.env.single_action_space.shape[0]
-        info: dict[str, float] = {}
+        info: dict[str, torch.Tensor] = {}
 
         cql_random_actions = self._sample_random_actions(batch_size, action_dim)
         cql_current_actions, cql_current_log_pis = self._sample_n_actions_with_log_probs(
@@ -599,13 +599,13 @@ class CQLCore(SACCore):
         cql_loss_raw = cql_q_diff.mean()
         info.update(
             {
-                "cql_q_diff": cql_q_diff.mean().item(),
-                "cql_ood_values": cql_ood_values.mean().item(),
+                "cql_q_diff": cql_q_diff.mean().detach(),
+                "cql_ood_values": cql_ood_values.mean().detach(),
             }
         )
         return cql_loss_raw, info
 
-    def _cql_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def _cql_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         return self._cql_regularizer(data, q_pred)
 
     def _target_q(self, data) -> torch.Tensor:
@@ -655,14 +655,17 @@ class CQLCore(SACCore):
                 1 - data.dones.reshape(-1, 1)
             ) * self.gamma * min_q_next
 
-    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         target_q = self._target_q(data)
         target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
         td_loss = F.mse_loss(q_pred, target_q_expanded)
-        return td_loss, {"td_loss": td_loss.item(), "target_q": target_q.mean().item()}
+        return td_loss, {
+            "td_loss": td_loss.detach(),
+            "target_q": target_q.mean().detach(),
+        }
 
-    def _critic_loss(self, data) -> tuple[torch.Tensor, dict[str, float]]:
-        info: dict[str, float] = {}
+    def _critic_loss(self, data) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        info: dict[str, torch.Tensor] = {}
         q_pred = self._critic_forward(data.obs, data.actions, target=False)
 
         td_loss = torch.tensor(0.0, device=self.device)
@@ -677,12 +680,12 @@ class CQLCore(SACCore):
             cql_alpha = self._current_cql_alpha()
             cql_loss = cql_loss_raw - self.cql_target_action_gap if self.cql_autotune_alpha else cql_loss_raw
             cql_loss = cql_alpha * cql_loss
-            info["cql_loss"] = cql_loss_raw.item()
-            info["cql_alpha"] = cql_alpha.item()
+            info["cql_loss"] = cql_loss_raw.detach()
+            info["cql_alpha"] = cql_alpha.detach()
 
         critic_loss = td_loss + cql_loss
-        info["critic_loss"] = critic_loss.item()
-        info["predicted_q"] = q_pred.mean().item()
+        info["critic_loss"] = critic_loss.detach()
+        info["predicted_q"] = q_pred.mean().detach()
         return critic_loss, info
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
@@ -705,17 +708,17 @@ class CQLCore(SACCore):
     def _backup_entropy_enabled(self) -> bool:
         return self.backup_entropy
 
-    def _post_actor_update(self, data) -> dict[str, float]:
-        info: dict[str, float] = {}
+    def _post_actor_update(self, data) -> dict[str, torch.Tensor]:
+        info: dict[str, torch.Tensor] = {}
         if self.cql_autotune_alpha:
             cql_alpha_loss = self._cql_alpha_loss(data)
             self.cql_alpha_optimizer.zero_grad()
             cql_alpha_loss.backward()
             self._clip_grad_norm(self.cql_alpha_lagrange.parameters())
             self.cql_alpha_optimizer.step()
-            info["cql_alpha_loss"] = cql_alpha_loss.item()
+            info["cql_alpha_loss"] = cql_alpha_loss.detach()
         if self.cql_autotune_alpha or self.use_cql_loss:
-            info["cql_alpha"] = self._current_cql_alpha().item()
+            info["cql_alpha"] = self._current_cql_alpha().detach()
         return info
 
 

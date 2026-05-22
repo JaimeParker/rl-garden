@@ -1,5 +1,6 @@
 from rl_garden.common.action_scaler import ActionScaler
 from rl_garden.common.logger import Logger
+from rl_garden.common.perf import enable_fast_math
 from rl_garden.common.types import (
     Obs,
     ReplayBufferSample,
@@ -23,6 +24,7 @@ __all__ = [
     "TensorDict",
     "ActionScaler",
     "constant_schedule",
+    "enable_fast_math",
     "get_device",
     "polyak_update",
     "seed_everything",

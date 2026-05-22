@@ -24,7 +24,7 @@ from tqdm import trange
 
 from rl_garden.algorithms import WSRL
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
-from rl_garden.common import Logger, seed_everything
+from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     VisionWSRLTrainingArgs,
     apply_log_env_overrides,
@@ -50,14 +50,15 @@ def _offline_update_loop(
     *,
     start_step: int = 0,
 ) -> None:
-    gradient_steps = (
-        int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
-    )
+    gradient_steps = 1
     interval_update_time = 0.0
     interval_update_steps = 0
     for step in trange(steps, desc="offline"):
+        should_log = log_freq > 0 and (
+            (step + 1) % log_freq == 0 or (step + 1) == steps
+        )
         update_t = time.perf_counter()
-        losses = agent.train(gradient_steps)
+        losses = agent.train(gradient_steps, compute_info=should_log)
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
@@ -88,6 +89,7 @@ def main() -> None:
     args = tyro.cli(Args)
     apply_log_env_overrides(args)
     seed_everything(args.seed)
+    enable_fast_math()
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
@@ -203,6 +205,7 @@ def main() -> None:
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
+        warmup_steps=args.warmup_steps,
         offline_sampling=args.offline_sampling,
         sparse_reward_mc=args.sparse_reward_mc,
         sparse_negative_reward=args.sparse_negative_reward,

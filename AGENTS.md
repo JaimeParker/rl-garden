@@ -36,14 +36,18 @@ Core design constraints:
 
 ## Code Structure
 
-- `rl_garden/algorithms/` - `BaseAlgorithm`, `OffPolicyAlgorithm`, `SAC`.
-- `rl_garden/policies/` - SAC actor/critic policy modules.
-- `rl_garden/buffers/` - GPU-native tensor and dict replay buffers.
+- `rl_garden/algorithms/` - `BaseAlgorithm`, `OffPolicyAlgorithm`, `OfflineRLAlgorithm`, `OfflineSAC`, `SAC`, `CQL`, `CalQL`, `WSRL`, `WSRLRGBD`.
+- `rl_garden/policies/` - `SACPolicy`, `WSRLPolicy`, `Actor`, `ContinuousCritic` (REDQ-style Q-ensemble).
+- `rl_garden/buffers/` - GPU-native tensor (`TensorReplayBuffer`) and dict (`DictReplayBuffer`) replay buffers, plus MC-return variants (`MCTensorReplayBuffer`, `MCDictReplayBuffer`).
 - `rl_garden/encoders/` - flatten, plain CNN, combined RGBD/proprio, pooling, FiLM, augmentation, and ResNet encoders.
-- `rl_garden/envs/` - ManiSkill env factory and vendored custom ManiSkill envs.
-- `examples/` - Python training entrypoints.
+- `rl_garden/networks/` - `EnsembleQCritic`, `SquashedGaussianActor`, MLP/MLPResNet backbone builders.
+- `rl_garden/common/` - `Logger`, `cli_args` (tyro dataclasses), `checkpoint` (`.pt` I/O), `optim`, types, utilities.
+- `rl_garden/datasets/` - WSRL dataset generation from SAC checkpoints.
+- `rl_garden/envs/` - ManiSkill env factory (`ManiSkillEnvConfig` + `make_maniskill_env()`), plus vendored custom ManiSkill envs and wrappers.
+- `robot_infra/teleop/` - EE twist teleoperation interface (Pico/spacemouse) and WSRL recording.
+- `examples/` - Python training entrypoints (`train_sac_state`, `train_sac_rgbd`, `train_sac_rgbd_peg`, `train_wsrl`, `train_wsrl_rgbd`, `pretrain_offline`, `pretrain_cql_offline`, `pretrain_wsrl_offline`, `generate_wsrl_dataset`).
 - `scripts/` - shell launchers for common training runs.
-- `tests/` - CPU unit tests and CUDA ManiSkill smoke tests.
+- `tests/` - CPU unit tests and CUDA ManiSkill smoke tests (20 test files).
 - `3rd_party/` - reference submodules and external clones. Do not edit these unless the user explicitly asks.
 - `pretrained_models/` - expected location for optional ResNet checkpoints.
 
@@ -102,6 +106,101 @@ MPLCONFIGDIR=/tmp python \
 ```
 
 Use `MPLCONFIGDIR=/tmp` when running ManiSkill commands if matplotlib cache warnings appear.
+
+---
+
+## Offline Pretraining (No Sim Env)
+
+Use `examples/pretrain_offline.py` with `--algorithm` to pretrain from a flat
+ManiSkill H5 dataset without spinning up a simulator env:
+
+```bash
+# Cal-QL (default, best for offline→online transfer)
+python examples/pretrain_offline.py --algorithm calql \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
+
+# CQL (pure conservative Q-learning)
+python examples/pretrain_offline.py --algorithm cql \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
+
+# WSRL agent (Cal-QL backbone, for later WSRL offline→online flow)
+python examples/pretrain_offline.py --algorithm wsrl \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
+```
+
+`--algorithm wsrl-calql` is a deprecated alias for `wsrl` that still works for
+backward compatibility.
+
+Algorithm-specific shell launchers (`scripts/pretrain_calql_offline.sh`,
+`scripts/pretrain_cql_offline.sh`, `scripts/pretrain_offline.sh`) wrap
+`pretrain_offline.py`.
+
+### Optional Offline Evaluation
+
+Pass `--env_id` to spin up a ManiSkill eval env during offline training for
+periodic success/return metrics:
+
+```bash
+python examples/pretrain_offline.py --algorithm calql \
+  --offline_dataset_path demos/pickcube.h5 \
+  --env_id PickCube-v1 --eval_freq 1000 --num_eval_steps 50
+```
+
+When `--env_id` is omitted only loss curves are logged; no simulator is started.
+
+---
+
+## Checkpoint Semantics
+
+Checkpoint save paths are resolved by `resolve_checkpoint_dir()` in
+`rl_garden/common/cli_args.py`. Unless `--checkpoint_dir` is explicitly passed,
+the default is:
+
+```
+{log_dir}/{run_name}/checkpoints/
+```
+
+- `log_dir` defaults to `"runs"` (from `LoggingArgs.log_dir`).
+- `run_name` is `--exp_name` if provided, otherwise `f"{algorithm}_offline_pretrain__{seed}__{int(time.time())}"`.
+
+If **both** `--save_final_checkpoint=False` and `--checkpoint_freq=0`,
+`resolve_checkpoint_dir()` returns `None` and no checkpoints are saved at all.
+
+### What Gets Saved
+
+Intermediate checkpoints (when `--checkpoint_freq > 0`):
+
+```
+runs/<run_name>/checkpoints/checkpoint_10000.pt
+runs/<run_name>/checkpoints/checkpoint_20000.pt
+...
+```
+
+Final checkpoint (when `--save_final_checkpoint=True`, which is the default):
+
+```
+runs/<run_name>/checkpoints/<algorithm>_offline_pretrained.pt
+```
+
+`--save_filename` overrides the final checkpoint filename.
+
+### Checkpoint Format
+
+Checkpoints are torch-native `.pt` dictionaries (format version 1). They
+contain model state, optimizer state, global step counters, and metadata.
+Algorithm class name aliases exist in `common/checkpoint.py` so legacy
+checkpoints (`OfflineCQL`, `OfflineCalQL`) remain loadable by renamed classes
+(`CQL`, `CalQL`).
+
+Replay buffer snapshots (when `--save_replay_buffer`) are written to a
+separate `_replay_buffer.pt` file next to the checkpoint.
+
+Load a checkpoint later with:
+
+```bash
+python examples/pretrain_offline.py --algorithm calql \
+  --load_checkpoint runs/<run_name>/checkpoints/calql_offline_pretrained.pt
+```
 
 ---
 

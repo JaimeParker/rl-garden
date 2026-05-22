@@ -62,7 +62,7 @@ class CalQLCore:
         mc_returns: torch.Tensor,
         n_samples: int,
         batch_size: int,
-    ) -> tuple[torch.Tensor, float]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Apply the Cal-QL infinite-horizon lower bound to OOD Q-values."""
         mc_returns_b1 = mc_returns.reshape(batch_size, 1)
 
@@ -79,8 +79,7 @@ class CalQLCore:
             mc_lower_bound = torch.cat([fake, real], dim=1)
         mc_lower_bound = mc_lower_bound.unsqueeze(0)
 
-        num_vals = q_ood.numel()
-        bound_rate = (q_ood < mc_lower_bound).sum().item() / max(num_vals, 1)
+        bound_rate = (q_ood < mc_lower_bound).float().mean().detach()
         return torch.maximum(q_ood, mc_lower_bound), bound_rate
 
 

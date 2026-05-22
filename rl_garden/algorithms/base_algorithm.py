@@ -28,6 +28,11 @@ from rl_garden.policies.base import BasePolicy
 class BaseAlgorithm(ABC):
     policy: BasePolicy
 
+    # Subclasses may list parent algorithm class names whose checkpoints are
+    # safe to load.  ``validate_checkpoint_metadata`` will accept a stored
+    # algorithm_class that matches *any* entry in this tuple.
+    _compatible_checkpoint_algorithms: tuple[str, ...] = ()
+
     def __init__(
         self,
         env: Any,
@@ -173,6 +178,7 @@ class BaseAlgorithm(ABC):
         validate_checkpoint_metadata(
             checkpoint,
             algorithm_class=type(self).__name__,
+            compatible_algorithms=self._compatible_checkpoint_algorithms,
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             strict=strict,

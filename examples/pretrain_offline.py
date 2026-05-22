@@ -35,7 +35,7 @@ from rl_garden.algorithms import (
     run_offline_pretraining,
 )
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
-from rl_garden.common import Logger, seed_everything
+from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     OfflinePretrainArgs,
     apply_log_env_overrides,
@@ -241,6 +241,7 @@ def main(
     args = tyro.cli(args_cls)
     apply_log_env_overrides(args)
     seed_everything(args.seed)
+    enable_fast_math()
 
     algorithm = _algorithm(args)
     if allowed_algorithms is not None and algorithm not in allowed_algorithms:

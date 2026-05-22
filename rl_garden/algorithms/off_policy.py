@@ -83,7 +83,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         """Build policy, optimizers, replay buffer, etc."""
 
     @abstractmethod
-    def train(self, gradient_steps: int) -> dict[str, float]: ...
+    def train(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]: ...
 
     # --- logging hooks ---
 
@@ -411,7 +413,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
             # Update.
             update_t = time.perf_counter()
-            losses = self.train(self.grad_steps_per_iteration)
+            losses = self.train(self.grad_steps_per_iteration, compute_info=should_log)
             update_time = time.perf_counter() - update_t
             cumulative["update_time"] += update_time
 

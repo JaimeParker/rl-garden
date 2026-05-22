@@ -22,7 +22,7 @@ from tqdm import trange
 
 from rl_garden.algorithms import WSRL
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
-from rl_garden.common import Logger, seed_everything
+from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     WSRLTrainingArgs,
     apply_log_env_overrides,
@@ -46,15 +46,16 @@ def _offline_update_loop(
     *,
     start_step: int = 0,
 ) -> int:
-    gradient_steps = (
-        int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
-    )
+    gradient_steps = 1
     interval_update_time = 0.0
     interval_update_steps = 0
     for step in trange(steps, desc="offline"):
         global_step = start_step + step + 1
+        should_log = log_freq > 0 and (
+            (step + 1) % log_freq == 0 or (step + 1) == steps
+        )
         update_t = time.perf_counter()
-        losses = agent.train(gradient_steps)
+        losses = agent.train(gradient_steps, compute_info=should_log)
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
@@ -146,6 +147,7 @@ def main() -> None:
     args = tyro.cli(Args)
     apply_log_env_overrides(args)
     seed_everything(args.seed)
+    enable_fast_math()
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
@@ -251,6 +253,7 @@ def main() -> None:
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
+        warmup_steps=args.warmup_steps,
         offline_sampling=args.offline_sampling,
         sparse_reward_mc=args.sparse_reward_mc,
         sparse_negative_reward=args.sparse_negative_reward,
@@ -305,6 +308,21 @@ def main() -> None:
         _set_offline_probe(agent, logger, args.std_log)
 
         # Switch to online mode. The algorithm owns empty/append/mixed buffer handling.
+        agent.switch_to_online_mode(
+            online_replay_mode=args.online_replay_mode,
+            offline_data_ratio=args.offline_data_ratio,
+        )
+        if args.std_log:
+            print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+    elif args.num_offline_steps == 0:
+        if args.warmup_steps > 0 and args.load_checkpoint is None:
+            import warnings
+            warnings.warn(
+                "warmup_steps > 0 has no effect without an offline-trained policy. "
+                "Use --load_checkpoint or set --warmup_steps 0 for pure-online runs.",
+                UserWarning,
+                stacklevel=2,
+            )
         agent.switch_to_online_mode(
             online_replay_mode=args.online_replay_mode,
             offline_data_ratio=args.offline_data_ratio,

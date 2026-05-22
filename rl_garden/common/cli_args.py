@@ -202,6 +202,7 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
 
     online_cql_alpha: Optional[float] = None
     online_use_cql_loss: Optional[bool] = None
+    warmup_steps: int = 5000
     offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
 
     sparse_reward_mc: bool = False
@@ -266,6 +267,8 @@ class OfflineOptimizerArgs:
     lr_min_ratio: float = 0.0
     grad_clip_norm: Optional[float] = None
 
+    use_compile: bool = True
+
 
 @dataclass
 class OfflineSACFamilyArgs:
@@ -275,7 +278,7 @@ class OfflineSACFamilyArgs:
     cql_alpha_lr: float = 3e-4
     policy_frequency: int = 1
     target_network_frequency: int = 1
-    use_compile: bool = False
+    use_compile: bool = True
     compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
     use_cql_loss: bool = True
     use_td_loss: bool = True
