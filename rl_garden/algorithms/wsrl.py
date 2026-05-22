@@ -415,11 +415,11 @@ class WSRL(_CalQLRolloutTrainingShell):
         return super().train(gradient_steps)
 
     def _explore_action(self, obs) -> torch.Tensor:
-        # In online mode the offline-trained policy is always better than
-        # random exploration, even before learning_has_started is set.
-        # switch_to_online_mode() is only called after actual offline
-        # pre-training, so _online_start_step is None during pure-online runs.
-        if self._online_start_step is not None:
+        # Use the offline-trained policy for exploration only when warmup is
+        # configured (warmup_steps > 0 and switch_to_online_mode() was called).
+        # Falls back to random uniform when warmup_steps=0, preserving the
+        # base class behaviour for pure-online runs without a pre-trained policy.
+        if self._warmup_end_step is not None:
             return self._policy_action(obs)
         return super()._explore_action(obs)
 

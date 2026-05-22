@@ -311,6 +311,14 @@ def main() -> None:
         if args.std_log:
             print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
     elif args.num_offline_steps == 0:
+        if args.warmup_steps > 0 and args.load_checkpoint is None:
+            import warnings
+            warnings.warn(
+                "warmup_steps > 0 has no effect without an offline-trained policy. "
+                "Use --load_checkpoint or set --warmup_steps 0 for pure-online runs.",
+                UserWarning,
+                stacklevel=2,
+            )
         agent.switch_to_online_mode(
             online_replay_mode=args.online_replay_mode,
             offline_data_ratio=args.offline_data_ratio,
