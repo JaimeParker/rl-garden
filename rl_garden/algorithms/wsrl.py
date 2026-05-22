@@ -406,13 +406,15 @@ class WSRL(_CalQLRolloutTrainingShell):
             tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
         return tagged
 
-    def train(self, gradient_steps: int) -> dict[str, float]:
+    def train(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]:
         if (
             self._warmup_end_step is not None
             and self._global_step <= self._warmup_end_step
         ):
             return {}
-        return super().train(gradient_steps)
+        return super().train(gradient_steps, compute_info=compute_info)
 
     def _explore_action(self, obs) -> torch.Tensor:
         # Use the offline-trained policy for exploration only when warmup is

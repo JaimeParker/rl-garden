@@ -55,7 +55,7 @@ class SACCore:
         elif getattr(self, "autotune", False) and getattr(self, "temperature_lagrange", None):
             yield from self.temperature_lagrange.parameters()
 
-    def _post_actor_update(self, data) -> dict[str, float]:
+    def _post_actor_update(self, data) -> dict[str, torch.Tensor]:
         return {}
 
     def _target_update(self) -> None:
@@ -90,20 +90,20 @@ class SACCore:
             ) * self.gamma * min_q_next
         return target
 
-    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         target_q = self._target_q(data)
         target_q_expanded = target_q.unsqueeze(0).expand_as(q_pred)
         td_loss = F.mse_loss(q_pred, target_q_expanded)
         return td_loss, {
-            "td_loss": td_loss.item(),
-            "target_q": target_q.mean().item(),
+            "td_loss": td_loss.detach(),
+            "target_q": target_q.mean().detach(),
         }
 
-    def _critic_loss(self, data) -> tuple[torch.Tensor, dict[str, float]]:
+    def _critic_loss(self, data) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         q_pred = self._critic_forward(data.obs, data.actions, target=False)
         td_loss, info = self._td_loss(data, q_pred)
-        info["critic_loss"] = td_loss.item()
-        info["predicted_q"] = q_pred.mean().item()
+        info["critic_loss"] = td_loss.detach()
+        info["predicted_q"] = q_pred.mean().detach()
         return td_loss, info
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
@@ -126,28 +126,47 @@ class SACCore:
             for key in keys
         }
 
-    def train(self, gradient_steps: int) -> dict[str, float]:
+    @staticmethod
+    def _reduce_tensor_lists(
+        tensor_lists: dict[str, list[torch.Tensor]],
+    ) -> dict[str, float]:
+        """Stack scalar tensors and reduce to floats. Single sync per key."""
+        out: dict[str, float] = {}
+        for key, vals in tensor_lists.items():
+            if not vals:
+                continue
+            stacked = torch.stack(vals)
+            out[key] = float(stacked.mean().item())
+        return out
+
+    def train(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]:
         high_utd_ratio = int(self.utd) if float(self.utd).is_integer() else 1
         if high_utd_ratio > 1:
             groups = gradient_steps // high_utd_ratio
             remainder = gradient_steps % high_utd_ratio
             infos: list[dict[str, float]] = []
             for _ in range(groups):
-                infos.append(self.train_high_utd(utd_ratio=high_utd_ratio))
+                infos.append(
+                    self.train_high_utd(
+                        utd_ratio=high_utd_ratio, compute_info=compute_info
+                    )
+                )
             if remainder:
                 old_utd = self.utd
                 self.utd = 1.0
                 try:
-                    infos.append(self.train(remainder))
+                    infos.append(self.train(remainder, compute_info=compute_info))
                 finally:
                     self.utd = old_utd
-            return self._mean_infos(infos)
+            return self._mean_infos(infos) if compute_info else {}
 
-        critic_losses: list[float] = []
-        actor_losses: list[float] = []
-        alpha_losses: list[float] = []
-        alphas: list[float] = []
-        info_accum: dict[str, list[float]] = {}
+        critic_losses_t: list[torch.Tensor] = []
+        actor_losses_t: list[torch.Tensor] = []
+        alpha_losses_t: list[torch.Tensor] = []
+        alphas_t: list[torch.Tensor] = []
+        info_accum: dict[str, list[torch.Tensor]] = {}
 
         for _ in range(gradient_steps):
             self._global_update += 1
@@ -159,10 +178,11 @@ class SACCore:
             self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
             self.q_optimizer.step()
             self._step_critic_scheduler()
-            critic_losses.append(critic_loss.item())
 
-            for key, value in critic_info.items():
-                info_accum.setdefault(key, []).append(value)
+            if compute_info:
+                critic_losses_t.append(critic_loss.detach())
+                for key, value in critic_info.items():
+                    info_accum.setdefault(key, []).append(value)
 
             if self._global_update % self.policy_frequency == 0:
                 actor_loss, log_prob_detached = self._actor_loss(data.obs)
@@ -171,7 +191,6 @@ class SACCore:
                 self._clip_grad_norm(self.policy.actor_parameters())
                 self.actor_optimizer.step()
                 self._step_actor_scheduler()
-                actor_losses.append(actor_loss.item())
 
                 if self.autotune:
                     alpha_loss = self._alpha_loss(log_prob_detached)
@@ -179,29 +198,44 @@ class SACCore:
                     alpha_loss.backward()
                     self._clip_grad_norm(self._alpha_parameters())
                     self.alpha_optimizer.step()
-                    alpha_losses.append(alpha_loss.item())
+                    if compute_info:
+                        alpha_losses_t.append(alpha_loss.detach())
 
-                for key, value in self._post_actor_update(data).items():
-                    info_accum.setdefault(key, []).append(value)
+                post_info = self._post_actor_update(data)
+                if compute_info:
+                    actor_losses_t.append(actor_loss.detach())
+                    for key, value in post_info.items():
+                        info_accum.setdefault(key, []).append(value)
 
-            alphas.append(self._current_alpha().item())
+            if compute_info:
+                alphas_t.append(self._current_alpha().detach())
 
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
 
-        out = {
-            "critic_loss": float(np.mean(critic_losses)) if critic_losses else 0.0,
-            "qf_loss": float(np.mean(critic_losses)) if critic_losses else 0.0,
-            "actor_loss": float(np.mean(actor_losses)) if actor_losses else 0.0,
-            "alpha": float(np.mean(alphas)) if alphas else 0.0,
+        if not compute_info:
+            return {}
+
+        critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
+        actor_mean = self._reduce_tensor_lists({"actor_loss": actor_losses_t})
+        alpha_mean = self._reduce_tensor_lists({"alpha": alphas_t})
+        alpha_loss_mean = self._reduce_tensor_lists({"alpha_loss": alpha_losses_t})
+        info_mean = self._reduce_tensor_lists(info_accum)
+
+        out: dict[str, float] = {
+            "critic_loss": critic_mean.get("critic_loss", 0.0),
+            "qf_loss": critic_mean.get("critic_loss", 0.0),
+            "actor_loss": actor_mean.get("actor_loss", 0.0),
+            "alpha": alpha_mean.get("alpha", 0.0),
         }
-        if alpha_losses:
-            out["alpha_loss"] = float(np.mean(alpha_losses))
-        for key, values in info_accum.items():
-            out[key] = float(np.mean(values))
+        if "alpha_loss" in alpha_loss_mean:
+            out["alpha_loss"] = alpha_loss_mean["alpha_loss"]
+        out.update(info_mean)
         return out
 
-    def train_high_utd(self, utd_ratio: int) -> dict[str, float]:
+    def train_high_utd(
+        self, utd_ratio: int, compute_info: bool = False
+    ) -> dict[str, float]:
         assert utd_ratio >= 1, f"utd_ratio must be >= 1, got {utd_ratio}"
         assert (
             self.batch_size % utd_ratio == 0
@@ -210,8 +244,8 @@ class SACCore:
         full_batch = self._sample_train_batch(self.batch_size)
         minibatch_size = self.batch_size // utd_ratio
 
-        critic_losses: list[float] = []
-        info_accum: dict[str, list[float]] = {}
+        critic_losses_t: list[torch.Tensor] = []
+        info_accum: dict[str, list[torch.Tensor]] = {}
 
         for j in range(utd_ratio):
             self._global_update += 1
@@ -223,10 +257,11 @@ class SACCore:
             self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
             self.q_optimizer.step()
             self._step_critic_scheduler()
-            critic_losses.append(critic_loss.item())
 
-            for key, value in critic_info.items():
-                info_accum.setdefault(key, []).append(value)
+            if compute_info:
+                critic_losses_t.append(critic_loss.detach())
+                for key, value in critic_info.items():
+                    info_accum.setdefault(key, []).append(value)
 
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
@@ -238,28 +273,36 @@ class SACCore:
         self.actor_optimizer.step()
         self._step_actor_scheduler()
 
-        alpha_loss_val = None
+        alpha_loss_t: Optional[torch.Tensor] = None
         if self.autotune:
             alpha_loss = self._alpha_loss(log_prob_detached)
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self._clip_grad_norm(self._alpha_parameters())
             self.alpha_optimizer.step()
-            alpha_loss_val = alpha_loss.item()
+            if compute_info:
+                alpha_loss_t = alpha_loss.detach()
+
+        post_info = self._post_actor_update(full_batch)
+
+        if not compute_info:
+            return {}
+
+        critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
+        info_mean = self._reduce_tensor_lists(info_accum)
+        post_mean = self._reduce_tensor_lists({k: [v] for k, v in post_info.items()})
 
         out: dict[str, float] = {
-            "critic_loss": float(np.mean(critic_losses)),
-            "qf_loss": float(np.mean(critic_losses)),
-            "actor_loss": float(actor_loss.item()),
-            "alpha": float(self._current_alpha().item()),
+            "critic_loss": critic_mean.get("critic_loss", 0.0),
+            "qf_loss": critic_mean.get("critic_loss", 0.0),
+            "actor_loss": float(actor_loss.detach().item()),
+            "alpha": float(self._current_alpha().detach().item()),
             "utd_ratio": float(utd_ratio),
         }
-        if alpha_loss_val is not None:
-            out["alpha_loss"] = alpha_loss_val
-        for key, value in self._post_actor_update(full_batch).items():
-            out[key] = value
-        for key, values in info_accum.items():
-            out[key] = float(np.mean(values))
+        if alpha_loss_t is not None:
+            out["alpha_loss"] = float(alpha_loss_t.item())
+        out.update(post_mean)
+        out.update(info_mean)
         return out
 
     @staticmethod

@@ -70,7 +70,7 @@ def test_sac_core_high_utd_update_runs():
     agent = _agent(n_critics=4, critic_subsample_size=2, utd=2.0, batch_size=8)
     _fill(agent)
 
-    info = agent.train(gradient_steps=2)
+    info = agent.train(gradient_steps=2, compute_info=True)
 
     assert agent._global_update == 2
     assert info["utd_ratio"] == 2.0

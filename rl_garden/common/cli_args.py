@@ -211,7 +211,7 @@ class OfflinePretrainArgs(LoggingArgs, CheckpointArgs):
     lr_min_ratio: float = 0.0
     grad_clip_norm: Optional[float] = None
 
-    use_compile: bool = False
+    use_compile: bool = True
     compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
 
     n_critics: int = 10

@@ -214,7 +214,7 @@ class TestWSRLDictTraining:
             wsrlrgbd_agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
         # Run training step
-        info = wsrlrgbd_agent.train(gradient_steps=2)
+        info = wsrlrgbd_agent.train(gradient_steps=2, compute_info=True)
 
         assert "critic_loss" in info
         assert "actor_loss" in info

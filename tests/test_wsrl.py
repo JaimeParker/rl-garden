@@ -512,7 +512,7 @@ class TestWSRLTraining:
             wsrl_agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
         # Run training step
-        info = wsrl_agent.train(gradient_steps=2)
+        info = wsrl_agent.train(gradient_steps=2, compute_info=True)
 
         assert "critic_loss" in info
         assert "actor_loss" in info
@@ -532,7 +532,7 @@ class TestWSRLTraining:
 
         # batch_size=8 must be divisible by utd_ratio.
         utd_ratio = 4
-        info = wsrl_agent.train_high_utd(utd_ratio=utd_ratio)
+        info = wsrl_agent.train_high_utd(utd_ratio=utd_ratio, compute_info=True)
 
         assert info["utd_ratio"] == float(utd_ratio)
         assert "critic_loss" in info
@@ -550,7 +550,7 @@ class TestWSRLTraining:
             wsrl_agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
         wsrl_agent.utd = 4.0
-        info = wsrl_agent.train(gradient_steps=4)
+        info = wsrl_agent.train(gradient_steps=4, compute_info=True)
         assert info["utd_ratio"] == 4.0
 
     def test_train_high_utd_invalid_ratio(self, wsrl_agent):
@@ -908,8 +908,8 @@ class TestCompilePath:
         agent = self._make_compiled_agent(simple_env)
         self._fill(agent, n_steps=5)
         try:
-            losses_1 = agent.train(gradient_steps=1)
-            losses_2 = agent.train(gradient_steps=1)
+            losses_1 = agent.train(gradient_steps=1, compute_info=True)
+            losses_2 = agent.train(gradient_steps=1, compute_info=True)
         except Exception as exc:
             # If torch._dynamo cannot compile in this environment, surface a
             # clear skip rather than a confusing failure.

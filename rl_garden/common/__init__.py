@@ -1,4 +1,5 @@
 from rl_garden.common.logger import Logger
+from rl_garden.common.perf import enable_fast_math
 from rl_garden.common.types import Obs, ReplayBufferSample, Schedule, TensorDict
 from rl_garden.common.utils import (
     constant_schedule,
@@ -14,6 +15,7 @@ __all__ = [
     "Schedule",
     "TensorDict",
     "constant_schedule",
+    "enable_fast_math",
     "get_device",
     "polyak_update",
     "seed_everything",

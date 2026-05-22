@@ -36,8 +36,12 @@ class DummyOfflineAlgorithm(OfflineRLAlgorithm):
     def _setup_model(self) -> None:
         pass
 
-    def train(self, gradient_steps: int) -> dict[str, float]:
+    def train(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]:
         self._global_update += gradient_steps
+        if not compute_info:
+            return {}
         return {"dummy_loss": float(self._global_update)}
 
 
@@ -182,6 +186,9 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
         cql_alpha=1.0,
         training_freq=1,
         log_type="none",
+        # torch.compile internally emits unrelated DeprecationWarnings; the
+        # filter below targets our wsrl-calql alias warning, not torch's.
+        use_compile=False,
     )
 
     class _NoopLogger:

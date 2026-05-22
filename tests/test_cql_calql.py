@@ -75,7 +75,7 @@ def test_cql_standalone_train_step_without_calql_bound():
     agent = CQL(env=_offline_env(), **_offline_kwargs())
     _fill(agent)
 
-    info = agent.train(1)
+    info = agent.train(1, compute_info=True)
 
     assert isinstance(agent, OfflineRLAlgorithm)
     assert agent.use_cql_loss
@@ -99,7 +99,7 @@ def test_cql_train_step_and_checkpoint(tmp_path):
     agent = CQL(env=_offline_env(), checkpoint_dir=str(tmp_path), **_offline_kwargs())
     _fill(agent)
 
-    info = agent.train(1)
+    info = agent.train(1, compute_info=True)
     result = agent.learn_offline(2, save_filename="offline_cql.pt")
 
     assert isinstance(agent.replay_buffer, TensorReplayBuffer)
@@ -114,7 +114,7 @@ def test_calql_standalone_train_step_logs_bound_rate():
     agent = CalQL(env=_offline_env(), **_offline_kwargs())
     _fill(agent)
 
-    info = agent.train(1)
+    info = agent.train(1, compute_info=True)
 
     assert isinstance(agent, CQL)
     assert agent.use_calql
@@ -142,7 +142,7 @@ def test_calql_train_step_logs_bound_rate():
     )
     _fill(agent)
 
-    info = agent.train(1)
+    info = agent.train(1, compute_info=True)
 
     assert isinstance(agent.replay_buffer, MCTensorReplayBuffer)
     assert agent.replay_buffer.sparse_reward_mc

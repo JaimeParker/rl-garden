@@ -100,7 +100,9 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         self.num_envs = env.num_envs
 
     @abstractmethod
-    def train(self, gradient_steps: int) -> dict[str, float]: ...
+    def train(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]: ...
 
     def learn(self, total_timesteps: int) -> "OfflineRLAlgorithm":
         self.learn_offline(total_timesteps)
@@ -298,8 +300,11 @@ def run_offline_pretraining(
     )
 
     for step in trange(start_step, final_target, desc=desc):
-        last_metrics = agent.train(gradient_steps)
         global_step = step + 1
+        should_log = log_freq > 0 and (
+            global_step % log_freq == 0 or global_step == final_target
+        )
+        last_metrics = agent.train(gradient_steps, compute_info=should_log)
         agent._global_step = global_step
 
         if _has_eval and global_step % eval_freq == 0 and getattr(agent, "eval_env", None) is not None:

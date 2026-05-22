@@ -461,12 +461,12 @@ class SAC(SACCore, OffPolicyAlgorithm):
             return self.log_alpha.exp()
         return self._fixed_alpha
 
-    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         target_q = self._target_q(data)
         q_loss = sum(F.mse_loss(q, target_q) for q in q_pred)
         return q_loss, {
-            "td_loss": q_loss.item(),
-            "target_q": target_q.mean().item(),
+            "td_loss": q_loss.detach(),
+            "target_q": target_q.mean().detach(),
         }
 
     def _step_critic_scheduler(self) -> None:
