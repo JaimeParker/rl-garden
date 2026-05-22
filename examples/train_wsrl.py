@@ -311,6 +311,13 @@ def main() -> None:
         )
         if args.std_log:
             print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+    else:
+        agent.switch_to_online_mode(
+            online_replay_mode=args.online_replay_mode,
+            offline_data_ratio=args.offline_data_ratio,
+        )
+        if args.std_log:
+            print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
 
     # Online training phase
     if args.num_online_steps > 0:

@@ -26,6 +26,7 @@ from rl_garden.encoders.flatten import FlattenExtractor
 
 class WSRL(_CalQLRolloutTrainingShell):
     """Cal-QL plus offline→online replay switching and WSRL logging."""
+    _compatible_checkpoint_algorithms = ("CalQL", "CQL")
 
     def __init__(
         self,
@@ -461,6 +462,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         if self.online_cql_alpha is not None:
             self.cql_alpha = self.online_cql_alpha
 
+        self.backup_entropy = True
         if not (0.0 <= offline_data_ratio <= 1.0):
             raise ValueError(f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}.")
         self.offline_replay_buffer = None
