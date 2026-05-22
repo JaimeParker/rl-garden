@@ -108,7 +108,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         use_td_loss: bool = True,
         online_cql_alpha: Optional[float] = None,
         online_use_cql_loss: Optional[bool] = None,
-        warmup_steps: int = 0,
+        warmup_steps: int = 5000,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         # Sparse-reward MC
         sparse_reward_mc: bool = False,
