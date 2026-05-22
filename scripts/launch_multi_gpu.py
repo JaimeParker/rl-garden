@@ -98,10 +98,24 @@ def main() -> None:
         if args.log_dir:
             extra += ["--log-dir", args.log_dir]
 
-        inner_cmd = (
+        # The shell launcher requires RLG_ROBOTWIN_ROOT env var; extract it
+        # from forward args so the user only needs to pass --robotwin-root once.
+        robotwin_root = None
+        for i, a in enumerate(extra):
+            if a in ("--robotwin-root", "--robotwin_root") and i + 1 < len(extra):
+                robotwin_root = extra[i + 1]
+                break
+
+        env_prefix = (
             f"CUDA_VISIBLE_DEVICES={gpu_id} "
-            f"CUDA_DEVICE_ORDER=PCI_BUS_ID "
-            f"bash {shlex.quote(script)} "
+            f"CUDA_DEVICE_ORDER=PCI_BUS_ID"
+        )
+        if robotwin_root:
+            env_prefix += f" RLG_ROBOTWIN_ROOT={shlex.quote(robotwin_root)}"
+
+        inner_cmd = (
+            env_prefix + " "
+            + f"bash {shlex.quote(script)} "
             + " ".join(shlex.quote(a) for a in extra)
         )
 
