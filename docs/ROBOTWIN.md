@@ -417,14 +417,36 @@ that need substep-level frames.
 
 `--control-step-cap` can cap/downsample the low-level TOPP trajectory executed
 for each RoboTwin action. This can improve FPS substantially but changes the
-smoothness of the physical motion, so it is an explicit experiment knob rather
-than a default. Start with `--control-step-cap 16`, then compare `8` only if the
-task remains stable.
+smoothness of the physical motion. In rl-garden's RoboTwin launchers, this is
+set to `16` by default because it consistently improved PPO throughput in our
+place-empty-cup experiments.
+
+rl-garden also supports `--disable-topp` for PPO RoboTwin runs. When enabled,
+the environment skips RoboTwin's qpos TOPP pass and uses a simple linear joint
+interpolation fallback inside the control loop. This path is kept as an
+explicit opt-in experiment knob. The default remains TOPP-enabled behavior.
 
 The RL launchers also leave `random_light=False` and
 `crazy_random_light_rate=0.0` by default. Random lighting is useful for
 robustness experiments, but it is unnecessary for speed profiling and can add
 variance to render timing.
+
+### Optimization Notes
+
+Recent RoboTwin speed experiments explored TOPP worker pools, ctrl-loop
+serialization, shard executors, shared-memory observation transfer, and
+multi-process launchers. Those experiments remain preserved on
+`dev/fast-robotwin` and RoboTwin's `dev/rl-garden-ctrl-gate` branches, but they
+are not part of the minimal supported path.
+
+The two changes intentionally kept in the maintained training path are:
+
+- `--control-step-cap 16` as the default launcher setting
+- `--disable-topp` as an opt-in switch for no-TOPP profiling and training runs
+
+The other experiments either added too much complexity for the observed gain or
+did not improve single-GPU PPO throughput reliably enough to justify carrying
+them in the main integration path.
 
 Place-empty-cup PPO with the dedicated launcher:
 

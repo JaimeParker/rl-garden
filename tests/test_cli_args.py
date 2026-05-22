@@ -181,6 +181,24 @@ def test_robotwin_ppo_make_env_forwards_profile_timing(monkeypatch: pytest.Monke
     assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"
 
 
+def test_robotwin_ppo_make_env_can_disable_topp(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.disable_topp = True
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.task_config["need_topp"] is False
+
+
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
     args = _args("train_sac_rgbd_peg.py")
 
