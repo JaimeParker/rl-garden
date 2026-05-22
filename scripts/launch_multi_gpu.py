@@ -93,7 +93,7 @@ def main() -> None:
             print(f"[gpu {gpu_id}] tmux session '{session}' already exists — skipping.")
             continue
 
-        extra = list(forward)
+        extra = [a for a in forward if a != "--"]
         extra += ["--seed", str(seed), "--exp-name", exp_name, "--device", "cuda:0"]
         if args.log_dir:
             extra += ["--log-dir", args.log_dir]
