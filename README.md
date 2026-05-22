@@ -44,7 +44,8 @@ rl-garden/
 │   ├── encoders/
 │   ├── envs/
 │   ├── networks/
-│   └── policies/
+│   ├── policies/
+│   └── reward_models/
 ├── examples/
 ├── scripts/
 ├── tests/
@@ -211,28 +212,75 @@ scripts/train_sac_rgbd.sh --encoder resnet10     # RGB SAC, PickCube-v1
 scripts/train_sac_rgbd_peg.sh                    # RGB SAC, PegInsertionSidePegOnly-v1
 ```
 
-Shell launchers wrap `python examples/train_sac_*.py` with env-specific
-flag presets (`--env_id`, `--num_envs`, `--total_timesteps`, etc.) and
-logging environment variables (`RLG_LOG_TYPE`, `RLG_LOG_KEYWORDS`).
-Algorithm hyperparameters (`batch_size`, `utd`, learning rates, ...) live
-in `SACTrainingArgs` / `VisionSACTrainingArgs` and are not duplicated in
-the shell.
+### Residual SAC
 
-Logging backend selection:
+Debug training:
 
 ```bash
-# Default: tensorboard
-scripts/train_sac_state.sh --log_type tensorboard
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd.sh \
+  --control_mode pd_ee_twist \
+  --residual-action-scale 1 \
+  --debug \
+  --log_type tensorboard
+```
 
-# Weights & Biases (RGBD)
-scripts/train_sac_rgbd.sh \
-  --log_type wandb \
-  --wandb_project rl-garden \
-  --encoder resnet10 \
-  --log_keywords debug,pickcube
+Peg-only training uses the peg-specific launcher. In non-debug mode the
+base policy defaults to ACT and loads `pretrained_models/act-peg-only.pt` by
+name:
 
-# Stdout only (no tensorboard/wandb artifacts)
-scripts/train_sac_state.sh --log_type none
+```bash
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd_peg.sh \
+  --control_mode pd_ee_twist \
+  --residual-action-scale 1 \
+  --policy act \
+  --ckpt-path act-peg-only \
+  --log_type tensorboard
+```
+
+State-observation peg training is also available:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_state_peg.sh \
+  --control_mode pd_ee_twist \
+  --residual-action-scale 1 \
+  --policy act \
+  --ckpt-path act-peg-only \
+  --log_type tensorboard
+```
+
+`ResidualSAC` follows the resfit action convention: replay/critic actions are
+normalized to `[-1, 1]`, while the env receives raw actions via `ActionScaler`.
+In `--debug` mode the base-action provider returns all-zero raw actions, which
+is useful for testing the residual rollout/update path. ACT checkpoints are
+selected with `--policy act --ckpt-path <name-or-path>`; names resolve under
+`pretrained_models/`, so `--ckpt-path act-peg-only` loads
+`pretrained_models/act-peg-only.pt`. The generic launcher mirrors
+`train_sac_rgbd.py`; peg-only kwargs such as `--fix_box`, `--fix_peg_pose`,
+`--robot_uids`, and `--reward_mode` live only in the peg residual entrypoints.
+`--residual-action-scale` multiplies the actor's unit residual output before
+adding it to the normalized base action.
+Design details are in
+[`docs/RESIDUAL_SAC.md`](docs/RESIDUAL_SAC.md).
+
+## Reward Classifiers
+
+Generate HSV labels from compressed HDF5 episodes:
+
+```bash
+python rl_garden/reward_models/classifiers/hsv/generate_labels.py --data_dir data/epi0-19_trimmed --tune_hsv --camera high
+python rl_garden/reward_models/classifiers/hsv/generate_labels.py --camera high --output data/labels.npz
+```
+
+Train the color reward classifier:
+
+```bash
+python rl_garden/reward_models/classifiers/color/train.py
+```
+
+Train the alignment reward classifier:
+
+```bash
+python rl_garden/reward_models/classifiers/alignment/train.py
 ```
 
 Python-side extractor injection:
@@ -311,9 +359,17 @@ pytest tests/test_sac_smoke.py
   - `3rd_party/ManiSkill/examples/baselines/sac/sac_rgbd.py`
 - SB3 architecture references:
   - `3rd_party/stable-baselines3/stable_baselines3/common/off_policy_algorithm.py`
+  - `3rd_party/stable-baselines3/stable_baselines3/common/on_policy_algorithm.py`
+  - `3rd_party/stable-baselines3/stable_baselines3/ppo/ppo.py`
   - `3rd_party/stable-baselines3/stable_baselines3/sac/sac.py`
   - `3rd_party/stable-baselines3/stable_baselines3/sac/policies.py`
   - `3rd_party/stable-baselines3/stable_baselines3/common/torch_layers.py`
+- ManiSkill PPO baselines:
+  - `3rd_party/ManiSkill/examples/baselines/ppo/ppo.py`
+  - `3rd_party/ManiSkill/examples/baselines/ppo/ppo_rgb.py`
+- PPO-family offline-to-online references:
+  - `3rd_party/BPPO/`
+  - `3rd_party/Uni-O4/`
 - hil-serl visual encoder references:
   - `3rd_party/hil-serl/serl_launcher/serl_launcher/vision/resnet_v1.py`
   - `3rd_party/hil-serl/serl_launcher/serl_launcher/common/encoding.py`
@@ -327,3 +383,10 @@ pytest tests/test_sac_smoke.py
 - [ ] Add Flax-vs-Torch parity validation for ResNet as a stretch goal.
 - [ ] Expand augmentation pipeline integration in training loop.
 - [ ] Add checkpoint/load examples and a lightweight benchmark script.
+- [ ] Add tanh-squashed PPO distributions while preserving SB3/ManiSkill-style
+      unsquashed Gaussian PPO as the default baseline.
+- [ ] Add separate actor/value feature extractors for PPO, including support for
+      different encoder architectures on each path.
+- [ ] Extend PPO toward BPPO/Uni-O4-style offline-to-online policy improvement,
+      including behavior-policy snapshots, external Q/V advantage providers,
+      ensemble policies, and KL-regularized behavior updates.

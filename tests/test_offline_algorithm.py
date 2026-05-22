@@ -1,4 +1,5 @@
 """Tests for offline-only algorithm scaffolding."""
+
 from __future__ import annotations
 
 import h5py
@@ -11,6 +12,7 @@ from rl_garden.algorithms import (
     OfflineEnvSpec,
     OfflineRLAlgorithm,
     infer_box_specs_from_h5,
+    infer_specs_from_h5,
     run_offline_pretraining,
 )
 from rl_garden.policies.base import BasePolicy
@@ -76,6 +78,27 @@ def test_infer_box_specs_rejects_dict_obs(tmp_path):
         assert "Dict observations" in str(exc)
     else:  # pragma: no cover - makes assertion message clearer.
         raise AssertionError("Expected dict observations to be rejected")
+
+
+def test_infer_specs_from_h5_supports_dict_obs(tmp_path):
+    path = tmp_path / "demo_dict.h5"
+    with h5py.File(path, "w") as f:
+        group = f.create_group("traj_0")
+        obs = group.create_group("obs")
+        obs.create_dataset("rgb", data=np.zeros((4, 64, 64, 3), dtype=np.uint8))
+        obs.create_dataset("state", data=np.zeros((4, 7), dtype=np.float32))
+        group.create_dataset("actions", data=np.zeros((3, 2), dtype=np.float32))
+
+    obs_space, action_space = infer_specs_from_h5(
+        path, action_low=-0.25, action_high=0.25
+    )
+
+    assert isinstance(obs_space, spaces.Dict)
+    assert obs_space["rgb"].shape == (64, 64, 3)
+    assert obs_space["rgb"].dtype == np.uint8
+    assert obs_space["state"].shape == (7,)
+    assert action_space.shape == (2,)
+    assert np.all(action_space.low == -0.25)
 
 
 def test_run_offline_pretraining_tracks_steps_and_saves(tmp_path):
@@ -167,7 +190,7 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
         sys.path.insert(0, str(examples_dir))
     from pretrain_offline import build_offline_agent  # type: ignore[import-not-found]
 
-    from rl_garden.algorithms import OfflineEnvSpec, WSRL
+    from rl_garden.algorithms import IQL, OfflineEnvSpec, WSRL
     from rl_garden.common.cli_args import OfflinePretrainArgs
 
     obs_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=float)
@@ -192,10 +215,17 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
     )
 
     class _NoopLogger:
-        def add_scalar(self, *a, **k): pass
-        def add_summary(self, *a, **k): pass
-        def add_text(self, *a, **k): pass
-        def close(self): pass
+        def add_scalar(self, *a, **k):
+            pass
+
+        def add_summary(self, *a, **k):
+            pass
+
+        def add_text(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
 
     args_new = OfflinePretrainArgs(algorithm="wsrl", **base_kwargs)
     with _warnings.catch_warnings():
@@ -204,5 +234,11 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
     assert isinstance(agent_new, WSRL)
 
     args_legacy = OfflinePretrainArgs(algorithm="wsrl-calql", **base_kwargs)
-    agent_legacy = build_offline_agent(args_legacy, env_spec, _NoopLogger(), "wsrl-calql")
+    agent_legacy = build_offline_agent(
+        args_legacy, env_spec, _NoopLogger(), "wsrl-calql"
+    )
     assert isinstance(agent_legacy, WSRL)
+
+    args_iql = OfflinePretrainArgs(algorithm="iql", **base_kwargs)
+    agent_iql = build_offline_agent(args_iql, env_spec, _NoopLogger(), "iql")
+    assert isinstance(agent_iql, IQL)

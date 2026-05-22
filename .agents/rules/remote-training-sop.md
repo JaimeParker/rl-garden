@@ -22,6 +22,8 @@ The active local runtime must provide:
 - `<container-name>`: Docker container used for rl-garden runs.
 - `<container-workspace-path>`: project path inside the container.
 - `<python-env-bin-path>`: directory containing the intended Python executable.
+- `<container-robotwin-root-path>`: RoboTwin checkout path inside the
+  container, required when running RoboTwin tasks with `--robotwin-root`.
 - `<mutagen-session-name>`: Mutagen session name, if Mutagen is used.
 
 ## Execution Model
@@ -78,6 +80,11 @@ ssh <ssh-alias> "docker exec <container-name> bash -lc '
 '"
 ```
 
+For RoboTwin commands that load curobo/warp, also set `HOME=/tmp` and
+`XDG_CACHE_HOME=/tmp`. Without those variables, warp can try to create
+`/.cache` or cache under a synced workspace, causing permission failures or
+root-owned files that interfere with Mutagen.
+
 Examples:
 
 ```bash
@@ -101,6 +108,14 @@ ssh <ssh-alias> "docker exec <container-name> bash -lc '
   export PATH=<python-env-bin-path>:\$PATH &&
   MPLCONFIGDIR=/tmp scripts/train_sac_rgbd_peg.sh
 '"
+
+# RoboTwin PPO place_empty_cup RGB
+ssh <ssh-alias> "docker exec -e CUDA_VISIBLE_DEVICES=<gpu-id> -e HOME=/tmp -e XDG_CACHE_HOME=/tmp <container-name> bash -lc '
+  cd <container-workspace-path> &&
+  export PATH=<python-env-bin-path>:\$PATH &&
+  export PYTHONPATH=<container-workspace-path>:<container-robotwin-root-path>:\${PYTHONPATH:-} &&
+  RLG_ROBOTWIN_ROOT=<container-robotwin-root-path> MPLCONFIGDIR=/tmp scripts/train_ppo_robotwin_place_empty_cup_rgbd.sh
+'"
 ```
 
 ## Long Runs
@@ -112,6 +127,10 @@ ssh <ssh-alias> "mkdir -p <remote-project-path>/logs && \
   tmux new-session -d -s <session-name> \
   \"docker exec -e CUDA_VISIBLE_DEVICES=<gpu-id> <container-name> bash -lc 'cd <container-workspace-path> && export PATH=<python-env-bin-path>:\\\$PATH && MPLCONFIGDIR=/tmp <command>' 2>&1 | tee <remote-project-path>/logs/<session-name>_\$(date +%Y%m%d_%H%M%S).log\""
 ```
+
+For RoboTwin long runs, include `-e HOME=/tmp -e XDG_CACHE_HOME=/tmp` in
+`docker exec`, pass `RLG_ROBOTWIN_ROOT=<container-robotwin-root-path>`, and add
+`<container-robotwin-root-path>` to `PYTHONPATH`.
 
 Inspect logs remotely:
 

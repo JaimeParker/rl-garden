@@ -17,6 +17,11 @@ from rl_garden.common.cli_args import (
 
 
 def _args(script_name: str):
+    module = _load_example_module(script_name)
+    return module.Args()
+
+
+def _load_example_module(script_name: str):
     path = Path(__file__).resolve().parents[1] / "examples" / script_name
     module_name = f"_rl_garden_test_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -25,7 +30,7 @@ def _args(script_name: str):
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-    return module.Args()
+    return module
 
 
 def test_state_sac_defaults_match_existing_cli() -> None:
@@ -52,6 +57,146 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.batch_size == 512
     assert args.utd == 0.25
     assert args.encoder == "plain_conv"
+
+
+def test_robotwin_sac_defaults_are_memory_safe() -> None:
+    args = _args("train_sac_robotwin_rgbd.py")
+
+    assert args.env_id == "place_shoe"
+    assert args.camera_width == 64
+    assert args.camera_height == 64
+    assert args.buffer_device == "cuda"
+    assert args.buffer_size == 100_000
+    assert args.batch_size == 512
+    assert args.utd == 0.25
+    assert args.include_wrist_cameras is True
+    assert args.reward_mode == "dense"
+    assert args.control_mode == "delta_joint_pos"
+
+
+def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_sac_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+
+    cfg = module._make_env(args, num_envs=3, is_eval=True)
+
+    assert cfg is captured["cfg"]
+    assert cfg.num_envs == 3
+    assert cfg.image_size == (64, 64)
+    assert cfg.include_wrist_cameras is True
+    assert cfg.render_every_control_step is False
+    assert cfg.control_step_cap is None
+    assert cfg.random_light is False
+    assert cfg.crazy_random_light_rate == 0.0
+    assert cfg.head_camera_type == "D435"
+    assert cfg.task_config["camera"]["head_camera_type"] == "D435"
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is True
+    assert cfg.task_config["eval_video_log"] is True
+
+
+def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.num_envs == 2
+    assert cfg.device == "auto"
+    assert cfg.image_size == (64, 64)
+    assert cfg.include_wrist_cameras is True
+    assert cfg.render_every_control_step is False
+    assert cfg.control_step_cap is None
+    assert cfg.random_light is False
+    assert cfg.crazy_random_light_rate == 0.0
+    assert cfg.head_camera_type == "D435"
+    assert cfg.task_config["camera"]["head_camera_type"] == "D435"
+    assert cfg.task_config["domain_randomization"]["random_light"] is False
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is True
+
+
+def test_robotwin_ppo_make_env_can_disable_wrist_cameras(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.collect_wrist_camera = False
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.include_wrist_cameras is False
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is False
+
+
+def test_robotwin_ppo_make_env_forwards_profile_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.profile_timing = True
+    args.profile_interval = 7
+    args.render_every_control_step = True
+    args.control_step_cap = 16
+    args.random_light = True
+    args.crazy_random_light_rate = 0.1
+    args.head_camera_type = "Train_D435_128x96"
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.profile_timing is True
+    assert cfg.profile_interval == 7
+    assert cfg.render_every_control_step is True
+    assert cfg.control_step_cap == 16
+    assert cfg.random_light is True
+    assert cfg.crazy_random_light_rate == 0.1
+    assert cfg.head_camera_type == "Train_D435_128x96"
+    assert cfg.task_config["render_every_control_step"] is True
+    assert cfg.task_config["control_step_cap"] == 16
+    assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"
+
+
+def test_robotwin_ppo_make_env_can_disable_topp(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_ppo_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.disable_topp = True
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.task_config["need_topp"] is False
 
 
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:

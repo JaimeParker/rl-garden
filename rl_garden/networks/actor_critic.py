@@ -113,8 +113,7 @@ class SquashedGaussianActor(nn.Module):
             )
         if log_std_mode not in ("clamp", "tanh"):
             raise ValueError(
-                "log_std_mode must be 'clamp' or 'tanh', "
-                f"got {log_std_mode!r}"
+                f"log_std_mode must be 'clamp' or 'tanh', got {log_std_mode!r}"
             )
 
         self.std_parameterization = std_parameterization
@@ -177,14 +176,116 @@ class SquashedGaussianActor(nn.Module):
         x_t = normal.rsample()
         y_t = torch.tanh(x_t)
         action = y_t * self.action_scale + self.action_bias
+        log_prob = self._squashed_log_prob(normal, x_t, y_t)
+        return action, log_prob
+
+    def evaluate_action_log_prob(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        """Evaluate log-probability for externally supplied env-space actions.
+
+        This complements ``action_log_prob()``: that method samples a new action
+        from the policy and returns its log-prob, while this method scores an
+        action that came from outside the policy, e.g. an offline dataset action
+        used by IQL/BC-style actor losses. ``actions`` are expected to already
+        be tanh-squashed and scaled into ``action_space`` bounds, so we map them
+        back through inverse tanh before applying the same squashing correction
+        used for sampled actions.
+        """
+        mean, log_std = self(features)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+
+        eps = 1e-6
+        y_t = (actions - self.action_bias) / self.action_scale
+        y_t = y_t.clamp(-1.0 + eps, 1.0 - eps)
+        x_t = 0.5 * (torch.log1p(y_t) - torch.log1p(-y_t))
+        return self._squashed_log_prob(normal, x_t, y_t)
+
+    def _squashed_log_prob(
+        self,
+        normal: torch.distributions.Normal,
+        x_t: torch.Tensor,
+        y_t: torch.Tensor,
+    ) -> torch.Tensor:
         log_prob = normal.log_prob(x_t)
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
-        log_prob = log_prob.sum(-1, keepdim=True)
-        return action, log_prob
+        return log_prob.sum(-1, keepdim=True)
 
     def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
         mean, _ = self(features)
         return torch.tanh(mean) * self.action_scale + self.action_bias
+
+
+class DiagGaussianActor(nn.Module):
+    """Unsquashed diagonal Gaussian actor used by PPO-style algorithms.
+
+    Actions are sampled in env action coordinates and may be clamped by the
+    training loop before stepping the environment. Log-probabilities are always
+    evaluated on the unclamped action tensor, matching SB3 and ManiSkill PPO.
+    """
+
+    def __init__(
+        self,
+        features_dim: int,
+        action_space: spaces.Box,
+        hidden_dims: Sequence[int],
+        *,
+        log_std_init: float = -0.5,
+        use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
+    ) -> None:
+        super().__init__()
+        act_dim = int(np.prod(action_space.shape))
+        self.trunk, trunk_dim = _build_trunk(
+            features_dim,
+            hidden_dims,
+            backbone_type=backbone_type,
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        self.mean = nn.Linear(trunk_dim, act_dim)
+        self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
+
+        high = torch.as_tensor(action_space.high, dtype=torch.float32)
+        low = torch.as_tensor(action_space.low, dtype=torch.float32)
+        self.register_buffer("action_high", high)
+        self.register_buffer("action_low", low)
+
+    def forward(self, features: torch.Tensor) -> torch.distributions.Normal:
+        mean = self.mean(self.trunk(features))
+        log_std = self.log_std.expand_as(mean)
+        return torch.distributions.Normal(mean, log_std.exp())
+
+    def action_log_prob(
+        self, features: torch.Tensor, deterministic: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        dist = self(features)
+        action = dist.mean if deterministic else dist.sample()
+        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        return action, log_prob, entropy
+
+    def evaluate_action_log_prob(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        dist = self(features)
+        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        return log_prob, entropy
+
+    def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
+        return self(features).mean
+
+    def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
+        return torch.max(torch.min(actions, self.action_high), self.action_low)
 
 
 class _QHead(nn.Module):
@@ -235,7 +336,7 @@ def _safe_name(dotted: str, prefix: str) -> str:
 
 
 def _dotted_from_safe(safe: str, prefix: str) -> str:
-    return safe[len(prefix):].replace(_PARAM_SEP, ".")
+    return safe[len(prefix) :].replace(_PARAM_SEP, ".")
 
 
 class EnsembleQCritic(nn.Module):
@@ -353,7 +454,9 @@ class EnsembleQCritic(nn.Module):
     ) -> tuple[torch.Tensor, ...]:
         return tuple(self._vmapped_forward(features, actions).unbind(0))
 
-    def forward_all(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    def forward_all(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
         return self._vmapped_forward(features, actions)
 
     # ------------------------------------------------------------------
@@ -379,14 +482,12 @@ class EnsembleQCritic(nn.Module):
             grouped: dict[str, dict[int, torch.Tensor]] = {}
             for key in legacy_keys:
                 # key looks like "<prefix>q_nets.3.trunk.0.weight"
-                tail = key[len(legacy_prefix):]
+                tail = key[len(legacy_prefix) :]
                 idx_str, _, dotted = tail.partition(".")
                 idx = int(idx_str)
                 grouped.setdefault(dotted, {})[idx] = state_dict.pop(key)
             for dotted, by_idx in grouped.items():
-                stacked = torch.stack(
-                    [by_idx[i] for i in range(self.n_critics)], dim=0
-                )
+                stacked = torch.stack([by_idx[i] for i in range(self.n_critics)], dim=0)
                 state_dict[prefix + _safe_name(dotted, _PARAM_PREFIX)] = stacked
 
         # Migrate intermediate flat-sequential format: ``ens_p_{N}__weight``
@@ -405,8 +506,12 @@ class EnsembleQCritic(nn.Module):
                 if flat_idx == max_idx:
                     new_dotted = "head." + param_suffix.replace(_PARAM_SEP, ".")
                 else:
-                    new_dotted = f"trunk.{flat_idx}." + param_suffix.replace(_PARAM_SEP, ".")
-                state_dict[prefix + _safe_name(new_dotted, _PARAM_PREFIX)] = state_dict.pop(key)
+                    new_dotted = f"trunk.{flat_idx}." + param_suffix.replace(
+                        _PARAM_SEP, "."
+                    )
+                state_dict[prefix + _safe_name(new_dotted, _PARAM_PREFIX)] = (
+                    state_dict.pop(key)
+                )
 
         return super()._load_from_state_dict(
             state_dict,

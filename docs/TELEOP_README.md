@@ -78,7 +78,7 @@ The rest of the twist computation should stay shared.
 Visual teleoperation:
 
 ```bash
-python robot_infra/teleop/examples/test_teleop.py \
+python robot_infra/teleop/examples/run_teleop_demo.py \
   --env-id PegInsertionSidePegOnly-v1 \
   --device pico \
   --zmq-url tcp://192.168.6.2:7777
@@ -87,12 +87,12 @@ python robot_infra/teleop/examples/test_teleop.py \
 Print incoming teleop state without connecting to an environment:
 
 ```bash
-python robot_infra/teleop/examples/test_twist_input.py \
+python robot_infra/teleop/examples/run_twist_input_inspector.py \
   --device pico \
   --zmq-url tcp://192.168.6.2:7777
 ```
 
-`test_teleop.py` creates the ManiSkill environment, polls teleop actions, applies
+`run_teleop_demo.py` creates the ManiSkill environment, polls teleop actions, applies
 controller action normalization when needed, and steps the environment.
 
 ## Recording WSRL Data

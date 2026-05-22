@@ -5,6 +5,7 @@ algorithms such as IQL/BC should not inherit ManiSkill rollout logic, while
 warm-start algorithms such as WSRL may still reuse the offline runner here for
 pretraining entrypoints.
 """
+
 from __future__ import annotations
 
 import time
@@ -14,12 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import numpy as np
 import torch
 from gymnasium import spaces
 from tqdm import trange
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
+from rl_garden.buffers.maniskill_h5 import (
+    infer_box_specs_from_h5 as _infer_box_specs_from_h5,
+    infer_specs_from_h5 as _infer_specs_from_h5,
+)
 from rl_garden.common.logger import Logger
 
 
@@ -83,7 +87,9 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
     ) -> None:
-        super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
+        super().__init__(
+            env=env, eval_env=eval_env, seed=seed, device=device, logger=logger
+        )
         self.buffer_size = buffer_size
         self.buffer_device = buffer_device
         self.batch_size = batch_size
@@ -171,56 +177,32 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         self.logger.log_metrics(metrics, step)
 
 
+def infer_specs_from_h5(
+    path: str | Path,
+    *,
+    action_low: float = -1.0,
+    action_high: float = 1.0,
+) -> tuple[spaces.Box | spaces.Dict, spaces.Box]:
+    """Compatibility wrapper for H5 observation/action space inference."""
+    return _infer_specs_from_h5(
+        path,
+        action_low=action_low,
+        action_high=action_high,
+    )
+
+
 def infer_box_specs_from_h5(
     path: str | Path,
     *,
     action_low: float = -1.0,
     action_high: float = 1.0,
 ) -> tuple[spaces.Box, spaces.Box]:
-    """Infer flat Box observation/action spaces from a trajectory H5 file."""
-    try:
-        import h5py  # type: ignore
-    except ImportError as exc:  # pragma: no cover - depends on optional env.
-        raise ImportError(
-            "Loading H5 datasets requires h5py. Install with `pip install h5py`."
-        ) from exc
-
-    path = Path(path)
-    with h5py.File(path, "r") as f:
-        traj_keys = sorted([key for key in f.keys() if key.startswith("traj_")])
-        if not traj_keys:
-            raise ValueError(f"No traj_* groups found in {path}.")
-        traj = f[traj_keys[0]]
-
-        if "obs" in traj:
-            obs_node = traj["obs"]
-        elif "observations" in traj:
-            obs_node = traj["observations"]
-        else:
-            raise ValueError(f"No obs/observations field in {traj_keys[0]}.")
-        if isinstance(obs_node, h5py.Group):
-            raise NotImplementedError(
-                "Dict observations detected. infer_box_specs_from_h5 supports flat "
-                "Box observations only. Use a vision-specific spec builder for RGBD."
-            )
-        obs_shape = tuple(obs_node.shape[1:])
-
-        if "actions" in traj:
-            action_node = traj["actions"]
-        elif "action" in traj:
-            action_node = traj["action"]
-        else:
-            raise ValueError(f"No actions/action field in {traj_keys[0]}.")
-        action_shape = tuple(action_node.shape[1:])
-
-    obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
-    action_space = spaces.Box(
-        low=action_low,
-        high=action_high,
-        shape=action_shape,
-        dtype=np.float32,
+    """Compatibility wrapper for flat Box H5 space inference."""
+    return _infer_box_specs_from_h5(
+        path,
+        action_low=action_low,
+        action_high=action_high,
     )
-    return obs_space, action_space
 
 
 def _default_gradient_steps(agent: Any) -> int:
@@ -247,7 +229,9 @@ def _log_eval_stdout(agent: Any, metrics: dict[str, float], step: int) -> None:
         eval_success = first(metrics, ("success_at_end", "success_once"))
     else:
         eval_return = metrics.get("return", float("nan"))
-        eval_success = metrics.get("success_at_end", metrics.get("success_once", float("nan")))
+        eval_success = metrics.get(
+            "success_at_end", metrics.get("success_once", float("nan"))
+        )
     fmt = getattr(agent, "_fmt_metric", lambda v: "nan" if v != v else f"{v:.4f}")
     print(
         f"[offline_eval] step={step} "
@@ -307,7 +291,11 @@ def run_offline_pretraining(
         last_metrics = agent.train(gradient_steps, compute_info=should_log)
         agent._global_step = global_step
 
-        if _has_eval and global_step % eval_freq == 0 and getattr(agent, "eval_env", None) is not None:
+        if (
+            _has_eval
+            and global_step % eval_freq == 0
+            and getattr(agent, "eval_env", None) is not None
+        ):
             t0 = time.perf_counter()
             eval_metrics = agent._evaluate()
             agent._log_eval_metrics(eval_metrics, global_step)
@@ -315,7 +303,9 @@ def run_offline_pretraining(
                 _log_eval_stdout(agent, eval_metrics, global_step)
             logger = getattr(agent, "logger", None)
             if logger is not None:
-                logger.add_scalar("time/eval_time", time.perf_counter() - t0, global_step)
+                logger.add_scalar(
+                    "time/eval_time", time.perf_counter() - t0, global_step
+                )
 
         if log_freq > 0 and global_step % log_freq == 0:
             _log_update_metrics(agent, last_metrics, global_step)

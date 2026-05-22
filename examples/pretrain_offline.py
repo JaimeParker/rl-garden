@@ -5,15 +5,17 @@ Use ``--algorithm`` to choose the offline algorithm:
     python examples/pretrain_offline.py --algorithm calql --offline_dataset_path demos/demo.h5
     python examples/pretrain_offline.py --algorithm cql --offline_dataset_path demos/demo.h5
     python examples/pretrain_offline.py --algorithm wsrl --offline_dataset_path demos/demo.h5
+    python examples/pretrain_offline.py --algorithm iql --offline_dataset_path demos/demo.h5
 
 ``wsrl`` produces a WSRL agent (Cal-QL-based by design) whose checkpoint is
 intended to resume through WSRL's offline→online flow on a deployment machine.
-Standalone offline training should prefer ``cql`` or ``calql``.
+Standalone offline training should prefer ``cql``, ``calql``, or ``iql``.
 
 ``wsrl-calql`` is a deprecated alias for ``wsrl`` kept for backward
 compatibility; selecting it prints a one-time warning and otherwise behaves
 identically.
 """
+
 from __future__ import annotations
 
 import time
@@ -21,13 +23,15 @@ from typing import Optional, TypeAlias
 
 import torch
 import tyro
+from gymnasium import spaces
 
 from rl_garden.algorithms import (
     CalQL,
     CQL,
+    IQL,
     OfflineEnvSpec,
     WSRL,
-    infer_box_specs_from_h5,
+    infer_specs_from_h5,
     run_offline_pretraining,
 )
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
@@ -35,11 +39,13 @@ from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     OfflinePretrainArgs,
     apply_log_env_overrides,
+    image_encoder_factory_from_args,
     resolve_checkpoint_dir,
 )
+from rl_garden.encoders.combined import discover_image_keys
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
-OfflinePretrainAgent: TypeAlias = CQL | CalQL | WSRL
+OfflinePretrainAgent: TypeAlias = CQL | CalQL | WSRL | IQL
 
 
 def _algorithm(args: OfflinePretrainArgs) -> str:
@@ -132,6 +138,69 @@ def _wsrl_kwargs(
     return kwargs
 
 
+def _iql_kwargs(
+    args: OfflinePretrainArgs, env_spec: OfflineEnvSpec, logger: Logger
+) -> dict:
+    obs_space = env_spec.single_observation_space
+    kwargs = dict(
+        env=env_spec,
+        buffer_size=args.buffer_size,
+        buffer_device=args.buffer_device,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        tau=args.tau,
+        offline_sampling=args.offline_sampling,
+        utd=args.utd,
+        actor_lr=args.actor_lr,
+        critic_value_lr=args.critic_value_lr,
+        weight_decay=args.weight_decay,
+        use_adamw=args.use_adamw,
+        lr_schedule=args.lr_schedule,
+        lr_warmup_steps=args.lr_warmup_steps,
+        lr_decay_steps=args.lr_decay_steps,
+        lr_min_ratio=args.lr_min_ratio,
+        grad_clip_norm=args.grad_clip_norm,
+        expectile=args.expectile,
+        temperature=args.temperature,
+        adv_clip_max=args.adv_clip_max,
+        n_critics=args.n_critics,
+        critic_subsample_size=args.critic_subsample_size,
+        actor_use_layer_norm=args.actor_use_layer_norm,
+        critic_use_layer_norm=args.critic_use_layer_norm,
+        value_use_layer_norm=args.value_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        value_use_group_norm=args.value_use_group_norm,
+        num_groups=args.num_groups,
+        actor_dropout_rate=args.actor_dropout_rate,
+        critic_dropout_rate=args.critic_dropout_rate,
+        value_dropout_rate=args.value_dropout_rate,
+        kernel_init=args.kernel_init,
+        backbone_type=args.backbone_type,
+        std_parameterization=args.std_parameterization,
+        seed=args.seed,
+        device=args.device,
+        logger=logger,
+        std_log=args.std_log,
+        log_freq=args.log_freq,
+        checkpoint_dir=None,
+        checkpoint_freq=0,
+        save_replay_buffer=args.save_replay_buffer,
+        save_final_checkpoint=False,
+    )
+    if isinstance(obs_space, spaces.Dict):
+        image_keys = discover_image_keys(obs_space)
+        kwargs.update(
+            image_encoder_factory=image_encoder_factory_from_args(args),
+            image_keys=image_keys,
+            state_key="state",
+            use_proprio=args.include_state,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=False,
+        )
+    return kwargs
+
+
 def build_offline_agent(
     args: OfflinePretrainArgs,
     env_spec: OfflineEnvSpec,
@@ -159,6 +228,8 @@ def build_offline_agent(
             sparse_negative_reward=args.sparse_negative_reward,
             success_threshold=args.success_threshold,
         )
+    if algorithm == "iql":
+        return IQL(**_iql_kwargs(args, env_spec, logger))
     raise ValueError(f"Unknown offline pretrain algorithm: {algorithm!r}")
 
 
@@ -182,6 +253,7 @@ def main(
         raise SystemExit("--num_offline_steps must be positive.")
     if algorithm == "wsrl-calql":
         import warnings as _warnings
+
         _warnings.warn(
             "--algorithm wsrl-calql is deprecated; use --algorithm wsrl. "
             "Both produce identical WSRL agents (Cal-QL-based by definition). "
@@ -197,7 +269,10 @@ def main(
         args.buffer_device = "cpu"
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    run_name = args.exp_name or f"{algorithm}_offline_pretrain__{args.seed}__{int(time.time())}"
+    run_name = (
+        args.exp_name
+        or f"{algorithm}_offline_pretrain__{args.seed}__{int(time.time())}"
+    )
     checkpoint_dir = resolve_checkpoint_dir(args, run_name)
     logger = Logger.create(
         log_type=args.log_type,
@@ -217,15 +292,21 @@ def main(
         + f"\n|resolved_algorithm|{algorithm}|",
     )
 
-    obs_space, action_space = infer_box_specs_from_h5(
+    obs_space, action_space = infer_specs_from_h5(
         args.offline_dataset_path,
         action_low=args.action_low,
         action_high=args.action_high,
     )
+    if isinstance(obs_space, spaces.Dict) and algorithm != "iql":
+        raise SystemExit(
+            "Dict observations from offline H5 are currently supported by "
+            "--algorithm iql. Use a flat state dataset for cql/calql/wsrl."
+        )
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
     if args.std_log:
+        obs_desc = obs_space.shape if isinstance(obs_space, spaces.Box) else obs_space
         print(
-            f"[pretrain] algorithm={algorithm} obs={obs_space.shape} "
+            f"[pretrain] algorithm={algorithm} obs={obs_desc} "
             f"action={action_space.shape}",
             flush=True,
         )

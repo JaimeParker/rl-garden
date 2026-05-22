@@ -20,9 +20,10 @@ dependencies = [
 
 [project.optional-dependencies]
 maniskill = ["mani_skill"]
+robotwin = ["pillow", "pyyaml"]
 wandb = ["wandb"]
-dev = ["pytest"]
+dev = ["pytest", "ruff"]
 
 [tool.setuptools.packages.find]
-include = ["rl_garden*"]
+include = ["rl_garden*", "robot_infra*"]
 exclude = ["3rd_party*", "tests*", "examples*"]
