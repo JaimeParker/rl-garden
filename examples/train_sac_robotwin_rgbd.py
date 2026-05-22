@@ -45,6 +45,10 @@ class Args(VisionSACTrainingArgs):
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"
+    device: str = "auto"
+    executor_type: str = "thread"
+    parallel_topp: bool = False
+    ctrl_concurrency: int = 0
     buffer_size: int = 100_000
 
 
@@ -108,7 +112,10 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
             image_size=image_size,
             auto_reset=True,
             ignore_terminations=False,
-            device="auto",
+            device=args.device,
+            executor_type=args.executor_type,  # type: ignore[arg-type]
+            parallel_topp=args.parallel_topp,
+            ctrl_concurrency=args.ctrl_concurrency,
         )
     )
 
@@ -142,13 +149,13 @@ def main() -> None:
     )
 
     env = _make_env(args, args.num_envs)
-    eval_env = _make_env(args, args.num_eval_envs, is_eval=True)
+    eval_env = _make_env(args, args.num_eval_envs, is_eval=True) if args.num_eval_envs > 0 else None
     factory = image_encoder_factory_from_args(args)
     image_keys = discover_image_keys(env.single_observation_space)
 
     agent = SAC(
         env=env,
-        eval_env=eval_env,
+        eval_env=eval_env,  # None is accepted
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
@@ -179,7 +186,8 @@ def main() -> None:
 
     logger.close()
     env.close()
-    eval_env.close()
+    if eval_env is not None:
+        eval_env.close()
 
 
 if __name__ == "__main__":
