@@ -311,7 +311,7 @@ def main() -> None:
         )
         if args.std_log:
             print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
-    else:
+    elif args.num_offline_steps == 0:
         agent.switch_to_online_mode(
             online_replay_mode=args.online_replay_mode,
             offline_data_ratio=args.offline_data_ratio,
