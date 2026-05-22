@@ -7,15 +7,13 @@ from mani_skill.agents.controllers import (
 )
 from mani_skill.agents.registration import register_agent
 
-from rl_garden.envs.custom.agents.controllers.pd_ee_twist import (
-    PDEETwistControllerConfig,
-)
 from rl_garden.envs.custom.agents.robots.panda.panda_gripper_closed import (
     PandaGripperClosed,
 )
 from robot_infra.controller.simulator.maniskill import (
     ImpedanceEEDeltaPoseControllerConfig,
     ImpedanceEETwistControllerConfig,
+    PDEETwistControllerConfig,
 )
 
 
