@@ -50,9 +50,7 @@ def _offline_update_loop(
     *,
     start_step: int = 0,
 ) -> None:
-    gradient_steps = (
-        int(agent.utd) if float(agent.utd).is_integer() and agent.utd > 1 else 1
-    )
+    gradient_steps = 1
     interval_update_time = 0.0
     interval_update_steps = 0
     for step in trange(steps, desc="offline"):
@@ -203,6 +201,7 @@ def main() -> None:
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
+        warmup_steps=args.warmup_steps,
         offline_sampling=args.offline_sampling,
         sparse_reward_mc=args.sparse_reward_mc,
         sparse_negative_reward=args.sparse_negative_reward,

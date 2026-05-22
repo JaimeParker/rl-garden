@@ -108,6 +108,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         use_td_loss: bool = True,
         online_cql_alpha: Optional[float] = None,
         online_use_cql_loss: Optional[bool] = None,
+        warmup_steps: int = 0,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         # Sparse-reward MC
         sparse_reward_mc: bool = False,
@@ -250,8 +251,10 @@ class WSRL(_CalQLRolloutTrainingShell):
         )
         self.online_cql_alpha = online_cql_alpha
         self.online_use_cql_loss = online_use_cql_loss
+        self.warmup_steps: int = warmup_steps
         self.offline_sampling: Literal["with_replace", "without_replace"] = offline_sampling
         self._online_start_step: int | None = None
+        self._warmup_end_step: Optional[int] = None
         self._offline_probe_batch: MCReplayBufferSample | None = None
         self.offline_replay_buffer: Optional[Any] = None
         self.offline_data_ratio: float = 0.0
@@ -261,6 +264,7 @@ class WSRL(_CalQLRolloutTrainingShell):
             **super()._checkpoint_metadata(),
             "online_cql_alpha": self.online_cql_alpha,
             "online_use_cql_loss": self.online_use_cql_loss,
+            "warmup_steps": self.warmup_steps,
             "offline_sampling": self.offline_sampling,
         }
         if self._is_dict_obs:
@@ -402,6 +406,23 @@ class WSRL(_CalQLRolloutTrainingShell):
             tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
         return tagged
 
+    def train(self, gradient_steps: int) -> dict[str, float]:
+        if (
+            self._warmup_end_step is not None
+            and self._global_step <= self._warmup_end_step
+        ):
+            return {}
+        return super().train(gradient_steps)
+
+    def _explore_action(self, obs) -> torch.Tensor:
+        # In online mode the offline-trained policy is always better than
+        # random exploration, even before learning_has_started is set.
+        # switch_to_online_mode() is only called after actual offline
+        # pre-training, so _online_start_step is None during pure-online runs.
+        if self._online_start_step is not None:
+            return self._policy_action(obs)
+        return super()._explore_action(obs)
+
     def set_offline_probe_batch(self, batch: MCReplayBufferSample | None) -> None:
         self._offline_probe_batch = batch
 
@@ -443,7 +464,9 @@ class WSRL(_CalQLRolloutTrainingShell):
         is_online = online_start is not None and step >= online_start
         offline_step = min(step, online_start) if online_start is not None else step
         online_step = max(0, step - online_start) if online_start is not None else 0
+        is_warmup = self._warmup_end_step is not None and step <= self._warmup_end_step
         self.logger.add_scalar("phase/is_online", float(is_online), step)
+        self.logger.add_scalar("phase/wsrl_warmup", float(is_warmup), step)
         self.logger.add_scalar("phase/offline_step", float(offline_step), step)
         self.logger.add_scalar("phase/online_step", float(online_step), step)
 
@@ -457,6 +480,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         offline_data_ratio: float = 0.0,
     ) -> None:
         self._online_start_step = self._global_step
+        if self.warmup_steps > 0:
+            self._warmup_end_step = self._global_step + self.warmup_steps
         if self.online_use_cql_loss is not None:
             self.use_cql_loss = self.online_use_cql_loss
         if self.online_cql_alpha is not None:
@@ -481,6 +506,9 @@ class WSRL(_CalQLRolloutTrainingShell):
 
         if self.logger:
             self.logger.add_summary("wsrl/online_start_step", self._global_step)
+            self.logger.add_summary("wsrl/warmup_steps", self.warmup_steps)
+            if self._warmup_end_step is not None:
+                self.logger.add_summary("wsrl/warmup_end_step", self._warmup_end_step)
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
             self.logger.add_summary("wsrl/online_replay_mode", online_replay_mode)

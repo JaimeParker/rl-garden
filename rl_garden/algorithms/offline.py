@@ -222,8 +222,7 @@ def infer_box_specs_from_h5(
 
 
 def _default_gradient_steps(agent: Any) -> int:
-    utd = float(getattr(agent, "utd", 1.0))
-    return int(utd) if utd.is_integer() and utd > 1 else 1
+    return 1
 
 
 def _log_update_metrics(agent: Any, metrics: dict[str, float], step: int) -> None:
