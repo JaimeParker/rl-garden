@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from rl_garden.envs.custom.agents.controllers.pd_ee_twist import PDEETwistControllerConfig
 from rl_garden.envs.custom.agents.robots.panda.panda import Panda
 from rl_garden.envs.custom.agents.robots.panda.panda_gripper_closed_wo_norm import (
     PandaGripperClosedWoNorm,
@@ -8,6 +7,7 @@ from rl_garden.envs.custom.agents.robots.panda.panda_gripper_closed_wo_norm impo
 from robot_infra.controller.simulator.maniskill import (
     ImpedanceEEDeltaPoseControllerConfig,
     ImpedanceEETwistControllerConfig,
+    PDEETwistControllerConfig,
 )
 
 
