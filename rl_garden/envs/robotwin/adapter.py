@@ -229,7 +229,7 @@ class RoboTwinTaskAdapter:
             )
         self._install_helpers()
         self._install_topp_proxies()
-        self._install_ctrl_gate(self._ctrl_gate)
+        self._install_ctrl_gate(None if self._coordinator is not None else self._ctrl_gate)
         self._install_topp_ctrl_coordinator()
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
@@ -426,6 +426,7 @@ class RoboTwinTaskAdapter:
     def _install_topp_ctrl_coordinator(self) -> None:
         if self._coordinator is not None and self.task is not None:
             self.task._topp_ctrl_coordinator = self._coordinator
+            self.task._ctrl_gate = None
 
     def _install_topp_proxies(self) -> None:
         """Replace task.robot's mplib planners with RemoteToppPlanner proxies.

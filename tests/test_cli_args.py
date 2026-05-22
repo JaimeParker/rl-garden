@@ -72,8 +72,6 @@ def test_robotwin_sac_defaults_are_memory_safe() -> None:
     assert args.include_wrist_cameras is True
     assert args.reward_mode == "dense"
     assert args.control_mode == "delta_joint_pos"
-    assert args.executor_type == "thread"
-    assert args.shard_size == 4
 
 
 def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,32 +99,6 @@ def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch)
     assert cfg.task_config["camera"]["head_camera_type"] == "D435"
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
     assert cfg.task_config["eval_video_log"] is True
-    assert cfg.executor_type == "thread"
-    assert cfg.shard_size == 4
-
-
-def test_robotwin_sac_make_env_forwards_shard_executor(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_sac_robotwin_rgbd.py")
-    captured = {}
-
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
-
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
-    args.executor_type = "shard"
-    args.parallel_topp = True
-    args.ctrl_concurrency = 1
-    args.shard_size = 2
-
-    cfg = module._make_env(args, num_envs=8)
-
-    assert cfg is captured["cfg"]
-    assert cfg.executor_type == "shard"
-    assert cfg.parallel_topp is True
-    assert cfg.ctrl_concurrency == 1
-    assert cfg.shard_size == 2
 
 
 def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,7 +219,6 @@ def test_robotwin_ppo_executor_type_default_is_thread(monkeypatch: pytest.Monkey
     assert cfg.parallel_topp is False
     assert cfg.topp_cpu_affinity is False
     assert cfg.ctrl_concurrency == 0
-    assert cfg.shard_size == 4
 
 
 def test_robotwin_ppo_make_env_forwards_ctrl_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,26 +257,6 @@ def test_robotwin_ppo_make_env_forwards_parallel_topp(monkeypatch: pytest.Monkey
     assert cfg is captured["cfg"]
     assert cfg.parallel_topp is True
     assert cfg.topp_cpu_affinity is True
-
-
-def test_robotwin_ppo_make_env_forwards_shard_size(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_ppo_robotwin_rgbd.py")
-    captured = {}
-
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
-
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
-    args.executor_type = "shard"
-    args.shard_size = 2
-
-    cfg = module._make_env(args, num_envs=8)
-
-    assert cfg is captured["cfg"]
-    assert cfg.executor_type == "shard"
-    assert cfg.shard_size == 2
 
 
 def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
