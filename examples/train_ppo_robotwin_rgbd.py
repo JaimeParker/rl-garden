@@ -47,6 +47,7 @@ class Args(VisionPPOTrainingArgs):
     profile_interval: int = 50
     render_every_control_step: bool = False
     control_step_cap: Optional[int] = None
+    disable_topp: bool = False
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
@@ -71,6 +72,7 @@ def _make_env(
         "render_freq": 0,
         "render_every_control_step": args.render_every_control_step,
         "control_step_cap": args.control_step_cap,
+        "need_topp": not args.disable_topp,
         "episode_num": 100,
         "use_seed": False,
         "save_freq": 15,
@@ -154,11 +156,15 @@ def main() -> None:
     )
 
     env = _make_env(args, args.num_envs)
-    eval_env = _make_env(
-        args,
-        args.num_eval_envs,
-        is_eval=True,
-        eval_record_dir=eval_record_dir,
+    eval_env = (
+        _make_env(
+            args,
+            args.num_eval_envs,
+            is_eval=True,
+            eval_record_dir=eval_record_dir,
+        )
+        if args.num_eval_envs > 0
+        else None
     )
     factory = image_encoder_factory_from_args(args)
     image_keys = discover_image_keys(env.single_observation_space)
@@ -200,7 +206,8 @@ def main() -> None:
     agent.learn(total_timesteps=args.total_timesteps)
     logger.close()
     env.close()
-    eval_env.close()
+    if eval_env is not None:
+        eval_env.close()
 
 
 if __name__ == "__main__":

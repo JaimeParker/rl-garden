@@ -98,4 +98,5 @@ exec env \
     --image-fusion-mode per_key \
     --reward-mode dense \
     --control-mode delta_joint_pos \
+    --control-step-cap 16 \
     "${FORWARD_ARGS[@]}"
