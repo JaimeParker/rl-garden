@@ -166,11 +166,10 @@ def main() -> None:
     )
 
     env = _make_env(args, args.num_envs)
-    eval_env = _make_env(
-        args,
-        args.num_eval_envs,
-        is_eval=True,
-        eval_record_dir=eval_record_dir,
+    eval_env = (
+        _make_env(args, args.num_eval_envs, is_eval=True, eval_record_dir=eval_record_dir)
+        if args.num_eval_envs > 0
+        else None
     )
     factory = image_encoder_factory_from_args(args)
     image_keys = discover_image_keys(env.single_observation_space)
@@ -212,7 +211,8 @@ def main() -> None:
     agent.learn(total_timesteps=args.total_timesteps)
     logger.close()
     env.close()
-    eval_env.close()
+    if eval_env is not None:
+        eval_env.close()
 
 
 if __name__ == "__main__":
