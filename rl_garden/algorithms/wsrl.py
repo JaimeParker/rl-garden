@@ -1,6 +1,7 @@
 """WSRL warm-start flow built on Cal-QL."""
 from __future__ import annotations
 
+import warnings
 from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
@@ -489,7 +490,6 @@ class WSRL(_CalQLRolloutTrainingShell):
         if self.online_cql_alpha is not None:
             self.cql_alpha = self.online_cql_alpha
 
-        self.backup_entropy = True
         if not (0.0 <= offline_data_ratio <= 1.0):
             raise ValueError(f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}.")
         self.offline_replay_buffer = None
@@ -506,6 +506,20 @@ class WSRL(_CalQLRolloutTrainingShell):
         else:
             raise ValueError(f"Unknown online_replay_mode: {online_replay_mode!r}")
 
+        if self.use_cql_loss and online_replay_mode == "empty":
+            warnings.warn(
+                "WSRL switch_to_online_mode: use_cql_loss=True with "
+                "online_replay_mode='empty' is not a configuration the WSRL or "
+                "Cal-QL papers cover. CQL conservatism is calibrated against the "
+                "offline data distribution; clearing the buffer removes that "
+                "support and leaves CQL fighting policy gradients with high-variance "
+                "OOD estimates over warmup-only data. Pass --online_use_cql_loss "
+                "False for paper-aligned WSRL, or --online_replay_mode mixed/append "
+                "to retain offline data for Cal-QL.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         if self.logger:
             self.logger.add_summary("wsrl/online_start_step", self._global_step)
             self.logger.add_summary("wsrl/warmup_steps", self.warmup_steps)
@@ -513,6 +527,7 @@ class WSRL(_CalQLRolloutTrainingShell):
                 self.logger.add_summary("wsrl/warmup_end_step", self._warmup_end_step)
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
+            self.logger.add_summary("wsrl/online_backup_entropy", self.backup_entropy)
             self.logger.add_summary("wsrl/online_replay_mode", online_replay_mode)
             self.logger.add_summary("wsrl/online_replay_cleared", online_replay_mode == "empty")
             if online_replay_mode == "empty":
@@ -521,4 +536,6 @@ class WSRL(_CalQLRolloutTrainingShell):
                 self.logger.add_summary("wsrl/offline_data_ratio", offline_data_ratio)
 
         if self.use_compile and self._eager_critic_loss is not None:
+            if self.logger:
+                self.logger.add_summary("wsrl/recompile_at_online_step", self._global_step)
             self._apply_compile()

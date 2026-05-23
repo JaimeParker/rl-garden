@@ -185,8 +185,39 @@ class TestWSRLHelperMethods:
                 torch.zeros(2),
             )
         assert len(wsrl_agent.replay_buffer) > 0
-        wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
+        with pytest.warns(UserWarning, match="not a configuration the WSRL"):
+            wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
         assert len(wsrl_agent.replay_buffer) == 0
+
+    def test_switch_to_online_mode_paper_wsrl_no_warning(self, wsrl_agent, recwarn):
+        wsrl_agent.online_use_cql_loss = False
+        wsrl_agent.online_cql_alpha = 0.0
+        wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
+        half_wsrl_warnings = [
+            w for w in recwarn if "not a configuration the WSRL" in str(w.message)
+        ]
+        assert half_wsrl_warnings == []
+
+    def test_switch_to_online_mode_logs_recompile_step(self, simple_env):
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=64,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [16, 16], "qf": [16, 16]},
+            n_critics=2,
+            online_use_cql_loss=False,
+            online_cql_alpha=0.0,
+            use_compile=False,
+            device="cpu",
+        )
+        logger = _RecordingLogger()
+        agent.logger = logger
+        agent._global_step = 7
+        agent.switch_to_online_mode(online_replay_mode="append")
+        assert ("wsrl/online_backup_entropy", agent.backup_entropy) in logger.summaries
+        recompile_logged = any(k == "wsrl/recompile_at_online_step" for k, _ in logger.summaries)
+        assert recompile_logged == (agent.use_compile and agent._eager_critic_loss is not None)
 
     def test_grad_clip_norm_configured(self, simple_env):
         agent = WSRL(

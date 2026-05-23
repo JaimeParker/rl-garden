@@ -200,8 +200,8 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"
 
-    online_cql_alpha: Optional[float] = None
-    online_use_cql_loss: Optional[bool] = None
+    online_cql_alpha: float = 0.0
+    online_use_cql_loss: bool = False
     warmup_steps: int = 5000
     offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
 
