@@ -350,6 +350,17 @@ def main() -> None:
                 UserWarning,
                 stacklevel=2,
             )
+        if args.load_checkpoint is not None and args.offline_dataset_path is not None:
+            loaded = load_maniskill_h5_to_replay_buffer(
+                agent.replay_buffer,
+                args.offline_dataset_path,
+                num_traj=args.offline_num_traj,
+                reward_scale=args.reward_scale,
+                reward_bias=args.reward_bias,
+                success_key=args.success_key,
+            )
+            logger.add_summary("wsrl/offline_loaded_transitions", loaded)
+            _set_offline_probe(agent, logger, args.std_log)
         agent.switch_to_online_mode(
             online_replay_mode=args.online_replay_mode,
             offline_data_ratio=args.offline_data_ratio,

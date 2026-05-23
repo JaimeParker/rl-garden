@@ -118,6 +118,8 @@ class _CalQLRolloutTrainingShell(CalQLCore, _CQLRolloutTrainingShell):
 class CalQL(CalQLCore, CQL):
     """Pure offline CQL with Cal-QL MC lower bounds."""
 
+    _compatible_checkpoint_algorithms = ("CalQL", "CQL")
+
     def __init__(
         self,
         *args: Any,

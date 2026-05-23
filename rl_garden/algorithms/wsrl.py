@@ -27,7 +27,7 @@ from rl_garden.encoders.flatten import FlattenExtractor
 
 class WSRL(_CalQLRolloutTrainingShell):
     """Cal-QL plus offline→online replay switching and WSRL logging."""
-    _compatible_checkpoint_algorithms = ("CalQL", "CQL")
+    _compatible_checkpoint_algorithms = ("WSRL", "CalQL", "CQL")
 
     def __init__(
         self,
@@ -439,9 +439,9 @@ class WSRL(_CalQLRolloutTrainingShell):
             target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
             td_mse = F.mse_loss(q_pred, target_q_expanded)
         return {
-            "q/offline_probe/predicted": float(q_pred.mean().item()),
-            "q/offline_probe/target": float(target_q.mean().item()),
-            "q/offline_probe/td_rmse": float(torch.sqrt(td_mse).item()),
+            "offline_probe/predicted_q": float(q_pred.mean().item()),
+            "offline_probe/target_q": float(target_q.mean().item()),
+            "offline_probe/td_rmse": float(torch.sqrt(td_mse).item()),
         }
 
     def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:

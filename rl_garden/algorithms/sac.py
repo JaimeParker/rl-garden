@@ -33,6 +33,7 @@ from rl_garden.policies.sac_policy import SACPolicy
 
 
 class SAC(SACCore, OffPolicyAlgorithm):
+    _compatible_checkpoint_algorithms = ("SAC",)
     _SUPPORTED_POLICY_KWARGS = frozenset({"features_extractor_class", "features_extractor_kwargs"})
 
     def __init__(

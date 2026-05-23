@@ -900,6 +900,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
 class CQL(CQLCore, OfflineRLAlgorithm):
     """Pure offline CQL over a static replay buffer."""
 
+    _compatible_checkpoint_algorithms = ("CQL",)
+
     def __init__(
         self,
         env: OfflineEnvSpec,
