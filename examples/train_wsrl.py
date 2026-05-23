@@ -42,6 +42,7 @@ def _offline_update_loop(
     steps: int,
     logger: Logger,
     log_freq: int,
+    eval_freq: int,
     std_log: bool,
     *,
     start_step: int = 0,
@@ -49,15 +50,29 @@ def _offline_update_loop(
     gradient_steps = 1
     interval_update_time = 0.0
     interval_update_steps = 0
+    final_step = start_step + steps
     for step in trange(steps, desc="offline"):
         global_step = start_step + step + 1
         should_log = log_freq > 0 and (
             (step + 1) % log_freq == 0 or (step + 1) == steps
         )
+        is_final_step = global_step == final_step
+        should_eval = (
+            eval_freq > 0 and global_step % eval_freq == 0
+        ) or is_final_step
         update_t = time.perf_counter()
         losses = agent.train(gradient_steps, compute_info=should_log)
+        agent._global_step = global_step
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
+        if should_eval:
+            _evaluate_offline(
+                agent,
+                logger,
+                global_step,
+                std_log,
+                record_summary=is_final_step,
+            )
         if log_freq > 0 and (step + 1) % log_freq == 0:
             logger.log_metrics(losses, global_step)
             offline_update_fps = (
@@ -96,13 +111,23 @@ def _fmt_metric(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.4f}"
 
 
-def _evaluate_offline_end(agent: WSRL, logger: Logger, step: int, std_log: bool) -> None:
+def _evaluate_offline(
+    agent: WSRL,
+    logger: Logger,
+    step: int,
+    std_log: bool,
+    *,
+    record_summary: bool = False,
+) -> None:
+    t0 = time.perf_counter()
     metrics = agent._evaluate()
     if not metrics:
         return
     agent._log_eval_metrics(metrics, step)
-    for key, value in agent.canonical_eval_metrics(metrics).items():
-        logger.add_summary(f"wsrl/offline_final_eval/{key}", value)
+    logger.add_scalar("time/eval_time", time.perf_counter() - t0, step)
+    if record_summary:
+        for key, value in agent.canonical_eval_metrics(metrics).items():
+            logger.add_summary(f"wsrl/offline_final_eval/{key}", value)
     if std_log:
         eval_return = _first_metric(metrics, ("return",))
         eval_success = _first_metric(metrics, ("success_at_end", "success_once"))
@@ -294,11 +319,11 @@ def main() -> None:
             args.num_offline_steps,
             logger,
             args.log_freq,
+            args.eval_freq,
             args.std_log,
             start_step=offline_start_step,
         )
         agent._global_step = offline_end_step
-        _evaluate_offline_end(agent, logger, offline_end_step, args.std_log)
         _save_offline_checkpoint(
             agent,
             checkpoint_dir,
