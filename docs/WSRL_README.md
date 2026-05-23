@@ -197,7 +197,12 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--cql_autotune_alpha`: Auto-tune CQL alpha via Lagrange multiplier
 - `--cql_importance_sample`: Use importance sampling (default: True)
 - `--cql_max_target_backup`: Use max Q for target (default: True)
-- `--backup_entropy`: Include entropy in TD target backups (default: False, matching upstream WSRL/Cal-QL)
+- `--backup_entropy`: Include entropy in TD target backups (default: False, matching
+  upstream WSRL/Cal-QL). This is a single global config — the same value applies to
+  both offline and online phases. `switch_to_online_mode` does **not** flip it.
+  The upstream `3rd_party/wsrl` config sets `backup_entropy=False` and the CQL
+  agent asserts this invariant (`cql.py:240`); diverging would inject an entropy
+  bonus into the TD target at the offline→online boundary.
 
 ### Cal-QL Parameters
 - `--use_calql`: Enable Cal-QL lower bounds (default: True)
@@ -208,8 +213,48 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--offline_dataset_path demos/foo.h5`: ManiSkill trajectory H5 path for offline pre-training
 - `--offline_num_traj`: Optional number of trajectories to load from the H5
 - `--num_online_steps 50000`: Number of online training steps
-- `--online_cql_alpha 0.5`: CQL alpha for online phase (optional)
-- `--online_use_cql_loss False`: Disable CQL loss for online phase (optional)
+- `--warmup_steps 5000`: Frozen-policy rollout steps before online updates begin (paper default)
+- `--online_replay_mode {empty,append,mixed}`: How to handle replay buffer at switch (default: `empty`, matches WSRL paper)
+- `--online_use_cql_loss`: Whether CQL stays on during the online phase (default: `False`, paper-aligned)
+- `--online_cql_alpha`: CQL alpha applied at the switch (default: `0.0`, paper-aligned)
+- `--offline_data_ratio 0.5`: Only meaningful when `online_replay_mode=mixed`
+
+#### Paper-aligned WSRL vs Cal-QL retention
+
+The defaults above reproduce the WSRL recipe (drop CQL after warmup, empty
+buffer, pure SAC online). If you instead want Cal-QL with offline-data
+retention, override:
+
+```bash
+# WSRL paper recipe (default — no flags needed)
+python examples/train_wsrl.py --env_id <id> --offline_dataset_path <h5> \
+    --num_offline_steps 200000 --num_online_steps 200000
+
+# Cal-QL retention recipe
+python examples/train_wsrl.py --env_id <id> --offline_dataset_path <h5> \
+    --num_offline_steps 200000 --num_online_steps 200000 \
+    --online_use_cql_loss True --online_cql_alpha 5.0 \
+    --online_replay_mode mixed --offline_data_ratio 0.5
+```
+
+**`switch_to_online_mode` emits a `UserWarning`** if `use_cql_loss=True` is
+combined with `online_replay_mode='empty'`. That combination keeps CQL active
+on a buffer with no offline support; CQL's conservatism floor is calibrated
+against the offline data distribution, and on warmup-only data the OOD
+LogSumExp estimates become high-variance, fighting the policy gradient. Pick
+either pure WSRL (CQL off) or Cal-QL retention (mixed/append buffer).
+
+#### WSRL switch-time diagnostics in wandb
+
+`switch_to_online_mode` records these one-shot summaries (visible in the wandb
+"Summary" panel, not the time-series charts):
+
+- `wsrl/online_start_step`, `wsrl/warmup_end_step`
+- `wsrl/online_use_cql_loss`, `wsrl/online_cql_alpha`, `wsrl/online_backup_entropy`
+- `wsrl/online_replay_mode`, `wsrl/online_replay_cleared`,
+  `wsrl/online_replay_size_before_clear` (empty mode), `wsrl/offline_data_ratio` (mixed mode)
+- `wsrl/recompile_at_online_step` (only when `--use_compile`) — lets you separate
+  recompile transients from real unlearning when reading post-switch curves
 
 ### Standalone Offline CQL/Cal-QL Control
 - `--algorithm cql`: Use `CQL` with a normal tensor replay buffer.
@@ -273,7 +318,11 @@ Notes:
   benchmark a specific environment.
 - Inside `switch_to_online_mode`, the compiled methods are re-wrapped because
   Python-side flags (`use_cql_loss`, `cql_alpha`) may have flipped and would
-  otherwise leave a stale specialization in the graph.
+  otherwise leave a stale specialization in the graph. `backup_entropy` is
+  **not** among these — it stays at its constructor value across phases. The
+  recompile step is recorded as the `wsrl/recompile_at_online_step` wandb
+  summary so you can tell post-switch recompile transients apart from real
+  unlearning when inspecting Q-value curves.
 - For larger speedups, also raise `--batch_size` until VRAM is exhausted —
   the small networks here leave most of the GPU idle.
 
@@ -479,7 +528,9 @@ pytest tests/test_cql_calql.py tests/test_sac_core.py tests/test_wsrl*.py -v
 ### Performance Tips
 
 - Use `--n_critics 10` with `--critic_subsample_size 2` for best offline performance (REDQ)
-- Set `--online_cql_alpha 0.5` or `--online_use_cql_loss False` for online phase
+- CLI defaults already match WSRL paper recipe (`--online_use_cql_loss False`,
+  `--online_cql_alpha 0.0`, `--online_replay_mode empty`); override only if you
+  want Cal-QL retention behavior
 - Use `--utd 1.0` for state-based, `--utd 0.25` for vision-based training
 - Enable `--use_calql` for better offline pre-training with Cal-QL bounds
 
