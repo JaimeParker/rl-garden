@@ -107,8 +107,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         detach_encoder_on_actor: bool = True,
         # WSRL phase control
         use_td_loss: bool = True,
-        online_cql_alpha: Optional[float] = None,
-        online_use_cql_loss: Optional[bool] = None,
+        online_cql_alpha: float = 0.0,
+        online_use_cql_loss: bool = False,
         warmup_steps: int = 5000,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         # Sparse-reward MC
@@ -391,22 +391,6 @@ class WSRL(_CalQLRolloutTrainingShell):
             out["normalized_score"] = float(success) * 100.0
         return out
 
-    @staticmethod
-    def _update_metric_tags(metrics: dict[str, float]) -> dict[str, float]:
-        """Map raw metric keys to namespaced paths using Logger's mapping."""
-        tagged: dict[str, float] = {}
-        namespaces = Logger.METRIC_NAMESPACES
-
-        for key, value in metrics.items():
-            # Use explicit mapping or default to losses namespace
-            full_path = namespaces.get(key, f"losses/{key}")
-            tagged[full_path] = value
-
-        # Derived metric: TD RMSE from TD loss
-        if "td_loss" in metrics:
-            tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
-        return tagged
-
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]:
@@ -460,8 +444,15 @@ class WSRL(_CalQLRolloutTrainingShell):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
             return
-        for tag, value in self._update_metric_tags(metrics).items():
-            self.logger.add_scalar(tag, value, step)
+        self.logger.log_metrics(metrics, step)
+
+        # WSRL-specific derived metric. Not propagated into Logger.log_metrics
+        # so SAC online and Cal-QL offline runs do not start showing q/td_rmse.
+        td_loss = metrics.get("td_loss")
+        if isinstance(td_loss, (int, float)):
+            self.logger.add_scalar(
+                "q/td_rmse", float(np.sqrt(max(td_loss, 0.0))), step
+            )
 
         online_start = self._online_start_step
         is_online = online_start is not None and step >= online_start
@@ -485,10 +476,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         self._online_start_step = self._global_step
         if self.warmup_steps > 0:
             self._warmup_end_step = self._global_step + self.warmup_steps
-        if self.online_use_cql_loss is not None:
-            self.use_cql_loss = self.online_use_cql_loss
-        if self.online_cql_alpha is not None:
-            self.cql_alpha = self.online_cql_alpha
+        self.use_cql_loss = self.online_use_cql_loss
+        self.cql_alpha = self.online_cql_alpha
 
         if not (0.0 <= offline_data_ratio <= 1.0):
             raise ValueError(f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}.")

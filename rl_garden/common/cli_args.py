@@ -146,7 +146,7 @@ class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     batch_size: int = 256
     learning_starts: int = 4_000
     training_freq: int = 64
-    utd: float = 1.0
+    utd: float = 4.0
     gamma: float = 0.99
     tau: float = 0.005
 

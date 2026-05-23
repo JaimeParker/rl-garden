@@ -528,10 +528,12 @@ pytest tests/test_cql_calql.py tests/test_sac_core.py tests/test_wsrl*.py -v
 ### Performance Tips
 
 - Use `--n_critics 10` with `--critic_subsample_size 2` for best offline performance (REDQ)
-- CLI defaults already match WSRL paper recipe (`--online_use_cql_loss False`,
-  `--online_cql_alpha 0.0`, `--online_replay_mode empty`); override only if you
-  want Cal-QL retention behavior
-- Use `--utd 1.0` for state-based, `--utd 0.25` for vision-based training
+- CLI defaults already match WSRL paper recipe (`--utd 4.0`,
+  `--online_use_cql_loss False`, `--online_cql_alpha 0.0`,
+  `--online_replay_mode empty`); override only if you want Cal-QL retention
+  behavior or a different update-to-data ratio
+- For state-based WSRL, the default `--utd 4.0` follows paper Table 1
+  (Adroit/Kitchen/AntMaze); vision-based training keeps `--utd 0.25`
 - Enable `--use_calql` for better offline pre-training with Cal-QL bounds
 
 ## License
