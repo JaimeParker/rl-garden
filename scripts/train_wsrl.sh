@@ -60,6 +60,12 @@ exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_
     --num_envs 16 \
     --num_offline_steps 0 \
     --num_online_steps 1000000 \
+    --gamma 0.8 \
+    --tau 0.01 \
+    --utd 4.0 \
+    --warmup_steps 5000 \
+    --online_replay_mode empty \
+    --no-online_use_cql_loss \
     --n_critics 10 \
     --critic_subsample_size 2 \
     --use_calql \
