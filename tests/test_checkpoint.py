@@ -351,6 +351,7 @@ def test_legacy_offline_cql_algorithm_class_alias_resolves_to_cql():
     validate_checkpoint_metadata(
         legacy_ckpt,
         algorithm_class="CQL",
+        compatible_algorithms=("CQL",),
         observation_space=obs_space,
         action_space=action_space,
         strict=True,
@@ -367,6 +368,7 @@ def test_legacy_offline_cql_algorithm_class_alias_resolves_to_cql():
     validate_checkpoint_metadata(
         legacy_calql_ckpt,
         algorithm_class="CalQL",
+        compatible_algorithms=("CalQL", "CQL"),
         observation_space=obs_space,
         action_space=action_space,
         strict=True,

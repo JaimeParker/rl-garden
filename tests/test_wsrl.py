@@ -5,6 +5,7 @@ from gymnasium import spaces
 from unittest.mock import MagicMock
 
 from rl_garden.algorithms.wsrl import WSRL
+from rl_garden.common.logger import Logger
 
 
 class _RecordingLogger:
@@ -17,6 +18,15 @@ class _RecordingLogger:
 
     def add_summary(self, tag, value):
         self.summaries.append((tag, value))
+
+    def log_metrics(self, metrics, step, *, metric_namespaces=None, default_namespace="losses"):
+        if metric_namespaces is None:
+            metric_namespaces = Logger.METRIC_NAMESPACES
+        for key, value in metrics.items():
+            if not isinstance(value, (int, float)):
+                continue
+            full_path = metric_namespaces.get(key, f"{default_namespace}/{key}")
+            self.add_scalar(full_path, value, step)
 
 
 @pytest.fixture
@@ -176,6 +186,11 @@ class TestWSRLHelperMethods:
         assert ("wsrl/online_start_step", 123) in logger.summaries
 
     def test_switch_to_online_mode_empty_clears_replay(self, wsrl_agent):
+        # Force the "half-WSRL" configuration (CQL on + empty buffer) to
+        # exercise the UserWarning. Paper-aligned defaults now turn CQL off
+        # at switch, so we have to explicitly opt in to keep this branch tested.
+        wsrl_agent.online_use_cql_loss = True
+        wsrl_agent.online_cql_alpha = 5.0
         for _ in range(5):
             wsrl_agent.replay_buffer.add(
                 torch.randn(2, 4),
@@ -185,8 +200,39 @@ class TestWSRLHelperMethods:
                 torch.zeros(2),
             )
         assert len(wsrl_agent.replay_buffer) > 0
-        wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
+        with pytest.warns(UserWarning, match="not a configuration the WSRL"):
+            wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
         assert len(wsrl_agent.replay_buffer) == 0
+
+    def test_switch_to_online_mode_paper_wsrl_no_warning(self, wsrl_agent, recwarn):
+        wsrl_agent.online_use_cql_loss = False
+        wsrl_agent.online_cql_alpha = 0.0
+        wsrl_agent.switch_to_online_mode(online_replay_mode="empty")
+        half_wsrl_warnings = [
+            w for w in recwarn if "not a configuration the WSRL" in str(w.message)
+        ]
+        assert half_wsrl_warnings == []
+
+    def test_switch_to_online_mode_logs_recompile_step(self, simple_env):
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=64,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [16, 16], "qf": [16, 16]},
+            n_critics=2,
+            online_use_cql_loss=False,
+            online_cql_alpha=0.0,
+            use_compile=False,
+            device="cpu",
+        )
+        logger = _RecordingLogger()
+        agent.logger = logger
+        agent._global_step = 7
+        agent.switch_to_online_mode(online_replay_mode="append")
+        assert ("wsrl/online_backup_entropy", agent.backup_entropy) in logger.summaries
+        recompile_logged = any(k == "wsrl/recompile_at_online_step" for k, _ in logger.summaries)
+        assert recompile_logged == (agent.use_compile and agent._eager_critic_loss is not None)
 
     def test_grad_clip_norm_configured(self, simple_env):
         agent = WSRL(
@@ -200,32 +246,6 @@ class TestWSRLHelperMethods:
             device="cpu",
         )
         assert agent.grad_clip_norm == 1.0
-
-    def test_update_metric_tags(self, wsrl_agent):
-        tags = wsrl_agent._update_metric_tags(
-            {
-                "critic_loss": 1.0,
-                "td_loss": 4.0,
-                "predicted_q": 2.0,
-                "target_q": 3.0,
-                "cql_ood_values": 5.0,
-                "cql_q_diff": 6.0,
-                "calql_bound_rate": 0.25,
-                "alpha": 0.1,
-                "cql_alpha": 5.0,
-            }
-        )
-
-        assert tags["losses/critic_loss"] == 1.0
-        assert tags["losses/td_loss"] == 4.0
-        assert tags["q/td_rmse"] == 2.0
-        assert tags["q/predicted"] == 2.0
-        assert tags["q/target"] == 3.0
-        assert tags["q/cql_ood"] == 5.0
-        assert tags["q/cql_diff"] == 6.0
-        assert tags["cql/bound_rate"] == 0.25
-        assert tags["entropy/alpha"] == 0.1
-        assert tags["cql/alpha"] == 5.0
 
     def test_eval_metrics_include_normalized_score(self, wsrl_agent):
         metrics = wsrl_agent.canonical_eval_metrics({"return": 1.0, "success_at_end": 0.82})

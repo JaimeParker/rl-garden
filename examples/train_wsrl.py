@@ -45,6 +45,7 @@ def _offline_update_loop(
     std_log: bool,
     *,
     start_step: int = 0,
+    eval_freq: int = 0,
 ) -> int:
     gradient_steps = 1
     interval_update_time = 0.0
@@ -59,7 +60,7 @@ def _offline_update_loop(
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            logger.log_metrics(losses, global_step)
+            agent._log_update_metrics(losses, global_step)
             offline_update_fps = (
                 interval_update_steps / interval_update_time
                 if interval_update_time > 0
@@ -82,6 +83,26 @@ def _offline_update_loop(
                 )
             interval_update_time = 0.0
             interval_update_steps = 0
+
+        if (
+            eval_freq > 0
+            and agent.eval_env is not None
+            and (step + 1) % eval_freq == 0
+        ):
+            eval_metrics = agent._evaluate()
+            if eval_metrics:
+                agent._log_eval_metrics(eval_metrics, global_step)
+                if std_log:
+                    eval_return = _first_metric(eval_metrics, ("return",))
+                    eval_success = _first_metric(eval_metrics, ("success_at_end", "success_once"))
+                    print(
+                        "[offline_eval] "
+                        f"step={step + 1}/{steps} "
+                        f"return={_fmt_metric(eval_return)} "
+                        f"success_at_end={_fmt_metric(eval_success)}",
+                        flush=True,
+                    )
+
     return start_step + steps
 
 
@@ -198,6 +219,11 @@ def main() -> None:
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
 
+    if args.eval_freq > 0 and args.num_eval_envs <= 0:
+        raise SystemExit(
+            "--eval_freq > 0 requires --num_eval_envs > 0 to provide an eval environment."
+        )
+
     agent = WSRL(
         env=env,
         eval_env=eval_env,
@@ -296,6 +322,7 @@ def main() -> None:
             args.log_freq,
             args.std_log,
             start_step=offline_start_step,
+            eval_freq=args.eval_freq,
         )
         agent._global_step = offline_end_step
         _evaluate_offline_end(agent, logger, offline_end_step, args.std_log)
@@ -323,6 +350,17 @@ def main() -> None:
                 UserWarning,
                 stacklevel=2,
             )
+        if args.load_checkpoint is not None and args.offline_dataset_path is not None:
+            loaded = load_maniskill_h5_to_replay_buffer(
+                agent.replay_buffer,
+                args.offline_dataset_path,
+                num_traj=args.offline_num_traj,
+                reward_scale=args.reward_scale,
+                reward_bias=args.reward_bias,
+                success_key=args.success_key,
+            )
+            logger.add_summary("wsrl/offline_loaded_transitions", loaded)
+            _set_offline_probe(agent, logger, args.std_log)
         agent.switch_to_online_mode(
             online_replay_mode=args.online_replay_mode,
             offline_data_ratio=args.offline_data_ratio,

@@ -1,6 +1,7 @@
 """WSRL warm-start flow built on Cal-QL."""
 from __future__ import annotations
 
+import warnings
 from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
@@ -26,7 +27,7 @@ from rl_garden.encoders.flatten import FlattenExtractor
 
 class WSRL(_CalQLRolloutTrainingShell):
     """Cal-QL plus offline→online replay switching and WSRL logging."""
-    _compatible_checkpoint_algorithms = ("CalQL", "CQL")
+    _compatible_checkpoint_algorithms = ("WSRL", "CalQL", "CQL")
 
     def __init__(
         self,
@@ -106,8 +107,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         detach_encoder_on_actor: bool = True,
         # WSRL phase control
         use_td_loss: bool = True,
-        online_cql_alpha: Optional[float] = None,
-        online_use_cql_loss: Optional[bool] = None,
+        online_cql_alpha: float = 0.0,
+        online_use_cql_loss: bool = False,
         warmup_steps: int = 5000,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         # Sparse-reward MC
@@ -390,22 +391,6 @@ class WSRL(_CalQLRolloutTrainingShell):
             out["normalized_score"] = float(success) * 100.0
         return out
 
-    @staticmethod
-    def _update_metric_tags(metrics: dict[str, float]) -> dict[str, float]:
-        """Map raw metric keys to namespaced paths using Logger's mapping."""
-        tagged: dict[str, float] = {}
-        namespaces = Logger.METRIC_NAMESPACES
-
-        for key, value in metrics.items():
-            # Use explicit mapping or default to losses namespace
-            full_path = namespaces.get(key, f"losses/{key}")
-            tagged[full_path] = value
-
-        # Derived metric: TD RMSE from TD loss
-        if "td_loss" in metrics:
-            tagged["q/td_rmse"] = float(np.sqrt(max(metrics["td_loss"], 0.0)))
-        return tagged
-
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]:
@@ -438,9 +423,9 @@ class WSRL(_CalQLRolloutTrainingShell):
             target_q_expanded = target_q.unsqueeze(0).repeat(self.n_critics, 1, 1)
             td_mse = F.mse_loss(q_pred, target_q_expanded)
         return {
-            "q/offline_probe/predicted": float(q_pred.mean().item()),
-            "q/offline_probe/target": float(target_q.mean().item()),
-            "q/offline_probe/td_rmse": float(torch.sqrt(td_mse).item()),
+            "offline_probe/predicted_q": float(q_pred.mean().item()),
+            "offline_probe/target_q": float(target_q.mean().item()),
+            "offline_probe/td_rmse": float(torch.sqrt(td_mse).item()),
         }
 
     def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
@@ -459,8 +444,15 @@ class WSRL(_CalQLRolloutTrainingShell):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
             return
-        for tag, value in self._update_metric_tags(metrics).items():
-            self.logger.add_scalar(tag, value, step)
+        self.logger.log_metrics(metrics, step)
+
+        # WSRL-specific derived metric. Not propagated into Logger.log_metrics
+        # so SAC online and Cal-QL offline runs do not start showing q/td_rmse.
+        td_loss = metrics.get("td_loss")
+        if isinstance(td_loss, (int, float)):
+            self.logger.add_scalar(
+                "q/td_rmse", float(np.sqrt(max(td_loss, 0.0))), step
+            )
 
         online_start = self._online_start_step
         is_online = online_start is not None and step >= online_start
@@ -484,12 +476,9 @@ class WSRL(_CalQLRolloutTrainingShell):
         self._online_start_step = self._global_step
         if self.warmup_steps > 0:
             self._warmup_end_step = self._global_step + self.warmup_steps
-        if self.online_use_cql_loss is not None:
-            self.use_cql_loss = self.online_use_cql_loss
-        if self.online_cql_alpha is not None:
-            self.cql_alpha = self.online_cql_alpha
+        self.use_cql_loss = self.online_use_cql_loss
+        self.cql_alpha = self.online_cql_alpha
 
-        self.backup_entropy = True
         if not (0.0 <= offline_data_ratio <= 1.0):
             raise ValueError(f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}.")
         self.offline_replay_buffer = None
@@ -506,6 +495,20 @@ class WSRL(_CalQLRolloutTrainingShell):
         else:
             raise ValueError(f"Unknown online_replay_mode: {online_replay_mode!r}")
 
+        if self.use_cql_loss and online_replay_mode == "empty":
+            warnings.warn(
+                "WSRL switch_to_online_mode: use_cql_loss=True with "
+                "online_replay_mode='empty' is not a configuration the WSRL or "
+                "Cal-QL papers cover. CQL conservatism is calibrated against the "
+                "offline data distribution; clearing the buffer removes that "
+                "support and leaves CQL fighting policy gradients with high-variance "
+                "OOD estimates over warmup-only data. Pass --online_use_cql_loss "
+                "False for paper-aligned WSRL, or --online_replay_mode mixed/append "
+                "to retain offline data for Cal-QL.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         if self.logger:
             self.logger.add_summary("wsrl/online_start_step", self._global_step)
             self.logger.add_summary("wsrl/warmup_steps", self.warmup_steps)
@@ -513,6 +516,7 @@ class WSRL(_CalQLRolloutTrainingShell):
                 self.logger.add_summary("wsrl/warmup_end_step", self._warmup_end_step)
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
+            self.logger.add_summary("wsrl/online_backup_entropy", self.backup_entropy)
             self.logger.add_summary("wsrl/online_replay_mode", online_replay_mode)
             self.logger.add_summary("wsrl/online_replay_cleared", online_replay_mode == "empty")
             if online_replay_mode == "empty":
@@ -521,4 +525,6 @@ class WSRL(_CalQLRolloutTrainingShell):
                 self.logger.add_summary("wsrl/offline_data_ratio", offline_data_ratio)
 
         if self.use_compile and self._eager_critic_loss is not None:
+            if self.logger:
+                self.logger.add_summary("wsrl/recompile_at_online_step", self._global_step)
             self._apply_compile()
