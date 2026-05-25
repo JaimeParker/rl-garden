@@ -54,6 +54,10 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
         env_kwargs["fix_peg_pose"] = cfg.fix_peg_pose
     if cfg.fix_box is not None:
         env_kwargs["fix_box"] = cfg.fix_box
+    if cfg.fixed_peg_xy is not None:
+        env_kwargs["fixed_peg_xy"] = cfg.fixed_peg_xy
+    if cfg.fixed_peg_z_rot_deg is not None:
+        env_kwargs["fixed_peg_z_rot_deg"] = cfg.fixed_peg_z_rot_deg
     if cfg.camera_width is not None:
         env_kwargs["sensor_configs"]["width"] = cfg.camera_width
     if cfg.camera_height is not None:
