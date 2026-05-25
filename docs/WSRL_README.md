@@ -116,9 +116,9 @@ python examples/pretrain_offline.py \
     --buffer_device cuda \
     --use_calql --cql_alpha 5.0
 
-# Equivalent launchers
-scripts/pretrain_cql_offline.sh --offline_dataset_path /path/to/real_robot.h5
-scripts/pretrain_calql_offline.sh --offline_dataset_path /path/to/real_robot.h5
+# Equivalent shell launchers
+scripts/pretrain_offline.sh --algorithm cql --offline_dataset_path /path/to/real_robot.h5
+scripts/pretrain_offline.sh --algorithm calql --offline_dataset_path /path/to/real_robot.h5
 ```
 
 These write `cql_offline_pretrained.pt` or `calql_offline_pretrained.pt` by
