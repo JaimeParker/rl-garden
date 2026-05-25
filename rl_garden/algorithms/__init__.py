@@ -1,4 +1,5 @@
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
+from rl_garden.algorithms.bc import BC
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.iql import IQL
@@ -20,6 +21,7 @@ from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
     "BaseAlgorithm",
+    "BC",
     "CalQL",
     "CQL",
     "IQL",

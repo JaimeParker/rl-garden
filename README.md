@@ -1,54 +1,101 @@
 # rl-garden
 
-SB3-style, PyTorch-native, GPU-parallel SAC framework for ManiSkill.
+SB3-style, PyTorch-native, GPU-parallel robot learning framework supporting online RL, offline RL, and imitation learning on ManiSkill and RoboTwin.
 
-`rl-garden` re-organizes ManiSkill SAC baselines into reusable algorithm/policy/encoder modules while keeping the full rollout + replay + update path on torch tensors (no numpy hot-path conversion).
+`rl-garden` organizes a broad set of robot learning algorithms — SAC, PPO, CQL, Cal-QL, IQL, BC, WSRL, ResidualSAC — into reusable `Algorithm / Policy / FeaturesExtractor` modules, keeping the full rollout, replay, and update path on torch tensors with no numpy hot-path conversion. It targets GPU-vectorized simulators (ManiSkill, RoboTwin) and real-robot deployment via an integrated pd_ee_twist controller and teleoperation stack.
 
 ## Goals
 
-- Keep ManiSkill GPU vectorization (`ManiSkillVectorEnv`) first-class.
+- Support the full offline→online robot learning pipeline: offline pretraining (BC/IQL/CQL/Cal-QL), warm-start fine-tuning (WSRL), and online RL (SAC/PPO/ResidualSAC).
+- Keep ManiSkill GPU vectorization (`ManiSkillVectorEnv`) first-class; expose the same algorithm/encoder interface to RoboTwin and future simulators.
 - Follow SB3 design patterns (`Algorithm` / `Policy` / `FeaturesExtractor`) without importing `stable_baselines3`.
 - Make visual pipelines pluggable: `PlainConv` and hil-serl-inspired `ResNetV1` + spatial pooling + proprio fusion.
-- Make new algorithms/extensions incremental via subclassing/composition.
+- Make new algorithms and environments incremental via subclassing and composition, with no changes to unrelated base classes.
 
 ## What Is Already Implemented
 
+**Online algorithms:**
 - `SAC` for both flat Box state observations and Dict image/image+state observations.
 - `SACCore`, shared by online SAC, offline SAC, CQL, Cal-QL, and WSRL.
+- `PPO` for both flat Box state observations and Dict image observations.
+- `ResidualSAC`: adds a learned residual on top of a frozen base policy (e.g. ACT); supports state and RGBD obs.
+
+**Offline algorithms:**
+- `IQL` (Implicit Q-Learning): offline actor training via expectile regression + AWR.
 - `CQL` / `CalQL` as standalone offline pretraining algorithms.
+- `BC` (Behavioral Cloning): actor-only supervised imitation baseline.
+- `OfflineSAC`: offline-only SAC variant that mirrors CQL update defaults without conservative penalty.
 - `WSRL` as the Cal-QL-based offline→online warm-start flow layer.
-- GPU-native replay buffers:
-  - `TensorReplayBuffer` for Box observations.
-  - `DictReplayBuffer` for `{rgb, depth, state, ...}` observations.
-- Encoder stack:
-  - `FlattenExtractor`
-  - `PlainConv`
-  - `CombinedExtractor` (image + proprio fusion)
-  - `ResNetEncoder` (`resnet10`/`resnet18`/`resnet34`) + pooling heads
-- ManiSkill env factory with wrappers for state/rgb/rgbd.
-- Python examples for state SAC and RGB SAC.
-- Unit tests + CUDA smoke tests.
+
+**GPU-native replay buffers:**
+- `TensorReplayBuffer` for Box observations.
+- `DictReplayBuffer` for `{rgb, depth, state, ...}` observations.
+- `MCTensorReplayBuffer` / `MCDictReplayBuffer`: Monte-Carlo return variants (used by CalQL/WSRL).
+- `ResidualTensorReplayBuffer` / `ResidualDictReplayBuffer`: store base + residual actions for ResidualSAC.
+- `RolloutBuffer` / `DictRolloutBuffer`: on-policy rollout storage for PPO.
+
+**Encoder stack:**
+- `FlattenExtractor`
+- `PlainConvEncoder`
+- `CombinedExtractor` (image + proprio fusion)
+- `ResNetEncoder` (`resnet10`/`resnet18`/`resnet34`) + pooling heads (`AvgPool`, `SpatialSoftmax`, `SpatialLearnedEmbeddings`)
+- `RandomCrop` data augmentation layer
+
+**Networks:**
+- `SquashedGaussianActor` (tanh-squashed, used by SAC/CQL/IQL/BC/WSRL families)
+- `DiagGaussianActor` (unsquashed, used by PPO)
+- `EnsembleQCritic` (REDQ-style Q-ensemble)
+- `ValueNetwork` (V-function for IQL/PPO)
+- `MLPResNet` (ResNet-style MLP backbone)
+
+**Simulator env factories:**
+- **ManiSkill** (`ManiSkillEnvConfig` + `make_maniskill_env()`): GPU-vectorized ManiSkill envs with state/rgb/rgbd wrappers, custom Panda agents, and peg-insertion tasks.
+- **RoboTwin** (`RoboTwinEnvConfig` + `make_robotwin_env()`): RoboTwin simulator adapter supporting SAC and PPO training on manipulation tasks (e.g. `place_shoe`, `place_empty_cup`).
+
+**Python examples** for state SAC, RGB SAC, PPO (ManiSkill + RoboTwin), ResidualSAC, WSRL, and offline pretraining (CQL/CalQL/IQL/BC).
+
+**Unit tests + CUDA smoke tests** (26 test files covering all major components).
+
+**ACT base action provider** for ResidualSAC (full DETR-based implementation under `rl_garden/models/act/`).
+
+**Robot infrastructure**: GPU-side pd_ee_twist + impedance controller and teleoperation recording for real-robot WSRL workflows.
 
 ## Project Layout
 
 ```text
 rl-garden/
-├── 3rd_party/                      # read-only references (git submodules)
+├── 3rd_party/                 # reference submodules (read-only)
 │   ├── ManiSkill
 │   ├── stable-baselines3
-│   └── hil-serl
+│   ├── hil-serl
+│   ├── wsrl
+│   ├── BPPO
+│   ├── Uni-O4
+│   ├── tdmpc2
+│   ├── Cal-QL
+│   ├── rlpd / RLinf
+│   ├── Cartesian-Impedance-Controller
+│   └── serl_franka_controllers
 ├── rl_garden/
-│   ├── algorithms/
-│   ├── buffers/
-│   ├── common/
-│   ├── encoders/
-│   ├── envs/
-│   ├── networks/
-│   ├── policies/
-│   └── reward_models/
-├── examples/
-├── scripts/
-├── tests/
+│   ├── algorithms/            # SAC, PPO, CQL, CalQL, IQL, BC, WSRL, ResidualSAC, OfflineSAC
+│   ├── buffers/               # Tensor/Dict/MC/Residual replay buffers, RolloutBuffer, H5 loader
+│   ├── common/                # Logger, CLI args, checkpoint I/O, optimizer factories, types
+│   ├── datasets/              # WSRL dataset generation from SAC checkpoints
+│   ├── encoders/              # FlattenExtractor, PlainConv, CombinedExtractor, ResNet, augmentation
+│   ├── envs/                  # ManiSkill + RobotWin env factories, custom tasks/agents/wrappers
+│   ├── models/
+│   │   ├── act/               # ACT policy model (DETR backbone), provider interface
+│   │   └── reward/            # HSV / color / alignment reward classifiers
+│   ├── networks/              # SquashedGaussianActor, DiagGaussianActor, EnsembleQCritic, MLPResNet
+│   └── policies/              # SACPolicy, PPOPolicy, IQLPolicy, BCPolicy, WSRLPolicy, ResidualSACPolicy
+├── robot_infra/
+│   ├── controller/            # GPU-side pd_ee_twist + impedance controller, ManiSkill simulator backend
+│   └── teleop/                # EE twist teleoperation interface + WSRL recording scripts
+├── examples/                  # Python training entrypoints (SAC, PPO, ResidualSAC, WSRL, offline)
+├── scripts/                   # Shell launchers for common training runs
+├── tests/                     # CPU unit tests and CUDA smoke tests (26 files)
+├── docs/                      # WSRL reproduction guide, ResidualSAC design notes
+├── pretrained_models/         # Expected location for ResNet / ACT checkpoints
 └── pyproject.toml
 ```
 
@@ -78,30 +125,98 @@ pip install -e ".[wandb]"        # wandb logger backend
 
 ## Quick Start
 
-State SAC:
+### State SAC
 
 ```bash
 python examples/train_sac_state.py --env_id PickCube-v1 --num_envs 16
 ```
 
-End-to-end WSRL reproduction, from SAC checkpoints to dataset generation and
-offline-to-online training, is documented in
-[`docs/WSRL_REPRODUCTION.md`](docs/WSRL_REPRODUCTION.md).
+### State PPO
 
-Offline pretraining from a flat ManiSkill H5 dataset:
+```bash
+python examples/train_ppo_state.py --env_id PickCube-v1 --num_envs 512
+scripts/train_ppo_state.sh
+```
+
+### RGB PPO
+
+```bash
+python examples/train_ppo_rgbd.py --env_id PickCube-v1 --obs_mode rgb --encoder plain_conv
+scripts/train_ppo_rgbd.sh
+```
+
+### RoboTwin
+
+RoboTwin must be installed or its repository passed via `--robotwin-root`:
+
+```bash
+# SAC on RoboTwin RGB (default task: place_shoe)
+python examples/train_sac_robotwin_rgbd.py \
+  --env-id place_shoe --robotwin-root /path/to/RoboTwin
+
+# PPO on RoboTwin RGB (default task: place_empty_cup)
+python examples/train_ppo_robotwin_rgbd.py \
+  --env-id place_empty_cup --robotwin-root /path/to/RoboTwin
+
+# Shell launcher for the place_empty_cup PPO run
+scripts/train_ppo_robotwin_place_empty_cup_rgbd.sh
+```
+
+The RoboTwin adapter uses the same `CombinedExtractor` + `PlainConv`/`ResNet` visual pipeline as ManiSkill
+and shares the same `VisionSACTrainingArgs` / `VisionPPOTrainingArgs` CLI surface, so encoder and
+replay-buffer flags work identically across both simulators.
+
+### Offline Pretraining
+
+Use `--algorithm` to choose the offline algorithm. Supports flat Box and Dict (image+state) H5 datasets:
+
+```bash
+# BC baseline (actor-only imitation learning)
+python examples/pretrain_offline.py --algorithm bc \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
+
+# IQL (Implicit Q-Learning)
+python examples/pretrain_offline.py --algorithm iql \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 300000
+
+# Cal-QL (default, best for offline→online transfer)
+python examples/pretrain_offline.py --algorithm calql \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
+
+# CQL (pure conservative Q-learning)
+python examples/pretrain_offline.py --algorithm cql \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
+
+# WSRL agent (Cal-QL backbone, for later WSRL offline→online flow)
+python examples/pretrain_offline.py --algorithm wsrl \
+  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
+```
+
+Dict observations (image+state H5) are supported by `--algorithm iql` and `--algorithm bc`. Use a flat state dataset for `cql`/`calql`/`wsrl`.
+
+Shell launchers wrap the same entrypoint:
 
 ```bash
 scripts/pretrain_offline.sh --algorithm calql --offline_dataset_path demos/pickcube.h5
-scripts/pretrain_offline.sh --algorithm cql --offline_dataset_path demos/pickcube.h5
 scripts/pretrain_cql_offline.sh --offline_dataset_path demos/pickcube.h5
 scripts/pretrain_calql_offline.sh --offline_dataset_path demos/pickcube.h5
 ```
 
-The primary entrypoint is `examples/pretrain_offline.py --algorithm
-cql|calql|wsrl-calql`; the algorithm-specific launchers are compatibility
-wrappers. The final checkpoint defaults to
-`<algorithm>_offline_pretrained.pt` and can be loaded into compatible
-SAC-family agents for later evaluation or fine-tuning.
+#### Optional Online Evaluation During Offline Training
+
+Pass `--env_id` to spin up a ManiSkill eval env during offline training for periodic success/return metrics:
+
+```bash
+python examples/pretrain_offline.py --algorithm iql \
+  --offline_dataset_path demos/pickcube.h5 \
+  --env_id PickCube-v1 --eval_freq 10000 --num_eval_steps 50
+```
+
+When `--env_id` is omitted only loss curves are logged; no simulator is started.
+
+End-to-end WSRL reproduction, from SAC checkpoints to dataset generation and
+offline-to-online training, is documented in
+[`docs/WSRL_REPRODUCTION.md`](docs/WSRL_REPRODUCTION.md).
 
 State SAC with EE twist control:
 
@@ -210,6 +325,8 @@ Shell launchers:
 scripts/train_sac_state.sh                       # state SAC, PickCube-v1
 scripts/train_sac_rgbd.sh --encoder resnet10     # RGB SAC, PickCube-v1
 scripts/train_sac_rgbd_peg.sh                    # RGB SAC, PegInsertionSidePegOnly-v1
+scripts/train_wsrl.sh                            # WSRL state, PickCube-v1
+scripts/train_wsrl_rgbd.sh                       # WSRL RGB, PickCube-v1
 ```
 
 ### Residual SAC
@@ -262,6 +379,122 @@ adding it to the normalized base action.
 Design details are in
 [`docs/RESIDUAL_SAC.md`](docs/RESIDUAL_SAC.md).
 
+## Checkpoint Semantics
+
+Checkpoint save paths are resolved by `resolve_checkpoint_dir()` in
+`rl_garden/common/cli_args.py`. Unless `--checkpoint_dir` is explicitly passed,
+the default is:
+
+```
+{log_dir}/{run_name}/checkpoints/
+```
+
+- `log_dir` defaults to `"runs"` (from `LoggingArgs.log_dir`).
+- `run_name` is `--exp_name` if provided, otherwise `f"{algorithm}_offline_pretrain__{seed}__{int(time.time())}"`.
+
+If **both** `--save_final_checkpoint=False` and `--checkpoint_freq=0`,
+`resolve_checkpoint_dir()` returns `None` and no checkpoints are saved at all.
+
+### What Gets Saved
+
+Intermediate checkpoints (when `--checkpoint_freq > 0`):
+
+```
+runs/<run_name>/checkpoints/checkpoint_10000.pt
+runs/<run_name>/checkpoints/checkpoint_20000.pt
+...
+```
+
+Final checkpoint (when `--save_final_checkpoint=True`, the default):
+
+```
+runs/<run_name>/checkpoints/<algorithm>_offline_pretrained.pt
+```
+
+`--save_filename` overrides the final checkpoint filename.
+
+### Checkpoint Format
+
+Checkpoints are torch-native `.pt` dictionaries (format version 1). They
+contain model state, optimizer state, global step counters, and metadata.
+Algorithm class name aliases exist in `common/checkpoint.py` so legacy
+checkpoints (`OfflineCQL`, `OfflineCalQL`) remain loadable by renamed classes
+(`CQL`, `CalQL`).
+
+Replay buffer snapshots (when `--save_replay_buffer`) are written to a
+separate `_replay_buffer.pt` file next to the checkpoint.
+
+Load a checkpoint:
+
+```bash
+python examples/pretrain_offline.py --algorithm calql \
+  --load_checkpoint runs/<run_name>/checkpoints/calql_offline_pretrained.pt
+```
+
+## Network Architecture
+
+`net_arch` configuration follows SB3 semantics:
+
+```python
+from rl_garden.algorithms import SAC, WSRL, IQL, BC
+
+sac = SAC(env=env, net_arch=[256, 256, 256])   # same actor/critic MLP sizes
+
+wsrl = WSRL(
+    env=env,
+    net_arch={"pi": [256, 256], "qf": [256, 256]},  # separate actor/critic
+)
+
+iql = IQL(
+    env=env,
+    net_arch={"pi": [256, 256], "qf": [256, 256], "vf": [256, 256]},
+)
+
+bc = BC(env=env, net_arch=[256, 256])  # actor-only; no "qf"/"vf" key
+```
+
+`actor_hidden_dims` / `critic_hidden_dims` are still accepted for backward
+compatibility, but they are deprecated in favor of `net_arch`.
+
+## Feature Extractor Injection
+
+```python
+from rl_garden.algorithms import SAC, IQL, BC
+from rl_garden.encoders import CombinedExtractor, resnet_encoder_factory
+
+# RGB SAC with ResNet10 encoder
+agent = SAC(
+    env=env,
+    policy_kwargs={
+        "features_extractor_class": CombinedExtractor,
+        "features_extractor_kwargs": {
+            "image_keys": ("rgb",),
+            "image_encoder_factory": resnet_encoder_factory("resnet10"),
+            "fusion_mode": "per_key",
+        },
+    },
+)
+
+# BC with a custom extractor
+bc = BC(
+    env=env,
+    policy_kwargs={
+        "features_extractor_class": CombinedExtractor,
+        "features_extractor_kwargs": {
+            "image_keys": ("rgb",),
+            "image_encoder_factory": resnet_encoder_factory("resnet10"),
+            "fusion_mode": "per_key",
+        },
+    },
+)
+```
+
+SAC/IQL/BC choose observation handling automatically:
+
+- `spaces.Box` observations use `FlattenExtractor` and `TensorReplayBuffer`.
+- `spaces.Dict` observations use `CombinedExtractor` and `DictReplayBuffer`.
+- Dict observations may be image-only, image+state, or mixed vector inputs.
+
 ## Reward Classifiers
 
 Generate HSV labels from compressed HDF5 episodes:
@@ -283,50 +516,17 @@ Train the alignment reward classifier:
 python rl_garden/reward_models/classifiers/alignment/train.py
 ```
 
-Python-side extractor injection:
+## Robot Infrastructure
 
-```python
-from rl_garden.algorithms import SAC
-from rl_garden.encoders import CombinedExtractor, resnet_encoder_factory
+`robot_infra/` provides the real-robot integration layer:
 
-agent = SAC(
-    env=env,
-    policy_kwargs={
-        "features_extractor_class": CombinedExtractor,
-        "features_extractor_kwargs": {
-            "image_keys": ("rgb",),
-            "image_encoder_factory": resnet_encoder_factory("resnet10"),
-            "fusion_mode": "per_key",
-        },
-    },
-)
-```
-
-SAC chooses observation handling automatically:
-
-- `spaces.Box` observations use `FlattenExtractor` and `TensorReplayBuffer`.
-- `spaces.Dict` observations use `CombinedExtractor` and `DictReplayBuffer`.
-- Dict observations may be image-only, image+state, or mixed vector inputs.
-- Dict-obs training defaults (smaller `batch_size`, lower `utd`) live in
-  `VisionSACTrainingArgs` and the `examples/train_sac_rgbd*.py` entrypoints.
-  When constructing `SAC(env=dict_env, ...)` directly from Python, consider
-  overriding `batch_size=512, utd=0.25` to match the vision-tuned defaults.
-
-Network architecture configuration (`net_arch`) for SAC/CQL/Cal-QL/WSRL families:
-
-```python
-from rl_garden.algorithms import SAC, WSRL
-
-sac = SAC(env=env, net_arch=[256, 256, 256])  # same actor/critic MLP sizes
-
-wsrl = WSRL(
-    env=env,
-    net_arch={"pi": [256, 256], "qf": [256, 256]},  # separate actor/critic
-)
-```
-
-`actor_hidden_dims` / `critic_hidden_dims` are still accepted for backward
-compatibility, but they are deprecated in favor of `net_arch`.
+- **Controller** (`robot_infra/controller/`): GPU-side pd_ee_twist and impedance
+  controller implementations, with a ManiSkill simulator backend for co-development.
+  EE kinematics run on torch tensors (Jacobian/IK on CUDA for GPU paths,
+  Pinocchio-based CPU path as fallback).
+- **Teleoperation** (`robot_infra/teleop/`): EE twist teleoperation interface
+  (Pico/spacemouse) and recording scripts for collecting WSRL demonstration
+  datasets on real hardware. See `robot_infra/controller/README.md` for setup.
 
 ## Core Design Constraints
 
@@ -340,16 +540,48 @@ compatibility, but they are deprecated in favor of `net_arch`.
 
 ## Testing
 
-CPU unit tests:
+Run all CPU unit tests:
 
 ```bash
-pytest tests/test_replay_buffer.py tests/test_resnet_encoder.py
+pytest tests/
 ```
 
-CUDA smoke tests (requires CUDA + ManiSkill runtime):
+Targeted test groups:
+
+```bash
+# Replay buffers and H5 loading
+pytest tests/test_replay_buffer.py tests/test_mc_buffer.py tests/test_maniskill_h5_loader.py
+
+# Offline algorithms
+pytest tests/test_offline_algorithm.py tests/test_iql.py tests/test_cql_calql.py tests/test_wsrl.py
+
+# Networks and encoders
+pytest tests/test_networks.py tests/test_resnet_encoder.py
+
+# PPO
+pytest tests/test_ppo.py
+
+# Checkpoint and CLI
+pytest tests/test_checkpoint.py tests/test_cli_args.py tests/test_policy_kwargs.py
+
+# ResidualSAC
+pytest tests/test_residual_sac.py tests/test_act_provider.py
+
+# WSRL-specific
+pytest tests/test_wsrl.py tests/test_wsrl_rgbd.py tests/test_wsrl_policy.py tests/test_wsrl_dataset_generation.py
+```
+
+CUDA smoke test (requires CUDA + ManiSkill runtime):
 
 ```bash
 pytest tests/test_sac_smoke.py
+```
+
+Offline evaluation harness (runs a saved checkpoint against a live env):
+
+```bash
+python tests/eval_offline.py --checkpoint runs/<run>/checkpoints/iql_offline_pretrained.pt \
+  --env_id PickCube-v1
 ```
 
 ## References
@@ -377,12 +609,10 @@ pytest tests/test_sac_smoke.py
 
 ## Roadmap
 
-- [ ] Formalize `policy_kwargs` / `features_extractor_class`-style injection API.
 - [ ] Add stricter policy tests (optimizer parameter disjointness, numerical checks).
-- [ ] Expand `net_arch` docs/examples across all training entrypoints.
 - [ ] Add Flax-vs-Torch parity validation for ResNet as a stretch goal.
-- [ ] Expand augmentation pipeline integration in training loop.
-- [ ] Add checkpoint/load examples and a lightweight benchmark script.
+- [ ] Expand augmentation pipeline (`RandomCrop`) integration into the training loop.
+- [ ] Add a lightweight benchmark script for comparing offline algorithms.
 - [ ] Add tanh-squashed PPO distributions while preserving SB3/ManiSkill-style
       unsquashed Gaussian PPO as the default baseline.
 - [ ] Add separate actor/value feature extractors for PPO, including support for
