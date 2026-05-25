@@ -48,6 +48,8 @@ class Args(SACTrainingArgs):
     robot_uids: str = "panda_wristcam_gripper_closed"
     fix_peg_pose: bool = False
     fix_box: bool = True
+    fixed_peg_xy: tuple[float, float] = (-0.05, -0.15)
+    fixed_peg_z_rot_deg: float = 67.5
 
     residual_action_scale: float = 0.1
     debug: bool = False
@@ -125,6 +127,8 @@ def main() -> None:
         robot_uids=args.robot_uids,
         fix_peg_pose=args.fix_peg_pose,
         fix_box=args.fix_box,
+        fixed_peg_xy=args.fixed_peg_xy,
+        fixed_peg_z_rot_deg=args.fixed_peg_z_rot_deg,
     )
     eval_cfg = ManiSkillEnvConfig(
         env_id=args.env_id,
@@ -137,6 +141,8 @@ def main() -> None:
         robot_uids=args.robot_uids,
         fix_peg_pose=args.fix_peg_pose,
         fix_box=args.fix_box,
+        fixed_peg_xy=args.fixed_peg_xy,
+        fixed_peg_z_rot_deg=args.fixed_peg_z_rot_deg,
         reconfiguration_freq=1,
         render_mode=args.render_mode,
         record_dir=resolve_eval_record_dir(args, run_name),

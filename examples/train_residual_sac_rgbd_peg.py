@@ -28,6 +28,8 @@ class Args(ResidualRGBDArgs):
     robot_uids: str = "panda_wristcam_gripper_closed"
     fix_peg_pose: bool = False
     fix_box: bool = True
+    fixed_peg_xy: tuple[float, float] = (-0.05, -0.15)
+    fixed_peg_z_rot_deg: float = 67.5
     # Peg env has base + hand cameras. Keep them as separate image keys so
     # per-key ResNet encoders remain 3-channel and can load ImageNet weights.
     per_camera_rgbd: bool = True
@@ -49,6 +51,8 @@ def main() -> None:
         robot_uids=args.robot_uids,
         fix_peg_pose=args.fix_peg_pose,
         fix_box=args.fix_box,
+        fixed_peg_xy=args.fixed_peg_xy,
+        fixed_peg_z_rot_deg=args.fixed_peg_z_rot_deg,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
         per_camera_rgbd=args.per_camera_rgbd,
@@ -65,6 +69,8 @@ def main() -> None:
         robot_uids=args.robot_uids,
         fix_peg_pose=args.fix_peg_pose,
         fix_box=args.fix_box,
+        fixed_peg_xy=args.fixed_peg_xy,
+        fixed_peg_z_rot_deg=args.fixed_peg_z_rot_deg,
         reconfiguration_freq=1,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
