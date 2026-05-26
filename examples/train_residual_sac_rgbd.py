@@ -4,7 +4,7 @@ Usage:
     python examples/train_residual_sac_rgbd.py --debug --env_id PickCube-v1
     python examples/train_residual_sac_rgbd.py --debug --env_id PickCube-v1 --encoder resnet10
 
-Default mode uses an ACT base-action provider. Debug mode uses a zero provider,
+Default mode uses an ACT base policy. Debug mode uses a zero base policy,
 which exercises the residual rollout/update path without checkpoint loading.
 """
 from __future__ import annotations
@@ -13,7 +13,6 @@ import time
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-import torch
 import tyro
 
 from rl_garden.algorithms import ResidualSAC
@@ -27,53 +26,39 @@ from rl_garden.common.cli_args import (
     resolve_eval_record_dir,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
-
-
-class ZeroBaseActionProvider:
-    """Base-action provider that always returns raw env-space zeros."""
-
-    def __init__(self, action_shape: tuple[int, ...]) -> None:
-        self.action_shape = action_shape
-
-    def __call__(self, obs):
-        if isinstance(obs, dict):
-            first = next(iter(obs.values()))
-            num_envs = first.shape[0]
-            device = first.device
-        else:
-            num_envs = obs.shape[0]
-            device = obs.device
-        return torch.zeros((num_envs,) + self.action_shape, device=device)
-
-    def reset(self, env_ids=None) -> None:
-        del env_ids
+from rl_garden.policies.base_policies import make_base_policy
 
 
 @dataclass
 class ResidualRGBDArgs(VisionSACTrainingArgs):
     residual_action_scale: float = 0.1
     debug: bool = False
-    policy: Literal["act", "zero"] = "act"
-    ckpt_path: Optional[str] = "act-peg-only"
-    act_temporal_agg: bool = True
-    act_temporal_agg_k: float = 0.01
+    base_policy: Literal["act", "sac", "zero"] = "act"
+    base_ckpt_path: Optional[str] = "act-peg-only"
+    base_act_temporal_agg: bool = True
+    base_act_temporal_agg_k: float = 0.01
+    base_sac_encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    base_sac_encoder_features_dim: int = 256
+    base_sac_image_fusion_mode: Optional[Literal["stack_channels", "per_key"]] = None
+    base_sac_deterministic: bool = True
 
 
 def make_base_action_provider(args: ResidualRGBDArgs, env):
-    action_shape = tuple(env.single_action_space.shape)
-    if args.debug or args.policy == "zero":
-        return ZeroBaseActionProvider(action_shape)
-    if args.policy == "act":
-        from rl_garden.models.act import ACTBaseActionProvider
-
-        provider = ACTBaseActionProvider.from_checkpoint(
-            observation_space=env.single_observation_space,
-            action_space=env.single_action_space,
-            ckpt_path=args.ckpt_path,
-            env=env,
-            temporal_agg=args.act_temporal_agg,
-            temporal_agg_k=args.act_temporal_agg_k,
-        )
+    base_policy = "zero" if args.debug else args.base_policy
+    provider = make_base_policy(
+        base_policy=base_policy,
+        observation_space=env.single_observation_space,
+        action_space=env.single_action_space,
+        env=env,
+        base_ckpt_path=args.base_ckpt_path,
+        base_act_temporal_agg=args.base_act_temporal_agg,
+        base_act_temporal_agg_k=args.base_act_temporal_agg_k,
+        base_sac_encoder=args.base_sac_encoder,
+        base_sac_encoder_features_dim=args.base_sac_encoder_features_dim,
+        base_sac_image_fusion_mode=args.base_sac_image_fusion_mode,
+        base_sac_deterministic=args.base_sac_deterministic,
+    )
+    if base_policy == "act":
         print(
             "[residual] base_policy=act "
             f"ckpt={provider.checkpoint_path} "
@@ -82,8 +67,16 @@ def make_base_action_provider(args: ResidualRGBDArgs, env):
             f"num_queries={provider.config.num_queries}",
             flush=True,
         )
-        return provider
-    raise ValueError(f"Unsupported residual base policy: {args.policy!r}.")
+    elif base_policy == "sac":
+        print(
+            "[residual] base_policy=sac "
+            f"ckpt={args.base_ckpt_path} "
+            f"deterministic={args.base_sac_deterministic}",
+            flush=True,
+        )
+    else:
+        print("[residual] base_policy=zero", flush=True)
+    return provider
 
 
 def run_residual_rgbd_training(
@@ -97,7 +90,8 @@ def run_residual_rgbd_training(
     seed_everything(args.seed)
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    suffix = "debug_zero_base" if args.debug else f"{args.policy}_base"
+    base_policy = "zero" if args.debug else args.base_policy
+    suffix = "debug_zero_base" if args.debug else f"{base_policy}_base"
     run_name = (
         args.exp_name
         or f"{args.env_id}__{run_label}_{suffix}_{args.encoder}__{args.seed}__{int(time.time())}"

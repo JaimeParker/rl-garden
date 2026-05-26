@@ -230,7 +230,7 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
             self._set_fixed_box_pose(env_idx)
 
     # Camera config for visualization (modify eye/target to change viewing angle)
-    _human_render_camera_eye = [0., -0.8, 0.1]
+    _human_render_camera_eye = [0.5, -0.5, 0.2]
     _human_render_camera_target = [0, 0, 0.1]
 
     @property
