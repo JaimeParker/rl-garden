@@ -198,9 +198,14 @@ Shell launchers wrap the same entrypoint:
 
 ```bash
 scripts/pretrain_offline.sh --algorithm calql --offline_dataset_path demos/pickcube.h5
-scripts/pretrain_cql_offline.sh --offline_dataset_path demos/pickcube.h5
-scripts/pretrain_calql_offline.sh --offline_dataset_path demos/pickcube.h5
+scripts/pretrain_offline.sh --algorithm cql --offline_dataset_path demos/pickcube.h5
 ```
+
+The primary entrypoint is `examples/pretrain_offline.py --algorithm
+cql|calql|wsrl-calql`; `scripts/pretrain_offline.sh` wraps it for shell
+launches. The final checkpoint defaults to
+`<algorithm>_offline_pretrained.pt` and can be loaded into compatible
+SAC-family agents for later evaluation or fine-tuning.
 
 #### Optional Online Evaluation During Offline Training
 

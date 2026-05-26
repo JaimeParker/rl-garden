@@ -131,9 +131,7 @@ python examples/pretrain_offline.py --algorithm wsrl \
 `--algorithm wsrl-calql` is a deprecated alias for `wsrl` that still works for
 backward compatibility.
 
-Algorithm-specific shell launchers (`scripts/pretrain_calql_offline.sh`,
-`scripts/pretrain_cql_offline.sh`, `scripts/pretrain_offline.sh`) wrap
-`pretrain_offline.py`.
+`scripts/pretrain_offline.sh` wraps `pretrain_offline.py` for shell launches.
 
 ### Optional Offline Evaluation
 
