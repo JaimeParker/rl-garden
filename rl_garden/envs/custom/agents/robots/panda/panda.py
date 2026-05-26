@@ -11,12 +11,10 @@ from mani_skill.agents.controllers import *
 from mani_skill.agents.registration import register_agent
 from mani_skill.utils import common, sapien_utils
 from mani_skill.utils.structs.actor import Actor
-from rl_garden.envs.custom.agents.controllers.pd_ee_twist import (
-    PDEETwistControllerConfig,
-)
 from robot_infra.controller.simulator.maniskill import (
     ImpedanceEEDeltaPoseControllerConfig,
     ImpedanceEETwistControllerConfig,
+    PDEETwistControllerConfig,
 )
 
 

@@ -6,6 +6,7 @@ Use ``--algorithm`` to choose the offline algorithm:
     python examples/pretrain_offline.py --algorithm cql --offline_dataset_path demos/demo.h5
     python examples/pretrain_offline.py --algorithm wsrl --offline_dataset_path demos/demo.h5
     python examples/pretrain_offline.py --algorithm iql --offline_dataset_path demos/demo.h5
+    python examples/pretrain_offline.py --algorithm bc --offline_dataset_path demos/demo.h5
 
 ``wsrl`` produces a WSRL agent (Cal-QL-based by design) whose checkpoint is
 intended to resume through WSRL's offline→online flow on a deployment machine.
@@ -26,6 +27,7 @@ import tyro
 from gymnasium import spaces
 
 from rl_garden.algorithms import (
+    BC,
     CalQL,
     CQL,
     IQL,
@@ -45,7 +47,7 @@ from rl_garden.common.cli_args import (
 from rl_garden.encoders.combined import discover_image_keys
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
-OfflinePretrainAgent: TypeAlias = CQL | CalQL | WSRL | IQL
+OfflinePretrainAgent: TypeAlias = BC | CQL | CalQL | WSRL | IQL
 
 
 def _algorithm(args: OfflinePretrainArgs) -> str:
@@ -201,6 +203,54 @@ def _iql_kwargs(
     return kwargs
 
 
+def _bc_kwargs(
+    args: OfflinePretrainArgs, env_spec: OfflineEnvSpec, logger: Logger
+) -> dict:
+    obs_space = env_spec.single_observation_space
+    kwargs = dict(
+        env=env_spec,
+        buffer_size=args.buffer_size,
+        buffer_device=args.buffer_device,
+        batch_size=args.batch_size,
+        offline_sampling=args.offline_sampling,
+        actor_lr=args.actor_lr,
+        weight_decay=args.weight_decay,
+        use_adamw=args.use_adamw,
+        lr_schedule=args.lr_schedule,
+        lr_warmup_steps=args.lr_warmup_steps,
+        lr_decay_steps=args.lr_decay_steps,
+        lr_min_ratio=args.lr_min_ratio,
+        grad_clip_norm=args.grad_clip_norm,
+        actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        num_groups=args.num_groups,
+        actor_dropout_rate=args.actor_dropout_rate,
+        kernel_init=args.kernel_init,
+        backbone_type=args.backbone_type,
+        std_parameterization=args.std_parameterization,
+        seed=args.seed,
+        device=args.device,
+        logger=logger,
+        std_log=args.std_log,
+        log_freq=args.log_freq,
+        checkpoint_dir=None,
+        checkpoint_freq=0,
+        save_replay_buffer=args.save_replay_buffer,
+        save_final_checkpoint=False,
+    )
+    if isinstance(obs_space, spaces.Dict):
+        image_keys = discover_image_keys(obs_space)
+        kwargs.update(
+            image_encoder_factory=image_encoder_factory_from_args(args),
+            image_keys=image_keys,
+            state_key="state",
+            use_proprio=args.include_state,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=False,
+        )
+    return kwargs
+
+
 def build_offline_agent(
     args: OfflinePretrainArgs,
     env_spec: OfflineEnvSpec,
@@ -230,6 +280,8 @@ def build_offline_agent(
         )
     if algorithm == "iql":
         return IQL(**_iql_kwargs(args, env_spec, logger))
+    if algorithm == "bc":
+        return BC(**_bc_kwargs(args, env_spec, logger))
     raise ValueError(f"Unknown offline pretrain algorithm: {algorithm!r}")
 
 
@@ -297,10 +349,10 @@ def main(
         action_low=args.action_low,
         action_high=args.action_high,
     )
-    if isinstance(obs_space, spaces.Dict) and algorithm != "iql":
+    if isinstance(obs_space, spaces.Dict) and algorithm not in ("iql", "bc"):
         raise SystemExit(
             "Dict observations from offline H5 are currently supported by "
-            "--algorithm iql. Use a flat state dataset for cql/calql/wsrl."
+            "--algorithm iql or --algorithm bc. Use a flat state dataset for cql/calql/wsrl."
         )
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
     if args.std_log:

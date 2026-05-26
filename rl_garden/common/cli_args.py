@@ -227,7 +227,7 @@ class VisionWSRLTrainingArgs(WSRLTrainingArgs, VisionArgs):
 class OfflineAlgorithmArgs:
     # ``wsrl-calql`` is a deprecated alias for ``wsrl`` kept so historical
     # commands keep working; both produce the same WSRL agent.
-    algorithm: Literal["cql", "calql", "wsrl", "wsrl-calql", "iql"] = "calql"
+    algorithm: Literal["cql", "calql", "wsrl", "wsrl-calql", "iql", "bc"] = "calql"
     # Backward-compatible alias used by examples/pretrain_cql_offline.py.
     agent: Optional[Literal["cql", "calql"]] = None
 
