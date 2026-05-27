@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # State-based Residual SAC launcher for PegInsertionSidePegOnly-v1.
-# Defaults to --policy act; use --debug to run with a zero base-action provider.
+# Defaults to --base_policy act; use --base_policy sac for SAC checkpoints or
+# --debug to run with a zero base policy.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

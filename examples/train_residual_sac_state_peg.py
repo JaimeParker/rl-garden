@@ -1,7 +1,7 @@
 """Residual SAC on PegInsertionSidePegOnly-v1 state observations.
 
 Usage:
-    python examples/train_residual_sac_state_peg.py --policy act --ckpt-path act-peg-only
+    python examples/train_residual_sac_state_peg.py --base_policy act --base_ckpt_path act-peg-only
     python examples/train_residual_sac_state_peg.py --debug
 """
 from __future__ import annotations
@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-import torch
 import tyro
 
 from rl_garden.algorithms import ResidualSAC
@@ -22,20 +21,7 @@ from rl_garden.common.cli_args import (
     resolve_eval_record_dir,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
-
-
-class ZeroBaseActionProvider:
-    """Base-action provider that always returns raw env-space zeros."""
-
-    def __init__(self, action_shape: tuple[int, ...]) -> None:
-        self.action_shape = action_shape
-
-    def __call__(self, obs):
-        num_envs = obs.shape[0]
-        return torch.zeros((num_envs,) + self.action_shape, device=obs.device)
-
-    def reset(self, env_ids=None) -> None:
-        del env_ids
+from rl_garden.policies.base_policies import make_base_policy
 
 
 @dataclass
@@ -53,27 +39,40 @@ class Args(SACTrainingArgs):
 
     residual_action_scale: float = 0.1
     debug: bool = False
-    policy: Literal["act", "zero"] = "act"
-    ckpt_path: Optional[str] = "act-peg-only"
-    act_temporal_agg: bool = True
-    act_temporal_agg_k: float = 0.01
+    base_policy: Literal["act", "sac", "zero"] = "act"
+    base_ckpt_path: Optional[str] = "act-peg-only"
+    base_act_temporal_agg: bool = True
+    base_act_temporal_agg_k: float = 0.01
+    base_sac_deterministic: bool = True
+
+    # Deprecated aliases kept so older launch commands continue to work.
+    policy: Optional[Literal["act", "zero"]] = None
+    ckpt_path: Optional[str] = None
+
+
+def _effective_base_policy(args: Args) -> Literal["act", "sac", "zero"]:
+    if args.debug:
+        return "zero"
+    return args.policy if args.policy is not None else args.base_policy
+
+
+def _effective_base_ckpt_path(args: Args) -> Optional[str]:
+    return args.ckpt_path if args.ckpt_path is not None else args.base_ckpt_path
 
 
 def make_base_action_provider(args: Args, env):
-    action_shape = tuple(env.single_action_space.shape)
-    if args.debug or args.policy == "zero":
-        return ZeroBaseActionProvider(action_shape)
-    if args.policy == "act":
-        from rl_garden.models.act import ACTBaseActionProvider
-
-        provider = ACTBaseActionProvider.from_checkpoint(
-            observation_space=env.single_observation_space,
-            action_space=env.single_action_space,
-            ckpt_path=args.ckpt_path,
-            env=env,
-            temporal_agg=args.act_temporal_agg,
-            temporal_agg_k=args.act_temporal_agg_k,
-        )
+    base_policy = _effective_base_policy(args)
+    provider = make_base_policy(
+        base_policy=base_policy,
+        observation_space=env.single_observation_space,
+        action_space=env.single_action_space,
+        env=env,
+        base_ckpt_path=_effective_base_ckpt_path(args),
+        base_act_temporal_agg=args.base_act_temporal_agg,
+        base_act_temporal_agg_k=args.base_act_temporal_agg_k,
+        base_sac_deterministic=args.base_sac_deterministic,
+    )
+    if base_policy == "act":
         print(
             "[residual] base_policy=act "
             f"ckpt={provider.checkpoint_path} "
@@ -82,8 +81,16 @@ def make_base_action_provider(args: Args, env):
             f"num_queries={provider.config.num_queries}",
             flush=True,
         )
-        return provider
-    raise ValueError(f"Unsupported residual base policy: {args.policy!r}.")
+    elif base_policy == "sac":
+        print(
+            "[residual] base_policy=sac "
+            f"ckpt={_effective_base_ckpt_path(args)} "
+            f"deterministic={args.base_sac_deterministic}",
+            flush=True,
+        )
+    else:
+        print("[residual] base_policy=zero", flush=True)
+    return provider
 
 
 def main() -> None:
@@ -92,7 +99,8 @@ def main() -> None:
     seed_everything(args.seed)
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    suffix = "debug_zero_base" if args.debug else f"{args.policy}_base"
+    base_policy = _effective_base_policy(args)
+    suffix = "debug_zero_base" if args.debug else f"{base_policy}_base"
     run_name = (
         args.exp_name
         or f"{args.env_id}__residual_sac_state_peg_{suffix}__{args.seed}__{int(time.time())}"

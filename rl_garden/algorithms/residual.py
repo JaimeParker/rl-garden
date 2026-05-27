@@ -26,6 +26,7 @@ class ResidualSAC(SAC):
     normalized coordinates used by residual learning.
     """
 
+    _compatible_checkpoint_algorithms = ("ResidualSAC",)
     _extra_batch_slice_keys = ("base_actions", "next_base_actions")
 
     def __init__(
