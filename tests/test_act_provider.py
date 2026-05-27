@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from torch import nn
 from gymnasium import spaces
 
 from rl_garden.models.act.config import ACTCheckpointSpec
 from rl_garden.models.act.provider import ACTBaseActionProvider
+from rl_garden.policies.base_policies.act import ACTBasePolicy
 
 
 def test_visual_act_space_accepts_per_camera_rgb_keys() -> None:
@@ -64,3 +66,29 @@ def test_visual_act_stacks_per_camera_rgb_keys() -> None:
     # Keys are sorted for deterministic camera order: base_camera, hand_camera.
     assert torch.all(rgb[:, 0] == 0)
     assert torch.all(rgb[:, 1] == 1)
+
+
+def test_act_wrapper_to_refreshes_nested_provider_device() -> None:
+    class FakeProvider(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.param = nn.Parameter(torch.zeros(()))
+            self.device = torch.device("cpu")
+
+        def to(self, *args, **kwargs):  # type: ignore[override]
+            module = super().to(*args, **kwargs)
+            self.device = next(self.parameters()).device
+            return module
+
+    provider = FakeProvider()
+    policy = ACTBasePolicy(
+        provider,
+        observation_space=spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+        action_space=spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        device="cpu",
+    )
+
+    policy.to("meta")
+
+    assert policy.device.type == "meta"
+    assert provider.device.type == "meta"

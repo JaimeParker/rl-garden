@@ -77,6 +77,11 @@ class ACTBasePolicy(BasePolicyProvider):
     def config(self):
         return self.provider.config
 
+    def to(self, *args, **kwargs):  # type: ignore[override]
+        module = super().to(*args, **kwargs)
+        self.provider.to(self.device)
+        return module
+
     def reset(self, env_ids: Optional[torch.Tensor] = None) -> None:
         self.provider.reset(env_ids=env_ids)
 
