@@ -22,6 +22,7 @@ PKG-INFO
 mutagen.yml.lock
 mutagen.yml
 .agents/local/personal_config.md
+.agents/local/
 .codex
 .pytest_cache
 .github
@@ -37,7 +38,7 @@ runs/
 data/
 .idea
 3rd_party/residual-rl/
-3rd_party/resfit/
+3rd_party/residual-offpolicy-rl/
 3rd_party/RLinf/
 3rd_party/RoboTwin
 pretrained_models/*
