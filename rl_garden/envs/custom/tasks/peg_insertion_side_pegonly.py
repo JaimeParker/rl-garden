@@ -230,8 +230,18 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
             self._set_fixed_box_pose(env_idx)
 
     # Camera config for visualization (modify eye/target to change viewing angle)
-    _human_render_camera_eye = [0.5, -0.5, 0.2]
+    # _human_render_camera_eye = [0.5, -0.5, 0.2]
+    # _human_render_camera_target = [0, 0, 0.1]
+    _human_render_camera_eye = [0.4, -0.2, 0.2]
     _human_render_camera_target = [0, 0, 0.1]
+
+    @property
+    def _default_sensor_configs(self):
+        pose = sapien_utils.look_at(
+            self._human_render_camera_eye,
+            self._human_render_camera_target,
+        )
+        return [CameraConfig("base_camera", pose, 128, 128, 1, 0.01, 100)]
 
     @property
     def _default_human_render_camera_configs(self):
