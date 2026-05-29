@@ -14,6 +14,7 @@ from rl_garden.buffers.residual_buffer import (
 )
 from rl_garden.common.action_scaler import ActionScaler
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.policies.base_policies import BasePolicyProvider
 from rl_garden.policies.residual_policy import ResidualSACPolicy
 
 
@@ -25,13 +26,14 @@ class ResidualSAC(SAC):
     normalized coordinates used by residual learning.
     """
 
+    _compatible_checkpoint_algorithms = ("ResidualSAC",)
     _extra_batch_slice_keys = ("base_actions", "next_base_actions")
 
     def __init__(
         self,
         env: Any,
         *,
-        base_action_provider: Any,
+        base_action_provider: BasePolicyProvider,
         residual_action_scale: float = 0.1,
         action_scaler: Optional[ActionScaler] = None,
         **kwargs,
@@ -103,24 +105,12 @@ class ResidualSAC(SAC):
             )
         else:
             self.action_scaler = self.action_scaler.to(self.device)
-        provider_to = getattr(self.base_action_provider, "to", None)
-        if provider_to is not None:
-            provider_to(self.device)
+        self.base_action_provider.to(self.device)
         super()._setup_model()
 
     def _call_base_action_provider(self, obs) -> torch.Tensor:
-        provider = self.base_action_provider
-        if callable(provider):
-            base_action = provider(obs)
-        elif hasattr(provider, "select_action"):
-            base_action = provider.select_action(obs)
-        elif hasattr(provider, "predict"):
-            base_action = provider.predict(obs)
-        else:
-            raise TypeError(
-                "base_action_provider must be callable or expose select_action()/predict()."
-            )
-        return torch.as_tensor(base_action, dtype=torch.float32, device=self.device)
+        output = self.base_action_provider.select_action(obs)
+        return torch.as_tensor(output.actions, dtype=torch.float32, device=self.device)
 
     def _base_naction(self, obs) -> torch.Tensor:
         with torch.no_grad():
@@ -165,16 +155,7 @@ class ResidualSAC(SAC):
         return (alpha * log_prob - min_q).mean(), log_prob.detach()
 
     def _reset_base_action_provider(self, env_ids: Optional[torch.Tensor] = None) -> None:
-        reset = getattr(self.base_action_provider, "reset", None)
-        if reset is None:
-            return
-        if env_ids is None:
-            reset()
-            return
-        try:
-            reset(env_ids=env_ids)
-        except TypeError:
-            reset(env_ids)
+        self.base_action_provider.reset(env_ids=env_ids)
 
     def _on_env_reset(self, obs) -> None:
         del obs
@@ -268,12 +249,11 @@ class ResidualSAC(SAC):
 
     def _evaluate(self) -> dict[str, float]:
         self._reset_base_action_provider()
-        bind_env = getattr(self.base_action_provider, "bind_env", None)
-        if bind_env is None or self.eval_env is None:
+        if self.eval_env is None:
             return super()._evaluate()
-        bind_env(self.eval_env)
+        self.base_action_provider.bind_env(self.eval_env)
         try:
             return super()._evaluate()
         finally:
-            bind_env(self.env)
+            self.base_action_provider.bind_env(self.env)
             self._reset_base_action_provider()

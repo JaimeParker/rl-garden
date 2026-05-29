@@ -154,12 +154,32 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
         robot_uids="panda_wristcam_gripper_closed",
         fix_box: bool = True,
         fix_peg_pose: bool = False,
+        fixed_peg_xy: Optional[tuple[float, float]] = None,
+        fixed_peg_z_rot: Optional[float] = None,
+        fixed_peg_z_rot_deg: Optional[float] = None,
         debug_pose_vis: bool = False,
         peg_density: float = 1000.0, ## default 1000
         **kwargs,
     ):
         self.fix_box = fix_box  # set before super() since parent's __init__ calls reset()
         self.fix_peg_pose = fix_peg_pose
+        if fixed_peg_xy is None:
+            self.fixed_peg_xy = self._fixed_peg_xy
+        else:
+            if len(fixed_peg_xy) != 2:
+                raise ValueError(
+                    "fixed_peg_xy must contain exactly two values: (x, y)."
+                )
+            self.fixed_peg_xy = (float(fixed_peg_xy[0]), float(fixed_peg_xy[1]))
+        if fixed_peg_z_rot is not None and fixed_peg_z_rot_deg is not None:
+            raise ValueError(
+                "Specify only one of fixed_peg_z_rot or fixed_peg_z_rot_deg."
+            )
+        if fixed_peg_z_rot_deg is not None:
+            fixed_peg_z_rot = np.deg2rad(float(fixed_peg_z_rot_deg))
+        self.fixed_peg_z_rot = (
+            self._fixed_peg_z_rot if fixed_peg_z_rot is None else float(fixed_peg_z_rot)
+        )
         self.peg_density = peg_density
         super().__init__(
             *args,
@@ -172,14 +192,14 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
         with torch.device(self.device):
             b = len(env_idx)
             peg_xy = torch.tensor(
-                [self._fixed_peg_xy[0], self._fixed_peg_xy[1]],
+                [self.fixed_peg_xy[0], self.fixed_peg_xy[1]],
                 device=self.device,
                 dtype=torch.float32,
             ).expand(b, 2)
             peg_pos = torch.zeros((b, 3), device=self.device)
             peg_pos[:, :2] = peg_xy
             peg_pos[:, 2] = self.peg_half_sizes[env_idx, 2]
-            angle = self._fixed_peg_z_rot
+            angle = self.fixed_peg_z_rot
             peg_quat = torch.zeros((b, 4), device=self.device)
             peg_quat[:, 0] = np.cos(angle / 2)
             peg_quat[:, 3] = np.sin(angle / 2)
@@ -210,8 +230,18 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
             self._set_fixed_box_pose(env_idx)
 
     # Camera config for visualization (modify eye/target to change viewing angle)
-    _human_render_camera_eye = [0., -0.8, 0.1]
+    # _human_render_camera_eye = [0.5, -0.5, 0.2]
+    # _human_render_camera_target = [0, 0, 0.1]
+    _human_render_camera_eye = [0.4, -0.2, 0.2]
     _human_render_camera_target = [0, 0, 0.1]
+
+    @property
+    def _default_sensor_configs(self):
+        pose = sapien_utils.look_at(
+            self._human_render_camera_eye,
+            self._human_render_camera_target,
+        )
+        return [CameraConfig("base_camera", pose, 128, 128, 1, 0.01, 100)]
 
     @property
     def _default_human_render_camera_configs(self):

@@ -18,6 +18,8 @@ class ManiSkillEnvConfig:
     robot_uids: Optional[str] = None
     fix_peg_pose: Optional[bool] = None
     fix_box: Optional[bool] = None
+    fixed_peg_xy: Optional[tuple[float, float]] = None
+    fixed_peg_z_rot_deg: Optional[float] = None
     env_kwargs: dict[str, Any] = field(default_factory=dict)
     reconfiguration_freq: Optional[int] = None
     camera_width: Optional[int] = None
