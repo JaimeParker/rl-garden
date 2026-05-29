@@ -360,7 +360,10 @@ def _infer_resnet_name(policy_state: dict[str, torch.Tensor]) -> Optional[str]:
     if block_count == 8:
         return "resnet18"
     if block_count == 16:
-        return "resnet34"
+        raise ValueError(
+            "Checkpoint uses ResNet-34 (16 residual blocks), which is not a supported "
+            "base SAC encoder. Supported: resnet10 (4 blocks), resnet18 (8 blocks)."
+        )
     raise ValueError(f"Cannot infer ResNet architecture from {block_count} residual blocks.")
 
 
