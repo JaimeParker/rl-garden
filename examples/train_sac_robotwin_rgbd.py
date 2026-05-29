@@ -15,12 +15,10 @@ import tyro
 
 from rl_garden.algorithms import SAC
 from rl_garden.common import Logger, seed_everything
-from rl_garden.common.cli_args import (
-    VisionSACTrainingArgs,
-    apply_log_env_overrides,
-    image_encoder_factory_from_args,
-    resolve_checkpoint_dir,
-)
+from rl_garden.common.cli_args import (VisionSACTrainingArgs,
+                                       apply_log_env_overrides,
+                                       image_encoder_factory_from_args,
+                                       resolve_checkpoint_dir)
 from rl_garden.encoders import discover_image_keys
 from rl_garden.envs import RoboTwinEnvConfig, make_robotwin_env
 
@@ -41,6 +39,7 @@ class Args(VisionSACTrainingArgs):
     include_wrist_cameras: bool = True
     render_every_control_step: bool = False
     control_step_cap: Optional[int] = None
+    disable_topp: bool = False
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
@@ -59,6 +58,7 @@ def _make_env(args: Args, num_envs: int, is_eval: bool = False):
         "render_freq": 0,
         "render_every_control_step": args.render_every_control_step,
         "control_step_cap": args.control_step_cap,
+        "need_topp": not args.disable_topp,
         "episode_num": 100,
         "use_seed": False,
         "save_freq": 15,

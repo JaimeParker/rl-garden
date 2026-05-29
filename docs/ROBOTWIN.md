@@ -421,10 +421,11 @@ smoothness of the physical motion. In rl-garden's RoboTwin launchers, this is
 set to `16` by default because it consistently improved PPO throughput in our
 place-empty-cup experiments.
 
-rl-garden also supports `--disable-topp` for PPO RoboTwin runs. When enabled,
-the environment skips RoboTwin's qpos TOPP pass and uses a simple linear joint
-interpolation fallback inside the control loop. This path is kept as an
-explicit opt-in experiment knob. The default remains TOPP-enabled behavior.
+rl-garden also supports `--disable-topp` for RoboTwin PPO and SAC runs. When
+enabled, the environment skips RoboTwin's qpos TOPP pass and uses a simple
+linear joint interpolation fallback inside the control loop. This path is kept
+as an explicit opt-in experiment knob. The default remains TOPP-enabled
+behavior.
 
 The RL launchers also leave `random_light=False` and
 `crazy_random_light_rate=0.0` by default. Random lighting is useful for
@@ -476,6 +477,16 @@ python examples/train_sac_robotwin_rgbd.py \
   --reward-mode dense \
   --control-mode delta_joint_pos \
   --buffer-device cuda
+```
+
+SAC supports the same optional no-TOPP knob as PPO:
+
+```bash
+HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
+python examples/train_sac_robotwin_rgbd.py \
+  --env-id place_shoe \
+  --robotwin-root /path/to/RoboTwin \
+  --disable-topp
 ```
 
 Generic remote/container command pattern:

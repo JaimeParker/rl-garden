@@ -40,7 +40,7 @@ class ManiSkillRunArgs(LoggingArgs):
     seed: int = 1
     control_mode: str = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
-    capture_video: bool = True
+    capture_video: bool = False
     video_fps: int = 30
     eval_output_dir: Optional[str] = None
 

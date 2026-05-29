@@ -72,6 +72,7 @@ def test_robotwin_sac_defaults_are_memory_safe() -> None:
     assert args.include_wrist_cameras is True
     assert args.reward_mode == "dense"
     assert args.control_mode == "delta_joint_pos"
+    assert args.disable_topp is False
 
 
 def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,6 +85,7 @@ def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
     args = module.Args()
+    args.capture_video = True
 
     cfg = module._make_env(args, num_envs=3, is_eval=True)
 
@@ -98,7 +100,26 @@ def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch)
     assert cfg.head_camera_type == "D435"
     assert cfg.task_config["camera"]["head_camera_type"] == "D435"
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
+    assert cfg.task_config["need_topp"] is True
     assert cfg.task_config["eval_video_log"] is True
+
+
+def test_robotwin_sac_make_env_can_disable_topp(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_example_module("train_sac_robotwin_rgbd.py")
+    captured = {}
+
+    def fake_make_robotwin_env(cfg):
+        captured["cfg"] = cfg
+        return cfg
+
+    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
+    args = module.Args()
+    args.disable_topp = True
+
+    cfg = module._make_env(args, num_envs=2)
+
+    assert cfg is captured["cfg"]
+    assert cfg.task_config["need_topp"] is False
 
 
 def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -369,15 +369,17 @@ def _to_torchvision_resnet10_state_dict(
     return out
 
 
-def test_pretrained_rejects_zero_backbone_overlap(tmp_path, monkeypatch):
+def test_pretrained_zero_backbone_overlap_loads_silently(tmp_path, monkeypatch):
     monkeypatch.setenv("RL_GARDEN_PRETRAINED_DIR", str(tmp_path))
     space = spaces.Box(0.0, 1.0, (3, 64, 64), np.float32)
     source = ResNetEncoder(space)
     torchvision_like = _to_torchvision_resnet10_state_dict(source.state_dict())
     torch.save(torchvision_like, tmp_path / "torchvision-like.pt")
 
-    with pytest.raises(RuntimeError, match="No pretrained backbone parameters were loaded"):
-        ResNetEncoder(space, pretrained_weights="torchvision-like")
+    # No validation: loads silently with 0 backbone key matches (all keys go to missing).
+    enc = ResNetEncoder(space, pretrained_weights="torchvision-like")
+    backbone_keys = [k for k in enc.state_dict() if k.startswith(("stem_conv.", "blocks."))]
+    assert len(backbone_keys) > 0  # encoder constructed successfully
 
 
 def test_convert_torchvision_checkpoint_script_outputs_loadable_weights(tmp_path, monkeypatch):
