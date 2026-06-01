@@ -29,7 +29,9 @@ from rl_garden.encoders.combined import (
     default_image_encoder_factory,
 )
 from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.vit import ViTCombinedExtractor
 from rl_garden.policies.sac_policy import SACPolicy
+from rl_garden.policies.vit_sac_policy import ViTSACPolicy
 
 
 class SAC(SACCore, OffPolicyAlgorithm):
@@ -359,6 +361,15 @@ class SAC(SACCore, OffPolicyAlgorithm):
         return self.env.single_action_space
 
     def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> SACPolicy:
+        if isinstance(features_extractor, ViTCombinedExtractor):
+            return ViTSACPolicy(
+                observation_space=self.env.single_observation_space,
+                action_space=self._policy_action_space(),
+                features_extractor=features_extractor,
+                net_arch=self.net_arch,
+                n_critics=self.n_critics,
+                critic_subsample_size=self.critic_subsample_size,
+            )
         return SACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),

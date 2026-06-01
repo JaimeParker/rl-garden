@@ -14,7 +14,9 @@ from rl_garden.buffers.residual_buffer import (
 )
 from rl_garden.common.action_scaler import ActionScaler
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.vit import ViTCombinedExtractor
 from rl_garden.policies.residual_policy import ResidualSACPolicy
+from rl_garden.policies.vit_sac_policy import ViTResidualSACPolicy
 
 
 class ResidualSAC(SAC):
@@ -87,6 +89,15 @@ class ResidualSAC(SAC):
         return self._residual_action_space
 
     def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> ResidualSACPolicy:
+        if isinstance(features_extractor, ViTCombinedExtractor):
+            return ViTResidualSACPolicy(
+                observation_space=self.env.single_observation_space,
+                action_space=self._residual_action_space,
+                features_extractor=features_extractor,
+                net_arch=self.net_arch,
+                n_critics=self.n_critics,
+                critic_subsample_size=self.critic_subsample_size,
+            )
         return ResidualSACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._residual_action_space,

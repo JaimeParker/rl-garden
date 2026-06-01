@@ -43,6 +43,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     resolve_checkpoint_dir,
+    sac_family_policy_kwargs_from_args,
 )
 from rl_garden.encoders.combined import discover_image_keys
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
@@ -137,6 +138,17 @@ def _wsrl_kwargs(
         eval_freq=0,
         num_eval_steps=0,
     )
+    if isinstance(env_spec.single_observation_space, spaces.Dict):
+        image_keys = discover_image_keys(env_spec.single_observation_space)
+        kwargs.update(
+            image_encoder_factory=image_encoder_factory_from_args(args),
+            image_keys=image_keys,
+            state_key="state",
+            use_proprio=args.include_state,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=False,
+            policy_kwargs=sac_family_policy_kwargs_from_args(args, image_keys),
+        )
     return kwargs
 
 

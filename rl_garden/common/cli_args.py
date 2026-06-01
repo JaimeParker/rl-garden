@@ -66,9 +66,18 @@ class VisionArgs:
     include_state: bool = True
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
     encoder_features_dim: int = 256
     image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
+    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
+    vit_embed_dim: int = 128
+    vit_depth: int = 1
+    vit_num_heads: int = 4
+    vit_embed_norm: bool = False
+    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
+    vit_random_shift_pad: int = 4
+    vit_actor_feature_dim: int = 128
+    vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
@@ -338,9 +347,18 @@ class OfflineVisionArgs:
     # observation spaces.
     obs_mode: str = "rgb"
     include_state: bool = True
-    encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
     encoder_features_dim: int = 256
     image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
+    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
+    vit_embed_dim: int = 128
+    vit_depth: int = 1
+    vit_num_heads: int = 4
+    vit_embed_norm: bool = False
+    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
+    vit_random_shift_pad: int = 4
+    vit_actor_feature_dim: int = 128
+    vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
@@ -443,6 +461,28 @@ def image_encoder_factory_from_args(args: VisionArgs):
 
         return default_image_encoder_factory(features_dim=args.encoder_features_dim)
 
+    if args.encoder == "vit":
+        if (
+            args.pretrained_weights is not None
+            or args.freeze_resnet_encoder
+            or args.freeze_resnet_backbone
+        ):
+            raise ValueError(
+                "--pretrained_weights, --freeze_resnet_encoder, and "
+                "--freeze_resnet_backbone are only supported for resnet encoders."
+            )
+        from rl_garden.encoders import vit_image_encoder_factory
+
+        return vit_image_encoder_factory(
+            features_dim=args.encoder_features_dim,
+            embed_dim=args.vit_embed_dim,
+            depth=args.vit_depth,
+            num_heads=args.vit_num_heads,
+            embed_norm=args.vit_embed_norm,
+            augmentation=args.vit_augmentation,
+            random_shift_pad=args.vit_random_shift_pad,
+        )
+
     from rl_garden.encoders import resnet_encoder_factory
 
     return resnet_encoder_factory(
@@ -452,6 +492,33 @@ def image_encoder_factory_from_args(args: VisionArgs):
         freeze_resnet_encoder=args.freeze_resnet_encoder,
         freeze_resnet_backbone=args.freeze_resnet_backbone,
     )
+
+
+def sac_family_policy_kwargs_from_args(
+    args: VisionArgs, image_keys: tuple[str, ...]
+) -> dict[str, Any]:
+    if args.encoder != "vit":
+        return {}
+    from rl_garden.encoders import ViTCombinedExtractor
+
+    return {
+        "features_extractor_class": ViTCombinedExtractor,
+        "features_extractor_kwargs": {
+            "image_keys": image_keys,
+            "state_key": "state",
+            "use_proprio": args.include_state,
+            "fusion_mode": args.vit_fusion_mode,
+            "enable_stacking": False,
+            "embed_dim": args.vit_embed_dim,
+            "depth": args.vit_depth,
+            "num_heads": args.vit_num_heads,
+            "embed_norm": args.vit_embed_norm,
+            "augmentation": args.vit_augmentation,
+            "random_shift_pad": args.vit_random_shift_pad,
+            "actor_feature_dim": args.vit_actor_feature_dim,
+            "critic_spatial_emb_dim": args.vit_critic_spatial_emb_dim,
+        },
+    }
 
 
 def image_keys_from_obs_mode(obs_mode: str) -> tuple[str, ...]:
