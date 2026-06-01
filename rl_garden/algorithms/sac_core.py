@@ -253,6 +253,117 @@ class SACCore:
         out.update(info_mean)
         return out
 
+    def train_critic_only(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]:
+        high_utd_ratio = int(self.utd) if float(self.utd).is_integer() else 1
+        if high_utd_ratio > 1:
+            groups = gradient_steps // high_utd_ratio
+            remainder = gradient_steps % high_utd_ratio
+            infos: list[dict[str, float]] = []
+            for _ in range(groups):
+                infos.append(
+                    self.train_high_utd_critic_only(
+                        utd_ratio=high_utd_ratio, compute_info=compute_info
+                    )
+                )
+            if remainder:
+                old_utd = self.utd
+                self.utd = 1.0
+                try:
+                    infos.append(
+                        self.train_critic_only(remainder, compute_info=compute_info)
+                    )
+                finally:
+                    self.utd = old_utd
+            return self._mean_infos(infos) if compute_info else {}
+
+        critic_losses_t: list[torch.Tensor] = []
+        info_accum: dict[str, list[torch.Tensor]] = {}
+
+        for _ in range(gradient_steps):
+            self._global_update += 1
+            data = self._sample_train_batch(self.batch_size)
+
+            critic_loss, critic_info = self._critic_loss(data)
+            self.q_optimizer.zero_grad()
+            critic_loss.backward()
+            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+            self.q_optimizer.step()
+            self._step_critic_scheduler()
+
+            if compute_info:
+                critic_losses_t.append(critic_loss.detach())
+                for key, value in critic_info.items():
+                    info_accum.setdefault(key, []).append(value)
+
+            if self._global_update % self.target_network_frequency == 0:
+                self._target_update()
+
+        if not compute_info:
+            return {}
+
+        critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
+        info_mean = self._reduce_tensor_lists(info_accum)
+
+        out: dict[str, float] = {
+            "critic_loss": critic_mean.get("critic_loss", 0.0),
+            "qf_loss": critic_mean.get("critic_loss", 0.0),
+            "actor_loss": 0.0,
+            "alpha": float(self._current_alpha().detach().item()),
+        }
+        out.update(info_mean)
+        return out
+
+    def train_high_utd_critic_only(
+        self, utd_ratio: int, compute_info: bool = False
+    ) -> dict[str, float]:
+        assert utd_ratio >= 1, f"utd_ratio must be >= 1, got {utd_ratio}"
+        assert (
+            self.batch_size % utd_ratio == 0
+        ), f"batch_size ({self.batch_size}) must be divisible by utd_ratio ({utd_ratio})"
+
+        full_batch = self._sample_train_batch(self.batch_size)
+        minibatch_size = self.batch_size // utd_ratio
+
+        critic_losses_t: list[torch.Tensor] = []
+        info_accum: dict[str, list[torch.Tensor]] = {}
+
+        for j in range(utd_ratio):
+            self._global_update += 1
+            mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
+
+            critic_loss, critic_info = self._critic_loss(mb)
+            self.q_optimizer.zero_grad()
+            critic_loss.backward()
+            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+            self.q_optimizer.step()
+            self._step_critic_scheduler()
+
+            if compute_info:
+                critic_losses_t.append(critic_loss.detach())
+                for key, value in critic_info.items():
+                    info_accum.setdefault(key, []).append(value)
+
+            if self._global_update % self.target_network_frequency == 0:
+                self._target_update()
+
+        if not compute_info:
+            return {}
+
+        critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
+        info_mean = self._reduce_tensor_lists(info_accum)
+
+        out: dict[str, float] = {
+            "critic_loss": critic_mean.get("critic_loss", 0.0),
+            "qf_loss": critic_mean.get("critic_loss", 0.0),
+            "actor_loss": 0.0,
+            "alpha": float(self._current_alpha().detach().item()),
+            "utd_ratio": float(utd_ratio),
+        }
+        out.update(info_mean)
+        return out
+
     def train_high_utd(
         self, utd_ratio: int, compute_info: bool = False
     ) -> dict[str, float]:

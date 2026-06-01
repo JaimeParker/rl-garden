@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
@@ -14,6 +15,10 @@ from rl_garden.buffers.mc_buffer import (
     MCDictReplayBuffer,
     MCReplayBufferSample,
     MCTensorReplayBuffer,
+)
+from rl_garden.common.checkpoint import (
+    load_checkpoint_file,
+    validate_checkpoint_metadata,
 )
 from rl_garden.common.logger import Logger
 from rl_garden.encoders.base import BaseFeaturesExtractor
@@ -111,6 +116,9 @@ class WSRL(_CalQLRolloutTrainingShell):
         online_use_cql_loss: bool = False,
         warmup_steps: int = 5000,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        # For PORL
+        porl_pre_sample_steps: int = 0,
+        porl_epsilon: float = 0.1,
         # Sparse-reward MC
         sparse_reward_mc: bool = False,
         sparse_negative_reward: float = 0.0,
@@ -173,6 +181,12 @@ class WSRL(_CalQLRolloutTrainingShell):
             raise TypeError(
                 f"WSRL supports Box or Dict observation spaces, got {type(obs_space)}"
             )
+        if porl_pre_sample_steps < 0:
+            raise ValueError(
+                f"porl_pre_sample_steps must be non-negative, got {porl_pre_sample_steps}."
+            )
+        if not (0.0 <= porl_epsilon <= 1.0):
+            raise ValueError(f"porl_epsilon must be in [0, 1], got {porl_epsilon}.")
 
         super().__init__(
             env=env,
@@ -254,8 +268,12 @@ class WSRL(_CalQLRolloutTrainingShell):
         self.online_use_cql_loss = online_use_cql_loss
         self.warmup_steps: int = warmup_steps
         self.offline_sampling: Literal["with_replace", "without_replace"] = offline_sampling
+        self.porl_pre_sample_steps: int = porl_pre_sample_steps
+        self.porl_epsilon: float = porl_epsilon
         self._online_start_step: int | None = None
         self._warmup_end_step: Optional[int] = None
+        self._porl_pre_sample_end_step: Optional[int] = None
+        self._actor_checkpoint_source: dict[str, Any] | None = None
         self._offline_probe_batch: MCReplayBufferSample | None = None
         self.offline_replay_buffer: Optional[Any] = None
         self.offline_data_ratio: float = 0.0
@@ -267,6 +285,8 @@ class WSRL(_CalQLRolloutTrainingShell):
             "online_use_cql_loss": self.online_use_cql_loss,
             "warmup_steps": self.warmup_steps,
             "offline_sampling": self.offline_sampling,
+            "porl_pre_sample_steps": self.porl_pre_sample_steps,
+            "porl_epsilon": self.porl_epsilon,
         }
         if self._is_dict_obs:
             meta.update(
@@ -279,6 +299,8 @@ class WSRL(_CalQLRolloutTrainingShell):
                     "enable_stacking": self._enable_stacking,
                 }
             )
+        if self._actor_checkpoint_source is not None:
+            meta["actor_checkpoint_source"] = dict(self._actor_checkpoint_source)
         return meta
 
     def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
@@ -391,15 +413,50 @@ class WSRL(_CalQLRolloutTrainingShell):
             out["normalized_score"] = float(success) * 100.0
         return out
 
+    def _porl_pre_sample_active(self) -> bool:
+        return (
+            self._porl_pre_sample_end_step is not None
+            and self._global_step <= self._porl_pre_sample_end_step
+        )
+
+    def _learning_has_started(self) -> bool:
+        if self._porl_pre_sample_active():
+            return len(self.replay_buffer) > 0
+        return super()._learning_has_started()
+
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]:
+        if self._porl_pre_sample_active():
+            return self.train_critic_only(gradient_steps, compute_info=compute_info)
         if (
             self._warmup_end_step is not None
             and self._global_step <= self._warmup_end_step
         ):
             return {}
         return super().train(gradient_steps, compute_info=compute_info)
+
+    def _rollout_action(
+        self, obs, learning_has_started: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, Optional[dict[str, Any]]]:
+        if self._porl_pre_sample_active():
+            policy_actions = self._policy_action(obs)
+            if self.porl_epsilon <= 0.0:
+                actions = policy_actions
+            elif self.porl_epsilon >= 1.0:
+                actions = super()._explore_action(obs)
+            else:
+                random_actions = super()._explore_action(obs)
+                mask_shape = (policy_actions.shape[0],) + (1,) * (
+                    policy_actions.ndim - 1
+                )
+                random_mask = (
+                    torch.rand(mask_shape, device=policy_actions.device)
+                    < self.porl_epsilon
+                )
+                actions = torch.where(random_mask, random_actions, policy_actions)
+            return actions, actions, None
+        return super()._rollout_action(obs, learning_has_started)
 
     def _explore_action(self, obs) -> torch.Tensor:
         # Use the offline-trained policy for exploration only when warmup is
@@ -459,14 +516,69 @@ class WSRL(_CalQLRolloutTrainingShell):
         offline_step = min(step, online_start) if online_start is not None else step
         online_step = max(0, step - online_start) if online_start is not None else 0
         is_warmup = self._warmup_end_step is not None and step <= self._warmup_end_step
+        is_porl_pre_sample = self._porl_pre_sample_active()
         self.logger.add_scalar("phase/is_online", float(is_online), step)
         self.logger.add_scalar("phase/wsrl_warmup", float(is_warmup), step)
+        self.logger.add_scalar(
+            "phase/porl_pre_sample", float(is_porl_pre_sample), step
+        )
         self.logger.add_scalar("phase/offline_step", float(offline_step), step)
         self.logger.add_scalar("phase/online_step", float(online_step), step)
 
         if is_online:
             for tag, value in self._offline_probe_metrics().items():
                 self.logger.add_scalar(tag, value, step)
+
+    def load_actor_checkpoint(
+        self, path: str | Path, strict: bool = True
+    ) -> "WSRL":
+        """Load only the actor weights from a compatible SAC-family checkpoint."""
+        checkpoint = load_checkpoint_file(path, map_location=self.device)
+        metadata = checkpoint.get("metadata", {})
+        validate_checkpoint_metadata(
+            checkpoint,
+            algorithm_class=type(self).__name__,
+            compatible_algorithms=self._compatible_checkpoint_algorithms + ("SAC",),
+            observation_space=self.env.single_observation_space,
+            action_space=self.env.single_action_space,
+            strict=strict,
+        )
+        state = checkpoint.get("state", {})
+        policy_state = state.get("policy")
+        if not isinstance(policy_state, dict):
+            raise ValueError("Checkpoint does not contain policy state.")
+        prefix = "actor."
+        actor_state = {
+            key.removeprefix(prefix): value
+            for key, value in policy_state.items()
+            if key.startswith(prefix)
+        }
+        if not actor_state:
+            raise ValueError("Checkpoint policy state does not contain actor weights.")
+        self.policy.actor.load_state_dict(actor_state, strict=strict)
+        self._actor_checkpoint_source = {
+            "path": str(Path(path)),
+            "algorithm_class": metadata.get("algorithm_class"),
+            "global_step": metadata.get("global_step"),
+            "global_update": metadata.get("global_update"),
+        }
+        if self.logger:
+            self.logger.add_summary(
+                "porl/source_checkpoint", self._actor_checkpoint_source["path"]
+            )
+            self.logger.add_summary(
+                "porl/source_algorithm",
+                self._actor_checkpoint_source["algorithm_class"],
+            )
+            self.logger.add_summary(
+                "porl/source_global_step",
+                self._actor_checkpoint_source["global_step"],
+            )
+            self.logger.add_summary(
+                "porl/source_global_update",
+                self._actor_checkpoint_source["global_update"],
+            )
+        return self
 
     def switch_to_online_mode(
         self,
@@ -476,6 +588,10 @@ class WSRL(_CalQLRolloutTrainingShell):
         self._online_start_step = self._global_step
         if self.warmup_steps > 0:
             self._warmup_end_step = self._global_step + self.warmup_steps
+        if self.porl_pre_sample_steps > 0:
+            self._porl_pre_sample_end_step = (
+                self._global_step + self.porl_pre_sample_steps
+            )
         self.use_cql_loss = self.online_use_cql_loss
         self.cql_alpha = self.online_cql_alpha
 
@@ -514,6 +630,15 @@ class WSRL(_CalQLRolloutTrainingShell):
             self.logger.add_summary("wsrl/warmup_steps", self.warmup_steps)
             if self._warmup_end_step is not None:
                 self.logger.add_summary("wsrl/warmup_end_step", self._warmup_end_step)
+            self.logger.add_summary(
+                "wsrl/porl_pre_sample_steps", self.porl_pre_sample_steps
+            )
+            self.logger.add_summary("wsrl/porl_epsilon", self.porl_epsilon)
+            if self._porl_pre_sample_end_step is not None:
+                self.logger.add_summary(
+                    "wsrl/porl_pre_sample_end_step",
+                    self._porl_pre_sample_end_step,
+                )
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
             self.logger.add_summary("wsrl/online_backup_entropy", self.backup_entropy)

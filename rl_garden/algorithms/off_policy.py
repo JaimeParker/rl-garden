@@ -87,6 +87,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]: ...
 
+    def _learning_has_started(self) -> bool:
+        return self._global_step >= self.learning_starts
+
     # --- logging hooks ---
 
     def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
@@ -393,7 +396,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 else float("nan")
             )
 
-            if self._global_step < self.learning_starts:
+            if not self._learning_has_started():
                 self._maybe_save_periodic_checkpoint(previous_step)
                 if self.std_log and should_log:
                     progress = 100.0 * self._global_step / total_timesteps

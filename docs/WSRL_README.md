@@ -70,6 +70,18 @@ python examples/train_wsrl.py \
 ./scripts/train_wsrl.sh --env_id PickCube-v1
 ```
 
+### PORL Policy-Only Online Fine-Tuning
+
+```bash
+# Policy-only online fine-tuning from a pretrained actor checkpoint
+python examples/train_porl.py \
+    --env_id PickCube-v1 \
+    --load_checkpoint runs/pretrained_policy/final.pt \
+    --porl_pre_sample_steps 5000 \
+    --porl_epsilon 0.1 \
+    --num_online_steps 1000000
+```
+
 ### Vision-Based Training
 
 ```bash
