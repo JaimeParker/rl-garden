@@ -193,13 +193,14 @@ def main() -> None:
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
     )
-    agent.load_actor_checkpoint(args.load_checkpoint)
+    agent.load_actor_checkpoint(args.load_checkpoint, restore_global_step=True)
     agent.switch_to_online_mode(online_replay_mode="empty", offline_data_ratio=0.0)
 
     if args.std_log:
         print(
             "[porl] "
             f"actor_checkpoint={args.load_checkpoint} "
+            f"start_step={agent._global_step} "
             f"pre_sample_steps={args.porl_pre_sample_steps} "
             f"epsilon={args.porl_epsilon}",
             flush=True,

@@ -530,7 +530,10 @@ class WSRL(_CalQLRolloutTrainingShell):
                 self.logger.add_scalar(tag, value, step)
 
     def load_actor_checkpoint(
-        self, path: str | Path, strict: bool = True
+        self,
+        path: str | Path,
+        strict: bool = True,
+        restore_global_step: bool = False,
     ) -> "WSRL":
         """Load only the actor weights from a compatible SAC-family checkpoint."""
         checkpoint = load_checkpoint_file(path, map_location=self.device)
@@ -556,12 +559,18 @@ class WSRL(_CalQLRolloutTrainingShell):
         if not actor_state:
             raise ValueError("Checkpoint policy state does not contain actor weights.")
         self.policy.actor.load_state_dict(actor_state, strict=strict)
+        source_global_step = metadata.get("global_step")
+        source_global_update = metadata.get("global_update")
         self._actor_checkpoint_source = {
             "path": str(Path(path)),
             "algorithm_class": metadata.get("algorithm_class"),
-            "global_step": metadata.get("global_step"),
-            "global_update": metadata.get("global_update"),
+            "global_step": source_global_step,
+            "global_update": source_global_update,
         }
+        if restore_global_step:
+            if source_global_step is None:
+                raise ValueError("Checkpoint metadata does not contain global_step.")
+            self._global_step = int(source_global_step)
         if self.logger:
             self.logger.add_summary(
                 "porl/source_checkpoint", self._actor_checkpoint_source["path"]
@@ -578,6 +587,7 @@ class WSRL(_CalQLRolloutTrainingShell):
                 "porl/source_global_update",
                 self._actor_checkpoint_source["global_update"],
             )
+            self.logger.add_summary("porl/restored_global_step", restore_global_step)
         return self
 
     def switch_to_online_mode(
