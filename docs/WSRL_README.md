@@ -82,6 +82,18 @@ python examples/train_porl.py \
     --num_online_steps 1000000
 ```
 
+### Pure Warmup Collect-Only Baseline
+
+```bash
+# Fill online replay with a pretrained behavior policy, then train a random learner
+python examples/train_pure_warmup.py \
+    --env_id PickCube-v1 \
+    --load_checkpoint runs/pretrained_policy/final.pt \
+    --pure_warmup_steps 50000 \
+    --pure_warmup_epsilon 0.0 \
+    --num_online_steps 200000
+```
+
 ### Vision-Based Training
 
 ```bash
@@ -261,10 +273,13 @@ either pure WSRL (CQL off) or Cal-QL retention (mixed/append buffer).
 `switch_to_online_mode` records these one-shot summaries (visible in the wandb
 "Summary" panel, not the time-series charts):
 
-- `wsrl/online_start_step`, `wsrl/warmup_end_step`
+- `wsrl/online_start_step`, `wsrl/warmup_end_step`,
+  `wsrl/pure_warmup_end_step`
 - `wsrl/online_use_cql_loss`, `wsrl/online_cql_alpha`, `wsrl/online_backup_entropy`
 - `wsrl/online_replay_mode`, `wsrl/online_replay_cleared`,
   `wsrl/online_replay_size_before_clear` (empty mode), `wsrl/offline_data_ratio` (mixed mode)
+- `pure_warmup/source_checkpoint`, `pure_warmup/source_global_step` when
+  `examples/train_pure_warmup.py` loads a behavior policy checkpoint
 - `wsrl/recompile_at_online_step` (only when `--use_compile`) — lets you separate
   recompile transients from real unlearning when reading post-switch curves
 
