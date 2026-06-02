@@ -300,6 +300,24 @@ class SACPolicy(BasePolicy):
         action, log_prob = self.actor.action_log_prob(actor_input)
         return action, log_prob, features
 
+    def _sample_actor_actions(
+        self, features: torch.Tensor, n: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample n actions from the actor using the full actor feature path."""
+        actor_input = self._transform_features_for_actor(features)
+        mean, log_std = self.actor(actor_input)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample(sample_shape=(n,))
+        y_t = torch.tanh(x_t)
+        action = y_t * self.actor.action_scale + self.actor.action_bias
+        log_prob = normal.log_prob(x_t)
+        log_prob = log_prob - torch.log(
+            self.actor.action_scale * (1 - y_t.pow(2)) + 1e-6
+        )
+        log_prob = log_prob.sum(-1)
+        return action.permute(1, 0, 2), log_prob.permute(1, 0)
+
     def q_values(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False
     ) -> tuple[torch.Tensor, ...]:

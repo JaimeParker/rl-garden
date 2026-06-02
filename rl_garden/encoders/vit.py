@@ -218,7 +218,7 @@ def vit_image_encoder_factory(
     return _factory
 
 
-class ViTCombinedExtractor(BaseFeaturesExtractor):
+class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
     """Dict extractor for SAC-family token-aware ViT policies.
 
     The returned tensor layout is ``[tokens.flatten(1), prop]``.
@@ -243,7 +243,7 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
         random_shift_pad: int = 4,
     ) -> None:
         if not isinstance(observation_space, spaces.Dict):
-            raise TypeError("ViTCombinedExtractor requires a Dict observation space.")
+            raise TypeError("ViTTokenAndPropExtractor requires a Dict observation space.")
         if fusion_mode not in ("per_key", "stack_channels"):
             raise ValueError(
                 f"fusion_mode must be 'per_key' or 'stack_channels', got {fusion_mode!r}."
@@ -251,7 +251,7 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
 
         self.image_keys = tuple(k for k in image_keys if k in observation_space.spaces)
         if not self.image_keys:
-            raise ValueError("ViTCombinedExtractor requires at least one image key.")
+            raise ValueError("ViTTokenAndPropExtractor requires at least one image key.")
         self.state_key = state_key
         self.has_state = use_proprio and state_key in observation_space.spaces
         self.fusion_mode = fusion_mode
@@ -342,6 +342,7 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
         obs[_VIT_CACHE_KEY] = self.encode(obs, augment=True)
         if next_obs is not None:
             with torch.no_grad():
+                # Preserve PR #21 behavior: cache augmented target observations too.
                 next_obs[_VIT_CACHE_KEY] = self.encode(next_obs, augment=True)
 
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:

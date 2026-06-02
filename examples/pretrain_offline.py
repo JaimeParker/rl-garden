@@ -64,7 +64,7 @@ def _save_filename(args: OfflinePretrainArgs, algorithm: str) -> str:
 def _cql_kwargs(
     args: OfflinePretrainArgs, env_spec: OfflineEnvSpec, logger: Logger
 ) -> dict:
-    return dict(
+    kwargs = dict(
         env=env_spec,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
@@ -125,6 +125,14 @@ def _cql_kwargs(
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=False,
     )
+    if isinstance(env_spec.single_observation_space, spaces.Dict):
+        image_keys = discover_image_keys(env_spec.single_observation_space)
+        kwargs.update(
+            policy_kwargs=vit_policy_kwargs_from_args(args, image_keys),
+            actor_feature_dim=args.vit_actor_feature_dim,
+            critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
+        )
+    return kwargs
 
 
 def _wsrl_kwargs(

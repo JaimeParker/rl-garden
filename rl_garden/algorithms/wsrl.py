@@ -80,6 +80,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         # Q-ensemble (REDQ)
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
+        actor_feature_dim: Optional[int] = None,
+        critic_spatial_emb_dim: int = 1024,
         # CQL parameters
         use_cql_loss: bool = True,
         cql_n_actions: int = 10,
@@ -219,6 +221,8 @@ class WSRL(_CalQLRolloutTrainingShell):
             std_parameterization=std_parameterization,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
+            actor_feature_dim=actor_feature_dim,
+            critic_spatial_emb_dim=critic_spatial_emb_dim,
             use_cql_loss=use_cql_loss,
             cql_n_actions=cql_n_actions,
             cql_alpha=cql_alpha,

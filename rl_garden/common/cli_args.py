@@ -473,6 +473,9 @@ def image_encoder_factory_from_args(args: VisionArgs):
             )
         from rl_garden.encoders import vit_image_encoder_factory
 
+        # This is the image-only flat ViT factory used by generic CombinedExtractor
+        # paths. SAC-family structured ViT uses ViTTokenAndPropExtractor via
+        # vit_policy_kwargs_from_args(), which overrides the whole extractor.
         return vit_image_encoder_factory(
             features_dim=args.encoder_features_dim,
             embed_dim=args.vit_embed_dim,
@@ -497,7 +500,7 @@ def image_encoder_factory_from_args(args: VisionArgs):
 def vit_policy_kwargs_from_args(
     args: VisionArgs, image_keys: tuple[str, ...]
 ) -> dict[str, Any]:
-    """Build ``policy_kwargs`` for ``ViTCombinedExtractor`` from CLI args.
+    """Build ``policy_kwargs`` for ``ViTTokenAndPropExtractor`` from CLI args.
 
     Returns an empty dict when encoder is not 'vit'.  The returned dict only
     configures the features extractor; policy-head hyperparams
@@ -506,10 +509,10 @@ def vit_policy_kwargs_from_args(
     """
     if args.encoder != "vit":
         return {}
-    from rl_garden.encoders import ViTCombinedExtractor
+    from rl_garden.encoders import ViTTokenAndPropExtractor
 
     return {
-        "features_extractor_class": ViTCombinedExtractor,
+        "features_extractor_class": ViTTokenAndPropExtractor,
         "features_extractor_kwargs": {
             "image_keys": image_keys,
             "state_key": "state",

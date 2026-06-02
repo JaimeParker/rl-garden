@@ -15,7 +15,7 @@ from rl_garden.encoders.pooling import AvgPool, SpatialLearnedEmbeddings, Spatia
 from rl_garden.encoders.resnet import ResNetBlock, ResNetEncoder, resnet_encoder_factory
 from rl_garden.encoders.vit import (
     MinVit,
-    ViTCombinedExtractor,
+    ViTTokenAndPropExtractor,
     ViTImageEncoder,
     vit_image_encoder_factory,
 )
@@ -37,7 +37,7 @@ __all__ = [
     "ResNetEncoder",
     "SpatialLearnedEmbeddings",
     "SpatialSoftmax",
-    "ViTCombinedExtractor",
+    "ViTTokenAndPropExtractor",
     "ViTImageEncoder",
     "default_image_encoder_factory",
     "discover_image_keys",

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import MISSING, fields
+import inspect
+from types import SimpleNamespace
+
 import numpy as np
 import torch
 from gymnasium import spaces
 
 from rl_garden.common.cli_args import vit_policy_kwargs_from_args
-from rl_garden.encoders import RandomShiftsAug, ViTCombinedExtractor, ViTImageEncoder
+from rl_garden.encoders import RandomShiftsAug, ViTTokenAndPropExtractor, ViTImageEncoder
 from rl_garden.encoders.base import TokenAndPropFeatureConfig
 from rl_garden.policies import ResidualSACPolicy, SACPolicy
 
@@ -19,7 +23,7 @@ def test_random_shifts_aug_shape_and_dtype():
     assert y.device == x.device
 
 
-def test_vit_combined_extractor_per_key_concats_patch_dimension():
+def test_vit_token_and_prop_extractor_per_key_concats_patch_dimension():
     obs_space = spaces.Dict(
         {
             "rgb_base": spaces.Box(0, 255, (32, 32, 3), np.uint8),
@@ -27,7 +31,7 @@ def test_vit_combined_extractor_per_key_concats_patch_dimension():
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
-    extractor = ViTCombinedExtractor(
+    extractor = ViTTokenAndPropExtractor(
         obs_space,
         image_keys=("rgb_base", "rgb_wrist"),
         embed_dim=16,
@@ -50,14 +54,14 @@ def test_vit_combined_extractor_per_key_concats_patch_dimension():
     assert features.shape == (2, 18 * 16 + 4)
 
 
-def test_vit_combined_extractor_stack_channels_is_explicit():
+def test_vit_token_and_prop_extractor_stack_channels_is_explicit():
     obs_space = spaces.Dict(
         {
             "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "depth": spaces.Box(0.0, 1.0, (32, 32, 1), np.float32),
         }
     )
-    extractor = ViTCombinedExtractor(
+    extractor = ViTTokenAndPropExtractor(
         obs_space,
         image_keys=("rgb", "depth"),
         fusion_mode="stack_channels",
@@ -75,14 +79,14 @@ def test_vit_combined_extractor_stack_channels_is_explicit():
     assert extractor(obs).shape == (2, 9 * 16)
 
 
-def test_vit_combined_extractor_structured_config():
+def test_vit_token_and_prop_extractor_structured_config():
     obs_space = spaces.Dict(
         {
             "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
-    extractor = ViTCombinedExtractor(
+    extractor = ViTTokenAndPropExtractor(
         obs_space,
         image_keys=("rgb",),
         embed_dim=16,
@@ -98,14 +102,14 @@ def test_vit_combined_extractor_structured_config():
     assert sc["num_patches"] * sc["patch_dim"] + sc["prop_dim"] == extractor.features_dim
 
 
-def test_vit_combined_extractor_prepare_batch_caches_features():
+def test_vit_token_and_prop_extractor_prepare_batch_caches_features():
     obs_space = spaces.Dict(
         {
             "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
-    extractor = ViTCombinedExtractor(
+    extractor = ViTTokenAndPropExtractor(
         obs_space,
         image_keys=("rgb",),
         embed_dim=16,
@@ -152,7 +156,7 @@ def test_sac_policy_with_vit_builds_spatial_critic():
         }
     )
     action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
-    extractor = ViTCombinedExtractor(
+    extractor = ViTTokenAndPropExtractor(
         obs_space,
         image_keys=("rgb",),
         embed_dim=16,
@@ -222,7 +226,7 @@ def test_residual_sac_policy_with_vit_uses_adapter():
         }
     )
     action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
-    extractor = ViTCombinedExtractor(
+    extractor = ViTTokenAndPropExtractor(
         obs_space,
         image_keys=("rgb",),
         embed_dim=16,
@@ -263,10 +267,89 @@ def test_vit_policy_kwargs_from_args_defaults_to_per_key():
         vit_random_shift_pad = 4
 
     kwargs = vit_policy_kwargs_from_args(Args(), ("rgb_base", "rgb_wrist"))
-    assert kwargs["features_extractor_class"] is ViTCombinedExtractor
+    assert kwargs["features_extractor_class"] is ViTTokenAndPropExtractor
     ext_kwargs = kwargs["features_extractor_kwargs"]
     assert ext_kwargs["fusion_mode"] == "per_key"
     assert ext_kwargs["image_keys"] == ("rgb_base", "rgb_wrist")
     # actor/critic dims are NOT in extractor kwargs
     assert "actor_feature_dim" not in ext_kwargs
     assert "critic_spatial_emb_dim" not in ext_kwargs
+
+
+def test_vit_token_and_prop_extractor_has_no_legacy_alias():
+    import rl_garden.encoders as encoders
+
+    assert hasattr(encoders, "ViTTokenAndPropExtractor")
+    assert not hasattr(encoders, "ViT" + "CombinedExtractor")
+
+
+def test_sac_policy_sample_actor_actions_uses_adapter():
+    obs_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
+        }
+    )
+    action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
+    extractor = ViTTokenAndPropExtractor(
+        obs_space,
+        image_keys=("rgb",),
+        embed_dim=16,
+        num_heads=4,
+        augmentation="none",
+    )
+    policy = SACPolicy(
+        obs_space,
+        action_space,
+        extractor,
+        net_arch={"pi": [32], "qf": [32]},
+        n_critics=2,
+        actor_feature_dim=8,
+        critic_spatial_emb_dim=32,
+    )
+    obs = {
+        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
+        "state": torch.randn(2, 4),
+    }
+    features = extractor(obs)
+    actions, log_probs = policy._sample_actor_actions(features, n=5)
+    assert actions.shape == (2, 5, 3)
+    assert log_probs.shape == (2, 5)
+
+
+def test_cql_sample_n_actions_delegates_to_policy_helper():
+    from rl_garden.algorithms.cql import CQLCore
+
+    features = torch.randn(2, 7)
+    expected_actions = torch.randn(2, 4, 3)
+    expected_log_probs = torch.randn(2, 4)
+
+    class Policy:
+        def _sample_actor_actions(self, got_features, n):
+            assert got_features is features
+            assert n == 4
+            return expected_actions, expected_log_probs
+
+    self = SimpleNamespace(policy=Policy())
+    actions, log_probs = CQLCore._sample_n_actions_with_log_probs(
+        self, obs=None, n=4, features=features
+    )
+    assert actions is expected_actions
+    assert log_probs is expected_log_probs
+
+
+def test_cql_and_wsrl_accept_vit_policy_head_params():
+    from rl_garden.algorithms import CQL, WSRL
+
+    for cls in (CQL, WSRL):
+        sig = inspect.signature(cls.__init__)
+        assert "actor_feature_dim" in sig.parameters
+        assert "critic_spatial_emb_dim" in sig.parameters
+
+
+def test_generate_wsrl_dataset_vit_actor_feature_dim_defaults_to_none():
+    from examples.generate_wsrl_dataset import Args
+
+    field = next(f for f in fields(Args) if f.name == "vit_actor_feature_dim")
+    assert field.default is None
+    assert field.default is not MISSING
