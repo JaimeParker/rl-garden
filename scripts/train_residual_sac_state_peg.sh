@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # State-based Residual SAC launcher for PegInsertionSidePegOnly-v1.
-# Defaults to --policy act; use --debug to run with a zero base-action provider.
+# Defaults to --base_policy act; use --base_policy sac for SAC checkpoints or
+# --debug to run with a zero base policy.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,7 +56,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_residual_sac_state_peg.py" \
+exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_residual_sac_state_peg.py" \
     --env_id PegInsertionSidePegOnly-v1 \
     --control_mode pd_ee_delta_pose \
     --capture_video \

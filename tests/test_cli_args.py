@@ -211,6 +211,8 @@ def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
     assert args.robot_uids == "panda_wristcam_gripper_closed_wo_norm"
     assert args.fix_peg_pose is False
     assert args.fix_box is True
+    assert args.fixed_peg_xy == (-0.05, -0.15)
+    assert args.fixed_peg_z_rot_deg == 67.5
 
 
 def test_state_wsrl_defaults_match_existing_cli() -> None:
@@ -221,7 +223,7 @@ def test_state_wsrl_defaults_match_existing_cli() -> None:
     assert args.num_online_steps == 1_000_000
     assert args.buffer_size == 1_000_000
     assert args.batch_size == 256
-    assert args.utd == 1.0
+    assert args.utd == 4.0
     assert args.gamma == 0.99
     assert args.use_cql_loss is True
     assert args.use_calql is True

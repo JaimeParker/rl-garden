@@ -7,21 +7,28 @@ from gymnasium import spaces
 from rl_garden.algorithms import ResidualSAC
 from rl_garden.buffers import ResidualDictReplayBuffer, ResidualTensorReplayBuffer
 from rl_garden.common import ActionScaler
+from rl_garden.policies.base_policies import BasePolicyOutput, BasePolicyProvider
 
 
-class ConstantBaseProvider:
-    def __init__(self, action: torch.Tensor) -> None:
+class ConstantBaseProvider(BasePolicyProvider):
+    def __init__(
+        self,
+        observation_space: spaces.Space,
+        action_space: spaces.Box,
+        action: torch.Tensor,
+    ) -> None:
+        super().__init__(observation_space, action_space, device="cpu")
         self.action = action.float()
         self.reset_calls = 0
 
-    def __call__(self, obs):
+    def select_action(self, obs):
         if isinstance(obs, dict):
             n = next(iter(obs.values())).shape[0]
             device = next(iter(obs.values())).device
         else:
             n = obs.shape[0]
             device = obs.device
-        return self.action.to(device).expand(n, -1)
+        return BasePolicyOutput(actions=self.action.to(device).expand(n, -1))
 
     def reset(self, env_ids=None) -> None:
         del env_ids
@@ -68,7 +75,9 @@ class RawActionVecEnv:
 def _agent(env=None, base_action=None, **kwargs) -> ResidualSAC:
     env = env or RawActionVecEnv()
     provider = ConstantBaseProvider(
-        torch.tensor([0.05, -0.05]) if base_action is None else base_action
+        env.single_observation_space,
+        env.single_action_space,
+        torch.tensor([0.05, -0.05]) if base_action is None else base_action,
     )
     params = {
         "device": "cpu",
@@ -182,7 +191,7 @@ def test_residual_update_hooks_combine_base_and_residual_actions():
     data = agent.replay_buffer.sample(agent.batch_size)
     target_action, _, _ = agent._target_action_log_prob(data)
     actor_loss, log_prob = agent._actor_loss_from_batch(data)
-    train_info = agent.train(1)
+    train_info = agent.train(1, compute_info=True)
 
     assert torch.allclose(target_action, data.next_base_actions)
     assert actor_loss.shape == ()

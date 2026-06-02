@@ -336,6 +336,14 @@ scripts/train_wsrl_rgbd.sh                       # WSRL RGB, PickCube-v1
 
 ### Residual SAC
 
+Residual SAC learns a residual action on top of a frozen base policy. The RGBD
+entrypoints use the unified base-policy provider:
+
+- `--base_policy act` loads an ACT checkpoint.
+- `--base_policy sac` loads an rl-garden SAC checkpoint.
+- `--base_policy zero` uses a zero-action base policy.
+- `--debug` is a shortcut for a zero base policy and does not load a checkpoint.
+
 Debug training:
 
 ```bash
@@ -347,26 +355,42 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd.sh \
 ```
 
 Peg-only training uses the peg-specific launcher. In non-debug mode the
-base policy defaults to ACT and loads `pretrained_models/act-peg-only.pt` by
-name:
+RGBD base policy defaults to ACT and loads `pretrained_models/act-peg-only.pt`
+by name:
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd_peg.sh \
   --control_mode pd_ee_twist \
   --residual-action-scale 1 \
-  --policy act \
-  --ckpt-path act-peg-only \
+  --base_policy act \
+  --base_ckpt_path act-peg-only \
   --log_type tensorboard
 ```
 
-State-observation peg training is also available:
+Use an existing SAC checkpoint as the RGBD base policy with `--base_policy sac`.
+For visual SAC checkpoints, pass the base-policy encoder settings that match
+the saved checkpoint:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_rgbd_peg.sh \
+  --control_mode pd_ee_delta_pose \
+  --residual-action-scale 1 \
+  --base_policy sac \
+  --base_ckpt_path runs/<run_name>/checkpoints/final.pt \
+  --base_sac_encoder resnet10 \
+  --base_sac_image_fusion_mode per_key \
+  --log_type tensorboard
+```
+
+State-observation peg training is also available and uses the same base-policy
+flags:
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_state_peg.sh \
   --control_mode pd_ee_twist \
   --residual-action-scale 1 \
-  --policy act \
-  --ckpt-path act-peg-only \
+  --base_policy act \
+  --base_ckpt_path act-peg-only \
   --log_type tensorboard
 ```
 
@@ -374,15 +398,32 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_state_peg.sh \
 normalized to `[-1, 1]`, while the env receives raw actions via `ActionScaler`.
 In `--debug` mode the base-action provider returns all-zero raw actions, which
 is useful for testing the residual rollout/update path. ACT checkpoints are
-selected with `--policy act --ckpt-path <name-or-path>`; names resolve under
-`pretrained_models/`, so `--ckpt-path act-peg-only` loads
-`pretrained_models/act-peg-only.pt`. The generic launcher mirrors
-`train_sac_rgbd.py`; peg-only kwargs such as `--fix_box`, `--fix_peg_pose`,
-`--robot_uids`, and `--reward_mode` live only in the peg residual entrypoints.
+selected with
+`--base_policy act --base_ckpt_path <name-or-path>`; names resolve under
+`pretrained_models/`, so `--base_ckpt_path act-peg-only` loads
+`pretrained_models/act-peg-only.pt`. SAC base policies require a checkpoint path
+and can use `--base_sac_encoder`, `--base_sac_encoder_features_dim`,
+`--base_sac_image_fusion_mode`, and `--base_sac_deterministic` to reconstruct
+visual saved policies. The generic RGBD launcher mirrors `train_sac_rgbd.py`;
+peg-only kwargs such as `--fix_box`, `--fix_peg_pose`, `--robot_uids`, and
+`--reward_mode` live only in the peg residual entrypoints.
 `--residual-action-scale` multiplies the actor's unit residual output before
 adding it to the normalized base action.
 Design details are in
 [`docs/RESIDUAL_SAC.md`](docs/RESIDUAL_SAC.md).
+
+Evaluate a saved RGBD peg ResidualSAC checkpoint and write a side-by-side
+`base_camera | hand_camera` video:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 scripts/eval_residual_sac_rgbd_peg.sh \
+  --checkpoint_path runs/<run_name>/checkpoints/final.pt \
+  --base_policy act \
+  --base_ckpt_path act-peg-only \
+  --num_eval_envs 16 \
+  --num_eval_steps 100 \
+  --output_dir runs/<run_name>/eval_residual_videos
+```
 
 ## Checkpoint Semantics
 
