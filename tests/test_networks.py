@@ -325,6 +325,52 @@ def test_ensemble_vmap_forward_shape():
     assert all(q.shape == (5, 1) for q in q_tuple)
 
 
+def test_ensemble_legacy_impl_forward_shape_and_grad():
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=float)
+    critic = EnsembleQCritic(
+        features_dim=11,
+        action_space=act_space,
+        hidden_dims=[32, 32],
+        n_critics=7,
+        critic_impl="legacy",
+    )
+    features = torch.randn(5, 11)
+    actions = torch.randn(5, 3)
+    q_all = critic.forward_all(features, actions)
+    assert q_all.shape == (7, 5, 1)
+    assert hasattr(critic, "q_nets")
+
+    loss = q_all.sum()
+    loss.backward()
+    assert all(
+        any(param.grad is not None for param in q_net.parameters())
+        for q_net in critic.q_nets
+    )
+
+
+def test_ensemble_vmap_prototype_does_not_shift_cpu_rng():
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=float)
+
+    def construct_and_sample(critic_impl: str) -> tuple[torch.Tensor, torch.Tensor]:
+        torch.manual_seed(123)
+        EnsembleQCritic(
+            features_dim=11,
+            action_space=act_space,
+            hidden_dims=[32, 32],
+            n_critics=7,
+            critic_impl=critic_impl,
+        )
+        rng_after_construct = torch.get_rng_state().clone()
+        replay_like_sample = torch.randint(0, 100000, (32,))
+        return rng_after_construct, replay_like_sample
+
+    vmap_rng, vmap_sample = construct_and_sample("vmap")
+    legacy_rng, legacy_sample = construct_and_sample("legacy")
+
+    assert torch.equal(vmap_rng, legacy_rng)
+    assert torch.equal(vmap_sample, legacy_sample)
+
+
 def test_ensemble_vmap_polyak_update():
     """polyak_update treats stacked params as one tensor → broadcasts naturally."""
     from rl_garden.common.utils import polyak_update

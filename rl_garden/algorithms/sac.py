@@ -63,11 +63,13 @@ class SAC(SACCore, OffPolicyAlgorithm):
         grad_clip_norm: Optional[float] = None,
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
+        alpha_min: float = 0.0,
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        critic_impl: Literal["vmap", "legacy"] = "vmap",
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
         image_keys: Optional[tuple[str, ...]] = None,
         state_key: Optional[str] = None,
@@ -129,6 +131,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
         self.ent_coef_init = ent_coef
         self.target_entropy_arg = target_entropy
+        self.alpha_min = alpha_min
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
@@ -136,6 +139,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
+        self.critic_impl = critic_impl
 
         obs_space = self.env.single_observation_space
         image_kwargs_explicit = {
@@ -204,9 +208,11 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
+            "alpha_min": self.alpha_min,
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
+            "critic_impl": self.critic_impl,
         }
         if self._is_dict_obs:
             meta.update(
@@ -366,6 +372,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
+            critic_impl=self.critic_impl,
         )
 
     def _actor_stop_gradient(self) -> bool:
@@ -465,7 +472,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
 
     def _current_alpha(self) -> torch.Tensor:
         if self.autotune:
-            return self.log_alpha.exp()
+            return self.log_alpha.exp().clamp(min=self.alpha_min)
         return self._fixed_alpha
 
     def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:

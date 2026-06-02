@@ -227,7 +227,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
 
     def _current_alpha(self) -> torch.Tensor:
         if self.autotune:
-            return self.log_alpha.exp()
+            return self.log_alpha.exp().clamp(min=getattr(self, "alpha_min", 0.0))
         return self._fixed_alpha
 
     def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:

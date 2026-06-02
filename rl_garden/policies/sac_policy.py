@@ -26,6 +26,7 @@ from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import (
     BackboneType,
+    CriticImpl,
     EnsembleQCritic,
     KernelInit,
     SquashedGaussianActor,
@@ -98,6 +99,7 @@ class SACPolicy(BasePolicy):
         critic_dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        critic_impl: CriticImpl = "vmap",
         std_parameterization: Literal["exp", "uniform"] = "exp",
         log_std_mode: Literal["clamp", "tanh"] = "tanh",
         log_std_min: float = LOG_STD_MIN,
@@ -154,6 +156,7 @@ class SACPolicy(BasePolicy):
             dropout_rate=critic_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+            critic_impl=critic_impl,
         )
         # Separate target critic, initialized to match critic.
         self.critic_target = ContinuousCritic(
@@ -167,6 +170,7 @@ class SACPolicy(BasePolicy):
             dropout_rate=critic_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+            critic_impl=critic_impl,
         )
         self.critic_target.load_state_dict(self.critic.state_dict())
         for p in self.critic_target.parameters():
