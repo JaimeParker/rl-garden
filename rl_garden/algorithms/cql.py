@@ -722,6 +722,9 @@ class CQLCore(SACCore):
             info["cql_alpha"] = self._current_cql_alpha().detach()
         return info
 
+    def _actor_stop_gradient(self) -> bool:
+        return isinstance(self.policy.observation_space, spaces.Dict)
+
 
 class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
     """Internal rollout/eval shell that wires ``CQLCore`` into ``OffPolicyAlgorithm``.

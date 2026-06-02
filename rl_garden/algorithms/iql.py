@@ -576,7 +576,8 @@ class IQL(OfflineRLAlgorithm):
         )
         torch.nn.utils.clip_grad_norm_(params, self.grad_clip_norm)
 
-    def train(self, gradient_steps: int) -> dict[str, float]:
+    def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
+        del compute_info
         if gradient_steps <= 0:
             raise ValueError(f"gradient_steps must be positive, got {gradient_steps}.")
         metrics_sum: dict[str, float] = {}

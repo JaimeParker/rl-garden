@@ -288,7 +288,9 @@ class SACCore:
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
 
-        self.policy.features_extractor.prepare_batch(full_batch.obs)
+        with torch.no_grad():
+            self.policy.features_extractor.prepare_batch(full_batch.obs)
+
         actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

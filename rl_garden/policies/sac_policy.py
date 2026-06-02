@@ -208,7 +208,7 @@ class SACPolicy(BasePolicy):
                 kernel_init=kernel_init,
                 features_dim=fd,
             )
-        else:
+        elif sc is None:
             self.critic = ContinuousCritic(
                 fd,
                 action_space,
@@ -232,6 +232,11 @@ class SACPolicy(BasePolicy):
                 dropout_rate=critic_dropout_rate,
                 kernel_init=kernel_init,
                 backbone_type=backbone_type,
+            )
+        else:
+            raise ValueError(
+                f"Unknown structured_feature_config layout {sc.get('layout')!r}. "
+                "Supported: 'token_and_prop'."
             )
         self.critic_target.load_state_dict(self.critic.state_dict())
         for p in self.critic_target.parameters():
@@ -311,11 +316,7 @@ class SACPolicy(BasePolicy):
         x_t = normal.rsample(sample_shape=(n,))
         y_t = torch.tanh(x_t)
         action = y_t * self.actor.action_scale + self.actor.action_bias
-        log_prob = normal.log_prob(x_t)
-        log_prob = log_prob - torch.log(
-            self.actor.action_scale * (1 - y_t.pow(2)) + 1e-6
-        )
-        log_prob = log_prob.sum(-1)
+        log_prob = self.actor._squashed_log_prob(normal, x_t, y_t).squeeze(-1)
         return action.permute(1, 0, 2), log_prob.permute(1, 0)
 
     def q_values(

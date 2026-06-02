@@ -348,7 +348,7 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         if _VIT_CACHE_KEY in obs:
             return obs[_VIT_CACHE_KEY]
-        return self.encode(obs, augment=self.training)
+        return self.encode(obs, augment=False)
 
     # --- internal helpers ---
 
@@ -382,7 +382,7 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
         )
 
     def _prepare_image(self, key: str, x: torch.Tensor) -> torch.Tensor:
-        if x.dtype == torch.uint8 or key.startswith("rgb"):
+        if x.dtype == torch.uint8:
             x = x.float() / 255.0
         else:
             x = x.float()

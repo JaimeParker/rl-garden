@@ -55,6 +55,7 @@ class RandomShiftsAug(nn.Module):
     def __init__(self, padding: int = 4) -> None:
         super().__init__()
         self.padding = padding
+        self.register_buffer("_base_grid", torch.empty(0), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.padding <= 0:
@@ -63,17 +64,24 @@ class RandomShiftsAug(nn.Module):
         if h != w:
             raise ValueError(f"RandomShiftsAug expects square images, got {(h, w)}.")
         x = F.pad(x, [self.padding] * 4, mode="replicate")
-        eps = 1.0 / (h + 2 * self.padding)
-        arange = torch.linspace(
-            -1.0 + eps,
-            1.0 - eps,
-            h + 2 * self.padding,
-            device=x.device,
-            dtype=x.dtype,
-        )[:h]
-        arange = arange.unsqueeze(0).repeat(h, 1).unsqueeze(2)
-        base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
-        base_grid = base_grid.unsqueeze(0).repeat(n, 1, 1, 1)
+        if (
+            self._base_grid.numel() == 0
+            or self._base_grid.shape[1] != h
+            or self._base_grid.device != x.device
+            or self._base_grid.dtype != x.dtype
+        ):
+            eps = 1.0 / (h + 2 * self.padding)
+            arange = torch.linspace(
+                -1.0 + eps,
+                1.0 - eps,
+                h + 2 * self.padding,
+                device=x.device,
+                dtype=x.dtype,
+            )[:h]
+            arange = arange.unsqueeze(0).repeat(h, 1).unsqueeze(2)
+            base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
+            self._base_grid = base_grid.unsqueeze(0)  # (1, H, W, 2)
+        base_grid = self._base_grid.expand(n, -1, -1, -1)
 
         shift = torch.randint(
             0,
