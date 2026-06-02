@@ -17,9 +17,7 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.flatten import FlattenExtractor
-from rl_garden.encoders.vit import ViTCombinedExtractor
 from rl_garden.policies.sac_policy import CQLAlphaLagrange, SACPolicy, TemperatureLagrange
-from rl_garden.policies.vit_sac_policy import ViTSACPolicy
 
 
 class CQLCore(SACCore):
@@ -362,12 +360,7 @@ class CQLCore(SACCore):
 
     def _setup_model(self) -> None:
         features_extractor = self._build_features_extractor()
-        policy_cls = (
-            ViTSACPolicy
-            if isinstance(features_extractor, ViTCombinedExtractor)
-            else SACPolicy
-        )
-        self.policy = policy_cls(
+        self.policy = SACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             features_extractor=features_extractor,

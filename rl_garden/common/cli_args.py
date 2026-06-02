@@ -76,7 +76,7 @@ class VisionArgs:
     vit_embed_norm: bool = False
     vit_augmentation: Literal["random_shift", "none"] = "random_shift"
     vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
+    vit_actor_feature_dim: Optional[int] = None
     vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
@@ -357,7 +357,7 @@ class OfflineVisionArgs:
     vit_embed_norm: bool = False
     vit_augmentation: Literal["random_shift", "none"] = "random_shift"
     vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
+    vit_actor_feature_dim: Optional[int] = None
     vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
@@ -494,9 +494,16 @@ def image_encoder_factory_from_args(args: VisionArgs):
     )
 
 
-def sac_family_policy_kwargs_from_args(
+def vit_policy_kwargs_from_args(
     args: VisionArgs, image_keys: tuple[str, ...]
 ) -> dict[str, Any]:
+    """Build ``policy_kwargs`` for ``ViTCombinedExtractor`` from CLI args.
+
+    Returns an empty dict when encoder is not 'vit'.  The returned dict only
+    configures the features extractor; policy-head hyperparams
+    (``actor_feature_dim``, ``critic_spatial_emb_dim``) are passed directly to
+    the algorithm constructor.
+    """
     if args.encoder != "vit":
         return {}
     from rl_garden.encoders import ViTCombinedExtractor
@@ -515,8 +522,6 @@ def sac_family_policy_kwargs_from_args(
             "embed_norm": args.vit_embed_norm,
             "augmentation": args.vit_augmentation,
             "random_shift_pad": args.vit_random_shift_pad,
-            "actor_feature_dim": args.vit_actor_feature_dim,
-            "critic_spatial_emb_dim": args.vit_critic_spatial_emb_dim,
         },
     }
 

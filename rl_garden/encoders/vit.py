@@ -17,12 +17,12 @@ from gymnasium import spaces
 from torch.nn.init import trunc_normal_
 
 from rl_garden.encoders.augment import RandomShiftsAug
-from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.base import BaseFeaturesExtractor, TokenAndPropFeatureConfig
 
 ViTFusionMode = Literal["per_key", "stack_channels"]
 ViTAugmentationMode = Literal["random_shift", "none"]
 
-VIT_CACHE_KEY = "_vit_features"
+_VIT_CACHE_KEY = "_vit_features"
 
 
 def _init_weights_vit_timm(module: nn.Module) -> None:
@@ -145,7 +145,7 @@ class MinVit(nn.Module):
         return self.norm(x)
 
 
-class VitImageEncoder(BaseFeaturesExtractor):
+class ViTImageEncoder(BaseFeaturesExtractor):
     """Image-only ViT encoder returning a flat feature vector."""
 
     def __init__(
@@ -162,7 +162,7 @@ class VitImageEncoder(BaseFeaturesExtractor):
     ) -> None:
         if len(observation_space.shape) != 3:
             raise ValueError(
-                "VitImageEncoder expects channels-first image space (C,H,W), "
+                "ViTImageEncoder expects channels-first image space (C,H,W), "
                 f"got {observation_space.shape}."
             )
         c, h, w = (int(v) for v in observation_space.shape)
@@ -189,7 +189,7 @@ class VitImageEncoder(BaseFeaturesExtractor):
         return self.vit(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        tokens = self.encode_tokens(x, augment=False)
+        tokens = self.encode_tokens(x, augment=self.training)
         return self.proj(tokens.flatten(1))
 
 
@@ -204,7 +204,7 @@ def vit_image_encoder_factory(
     random_shift_pad: int = 4,
 ):
     def _factory(img_space: spaces.Box) -> BaseFeaturesExtractor:
-        return VitImageEncoder(
+        return ViTImageEncoder(
             img_space,
             features_dim=features_dim,
             embed_dim=embed_dim,
@@ -221,9 +221,10 @@ def vit_image_encoder_factory(
 class ViTCombinedExtractor(BaseFeaturesExtractor):
     """Dict extractor for SAC-family token-aware ViT policies.
 
-    The returned tensor layout is:
-        ``[tokens.flatten(1), prop]``
-    where ``tokens`` has shape ``(B, num_patches_total, patch_dim)``.
+    The returned tensor layout is ``[tokens.flatten(1), prop]``.
+    ``structured_feature_config()`` exposes this layout so that ``SACPolicy``
+    can self-configure a spatial Q-critic and actor adapter without any
+    isinstance checks.
     """
 
     def __init__(
@@ -240,8 +241,6 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
         embed_norm: bool = False,
         augmentation: ViTAugmentationMode = "random_shift",
         random_shift_pad: int = 4,
-        actor_feature_dim: int = 128,
-        critic_spatial_emb_dim: int = 1024,
     ) -> None:
         if not isinstance(observation_space, spaces.Dict):
             raise TypeError("ViTCombinedExtractor requires a Dict observation space.")
@@ -258,8 +257,6 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
         self.fusion_mode = fusion_mode
         self.enable_stacking = enable_stacking
         self.augmentation = augmentation
-        self.actor_feature_dim = actor_feature_dim
-        self.critic_spatial_emb_dim = critic_spatial_emb_dim
 
         specs = {
             k: self._image_space_to_hwc(
@@ -327,6 +324,33 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
                     depth=depth,
                 )
 
+    # --- BaseFeaturesExtractor overrides ---
+
+    def structured_feature_config(self) -> TokenAndPropFeatureConfig:
+        return TokenAndPropFeatureConfig(
+            layout="token_and_prop",
+            num_patches=self.num_patches,
+            patch_dim=self.patch_dim,
+            prop_dim=self.prop_dim,
+        )
+
+    def prepare_batch(
+        self,
+        obs: dict,
+        next_obs: Optional[dict] = None,
+    ) -> None:
+        obs[_VIT_CACHE_KEY] = self.encode(obs, augment=True)
+        if next_obs is not None:
+            with torch.no_grad():
+                next_obs[_VIT_CACHE_KEY] = self.encode(next_obs, augment=True)
+
+    def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        if _VIT_CACHE_KEY in obs:
+            return obs[_VIT_CACHE_KEY]
+        return self.encode(obs, augment=self.training)
+
+    # --- internal helpers ---
+
     @staticmethod
     def _num_patches_for_hw(image_size: tuple[int, int]) -> int:
         h, w = image_size
@@ -392,49 +416,20 @@ class ViTCombinedExtractor(BaseFeaturesExtractor):
         props = []
         if self.has_state:
             state = obs[self.state_key]
-            props.append(state.flatten(1) if state.ndim > 2 else state.float())
+            props.append(state.float().flatten(1))
         for key in self.vector_keys:
             props.append(obs[key].float().flatten(1))
         if not props:
             batch = next(iter(obs.values())).shape[0]
             device = next(iter(obs.values())).device
             return torch.empty(batch, 0, device=device)
-        return torch.cat([p.float().flatten(1) for p in props], dim=-1)
+        return torch.cat(props, dim=-1)
 
     def encode(
         self,
         obs: dict[str, torch.Tensor],
         *,
         augment: bool = False,
-        stop_gradient: bool = False,
     ) -> torch.Tensor:
         tokens = self._encode_tokens(obs, augment=augment)
-        if stop_gradient:
-            tokens = tokens.detach()
         return torch.cat([tokens.flatten(1), self._encode_prop(obs)], dim=-1)
-
-    def cache_features(
-        self, obs: dict[str, torch.Tensor], *, augment: bool = True
-    ) -> dict[str, torch.Tensor]:
-        obs[VIT_CACHE_KEY] = self.encode(obs, augment=augment, stop_gradient=False)
-        return obs
-
-    def extract(
-        self, obs: dict[str, torch.Tensor], stop_gradient: bool = False
-    ) -> torch.Tensor:
-        if VIT_CACHE_KEY in obs:
-            features = obs[VIT_CACHE_KEY]
-            return features.detach() if stop_gradient else features
-        return self.encode(obs, augment=False, stop_gradient=stop_gradient)
-
-    def split_features(
-        self, features: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        tokens = features[:, : self.token_dim].reshape(
-            features.shape[0], self.num_patches, self.patch_dim
-        )
-        prop = features[:, self.token_dim :]
-        return tokens, prop
-
-    def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        return self.extract(obs, stop_gradient=False)

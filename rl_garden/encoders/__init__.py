@@ -14,10 +14,9 @@ from rl_garden.encoders.plain_conv import PlainConv
 from rl_garden.encoders.pooling import AvgPool, SpatialLearnedEmbeddings, SpatialSoftmax
 from rl_garden.encoders.resnet import ResNetBlock, ResNetEncoder, resnet_encoder_factory
 from rl_garden.encoders.vit import (
-    VIT_CACHE_KEY,
     MinVit,
     ViTCombinedExtractor,
-    VitImageEncoder,
+    ViTImageEncoder,
     vit_image_encoder_factory,
 )
 
@@ -29,6 +28,7 @@ __all__ = [
     "FlattenExtractor",
     "ImageEncoderFactory",
     "ImageFusionMode",
+    "MinVit",
     "PlainConv",
     "ProprioEncoder",
     "RandomCrop",
@@ -37,10 +37,8 @@ __all__ = [
     "ResNetEncoder",
     "SpatialLearnedEmbeddings",
     "SpatialSoftmax",
-    "VIT_CACHE_KEY",
-    "MinVit",
     "ViTCombinedExtractor",
-    "VitImageEncoder",
+    "ViTImageEncoder",
     "default_image_encoder_factory",
     "discover_image_keys",
     "resnet_encoder_factory",

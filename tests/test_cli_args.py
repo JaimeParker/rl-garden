@@ -13,7 +13,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_obs_mode,
-    sac_family_policy_kwargs_from_args,
+    vit_policy_kwargs_from_args,
 )
 
 
@@ -263,8 +263,6 @@ class _VitArgs:
     vit_embed_norm: bool = False
     vit_augmentation: str = "random_shift"
     vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: str | None = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
@@ -281,10 +279,13 @@ def test_vit_rejects_resnet_only_options() -> None:
         image_encoder_factory_from_args(args)
 
 
-def test_vit_sac_family_kwargs_default_to_per_key() -> None:
-    kwargs = sac_family_policy_kwargs_from_args(_VitArgs(), ("rgb_base", "rgb_wrist"))
+def test_vit_policy_kwargs_defaults_to_per_key() -> None:
+    kwargs = vit_policy_kwargs_from_args(_VitArgs(), ("rgb_base", "rgb_wrist"))
     assert kwargs["features_extractor_kwargs"]["fusion_mode"] == "per_key"
     assert kwargs["features_extractor_kwargs"]["image_keys"] == ("rgb_base", "rgb_wrist")
+    # actor/critic dims are NOT in extractor kwargs
+    assert "actor_feature_dim" not in kwargs["features_extractor_kwargs"]
+    assert "critic_spatial_emb_dim" not in kwargs["features_extractor_kwargs"]
 
 
 def test_image_keys_from_obs_mode() -> None:

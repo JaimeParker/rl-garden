@@ -64,11 +64,6 @@ class SACCore:
     def _post_actor_update(self, data) -> dict[str, torch.Tensor]:
         return {}
 
-    def _prepare_train_batch(self, data) -> None:
-        prepare = getattr(self.policy, "prepare_train_batch", None)
-        if prepare is not None:
-            prepare(data)
-
     def _target_update(self) -> None:
         polyak_update(
             self.policy.critic.parameters(),
@@ -196,7 +191,7 @@ class SACCore:
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
-            self._prepare_train_batch(data)
+            self.policy.features_extractor.prepare_batch(data.obs, data.next_obs)
 
             critic_loss, critic_info = self._critic_loss(data)
             self.q_optimizer.zero_grad()
@@ -276,7 +271,7 @@ class SACCore:
         for j in range(utd_ratio):
             self._global_update += 1
             mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
-            self._prepare_train_batch(mb)
+            self.policy.features_extractor.prepare_batch(mb.obs, mb.next_obs)
 
             critic_loss, critic_info = self._critic_loss(mb)
             self.q_optimizer.zero_grad()
@@ -293,7 +288,7 @@ class SACCore:
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
 
-        self._prepare_train_batch(full_batch)
+        self.policy.features_extractor.prepare_batch(full_batch.obs)
         actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

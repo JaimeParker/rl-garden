@@ -30,7 +30,7 @@ from rl_garden.common import seed_everything
 from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
     image_keys_from_obs_mode,
-    sac_family_policy_kwargs_from_args,
+    vit_policy_kwargs_from_args,
 )
 from rl_garden.datasets import (
     CheckpointScore,
@@ -135,7 +135,9 @@ def _make_agent(args: Args, env):
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
-        policy_kwargs=sac_family_policy_kwargs_from_args(args, image_keys),
+        actor_feature_dim=args.vit_actor_feature_dim,
+        critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
+        policy_kwargs=vit_policy_kwargs_from_args(args, image_keys),
     )
 
 
