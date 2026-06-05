@@ -620,3 +620,186 @@ Started on 6017-nofwd at 2026-06-02 Asia/Shanghai:
 - Key params: `critic_impl=vmap`, `alpha_min=1e-4`, `seed=1`,
   `total_timesteps=1000000`, same RGB ResNet10 converted stack-channel settings
   as all other 1m ablations.
+
+Additional alpha-min run:
+
+- exp: `pickcube_sac_rgb_resnet10_converted_gamma08_stack_1m_vmap_alphamin4e4_seed1`
+- W&B: https://wandb.ai/dalian0744-intel/rl-garden/runs/d1242ius
+- Key params: `critic_impl=vmap`, `alpha_min=4e-4`, `seed=1`,
+  `total_timesteps=1000000`, same RGB ResNet10 converted stack-channel settings.
+- Result summary: alpha floor engaged at `4e-4`, but the run still finished with
+  `success_at_end=0`. It showed only transient `success_once=0.125`.
+
+Interpretation after both alpha-min runs: `1e-4` was too low to meaningfully
+intervene, while `4e-4` intervened but was not enough for stable breakthrough.
+This argues against a pure "alpha too low" explanation; alpha-flooring alone
+does not solve the missing stable-success-transition problem.
+
+## Target Entropy Probe
+
+Purpose: test whether changing the alpha-autotune target keeps alpha higher for
+longer and extends the exploration window without using an explicit floor.
+
+Completed run:
+
+- exp: `pickcube_sac_rgb_resnet10_converted_gamma08_stack_1m_vmap_targetentropy_m5_seed1`
+- W&B: https://wandb.ai/dalian0744-intel/rl-garden/runs/2pbysqf1
+- Key params: `critic_impl=vmap`, `target_entropy=-5`, `alpha_min=0.0`,
+  `seed=1`, `total_timesteps=1000000`, same RGB ResNet10 converted settings.
+- Result summary: alpha stayed higher than ordinary vmap late in training
+  (`~5e-4` to `9e-4` instead of `~3e-4` to `4e-4`), but `success_at_end` stayed
+  at `0` with only transient `success_once=0.0625`.
+
+Interpretation: target entropy intervention worked mechanically but did not fix
+the training failure by itself.
+
+## Learning-Rate and Stronger Entropy Probes
+
+Purpose: separate three plausible failure mechanisms:
+
+- actor updates too quickly toward early unreliable Q (`policy_lr` probe)
+- critic/ResNet updates overfit too quickly (`q_lr` probe)
+- alpha target is still too conservative (`target_entropy=-3.5` probe)
+
+Started on 6017-nofwd at 2026-06-03 Asia/Shanghai:
+
+| probe | exp | W&B | GPU | changed param |
+|---|---|---|---:|---|
+| lower actor LR | `pickcube_sac_rgb_resnet10_converted_gamma08_stack_1m_vmap_policylr1e4_seed1` | https://wandb.ai/dalian0744-intel/rl-garden/runs/0pprnctd | 0 | `policy_lr=1e-4` |
+| lower critic LR | `pickcube_sac_rgb_resnet10_converted_gamma08_stack_1m_vmap_qlr1e4_seed1` | https://wandb.ai/dalian0744-intel/rl-garden/runs/exrcuill | 1 | `q_lr=1e-4` |
+| stronger entropy target | `pickcube_sac_rgb_resnet10_converted_gamma08_stack_1m_vmap_targetentropy_m35_seed1` | https://wandb.ai/dalian0744-intel/rl-garden/runs/qyx94bnp | 2 | `target_entropy=-3.5` |
+
+Shared params: `critic_impl=vmap`, `alpha_min=0.0`, `seed=1`,
+`total_timesteps=1000000`, RGB ResNet10 converted stack-channel settings,
+`gamma=0.8`, `utd=0.25`, `num_envs=16`, no video capture.
+
+Initial check: all three runs reached W&B and entered post-warmup training at
+step `4032` without CLI error or OOM. GPU usage was about 9.9 GB per run.
+
+Follow-up lower critic LR run:
+
+- exp: `pickcube_sac_rgb_resnet10_converted_gamma08_stack_1m_vmap_qlr3e5_seed1`
+- W&B: https://wandb.ai/dalian0744-intel/rl-garden/runs/5j4jqj46
+- tmux: `pickcube_sac_rgb_resnet10_vmap_qlr3e5_seed1`
+- GPU: 3
+- Key params: `critic_impl=vmap`, `q_lr=3e-5`, `policy_lr=3e-4`,
+  `alpha_min=0.0`, `target_entropy=auto`, `seed=1`, `total_timesteps=1000000`.
+
+Purpose: test whether reducing critic/ResNet learning rate below the successful
+`q_lr=1e-4` probe further improves stability, or whether it becomes too slow to
+learn within 1M steps.
+
+Initial check: run reached W&B and entered post-warmup training at step `4032`
+without CLI error or OOM.
+
+### Results (all four probes complete, seed 1, 1M steps)
+
+The discriminator is `success_at_end` (a *stable* transition), not `success_once`
+(a transient touch). Only `q_lr=1e-4` produces stable, legacy-quality success.
+
+| probe | changed param | success_at_end | success_once max | return final | alpha trajectory |
+|---|---|---:|---:|---:|---|
+| `qlr1e4` (`exrcuill`) | `q_lr=1e-4` | **0.8125** | **1.0** @944k | 31.7 | falls to ~6e-4 @344k, **recovers to ~1.5e-3** by 1M |
+| `qlr3e5` (`5j4jqj46`) | `q_lr=3e-5` | 0 | 0 | 18.4 | monotonic decline, never recovers (ends ~7.5e-4) |
+| `policylr1e4` (`0pprnctd`) | `policy_lr=1e-4` | 0 | 0.3125 | 21.0 | flat ~4.5e-4, transient success bursts only |
+| `targetentropy_m35` (`qyx94bnp`) | `target_entropy=-3.5` | 0 | 0.3125 | 19.9 | ~1.5e-3 early, drifts to ~7e-4, transient bursts only |
+
+Interpretation:
+
+- Clean U-shape in `q_lr`: `3e-4` (default) overfits Q too fast and fails;
+  `1e-4` succeeds; `3e-5` is too slow to build the value signal in 1M and fails.
+- `qlr1e4` reproduces the healthy legacy-seed1 alpha signature: alpha bottoms,
+  then *recovers* coincident with first stable breakthrough (~608k-704k). Final
+  `success_at_end=0.8125` is on par with legacy seed1 (`0.875`).
+- `policy_lr=1e-4` and `target_entropy=-3.5` give `success_once` bursts up to
+  `0.3125` but `success_at_end=0`. These are the same failure class as baseline
+  vmap (no stable transition), not partial fixes.
+- This places the vmap RGB regression in the **critic/ResNet learning-rate**
+  regime, not in alpha autotuning per se. `q_lr=1e-4` is the only single-knob
+  intervention that produced stable success.
+
+## q_lr=1e-4 Seed Robustness Sweep (gate before any default change)
+
+Purpose: `qlr1e4` succeeded on seed 1, which is exactly where vmap failed most
+clearly before. That is the strongest single case but `n=1`. Seeds 2-5 convert
+"interesting seed-1 result" into a validated fix, paralleling the existing
+legacy seed sweep. **Do not flip the PickCube RGB ResNet default or mark this
+"fixed" until seeds 2-5 report.**
+
+If the fix holds across seeds, it likely *saves* vmap: keep the
+performance-motivated vmap critic and only lower `q_lr` to `1e-4` for RGB
+ResNet, rather than falling back to `critic_impl=legacy`.
+
+Early leading indicator (watch before final success): the alpha U-turn. The
+fix announces itself when alpha stops declining and starts rising (~600-700k in
+seed 1), before `success_at_end` consolidates. Monotonic alpha decline like
+baseline means `q_lr=1e-4` did not take for that seed.
+
+Constraints honored: no knob-stacking (`q_lr=1e-4` alone gives the healthy alpha
+recovery); any eventual default change goes in the RGB-ResNet example/script,
+**not** global `SACTrainingArgs` (state mode is healthy at `q_lr=3e-4` across all
+six runs, so a global lower default would degrade the working state path).
+
+Started on 6017-nofwd at 2026-06-03 Asia/Shanghai. Shared params identical to
+`qlr1e4` seed 1: `critic_impl=vmap`, `q_lr=1e-4`, `policy_lr=3e-4`,
+`alpha_min=0.0`, `target_entropy=auto`, `total_timesteps=1000000`, RGB ResNet10
+converted stack-channel settings, no video capture.
+
+| seed | tmux session | GPU | W&B |
+|---|---|---:|---|
+| 2 | `pickcube_sac_rgb_resnet10_vmap_qlr1e4_seed2` | 0 | https://wandb.ai/dalian0744-intel/rl-garden/runs/1y4snuf4 |
+| 3 | `pickcube_sac_rgb_resnet10_vmap_qlr1e4_seed3` | 1 | https://wandb.ai/dalian0744-intel/rl-garden/runs/551iodgy |
+| 4 | `pickcube_sac_rgb_resnet10_vmap_qlr1e4_seed4` | 2 | https://wandb.ai/dalian0744-intel/rl-garden/runs/kdbo2tfl |
+| 5 | `pickcube_sac_rgb_resnet10_vmap_qlr1e4_seed5` | 3 | https://wandb.ai/dalian0744-intel/rl-garden/runs/jd5foyc6 |
+
+Initial check: all four reached W&B and entered the post-warmup `[train]` loop
+without CLI error or OOM; GPUs 0-3 each run one job at ~10 GB. Each run is
+~8-9h.
+
+### Results (all five seeds, 1M steps) — gate PASSES
+
+All four sweep runs reached 1M steps with no crash. Metric keys: `entropy/alpha`,
+`train/success_at_end`, `train/success_once` (these runs log train-time rolling
+metrics only; no separate `eval/` episodes).
+
+| seed | run | `success_at_end` (final) | `success_once` max | alpha trough (val @ step) | alpha final | U-turn |
+|---|---|---:|---:|---|---:|:---:|
+| 1 | `exrcuill` | 0.8125 | 1.0 @944k | ~6e-4 @344k | ~1.5e-3 | yes |
+| 2 | `1y4snuf4` | 0.4375 | 0.9375 @984k | 4.83e-4 @712k | 1.14e-3 | yes |
+| 3 | `551iodgy` | 0.5625 | 1.0 @696k | 6.17e-4 @360k | 2.45e-3 | yes |
+| 4 | `kdbo2tfl` | 0.8125 | 1.0 @840k | 5.05e-4 @640k | 2.02e-3 | yes |
+| 5 | `jd5foyc6` | 0.75 | 1.0 @608k | 4.08e-4 @552k | 2.07e-3 | yes |
+
+**Pre-registered gate criterion met.** The gate was defined as the alpha U-turn
+appearing (alpha stops declining and recovers) rather than monotonic
+baseline-style collapse. Result: **5/5 seeds show the U-turn; 0/5 collapsed to
+zero `success_at_end`; 4/5 reach `success_once=1.0`.** Seed 2 is the weakest —
+slowest onset (trough delayed to 712k) and `success_once` peaks at 0.9375 rather
+than 1.0 — but it still recovered (non-monotonic alpha, non-zero success), so it
+is "slow but took," not a near-failure.
+
+**Scope of the claim (no overclaim).** The vmap `q_lr=3e-4` baseline in this doc
+is `n=1` (seed-1 collapse); there is no matched `q_lr=3e-4` seeds 2-5 sweep. So
+the defensible statement is: at `q_lr=1e-4` the per-seed final distribution is
+**unimodal 0.44–0.81 with no zeros**, replacing the bimodal-with-zeros regime
+seen in the seed-1 four-probe table. We do *not* claim a matched cross-seed
+elimination of the binary collapse; that would need a `q_lr=3e-4` sweep, which is
+not worth the GPU-days given the seed-1 probe table plus this 5-seed result.
+
+**Note on ranking.** `success_at_end` final is a single-step rolling snapshot over
+16 envs (1/16 granularity, one timestep), so the 0.4375 vs 0.8125 spread is partly
+snapshot noise. The robust per-seed signals are `success_once` (4/5 at 1.0) and
+the U-turn (5/5); do not over-read the final-step ordering.
+
+**Decision.** Gate passes → keep the performance-motivated `critic_impl=vmap` and
+lower `q_lr` to `1e-4` **only** in the RGB-ResNet path, not in global
+`SACTrainingArgs` (state mode is healthy at `q_lr=3e-4` across all six runs).
+
+**Applied.** The default lives in the launcher `scripts/train_sac_rgbd.sh` (not the
+generic `examples/train_sac_rgbd.py`, which stays encoder-agnostic). The script
+inspects the forwarded args: when `--encoder resnet*` is requested and the caller
+did not pass `--q_lr`, it appends `--q_lr 1e-4` (an explicit `--q_lr` always
+wins). Scope is surgical: `plain_conv` RGB, state SAC (`SACTrainingArgs`), and
+offline args keep the global `3e-4` default — only `resnet10`/`resnet18` launched
+through this script get `1e-4`. `plain_conv` was not part of this sweep, so it is
+deliberately left untouched.
