@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from gymnasium import spaces
 
-from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.base import BaseFeaturesExtractor, image_needs_normalization
 from rl_garden.encoders.plain_conv import PlainConv
 
 # A factory takes the stacked image ``spaces.Box`` (channels-first) and returns
@@ -150,6 +150,10 @@ class CombinedExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
 
         self.image_keys: tuple[str, ...] = tuple(present_image_keys)
+        self._needs_norm: frozenset[str] = frozenset(
+            k for k in self.image_keys
+            if image_needs_normalization(observation_space.spaces[k])
+        )
         self.state_key = state_key
         self.has_state = has_state
         self.fusion_mode = fusion_mode
@@ -180,8 +184,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         )
 
     def _prepare_image(self, key: str, x: torch.Tensor) -> torch.Tensor:
-        if x.dtype == torch.uint8 or key == "rgb":
-            # uint8 HWC -> float32, normalized to [0, 1]
+        if key in self._needs_norm:
             x = x.float() / 255.0
         else:
             x = x.float()

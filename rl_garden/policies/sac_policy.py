@@ -28,6 +28,7 @@ from rl_garden.networks import (
     BackboneType,
     EnsembleQCritic,
     KernelInit,
+    SpatialEmbQEnsemble,
     SquashedGaussianActor,
     get_actor_critic_arch,
 )
@@ -40,6 +41,37 @@ WSRL_LOG_STD_MIN = -20.0
 
 Actor = SquashedGaussianActor
 ContinuousCritic = EnsembleQCritic
+
+
+class _TokenCompressor(nn.Module):
+    """Compress flat token+prop features for the actor input.
+
+    Splits the flat ``[tokens_flat, prop]`` vector into its two components,
+    applies a Linear+LayerNorm+ReLU compression to the token block, then
+    re-concatenates prop.
+
+    Output dimension: ``output_dim + prop_dim``.
+    """
+
+    def __init__(self, token_dim: int, prop_dim: int, output_dim: int) -> None:
+        super().__init__()
+        self.token_dim = token_dim
+        self.prop_dim = prop_dim
+        self.output_dim = output_dim
+        self.compress = nn.Sequential(
+            nn.Linear(token_dim, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.ReLU(),
+        )
+
+    @property
+    def features_dim(self) -> int:
+        return self.output_dim + self.prop_dim
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        tokens_flat = features[:, : self.token_dim]
+        prop = features[:, self.token_dim :]
+        return torch.cat([self.compress(tokens_flat), prop], dim=-1)
 
 
 def _softplus_inverse(x: float) -> float:
@@ -104,6 +136,8 @@ class SACPolicy(BasePolicy):
         log_std_max: float = LOG_STD_MAX,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
+        actor_feature_dim: Optional[int] = None,
+        critic_spatial_emb_dim: int = 1024,
     ) -> None:
         del use_cql_alpha_lagrange, cql_alpha_lagrange_init
         super().__init__()
@@ -128,8 +162,89 @@ class SACPolicy(BasePolicy):
             actor_arch, critic_arch = get_actor_critic_arch(net_arch)
 
         fd = features_extractor.features_dim
+        sc = features_extractor.structured_feature_config()
+
+        # --- Actor adapter (token compression) ---
+        if actor_feature_dim is not None:
+            if sc is None or sc.get("layout") != "token_and_prop":
+                raise ValueError(
+                    "actor_feature_dim requires the features extractor to declare a "
+                    "'token_and_prop' structured_feature_config. "
+                    f"Got: {sc!r}"
+                )
+            self._actor_adapter: Optional[_TokenCompressor] = _TokenCompressor(
+                token_dim=sc["num_patches"] * sc["patch_dim"],
+                prop_dim=sc["prop_dim"],
+                output_dim=actor_feature_dim,
+            )
+            self._actor_fd: int = self._actor_adapter.features_dim
+        else:
+            self._actor_adapter = None
+            self._actor_fd = fd
+
+        # --- Critic ---
+        if sc is not None and sc.get("layout") == "token_and_prop":
+            self.critic = SpatialEmbQEnsemble(
+                num_patches=sc["num_patches"],
+                patch_dim=sc["patch_dim"],
+                prop_dim=sc["prop_dim"],
+                action_space=action_space,
+                hidden_dims=critic_arch,
+                n_critics=n_critics,
+                spatial_emb_dim=critic_spatial_emb_dim,
+                use_layer_norm=critic_use_layer_norm,
+                kernel_init=kernel_init,
+                features_dim=fd,
+            )
+            self.critic_target = SpatialEmbQEnsemble(
+                num_patches=sc["num_patches"],
+                patch_dim=sc["patch_dim"],
+                prop_dim=sc["prop_dim"],
+                action_space=action_space,
+                hidden_dims=critic_arch,
+                n_critics=n_critics,
+                spatial_emb_dim=critic_spatial_emb_dim,
+                use_layer_norm=critic_use_layer_norm,
+                kernel_init=kernel_init,
+                features_dim=fd,
+            )
+        elif sc is None:
+            self.critic = ContinuousCritic(
+                fd,
+                action_space,
+                hidden_dims=critic_arch,
+                n_critics=n_critics,
+                use_layer_norm=critic_use_layer_norm,
+                use_group_norm=critic_use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=critic_dropout_rate,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+            )
+            self.critic_target = ContinuousCritic(
+                fd,
+                action_space,
+                hidden_dims=critic_arch,
+                n_critics=n_critics,
+                use_layer_norm=critic_use_layer_norm,
+                use_group_norm=critic_use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=critic_dropout_rate,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+            )
+        else:
+            raise ValueError(
+                f"Unknown structured_feature_config layout {sc.get('layout')!r}. "
+                "Supported: 'token_and_prop'."
+            )
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        for p in self.critic_target.parameters():
+            p.requires_grad_(False)
+
+        # --- Actor ---
         self.actor = Actor(
-            fd,
+            self._actor_fd,
             action_space,
             hidden_dims=actor_arch,
             use_layer_norm=actor_use_layer_norm,
@@ -143,34 +258,6 @@ class SACPolicy(BasePolicy):
             log_std_min=log_std_min,
             log_std_max=log_std_max,
         )
-        self.critic = ContinuousCritic(
-            fd,
-            action_space,
-            hidden_dims=critic_arch,
-            n_critics=n_critics,
-            use_layer_norm=critic_use_layer_norm,
-            use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-        )
-        # Separate target critic, initialized to match critic.
-        self.critic_target = ContinuousCritic(
-            fd,
-            action_space,
-            hidden_dims=critic_arch,
-            n_critics=n_critics,
-            use_layer_norm=critic_use_layer_norm,
-            use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-        )
-        self.critic_target.load_state_dict(self.critic.state_dict())
-        for p in self.critic_target.parameters():
-            p.requires_grad_(False)
 
         self.use_cql_alpha_lagrange = False
         self.cql_alpha_lagrange = None
@@ -184,6 +271,12 @@ class SACPolicy(BasePolicy):
     ) -> torch.Tensor:
         return self._extract_features(obs, stop_gradient=stop_gradient)
 
+    def _transform_features_for_actor(self, features: torch.Tensor) -> torch.Tensor:
+        """Apply token compressor adapter if configured; otherwise identity."""
+        if self._actor_adapter is not None:
+            return self._actor_adapter(features)
+        return features
+
     # --- public inference API ---
 
     def forward(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
@@ -191,9 +284,10 @@ class SACPolicy(BasePolicy):
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         features = self.extract_features(obs)
+        actor_input = self._transform_features_for_actor(features)
         if deterministic:
-            return self.actor.deterministic_action(features)
-        action, _ = self.actor.action_log_prob(features)
+            return self.actor.deterministic_action(actor_input)
+        action, _ = self.actor.action_log_prob(actor_input)
         return action
 
     # --- helpers for SAC.train() ---
@@ -207,8 +301,23 @@ class SACPolicy(BasePolicy):
         if detach_encoder is not None:
             stop_gradient = detach_encoder
         features = self.extract_features(obs, stop_gradient=stop_gradient)
-        action, log_prob = self.actor.action_log_prob(features)
+        actor_input = self._transform_features_for_actor(features)
+        action, log_prob = self.actor.action_log_prob(actor_input)
         return action, log_prob, features
+
+    def _sample_actor_actions(
+        self, features: torch.Tensor, n: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample n actions from the actor using the full actor feature path."""
+        actor_input = self._transform_features_for_actor(features)
+        mean, log_std = self.actor(actor_input)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample(sample_shape=(n,))
+        y_t = torch.tanh(x_t)
+        action = y_t * self.actor.action_scale + self.actor.action_bias
+        log_prob = self.actor._squashed_log_prob(normal, x_t, y_t).squeeze(-1)
+        return action.permute(1, 0, 2), log_prob.permute(1, 0)
 
     def q_values(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False
@@ -265,6 +374,8 @@ class SACPolicy(BasePolicy):
 
     def actor_parameters(self):
         # Actor-only; RGBD actor path uses stop_gradient on image encodings.
+        if self._actor_adapter is not None:
+            yield from self._actor_adapter.parameters()
         yield from self.actor.parameters()
 
     def cql_alpha_lagrange_parameters(self):

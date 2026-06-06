@@ -26,6 +26,8 @@ class ResidualSACPolicy(SACPolicy):
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        actor_feature_dim: Optional[int] = None,
+        critic_spatial_emb_dim: int = 1024,
     ) -> None:
         super().__init__(
             observation_space=observation_space,
@@ -34,21 +36,20 @@ class ResidualSACPolicy(SACPolicy):
             net_arch=net_arch,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
+            actor_feature_dim=actor_feature_dim,
+            critic_spatial_emb_dim=critic_spatial_emb_dim,
         )
+        # Rebuild actor: base_actions are appended after the adapter (if any).
         actor_arch, _ = get_actor_critic_arch(net_arch)
         action_dim = int(np.prod(action_space.shape))
         self.actor = Actor(
-            features_extractor.features_dim + action_dim,
+            self._actor_fd + action_dim,  # post-adapter dim + base_action_dim
             action_space,
             hidden_dims=actor_arch,
             log_std_mode="tanh",
             log_std_min=LOG_STD_MIN,
             log_std_max=LOG_STD_MAX,
         )
-
-    @staticmethod
-    def _actor_features(features: torch.Tensor, base_actions: torch.Tensor) -> torch.Tensor:
-        return torch.cat([features, base_actions], dim=-1)
 
     def predict(
         self,
@@ -60,10 +61,11 @@ class ResidualSACPolicy(SACPolicy):
         if base_actions is None:
             raise ValueError("ResidualSACPolicy.predict requires base_actions.")
         features = self.extract_features(obs)
-        actor_features = self._actor_features(features, base_actions)
+        adapted = self._transform_features_for_actor(features)
+        actor_input = torch.cat([adapted, base_actions], dim=-1)
         if deterministic:
-            return self.actor.deterministic_action(actor_features)
-        action, _ = self.actor.action_log_prob(actor_features)
+            return self.actor.deterministic_action(actor_input)
+        action, _ = self.actor.action_log_prob(actor_input)
         return action
 
     def actor_action_log_prob(
@@ -76,6 +78,7 @@ class ResidualSACPolicy(SACPolicy):
         if detach_encoder is not None:
             stop_gradient = detach_encoder
         features = self.extract_features(obs, stop_gradient=stop_gradient)
-        actor_features = self._actor_features(features, base_actions)
-        unit_residual_action, log_prob = self.actor.action_log_prob(actor_features)
+        adapted = self._transform_features_for_actor(features)
+        actor_input = torch.cat([adapted, base_actions], dim=-1)
+        unit_residual_action, log_prob = self.actor.action_log_prob(actor_input)
         return unit_residual_action, log_prob, features

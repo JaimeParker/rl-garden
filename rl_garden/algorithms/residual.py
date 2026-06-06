@@ -96,6 +96,8 @@ class ResidualSAC(SAC):
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
+            actor_feature_dim=self.actor_feature_dim,
+            critic_spatial_emb_dim=self.critic_spatial_emb_dim,
         )
 
     def _setup_model(self) -> None:

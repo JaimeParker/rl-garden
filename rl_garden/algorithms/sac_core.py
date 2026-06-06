@@ -191,6 +191,7 @@ class SACCore:
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
+            self.policy.features_extractor.prepare_batch(data.obs, data.next_obs)
 
             critic_loss, critic_info = self._critic_loss(data)
             self.q_optimizer.zero_grad()
@@ -270,6 +271,7 @@ class SACCore:
         for j in range(utd_ratio):
             self._global_update += 1
             mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
+            self.policy.features_extractor.prepare_batch(mb.obs, mb.next_obs)
 
             critic_loss, critic_info = self._critic_loss(mb)
             self.q_optimizer.zero_grad()
@@ -285,6 +287,9 @@ class SACCore:
 
             if self._global_update % self.target_network_frequency == 0:
                 self._target_update()
+
+        with torch.no_grad():
+            self.policy.features_extractor.prepare_batch(full_batch.obs)
 
         actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
         self.actor_optimizer.zero_grad()

@@ -43,6 +43,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     resolve_checkpoint_dir,
+    vit_policy_kwargs_from_args,
 )
 from rl_garden.encoders.combined import discover_image_keys
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
@@ -63,7 +64,7 @@ def _save_filename(args: OfflinePretrainArgs, algorithm: str) -> str:
 def _cql_kwargs(
     args: OfflinePretrainArgs, env_spec: OfflineEnvSpec, logger: Logger
 ) -> dict:
-    return dict(
+    kwargs = dict(
         env=env_spec,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
@@ -124,6 +125,14 @@ def _cql_kwargs(
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=False,
     )
+    if isinstance(env_spec.single_observation_space, spaces.Dict):
+        image_keys = discover_image_keys(env_spec.single_observation_space)
+        kwargs.update(
+            policy_kwargs=vit_policy_kwargs_from_args(args, image_keys),
+            actor_feature_dim=args.vit_actor_feature_dim,
+            critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
+        )
+    return kwargs
 
 
 def _wsrl_kwargs(
@@ -137,6 +146,19 @@ def _wsrl_kwargs(
         eval_freq=0,
         num_eval_steps=0,
     )
+    if isinstance(env_spec.single_observation_space, spaces.Dict):
+        image_keys = discover_image_keys(env_spec.single_observation_space)
+        kwargs.update(
+            image_encoder_factory=image_encoder_factory_from_args(args),
+            image_keys=image_keys,
+            state_key="state",
+            use_proprio=args.include_state,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=False,
+            policy_kwargs=vit_policy_kwargs_from_args(args, image_keys),
+            actor_feature_dim=args.vit_actor_feature_dim,
+            critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
+        )
     return kwargs
 
 

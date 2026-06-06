@@ -21,6 +21,7 @@ from rl_garden.common.cli_args import (
     image_keys_from_env,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
+    vit_policy_kwargs_from_args,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
@@ -91,6 +92,7 @@ def main() -> None:
 
     factory = image_encoder_factory_from_args(args)
     image_keys = image_keys_from_env(env, args)
+    policy_kwargs = vit_policy_kwargs_from_args(args, image_keys)
 
     agent = SAC(
         env=env,
@@ -118,6 +120,9 @@ def main() -> None:
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
+        policy_kwargs=policy_kwargs,
+        actor_feature_dim=args.vit_actor_feature_dim,
+        critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)

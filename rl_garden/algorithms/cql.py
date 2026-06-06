@@ -66,6 +66,8 @@ class CQLCore(SACCore):
         # Q-ensemble (REDQ)
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
+        actor_feature_dim: Optional[int] = None,
+        critic_spatial_emb_dim: int = 1024,
         # CQL parameters
         use_cql_loss: bool = True,
         cql_n_actions: int = 10,
@@ -134,6 +136,8 @@ class CQLCore(SACCore):
         self.std_parameterization = std_parameterization
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
+        self.actor_feature_dim = actor_feature_dim
+        self.critic_spatial_emb_dim = critic_spatial_emb_dim
 
         self.use_td_loss = use_td_loss
         self.use_cql_loss = use_cql_loss
@@ -189,6 +193,8 @@ class CQLCore(SACCore):
             "std_parameterization": self.std_parameterization,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
+            "actor_feature_dim": self.actor_feature_dim,
+            "critic_spatial_emb_dim": self.critic_spatial_emb_dim,
             "use_td_loss": self.use_td_loss,
             "use_cql_loss": self.use_cql_loss,
             "cql_n_actions": self.cql_n_actions,
@@ -277,17 +283,20 @@ class CQLCore(SACCore):
         return normalized
 
     def _resolve_policy_kwargs(self) -> dict[str, Any]:
-        default_features_extractor_class = self._default_features_extractor_class()
-        default_features_extractor_kwargs = dict(self._default_features_extractor_kwargs())
+        has_custom_class = "features_extractor_class" in self.policy_kwargs
+        default_features_extractor_class = (
+            None if has_custom_class else self._default_features_extractor_class()
+        )
+        default_features_extractor_kwargs = (
+            {} if has_custom_class else dict(self._default_features_extractor_kwargs())
+        )
         resolved = {
             "features_extractor_class": default_features_extractor_class,
             "features_extractor_kwargs": default_features_extractor_kwargs,
         }
 
-        if "features_extractor_class" in self.policy_kwargs:
+        if has_custom_class:
             resolved["features_extractor_class"] = self.policy_kwargs["features_extractor_class"]
-            if resolved["features_extractor_class"] is not default_features_extractor_class:
-                resolved["features_extractor_kwargs"] = {}
         if "features_extractor_kwargs" in self.policy_kwargs:
             if resolved["features_extractor_class"] is default_features_extractor_class:
                 resolved["features_extractor_kwargs"] = {
@@ -379,6 +388,8 @@ class CQLCore(SACCore):
             std_parameterization=self.std_parameterization,
             log_std_mode="clamp",
             log_std_min=-20.0,
+            actor_feature_dim=self.actor_feature_dim,
+            critic_spatial_emb_dim=self.critic_spatial_emb_dim,
         ).to(self.device)
 
         self.q_optimizer = make_optimizer(
@@ -488,17 +499,7 @@ class CQLCore(SACCore):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if features is None:
             features = self.policy.extract_features(obs)
-        actor = self.policy.actor
-        mean, log_std = actor(features)
-        std = log_std.exp()
-        normal = torch.distributions.Normal(mean, std)
-        x_t = normal.rsample(sample_shape=(n,))
-        y_t = torch.tanh(x_t)
-        action = y_t * actor.action_scale + actor.action_bias
-        log_prob = normal.log_prob(x_t)
-        log_prob = log_prob - torch.log(actor.action_scale * (1 - y_t.pow(2)) + 1e-6)
-        log_prob = log_prob.sum(-1)
-        return action.permute(1, 0, 2), log_prob.permute(1, 0)
+        return self.policy._sample_actor_actions(features, n)
 
     def _sample_random_actions(self, batch_size: int, action_dim: int) -> torch.Tensor:
         if self.cql_action_sample_method == "uniform":
@@ -721,6 +722,9 @@ class CQLCore(SACCore):
             info["cql_alpha"] = self._current_cql_alpha().detach()
         return info
 
+    def _actor_stop_gradient(self) -> bool:
+        return isinstance(self.policy.observation_space, spaces.Dict)
+
 
 class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
     """Internal rollout/eval shell that wires ``CQLCore`` into ``OffPolicyAlgorithm``.
@@ -785,6 +789,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         # Q-ensemble (REDQ)
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
+        actor_feature_dim: Optional[int] = None,
+        critic_spatial_emb_dim: int = 1024,
         # CQL parameters
         use_cql_loss: bool = True,
         cql_n_actions: int = 10,
@@ -874,6 +880,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             std_parameterization=std_parameterization,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
+            actor_feature_dim=actor_feature_dim,
+            critic_spatial_emb_dim=critic_spatial_emb_dim,
             use_cql_loss=use_cql_loss,
             cql_n_actions=cql_n_actions,
             cql_alpha=cql_alpha,
@@ -945,6 +953,8 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
+        actor_feature_dim: Optional[int] = None,
+        critic_spatial_emb_dim: int = 1024,
         use_cql_loss: bool = True,
         cql_n_actions: int = 10,
         cql_alpha: float = 5.0,
@@ -1022,6 +1032,8 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             std_parameterization=std_parameterization,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
+            actor_feature_dim=actor_feature_dim,
+            critic_spatial_emb_dim=critic_spatial_emb_dim,
             use_cql_loss=use_cql_loss,
             cql_n_actions=cql_n_actions,
             cql_alpha=cql_alpha,

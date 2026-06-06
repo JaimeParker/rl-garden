@@ -1,4 +1,4 @@
-from rl_garden.encoders.augment import RandomCrop
+from rl_garden.encoders.augment import RandomCrop, RandomShiftsAug
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
@@ -13,6 +13,12 @@ from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.encoders.plain_conv import PlainConv
 from rl_garden.encoders.pooling import AvgPool, SpatialLearnedEmbeddings, SpatialSoftmax
 from rl_garden.encoders.resnet import ResNetBlock, ResNetEncoder, resnet_encoder_factory
+from rl_garden.encoders.vit import (
+    MinVit,
+    ViTTokenAndPropExtractor,
+    ViTImageEncoder,
+    vit_image_encoder_factory,
+)
 
 __all__ = [
     "AvgPool",
@@ -22,14 +28,19 @@ __all__ = [
     "FlattenExtractor",
     "ImageEncoderFactory",
     "ImageFusionMode",
+    "MinVit",
     "PlainConv",
     "ProprioEncoder",
     "RandomCrop",
+    "RandomShiftsAug",
     "ResNetBlock",
     "ResNetEncoder",
     "SpatialLearnedEmbeddings",
     "SpatialSoftmax",
+    "ViTTokenAndPropExtractor",
+    "ViTImageEncoder",
     "default_image_encoder_factory",
     "discover_image_keys",
     "resnet_encoder_factory",
+    "vit_image_encoder_factory",
 ]

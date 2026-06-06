@@ -27,7 +27,11 @@ except ImportError:
 
 from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
-from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_obs_mode
+from rl_garden.common.cli_args import (
+    image_encoder_factory_from_args,
+    image_keys_from_obs_mode,
+    vit_policy_kwargs_from_args,
+)
 from rl_garden.datasets import (
     CheckpointScore,
     PolicySource,
@@ -61,9 +65,18 @@ class Args:
 
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
     encoder_features_dim: int = 256
     image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
+    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
+    vit_embed_dim: int = 128
+    vit_depth: int = 1
+    vit_num_heads: int = 4
+    vit_embed_norm: bool = False
+    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
+    vit_random_shift_pad: int = 4
+    vit_actor_feature_dim: Optional[int] = None
+    vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
@@ -116,11 +129,15 @@ def _make_agent(args: Args, env):
         return SAC(**common_kwargs)
 
     factory = image_encoder_factory_from_args(args)
+    image_keys = image_keys_from_obs_mode(args.obs_mode)
     return SAC(
         **common_kwargs,
-        image_keys=image_keys_from_obs_mode(args.obs_mode),
+        image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
+        actor_feature_dim=args.vit_actor_feature_dim,
+        critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
+        policy_kwargs=vit_policy_kwargs_from_args(args, image_keys),
     )
 
 

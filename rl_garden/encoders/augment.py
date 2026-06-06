@@ -42,3 +42,57 @@ class RandomCrop(nn.Module):
         for i in range(b):
             out[i] = padded[i, :, offs_h[i] : offs_h[i] + h, offs_w[i] : offs_w[i] + w]
         return out
+
+
+class RandomShiftsAug(nn.Module):
+    """Replicate-pad and randomly shift square NCHW images.
+
+    Ported from residual-offpolicy-rl's ``RandomShiftsAug``. Inputs are float
+    tensors in [0, 1]. Unlike ``RandomCrop``, this module uses ``grid_sample``
+    so the same code path works efficiently on CUDA batches.
+    """
+
+    def __init__(self, padding: int = 4) -> None:
+        super().__init__()
+        self.padding = padding
+        self.register_buffer("_base_grid", torch.empty(0), persistent=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.padding <= 0:
+            return x
+        n, _c, h, w = x.shape
+        if h != w:
+            raise ValueError(f"RandomShiftsAug expects square images, got {(h, w)}.")
+        x = F.pad(x, [self.padding] * 4, mode="replicate")
+        if (
+            self._base_grid.numel() == 0
+            or self._base_grid.shape[1] != h
+            or self._base_grid.device != x.device
+            or self._base_grid.dtype != x.dtype
+        ):
+            eps = 1.0 / (h + 2 * self.padding)
+            arange = torch.linspace(
+                -1.0 + eps,
+                1.0 - eps,
+                h + 2 * self.padding,
+                device=x.device,
+                dtype=x.dtype,
+            )[:h]
+            arange = arange.unsqueeze(0).repeat(h, 1).unsqueeze(2)
+            base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
+            self._base_grid = base_grid.unsqueeze(0)  # (1, H, W, 2)
+        base_grid = self._base_grid.expand(n, -1, -1, -1)
+
+        shift = torch.randint(
+            0,
+            2 * self.padding + 1,
+            size=(n, 1, 1, 2),
+            device=x.device,
+        ).to(dtype=x.dtype)
+        shift *= 2.0 / (h + 2 * self.padding)
+        return F.grid_sample(
+            x,
+            base_grid + shift,
+            padding_mode="zeros",
+            align_corners=False,
+        )
