@@ -58,6 +58,7 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     tau: float = 0.01
     policy_lr: float = 3e-4
     q_lr: float = 3e-4
+    critic_impl: Literal["vmap", "legacy"] = "vmap"
 
 
 @dataclass

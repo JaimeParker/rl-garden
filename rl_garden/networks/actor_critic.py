@@ -11,6 +11,7 @@ from gymnasium import spaces
 from rl_garden.networks.mlp import KernelInit, MLPResNet, create_mlp
 
 BackboneType = Literal["mlp", "mlp_resnet"]
+CriticImpl = Literal["vmap", "legacy"]
 
 
 def get_actor_critic_arch(
@@ -340,24 +341,20 @@ def _dotted_from_safe(safe: str, prefix: str) -> str:
 
 
 class EnsembleQCritic(nn.Module):
-    """Ensemble of Q(s, a) networks, vmap-fused via ``torch.func``.
+    """Ensemble of Q(s, a) networks.
 
-    Replaces the old ``nn.ModuleList`` of N independent ``_QHead`` instances
-    with a single prototype + stacked parameters of shape ``(n_critics, ...)``.
-    ``forward`` runs all N critics in one fused pass via
-    ``torch.func.vmap(functional_call)``, eliminating per-critic kernel launch
-    overhead. The public API (``forward`` returning a tuple, ``forward_all``
-    returning ``(n_critics, batch, 1)``) is unchanged so ``WSRLPolicy`` and
-    the polyak target update need no modifications.
+    ``critic_impl="vmap"`` uses the fused ``torch.func.vmap`` implementation.
+    ``critic_impl="legacy"`` keeps the pre-vmap ``nn.ModuleList`` layout for
+    training-regression ablations while preserving the same public API.
 
     Each critic is initialized independently before stacking — the diverse
-    random init across the ensemble is preserved.
+    random init across the ensemble is preserved in both modes.
 
-    Checkpoint state_dict keys:
+    Vmap checkpoint state_dict keys:
         ``ens_p_<dotted_path>``  (e.g. ``ens_p_trunk__0__weight``, shape
         ``(n_critics, *original_shape)``).
     Legacy checkpoints with ``q_nets.<i>.<dotted_path>`` keys are migrated
-    transparently via ``_load_from_state_dict`` (see below).
+    transparently when loading into vmap mode.
     """
 
     def __init__(
@@ -373,12 +370,18 @@ class EnsembleQCritic(nn.Module):
         dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        critic_impl: CriticImpl = "vmap",
     ) -> None:
         super().__init__()
         if n_critics < 1:
             raise ValueError(f"n_critics must be >= 1, got {n_critics}")
+        if critic_impl not in ("vmap", "legacy"):
+            raise ValueError(
+                f"critic_impl must be 'vmap' or 'legacy', got {critic_impl!r}"
+            )
 
         self.n_critics = n_critics
+        self.critic_impl = critic_impl
         act_dim = int(np.prod(action_space.shape))
         self._head_kwargs = dict(
             features_dim=features_dim,
@@ -391,6 +394,14 @@ class EnsembleQCritic(nn.Module):
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
         )
+
+        if critic_impl == "legacy":
+            self.q_nets = nn.ModuleList(
+                [_QHead(**self._head_kwargs) for _ in range(n_critics)]
+            )
+            self._dotted_param_names = []
+            self._dotted_buffer_names = []
+            return
 
         # 1) Initialize N independent critics so each has diverse random init.
         critics = [_QHead(**self._head_kwargs) for _ in range(n_critics)]
@@ -418,19 +429,27 @@ class EnsembleQCritic(nn.Module):
         # 5) Prototype carries the forward() structure for functional_call.
         #    Stored via object.__setattr__ to bypass nn.Module's submodule
         #    tracking — we don't want prototype params in ``self.parameters()``.
+        #    Save/restore CPU RNG state so prototype init doesn't shift
+        #    downstream random ops such as replay-buffer sampling.
+        _cpu_rng = torch.get_rng_state()
         prototype = _QHead(**self._head_kwargs)
+        torch.set_rng_state(_cpu_rng)
         # Move prototype to meta device so its parameters take no memory and
         # cannot be accidentally trained. functional_call replaces all params.
         prototype.to("meta")
         object.__setattr__(self, "_prototype", prototype)
 
     def _gather_params(self) -> dict[str, torch.Tensor]:
+        if self.critic_impl != "vmap":
+            raise RuntimeError("_gather_params is only valid for critic_impl='vmap'.")
         return {
             dotted: getattr(self, _safe_name(dotted, _PARAM_PREFIX))
             for dotted in self._dotted_param_names
         }
 
     def _gather_buffers(self) -> dict[str, torch.Tensor]:
+        if self.critic_impl != "vmap":
+            raise RuntimeError("_gather_buffers is only valid for critic_impl='vmap'.")
         return {
             dotted: getattr(self, _safe_name(dotted, _BUFFER_PREFIX))
             for dotted in self._dotted_buffer_names
@@ -440,6 +459,8 @@ class EnsembleQCritic(nn.Module):
         self, features: torch.Tensor, actions: torch.Tensor
     ) -> torch.Tensor:
         """Run all N critics in one fused pass; returns ``(n_critics, batch, 1)``."""
+        if self.critic_impl != "vmap":
+            raise RuntimeError("_vmapped_forward is only valid for critic_impl='vmap'.")
         prototype = self._prototype
 
         def single(params, buffers, f, a):
@@ -452,11 +473,15 @@ class EnsembleQCritic(nn.Module):
     def forward(
         self, features: torch.Tensor, actions: torch.Tensor
     ) -> tuple[torch.Tensor, ...]:
+        if self.critic_impl == "legacy":
+            return tuple(q(features, actions) for q in self.q_nets)
         return tuple(self._vmapped_forward(features, actions).unbind(0))
 
     def forward_all(
         self, features: torch.Tensor, actions: torch.Tensor
     ) -> torch.Tensor:
+        if self.critic_impl == "legacy":
+            return torch.stack(self.forward(features, actions), dim=0)
         return self._vmapped_forward(features, actions)
 
     # ------------------------------------------------------------------
@@ -473,6 +498,17 @@ class EnsembleQCritic(nn.Module):
         unexpected_keys,
         error_msgs,
     ):
+        if getattr(self, "critic_impl", "vmap") == "legacy":
+            return super()._load_from_state_dict(
+                state_dict,
+                prefix,
+                local_metadata,
+                strict,
+                missing_keys,
+                unexpected_keys,
+                error_msgs,
+            )
+
         # Detect legacy ``q_nets.<i>.<...>`` layout in the keys that target
         # this module and convert them in-place to the new ``ens_p_<...>``
         # stacked layout before delegating to the base implementation.
