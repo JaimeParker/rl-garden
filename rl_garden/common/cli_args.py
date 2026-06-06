@@ -76,7 +76,7 @@ class VisionArgs:
     vit_embed_norm: bool = False
     vit_augmentation: Literal["random_shift", "none"] = "random_shift"
     vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: Optional[int] = None
+    vit_actor_feature_dim: int = 128
     vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
@@ -357,7 +357,7 @@ class OfflineVisionArgs:
     vit_embed_norm: bool = False
     vit_augmentation: Literal["random_shift", "none"] = "random_shift"
     vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: Optional[int] = None
+    vit_actor_feature_dim: int = 128
     vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False

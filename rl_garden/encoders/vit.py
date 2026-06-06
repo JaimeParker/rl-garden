@@ -17,7 +17,7 @@ from gymnasium import spaces
 from torch.nn.init import trunc_normal_
 
 from rl_garden.encoders.augment import RandomShiftsAug
-from rl_garden.encoders.base import BaseFeaturesExtractor, TokenAndPropFeatureConfig
+from rl_garden.encoders.base import BaseFeaturesExtractor, TokenAndPropFeatureConfig, image_needs_normalization
 
 ViTFusionMode = Literal["per_key", "stack_channels"]
 ViTAugmentationMode = Literal["random_shift", "none"]
@@ -159,6 +159,7 @@ class ViTImageEncoder(BaseFeaturesExtractor):
         embed_norm: bool = False,
         augmentation: ViTAugmentationMode = "none",
         random_shift_pad: int = 4,
+        forward_augment: bool = False,
     ) -> None:
         if len(observation_space.shape) != 3:
             raise ValueError(
@@ -179,6 +180,7 @@ class ViTImageEncoder(BaseFeaturesExtractor):
         self.num_patches = self.vit.num_patches
         self.repr_dim = self.patch_dim * self.num_patches
         self.augmentation = augmentation
+        self.forward_augment = forward_augment
         self.random_shift = RandomShiftsAug(random_shift_pad)
         self.proj = nn.Linear(self.repr_dim, features_dim)
 
@@ -189,7 +191,7 @@ class ViTImageEncoder(BaseFeaturesExtractor):
         return self.vit(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        tokens = self.encode_tokens(x, augment=self.training)
+        tokens = self.encode_tokens(x, augment=self.forward_augment and self.training)
         return self.proj(tokens.flatten(1))
 
 
@@ -202,6 +204,7 @@ def vit_image_encoder_factory(
     embed_norm: bool = False,
     augmentation: ViTAugmentationMode = "none",
     random_shift_pad: int = 4,
+    forward_augment: bool = False,
 ):
     def _factory(img_space: spaces.Box) -> BaseFeaturesExtractor:
         return ViTImageEncoder(
@@ -213,6 +216,7 @@ def vit_image_encoder_factory(
             embed_norm=embed_norm,
             augmentation=augmentation,
             random_shift_pad=random_shift_pad,
+            forward_augment=forward_augment,
         )
 
     return _factory
@@ -252,6 +256,10 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
         self.image_keys = tuple(k for k in image_keys if k in observation_space.spaces)
         if not self.image_keys:
             raise ValueError("ViTTokenAndPropExtractor requires at least one image key.")
+        self._needs_norm: frozenset[str] = frozenset(
+            k for k in self.image_keys
+            if image_needs_normalization(observation_space.spaces[k])
+        )
         self.state_key = state_key
         self.has_state = use_proprio and state_key in observation_space.spaces
         self.fusion_mode = fusion_mode
@@ -382,7 +390,7 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
         )
 
     def _prepare_image(self, key: str, x: torch.Tensor) -> torch.Tensor:
-        if x.dtype == torch.uint8:
+        if key in self._needs_norm:
             x = x.float() / 255.0
         else:
             x = x.float()

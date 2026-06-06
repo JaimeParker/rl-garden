@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
+import numpy as np
 import gymnasium as gym
+from gymnasium import spaces
 import torch
 import torch.nn as nn
 
@@ -15,6 +17,16 @@ try:
     from typing import TypedDict
 except ImportError:
     from typing_extensions import TypedDict
+
+
+def image_needs_normalization(space: spaces.Box) -> bool:
+    """Return True when the image space stores raw [0, 255] pixel data.
+
+    Covers both uint8 spaces (ManiSkill default) and float32 spaces whose
+    declared upper bound exceeds 1.0 (un-normalized pixels from other sources).
+    A float32 space with high=1.0 is assumed already normalized.
+    """
+    return space.dtype == np.uint8 or float(space.high.max()) > 1.0
 
 
 class TokenAndPropFeatureConfig(TypedDict):
