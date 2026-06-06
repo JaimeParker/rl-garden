@@ -1,5 +1,6 @@
 from rl_garden.networks.actor_critic import (
     BackboneType,
+    CriticImpl,
     DiagGaussianActor,
     EnsembleQCritic,
     SquashedGaussianActor,
@@ -11,6 +12,7 @@ from rl_garden.networks.value import ValueNetwork
 
 __all__ = [
     "BackboneType",
+    "CriticImpl",
     "DiagGaussianActor",
     "EnsembleQCritic",
     "KernelInit",

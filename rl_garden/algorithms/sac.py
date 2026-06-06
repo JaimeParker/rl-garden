@@ -68,6 +68,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        critic_impl: Literal["vmap", "legacy"] = "vmap",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
@@ -138,6 +139,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
+        self.critic_impl = critic_impl
         self.actor_feature_dim = actor_feature_dim
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
 
@@ -211,6 +213,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
+            "critic_impl": self.critic_impl,
         }
         if self._is_dict_obs:
             meta.update(
@@ -370,6 +373,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
+            critic_impl=self.critic_impl,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
         )

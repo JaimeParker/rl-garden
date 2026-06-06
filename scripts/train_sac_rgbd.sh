@@ -58,6 +58,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+ENCODER="plain_conv"
+HAS_Q_LR=0
+for ((i = 0; i < ${#FORWARD_ARGS[@]}; i++)); do
+    arg="${FORWARD_ARGS[$i]}"
+    case "$arg" in
+        --encoder)
+            if (( i + 1 < ${#FORWARD_ARGS[@]} )); then
+                ENCODER="${FORWARD_ARGS[$((i + 1))]}"
+            fi
+            ;;
+        --encoder=*)
+            ENCODER="${arg#*=}"
+            ;;
+        --q_lr|--q-lr|--q_lr=*|--q-lr=*)
+            HAS_Q_LR=1
+            ;;
+    esac
+done
+if [[ "$ENCODER" == resnet* && "$HAS_Q_LR" -eq 0 ]]; then
+    FORWARD_ARGS+=(--q_lr 1e-4)
+fi
+
 exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_sac_rgbd.py" \
     --env_id PickCube-v1 \
     --obs_mode rgb \
