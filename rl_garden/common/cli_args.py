@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 
 @dataclass
@@ -447,46 +447,50 @@ def resolve_eval_record_dir(args: Any, run_name: str) -> str:
     return os.path.join(args.log_dir, run_name, "eval_videos")
 
 
-def image_encoder_factory_from_args(args: VisionArgs):
-    if args.encoder == "plain_conv":
-        if (
-            args.pretrained_weights is not None
-            or args.freeze_resnet_encoder
-            or args.freeze_resnet_backbone
-        ):
-            raise ValueError(
-                "--pretrained_weights, --freeze_resnet_encoder, and "
-                "--freeze_resnet_backbone are only supported for resnet encoders."
-            )
-        from rl_garden.encoders import default_image_encoder_factory
+@dataclass(frozen=True)
+class EncoderSpec:
+    """Declares how one image encoder wires into the CLI/training layer.
 
-        return default_image_encoder_factory(features_dim=args.encoder_features_dim)
+    ``build_factory`` returns the flat image-encoder factory used by *all*
+    algorithms (including PPO/eval). For the structured ViT/SAC path this factory
+    is overridden by ``build_sac_kwargs``' ``policy_kwargs`` features extractor,
+    but PPO/eval still consume the flat factory directly.
 
-    if args.encoder == "vit":
-        if (
-            args.pretrained_weights is not None
-            or args.freeze_resnet_encoder
-            or args.freeze_resnet_backbone
-        ):
-            raise ValueError(
-                "--pretrained_weights, --freeze_resnet_encoder, and "
-                "--freeze_resnet_backbone are only supported for resnet encoders."
-            )
-        from rl_garden.encoders import vit_image_encoder_factory
+    ``build_sac_kwargs`` returns the structured-path kwargs for SAC-family
+    constructors (``policy_kwargs`` + ``actor_feature_dim`` +
+    ``critic_spatial_emb_dim``). It returns ``{}`` for encoders without a
+    structured extractor, so callers can splat the result and fall back to the
+    algorithm constructor defaults.
 
-        # This is the image-only flat ViT factory used by generic CombinedExtractor
-        # paths. SAC-family structured ViT uses ViTTokenAndPropExtractor via
-        # vit_policy_kwargs_from_args(), which overrides the whole extractor.
-        return vit_image_encoder_factory(
-            features_dim=args.encoder_features_dim,
-            embed_dim=args.vit_embed_dim,
-            depth=args.vit_depth,
-            num_heads=args.vit_num_heads,
-            embed_norm=args.vit_embed_norm,
-            augmentation=args.vit_augmentation,
-            random_shift_pad=args.vit_random_shift_pad,
-        )
+    ``build_sac_kwargs`` is intentionally scoped to the SAC family
+    (SAC/CQL/CalQL/WSRL): only those constructors expose
+    ``actor_feature_dim``/``critic_spatial_emb_dim``, and only ``SACPolicy``'s
+    head consumes a ``token_and_prop`` structured extractor (actor token
+    compression + spatial critic embedding). PPO/IQL/BC use only
+    ``build_factory`` (the flat encoder) and have no structured path today.
+    TODO(ppo-vit): to give PPO a structured ViT, add ``token_and_prop`` handling
+    to the PPO policy and a parallel structured-kwargs builder here (e.g. a
+    ``build_ppo_kwargs`` field, or a per-family mapping replacing
+    ``build_sac_kwargs``), then have the PPO entrypoints splat it. The registry
+    is the only place that would change — no other entrypoint needs touching.
 
+    ``allows_resnet_weights`` records whether ``--pretrained_weights`` /
+    ``--freeze_resnet_*`` apply (resnet only); it centralizes the compatibility
+    check that used to be duplicated per-branch.
+    """
+
+    build_factory: Callable[[Any], Any]
+    build_sac_kwargs: Callable[[Any, tuple[str, ...]], dict[str, Any]]
+    allows_resnet_weights: bool
+
+
+def _plain_conv_factory(args: VisionArgs):
+    from rl_garden.encoders import default_image_encoder_factory
+
+    return default_image_encoder_factory(features_dim=args.encoder_features_dim)
+
+
+def _resnet_factory(args: VisionArgs):
     from rl_garden.encoders import resnet_encoder_factory
 
     return resnet_encoder_factory(
@@ -498,36 +502,115 @@ def image_encoder_factory_from_args(args: VisionArgs):
     )
 
 
-def vit_policy_kwargs_from_args(
-    args: VisionArgs, image_keys: tuple[str, ...]
-) -> dict[str, Any]:
-    """Build ``policy_kwargs`` for ``ViTTokenAndPropExtractor`` from CLI args.
+def _vit_factory(args: VisionArgs):
+    # Image-only flat ViT factory used by generic CombinedExtractor paths (e.g.
+    # PPO). SAC-family structured ViT instead installs ViTTokenAndPropExtractor
+    # via vit_sac_kwargs_from_args(), which overrides the whole extractor.
+    from rl_garden.encoders import vit_image_encoder_factory
 
-    Returns an empty dict when encoder is not 'vit'.  The returned dict only
-    configures the features extractor; policy-head hyperparams
-    (``actor_feature_dim``, ``critic_spatial_emb_dim``) are passed directly to
-    the algorithm constructor.
-    """
-    if args.encoder != "vit":
-        return {}
+    return vit_image_encoder_factory(
+        features_dim=args.encoder_features_dim,
+        embed_dim=args.vit_embed_dim,
+        depth=args.vit_depth,
+        num_heads=args.vit_num_heads,
+        embed_norm=args.vit_embed_norm,
+        augmentation=args.vit_augmentation,
+        random_shift_pad=args.vit_random_shift_pad,
+    )
+
+
+def _no_sac_kwargs(args: VisionArgs, image_keys: tuple[str, ...]) -> dict[str, Any]:
+    return {}
+
+
+def _vit_sac_kwargs(args: VisionArgs, image_keys: tuple[str, ...]) -> dict[str, Any]:
     from rl_garden.encoders import ViTTokenAndPropExtractor
 
     return {
-        "features_extractor_class": ViTTokenAndPropExtractor,
-        "features_extractor_kwargs": {
-            "image_keys": image_keys,
-            "state_key": "state",
-            "use_proprio": args.include_state,
-            "fusion_mode": args.vit_fusion_mode,
-            "enable_stacking": False,
-            "embed_dim": args.vit_embed_dim,
-            "depth": args.vit_depth,
-            "num_heads": args.vit_num_heads,
-            "embed_norm": args.vit_embed_norm,
-            "augmentation": args.vit_augmentation,
-            "random_shift_pad": args.vit_random_shift_pad,
+        "policy_kwargs": {
+            "features_extractor_class": ViTTokenAndPropExtractor,
+            "features_extractor_kwargs": {
+                "image_keys": image_keys,
+                "state_key": "state",
+                "use_proprio": args.include_state,
+                "fusion_mode": args.vit_fusion_mode,
+                "enable_stacking": False,
+                "embed_dim": args.vit_embed_dim,
+                "depth": args.vit_depth,
+                "num_heads": args.vit_num_heads,
+                "embed_norm": args.vit_embed_norm,
+                "augmentation": args.vit_augmentation,
+                "random_shift_pad": args.vit_random_shift_pad,
+            },
         },
+        "actor_feature_dim": args.vit_actor_feature_dim,
+        "critic_spatial_emb_dim": args.vit_critic_spatial_emb_dim,
     }
+
+
+# Single source of truth for image encoders. Adding a new encoder = one entry
+# here (plus its name in VisionArgs.encoder); training/eval entrypoints stay
+# encoder-agnostic. The ``test_encoder_registry_matches_literal`` test guards
+# that this dict and the ``VisionArgs.encoder`` Literal stay in sync.
+ENCODER_REGISTRY: dict[str, EncoderSpec] = {
+    "plain_conv": EncoderSpec(_plain_conv_factory, _no_sac_kwargs, allows_resnet_weights=False),
+    "resnet10": EncoderSpec(_resnet_factory, _no_sac_kwargs, allows_resnet_weights=True),
+    "resnet18": EncoderSpec(_resnet_factory, _no_sac_kwargs, allows_resnet_weights=True),
+    "vit": EncoderSpec(_vit_factory, _vit_sac_kwargs, allows_resnet_weights=False),
+}
+
+
+def _resolve_encoder_spec(args: VisionArgs) -> EncoderSpec:
+    try:
+        return ENCODER_REGISTRY[args.encoder]
+    except KeyError:
+        raise ValueError(
+            f"Unknown encoder {args.encoder!r}. Known: {sorted(ENCODER_REGISTRY)}."
+        )
+
+
+def image_encoder_factory_from_args(args: VisionArgs):
+    """Return the flat image-encoder factory for ``args.encoder``.
+
+    Also enforces that resnet-only options (``--pretrained_weights`` /
+    ``--freeze_resnet_*``) are not set for non-resnet encoders.
+    """
+    spec = _resolve_encoder_spec(args)
+    if not spec.allows_resnet_weights and (
+        args.pretrained_weights is not None
+        or args.freeze_resnet_encoder
+        or args.freeze_resnet_backbone
+    ):
+        raise ValueError(
+            "--pretrained_weights, --freeze_resnet_encoder, and "
+            "--freeze_resnet_backbone are only supported for resnet encoders."
+        )
+    return spec.build_factory(args)
+
+
+def vit_sac_kwargs_from_args(
+    args: VisionArgs, image_keys: tuple[str, ...]
+) -> dict[str, Any]:
+    """Structured-path kwargs for SAC-family constructors, keyed by encoder.
+
+    For encoders that install a structured features extractor (currently only
+    ``vit``) this returns ``policy_kwargs`` plus the policy-head hyperparameters
+    (``actor_feature_dim``, ``critic_spatial_emb_dim``). For every other encoder
+    it returns ``{}`` so callers can splat the result and fall back to the
+    algorithm constructor defaults (``actor_feature_dim=None``,
+    ``critic_spatial_emb_dim=1024``, ``policy_kwargs=None``).
+
+    NOTE(ppo-vit): the ``sac`` here is load-bearing, not just a label -- the
+    returned dict is keyed to SAC-family constructor params and would raise
+    ``TypeError`` if splatted into a PPO/IQL/BC constructor (they have no
+    ``actor_feature_dim``/``critic_spatial_emb_dim``). When PPO gains
+    ``token_and_prop`` handling, do NOT blindly reuse this bundle and do rename
+    this to a per-family form: PPO's head kwargs will likely differ -- notably
+    ``critic_spatial_emb_dim`` is a Q-critic concept, whereas PPO has a value
+    head. Add a sibling builder (e.g. ``build_ppo_kwargs``) on ``EncoderSpec``
+    rather than widening this one.
+    """
+    return _resolve_encoder_spec(args).build_sac_kwargs(args, image_keys)
 
 
 def image_keys_from_obs_mode(obs_mode: str) -> tuple[str, ...]:

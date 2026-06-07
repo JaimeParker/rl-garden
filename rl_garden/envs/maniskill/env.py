@@ -74,6 +74,12 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
     )
 
     # RGBD dict -> flat {rgb(/depth), state} dict
+    # FIXME(depth-obs-mode): `"depth" in cfg.obs_mode` is a substring test, so
+    # obs_mode="rgbd" yields False ("depth" is not a substring of "rgbd") and
+    # depth is silently dropped -- yet image_keys_from_obs_mode("rgbd") returns
+    # ("rgb", "depth"). The two disagree on what "rgbd" means. Decide the rgbd
+    # contract and make env factory + image_keys helper consistent. (Pre-existing;
+    # out of scope for the encoder-registry change.)
     if _is_visual_obs_mode(cfg.obs_mode):
         if cfg.per_camera_rgbd:
             from rl_garden.envs.wrappers import PerCameraRGBDWrapper

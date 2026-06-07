@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 
 from rl_garden.common.cli_args import (
+    ENCODER_REGISTRY,
     LoggingArgs,
+    VisionArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_obs_mode,
-    vit_policy_kwargs_from_args,
+    vit_sac_kwargs_from_args,
 )
 
 
@@ -263,6 +265,8 @@ class _VitArgs:
     vit_embed_norm: bool = False
     vit_augmentation: str = "random_shift"
     vit_random_shift_pad: int = 4
+    vit_actor_feature_dim: int = 128
+    vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: str | None = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
@@ -279,13 +283,40 @@ def test_vit_rejects_resnet_only_options() -> None:
         image_encoder_factory_from_args(args)
 
 
-def test_vit_policy_kwargs_defaults_to_per_key() -> None:
-    kwargs = vit_policy_kwargs_from_args(_VitArgs(), ("rgb_base", "rgb_wrist"))
-    assert kwargs["features_extractor_kwargs"]["fusion_mode"] == "per_key"
-    assert kwargs["features_extractor_kwargs"]["image_keys"] == ("rgb_base", "rgb_wrist")
-    # actor/critic dims are NOT in extractor kwargs
-    assert "actor_feature_dim" not in kwargs["features_extractor_kwargs"]
-    assert "critic_spatial_emb_dim" not in kwargs["features_extractor_kwargs"]
+def test_vit_sac_kwargs_defaults_to_per_key() -> None:
+    kwargs = vit_sac_kwargs_from_args(_VitArgs(), ("rgb_base", "rgb_wrist"))
+    extractor_kwargs = kwargs["policy_kwargs"]["features_extractor_kwargs"]
+    assert extractor_kwargs["fusion_mode"] == "per_key"
+    assert extractor_kwargs["image_keys"] == ("rgb_base", "rgb_wrist")
+    # head hyperparams live at the bundle top level, not in the extractor kwargs
+    assert kwargs["actor_feature_dim"] == 128
+    assert kwargs["critic_spatial_emb_dim"] == 1024
+    assert "actor_feature_dim" not in extractor_kwargs
+    assert "critic_spatial_emb_dim" not in extractor_kwargs
+
+
+def test_encoder_registry_matches_literal() -> None:
+    """Every VisionArgs.encoder choice must have exactly one registry entry."""
+    from typing import get_args, get_type_hints
+
+    literal_choices = set(get_args(get_type_hints(VisionArgs)["encoder"]))
+    assert literal_choices == set(ENCODER_REGISTRY)
+
+
+@pytest.mark.parametrize("encoder", ["plain_conv", "resnet10", "resnet18"])
+def test_vit_sac_kwargs_empty_for_non_vit(encoder: str) -> None:
+    # Regression guard: non-vit encoders must NOT inject actor_feature_dim, which
+    # crashed every non-vit RGBD run when forwarded to SACPolicy. Empty bundle ->
+    # the algorithm constructor falls back to actor_feature_dim=None.
+    kwargs = vit_sac_kwargs_from_args(VisionArgs(encoder=encoder), ("rgb",))
+    assert kwargs == {}
+    assert "actor_feature_dim" not in kwargs
+
+
+def test_image_encoder_factory_returns_callable_for_each_encoder() -> None:
+    for encoder in ENCODER_REGISTRY:
+        factory = image_encoder_factory_from_args(VisionArgs(encoder=encoder))
+        assert callable(factory)
 
 
 def test_image_keys_from_obs_mode() -> None:

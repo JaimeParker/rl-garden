@@ -88,6 +88,10 @@ def main() -> None:
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
 
+    # NOTE: encoder="vit" yields the flat ViT image encoder via CombinedExtractor.
+    # The structured ViTTokenAndPropExtractor path is SAC-family only.
+    # TODO(ppo-vit): wire structured ViT for PPO (see EncoderSpec in
+    # rl_garden/common/cli_args.py).
     factory = image_encoder_factory_from_args(args)
     image_keys = image_keys_from_env(env, args)
 

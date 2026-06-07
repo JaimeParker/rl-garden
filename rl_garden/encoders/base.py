@@ -26,6 +26,12 @@ def image_needs_normalization(space: spaces.Box) -> bool:
     declared upper bound exceeds 1.0 (un-normalized pixels from other sources).
     A float32 space with high=1.0 is assumed already normalized.
     """
+    # FIXME(depth-norm): the high>1.0 branch assumes [0,255] pixel data, so an
+    # int16 depth space (high=32767) is flagged here and then divided by 255 in
+    # CombinedExtractor._prepare_image -- not a valid [0,1] depth normalization
+    # (32767/255 ~= 128). Depth needs its own scaling, distinct from RGB /255.
+    # Pre-existing in 7444cb3; only reachable when obs_mode contains "depth".
+    # Out of scope for the encoder-registry change.
     return space.dtype == np.uint8 or float(space.high.max()) > 1.0
 
 

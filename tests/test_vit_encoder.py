@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.common.cli_args import vit_policy_kwargs_from_args
+from rl_garden.common.cli_args import vit_sac_kwargs_from_args
 from rl_garden.encoders import RandomShiftsAug, ViTTokenAndPropExtractor, ViTImageEncoder
 from rl_garden.encoders.base import TokenAndPropFeatureConfig
 from rl_garden.policies import ResidualSACPolicy, SACPolicy
@@ -254,7 +254,7 @@ def test_residual_sac_policy_with_vit_uses_adapter():
     assert policy.q_values_all(features, action).shape == (2, 2, 1)
 
 
-def test_vit_policy_kwargs_from_args_defaults_to_per_key():
+def test_vit_sac_kwargs_from_args_defaults_to_per_key():
     class Args:
         encoder = "vit"
         include_state = True
@@ -265,13 +265,18 @@ def test_vit_policy_kwargs_from_args_defaults_to_per_key():
         vit_embed_norm = False
         vit_augmentation = "random_shift"
         vit_random_shift_pad = 4
+        vit_actor_feature_dim = 128
+        vit_critic_spatial_emb_dim = 1024
 
-    kwargs = vit_policy_kwargs_from_args(Args(), ("rgb_base", "rgb_wrist"))
-    assert kwargs["features_extractor_class"] is ViTTokenAndPropExtractor
-    ext_kwargs = kwargs["features_extractor_kwargs"]
+    kwargs = vit_sac_kwargs_from_args(Args(), ("rgb_base", "rgb_wrist"))
+    policy_kwargs = kwargs["policy_kwargs"]
+    assert policy_kwargs["features_extractor_class"] is ViTTokenAndPropExtractor
+    ext_kwargs = policy_kwargs["features_extractor_kwargs"]
     assert ext_kwargs["fusion_mode"] == "per_key"
     assert ext_kwargs["image_keys"] == ("rgb_base", "rgb_wrist")
-    # actor/critic dims are NOT in extractor kwargs
+    # head hyperparams live at the top level, not in the extractor kwargs
+    assert kwargs["actor_feature_dim"] == 128
+    assert kwargs["critic_spatial_emb_dim"] == 1024
     assert "actor_feature_dim" not in ext_kwargs
     assert "critic_spatial_emb_dim" not in ext_kwargs
 

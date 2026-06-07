@@ -20,7 +20,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     resolve_checkpoint_dir,
-    vit_policy_kwargs_from_args,
+    vit_sac_kwargs_from_args,
 )
 from rl_garden.encoders import discover_image_keys
 from rl_garden.envs import RoboTwinEnvConfig, make_robotwin_env
@@ -147,7 +147,6 @@ def main() -> None:
     eval_env = _make_env(args, args.num_eval_envs, is_eval=True) if args.num_eval_envs > 0 else None
     factory = image_encoder_factory_from_args(args)
     image_keys = discover_image_keys(env.single_observation_space)
-    policy_kwargs = vit_policy_kwargs_from_args(args, image_keys)
 
     agent = SAC(
         env=env,
@@ -175,9 +174,7 @@ def main() -> None:
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
-        actor_feature_dim=args.vit_actor_feature_dim,
-        critic_spatial_emb_dim=args.vit_critic_spatial_emb_dim,
-        policy_kwargs=policy_kwargs,
+        **vit_sac_kwargs_from_args(args, image_keys),
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
