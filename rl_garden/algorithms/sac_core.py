@@ -225,6 +225,9 @@ class SACCore:
                 post_info = self._post_actor_update(data)
                 if compute_info:
                     actor_losses_t.append(actor_loss.detach())
+                    info_accum.setdefault("entropy", []).append(-log_prob_detached.mean())
+                    for key, value in self.policy.actor_diagnostics(data.obs).items():
+                        info_accum.setdefault(key, []).append(value)
                     for key, value in post_info.items():
                         info_accum.setdefault(key, []).append(value)
 
@@ -251,6 +254,8 @@ class SACCore:
         }
         if "alpha_loss" in alpha_loss_mean:
             out["alpha_loss"] = alpha_loss_mean["alpha_loss"]
+        if self.autotune:
+            out["target_entropy"] = self.target_entropy
         out.update(info_mean)
         return out
 
@@ -313,6 +318,9 @@ class SACCore:
         if not compute_info:
             return {}
 
+        post_info["entropy"] = -log_prob_detached.mean()
+        post_info.update(self.policy.actor_diagnostics(full_batch.obs))
+
         critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
         info_mean = self._reduce_tensor_lists(info_accum)
         post_mean = self._reduce_tensor_lists({k: [v] for k, v in post_info.items()})
@@ -326,6 +334,8 @@ class SACCore:
         }
         if alpha_loss_t is not None:
             out["alpha_loss"] = float(alpha_loss_t.item())
+        if self.autotune:
+            out["target_entropy"] = self.target_entropy
         out.update(post_mean)
         out.update(info_mean)
         return out

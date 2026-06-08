@@ -309,6 +309,34 @@ class SACPolicy(BasePolicy):
         action, log_prob = self.actor.action_log_prob(actor_input)
         return action, log_prob, features
 
+    def actor_diagnostics(self, obs: Obs) -> dict[str, torch.Tensor]:
+        """Diagnostic-only actor stats: entropy decomposition and saturation.
+
+        Mirrors the two additive terms of ``SquashedGaussianActor._squashed_log_prob``
+        (Gaussian log-density minus tanh-squash correction) so ``entropy`` can be
+        read as ``entropy_gaussian + tanh_correction`` without a closed-form
+        Gaussian-entropy estimate (which would require collapsing per-dimension,
+        per-sample std into a single scalar and incurs a Jensen's-gap bias).
+        """
+        with torch.no_grad():
+            features = self.extract_features(obs, stop_gradient=True)
+            actor_input = self._transform_features_for_actor(features)
+            mean, log_std = self.actor(actor_input)
+            std = log_std.exp()
+            normal = torch.distributions.Normal(mean, std)
+            x_t = normal.rsample()
+            y_t = torch.tanh(x_t)
+            gaussian_term = normal.log_prob(x_t).sum(-1)
+            tanh_correction = torch.log(
+                self.actor.action_scale * (1 - y_t.pow(2)) + 1e-6
+            ).sum(-1)
+            return {
+                "policy_std": std.mean(),
+                "action_saturation": torch.tanh(mean).abs().mean(),
+                "entropy_gaussian": -gaussian_term.mean(),
+                "tanh_correction": tanh_correction.mean(),
+            }
+
     def _sample_actor_actions(
         self, features: torch.Tensor, n: int
     ) -> tuple[torch.Tensor, torch.Tensor]:

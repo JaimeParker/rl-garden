@@ -135,6 +135,12 @@ class Logger:
         "calql_bound_rate": "cql/bound_rate",
         # Entropy metrics
         "alpha": "entropy/alpha",
+        "entropy": "entropy/entropy",
+        "target_entropy": "entropy/target_entropy",
+        "policy_std": "entropy/policy_std",
+        "action_saturation": "entropy/action_saturation",
+        "entropy_gaussian": "entropy/entropy_gaussian",
+        "tanh_correction": "entropy/tanh_correction",
         # Training metrics
         "utd_ratio": "train/utd_ratio",
     }
