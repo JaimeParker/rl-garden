@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -91,3 +92,40 @@ def test_sac_actor_loss_uses_all_critics():
     assert q_all.shape[0] == 5
     assert loss.shape == ()
     assert log_prob.shape == (agent.batch_size, 1)
+
+
+def test_actor_diagnostics_preserves_cpu_rng_state():
+    agent = _agent()
+    obs = torch.randn(agent.batch_size, *agent.env.single_observation_space.shape)
+
+    torch.manual_seed(123)
+    expected = torch.rand(4)
+
+    torch.manual_seed(123)
+    diagnostics = agent._actor_diagnostics(obs)
+    actual = torch.rand(4)
+
+    assert "action_saturation" in diagnostics
+    torch.testing.assert_close(actual, expected)
+
+
+def test_actor_diagnostics_preserves_cuda_rng_state():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    agent = _agent(device="cuda", buffer_device="cuda")
+    obs = torch.randn(
+        agent.batch_size,
+        *agent.env.single_observation_space.shape,
+        device="cuda",
+    )
+
+    torch.cuda.manual_seed_all(123)
+    expected = torch.rand(4, device="cuda")
+
+    torch.cuda.manual_seed_all(123)
+    diagnostics = agent._actor_diagnostics(obs)
+    actual = torch.rand(4, device="cuda")
+
+    assert "action_saturation" in diagnostics
+    torch.testing.assert_close(actual, expected)
