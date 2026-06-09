@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, Sequence
 
 
 @dataclass
@@ -323,6 +323,7 @@ class OfflineIQLArgs:
 
 @dataclass
 class OfflineNetworkArgs:
+    net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None
     n_critics: int = 10
     critic_subsample_size: int = 2
     actor_use_layer_norm: bool = True
