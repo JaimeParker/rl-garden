@@ -99,9 +99,13 @@ class PegInsertionSideEnv(BaseEnv):
         num_envs=1,
         reconfiguration_freq=None,
         debug_pose_vis: bool = False,
+        include_reaching_reward: bool = True,
+        include_grasp_reward: bool = True,
         **kwargs,
     ):
         self.debug_pose_vis = debug_pose_vis
+        self.include_reaching_reward = include_reaching_reward
+        self.include_grasp_reward = include_grasp_reward
         if reconfiguration_freq is None:
             if num_envs == 1:
                 reconfiguration_freq = 1
@@ -379,7 +383,11 @@ class PegInsertionSideEnv(BaseEnv):
 
         # check with max_angle=20 to ensure gripper isn't grasping peg at an awkward pose
         is_grasped = self.agent.is_grasping(self.peg, max_angle=20)
-        reward = reaching_reward + is_grasped
+        reward = torch.zeros_like(reaching_reward)
+        if self.include_reaching_reward:
+            reward = reward + reaching_reward
+        if self.include_grasp_reward:
+            reward = reward + is_grasped
 
         # Stage 3: Orient the grasped peg properly towards the hole
 
