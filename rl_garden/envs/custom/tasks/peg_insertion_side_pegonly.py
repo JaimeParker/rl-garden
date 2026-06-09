@@ -159,6 +159,8 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
         fixed_peg_z_rot_deg: Optional[float] = None,
         debug_pose_vis: bool = False,
         peg_density: float = 1000.0, ## default 1000
+        include_reaching_reward: bool = False,
+        include_grasp_reward: bool = False,
         **kwargs,
     ):
         self.fix_box = fix_box  # set before super() since parent's __init__ calls reset()
@@ -185,6 +187,8 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
             *args,
             robot_uids=robot_uids,
             debug_pose_vis=debug_pose_vis,
+            include_reaching_reward=include_reaching_reward,
+            include_grasp_reward=include_grasp_reward,
             **kwargs,
         )
 
@@ -232,7 +236,9 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
     # Camera config for visualization (modify eye/target to change viewing angle)
     # _human_render_camera_eye = [0.5, -0.5, 0.2]
     # _human_render_camera_target = [0, 0, 0.1]
-    _human_render_camera_eye = [0.4, -0.2, 0.2]
+    # _human_render_camera_eye = [0.4, -0.2, 0.2]
+    # _human_render_camera_target = [0, 0, 0.1]
+    _human_render_camera_eye = [0., -0.8, 0.1] 
     _human_render_camera_target = [0, 0, 0.1]
 
     @property
