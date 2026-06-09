@@ -64,13 +64,13 @@ class SACCore:
     def _post_actor_update(self, data) -> dict[str, torch.Tensor]:
         return {}
 
-    def _actor_diagnostics(self, obs) -> dict[str, torch.Tensor]:
+    def _actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
         device = torch.device(getattr(self, "device", "cpu"))
         devices: list[int] = []
         if device.type == "cuda" and torch.cuda.is_available():
             devices = [torch.cuda.current_device() if device.index is None else device.index]
         with torch.random.fork_rng(devices=devices):
-            return self.policy.actor_diagnostics(obs)
+            return self.policy.actor_diagnostics(data.obs)
 
     def _target_update(self) -> None:
         polyak_update(
@@ -234,7 +234,7 @@ class SACCore:
                 if compute_info:
                     actor_losses_t.append(actor_loss.detach())
                     info_accum.setdefault("entropy", []).append(-log_prob_detached.mean())
-                    for key, value in self._actor_diagnostics(data.obs).items():
+                    for key, value in self._actor_diagnostics(data).items():
                         info_accum.setdefault(key, []).append(value)
                     for key, value in post_info.items():
                         info_accum.setdefault(key, []).append(value)
@@ -327,7 +327,7 @@ class SACCore:
             return {}
 
         post_info["entropy"] = -log_prob_detached.mean()
-        post_info.update(self._actor_diagnostics(full_batch.obs))
+        post_info.update(self._actor_diagnostics(full_batch))
 
         critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
         info_mean = self._reduce_tensor_lists(info_accum)
