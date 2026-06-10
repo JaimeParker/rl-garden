@@ -197,3 +197,35 @@ def test_residual_update_hooks_combine_base_and_residual_actions():
     assert actor_loss.shape == ()
     assert log_prob.shape == (agent.batch_size, 1)
     assert torch.isfinite(torch.tensor(train_info["critic_loss"]))
+
+
+def test_residual_actor_diagnostics_use_base_actions_without_advancing_rng():
+    agent = _agent()
+    env = agent.env
+    for _ in range(4):
+        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
+        next_obs = torch.randn_like(obs)
+        base = torch.full((env.num_envs, 2), 0.25)
+        next_base = torch.full((env.num_envs, 2), -0.25)
+        agent.replay_buffer.add(
+            obs,
+            next_obs,
+            base,
+            torch.ones(env.num_envs),
+            torch.zeros(env.num_envs),
+            base_actions=base,
+            next_base_actions=next_base,
+        )
+
+    data = agent.replay_buffer.sample(agent.batch_size)
+
+    torch.manual_seed(123)
+    expected = torch.rand(4)
+
+    torch.manual_seed(123)
+    diagnostics = agent._actor_diagnostics(data)
+    actual = torch.rand(4)
+
+    assert "action_saturation" in diagnostics
+    assert "entropy_gaussian" in diagnostics
+    torch.testing.assert_close(actual, expected)
