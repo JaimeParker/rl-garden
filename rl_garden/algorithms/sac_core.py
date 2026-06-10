@@ -51,11 +51,18 @@ class SACCore:
         return None
 
     def _alpha_loss(self, log_prob_detached: torch.Tensor) -> torch.Tensor:
+        alpha_tuner = getattr(self, "alpha_tuner", None)
+        if alpha_tuner is not None:
+            return alpha_tuner.loss(log_prob_detached, self.target_entropy)
         return -(
             self._current_alpha() * (log_prob_detached + self.target_entropy)
         ).mean()
 
     def _alpha_parameters(self):
+        alpha_tuner = getattr(self, "alpha_tuner", None)
+        if getattr(self, "autotune", False) and alpha_tuner is not None:
+            yield from alpha_tuner.parameters()
+            return
         if getattr(self, "autotune", False) and getattr(self, "log_alpha", None) is not None:
             yield self.log_alpha
         elif getattr(self, "autotune", False) and getattr(self, "temperature_lagrange", None):

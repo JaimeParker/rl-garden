@@ -20,6 +20,7 @@ from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
@@ -63,6 +64,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         grad_clip_norm: Optional[float] = None,
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
+        alpha_tuning: AlphaTuning = "legacy_exp",
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -132,6 +134,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
             raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
         self.ent_coef_init = ent_coef
         self.target_entropy_arg = target_entropy
+        if alpha_tuning not in ("legacy_exp", "log_alpha", "lagrange_softplus"):
+            raise ValueError(f"Unknown alpha_tuning mode: {alpha_tuning!r}.")
+        self.alpha_tuning = alpha_tuning
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
@@ -210,6 +215,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
+            "alpha_tuning": self.alpha_tuning,
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
@@ -234,7 +240,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "target_entropy": self.target_entropy,
         }
         if self.autotune:
-            state["log_alpha"] = self.log_alpha.detach()
+            state["alpha_tuning"] = self.alpha_tuning
+            state["alpha_tuner"] = self.alpha_tuner.state_dict()
+            if self.log_alpha is not None:
+                state["log_alpha"] = self.log_alpha.detach()
         else:
             state["fixed_alpha"] = self._fixed_alpha.detach()
         sched_states: list[Optional[dict]] = []
@@ -246,14 +255,43 @@ class SAC(SACCore, OffPolicyAlgorithm):
     def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
         if "target_entropy" in state:
             self.target_entropy = float(state["target_entropy"])
-        if self.autotune and "log_alpha" in state:
-            self.log_alpha.data.copy_(state["log_alpha"].to(self.device))
+        self._skip_alpha_optimizer_load = False
+        if self.autotune and "alpha_tuner" in state:
+            checkpoint_alpha_tuning = state.get("alpha_tuning", "legacy_exp")
+            if checkpoint_alpha_tuning == self.alpha_tuning:
+                self.alpha_tuner.load_state_dict(state["alpha_tuner"])
+            else:
+                warnings.warn(
+                    "Checkpoint alpha_tuning="
+                    f"{checkpoint_alpha_tuning!r} does not match current "
+                    f"alpha_tuning={self.alpha_tuning!r}; reinitializing alpha. "
+                    "This may affect continued-training performance.",
+                    RuntimeWarning,
+                )
+                self._skip_alpha_optimizer_load = True
+        elif self.autotune and "log_alpha" in state:
+            if self.alpha_tuning == "legacy_exp":
+                self.log_alpha.data.copy_(state["log_alpha"].to(self.device))
+            else:
+                warnings.warn(
+                    "Legacy checkpoint stores log_alpha for alpha_tuning='legacy_exp', "
+                    f"but current alpha_tuning={self.alpha_tuning!r}; reinitializing alpha. "
+                    "This may affect continued-training performance.",
+                    RuntimeWarning,
+                )
+                self._skip_alpha_optimizer_load = True
         elif not self.autotune and "fixed_alpha" in state:
             self._fixed_alpha = state["fixed_alpha"].to(self.device)
         if "lr_scheduler_states" in state:
             for sched, sched_state in zip(self._lr_schedulers, state["lr_scheduler_states"]):
                 if sched is not None and sched_state is not None:
                     sched.load_state_dict(sched_state)
+
+    def _load_optimizer_state_dicts(self, states: dict[str, Any]) -> None:
+        if getattr(self, "_skip_alpha_optimizer_load", False):
+            states = dict(states)
+            states.pop("alpha_optimizer", None)
+        super()._load_optimizer_state_dicts(states)
 
     # --- construction hooks ---
 
@@ -435,23 +473,25 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
 
         # Entropy coefficient (auto-tuned by default).
-        self.autotune = isinstance(self.ent_coef_init, str) and self.ent_coef_init.startswith(
-            "auto"
-        )
+        self.autotune, alpha_init = parse_auto_alpha_init(self.ent_coef_init)
         if self.autotune:
-            init = 1.0
-            if isinstance(self.ent_coef_init, str) and "_" in self.ent_coef_init:
-                init = float(self.ent_coef_init.split("_")[1])
-            self.log_alpha = torch.log(
-                torch.ones(1, device=self.device) * init
-            ).requires_grad_(True)
+            self.alpha_tuner = AlphaTuner(
+                self.alpha_tuning,
+                init_value=alpha_init,
+                device=self.device,
+            )
+            self.log_alpha = getattr(self.alpha_tuner, "log_alpha", None)
             self.alpha_optimizer = make_optimizer(
-                [self.log_alpha], lr=self.alpha_lr, weight_decay=0.0, use_adamw=self.use_adamw
+                list(self.alpha_tuner.parameters()),
+                lr=self.alpha_lr,
+                weight_decay=0.0,
+                use_adamw=self.use_adamw,
             )
         else:
+            self.alpha_tuner = None
             self.log_alpha = None
             self.alpha_optimizer = None
-            self._fixed_alpha = torch.tensor(float(self.ent_coef_init), device=self.device)
+            self._fixed_alpha = torch.tensor(alpha_init, device=self.device)
 
         if self.target_entropy_arg == "auto":
             self.target_entropy = float(
@@ -475,7 +515,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
 
     def _current_alpha(self) -> torch.Tensor:
         if self.autotune:
-            return self.log_alpha.exp()
+            return self.alpha_tuner.current_alpha()
         return self._fixed_alpha
 
     def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:

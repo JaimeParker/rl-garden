@@ -90,6 +90,7 @@ def main() -> None:
         utd=args.utd,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
+        alpha_tuning=args.alpha_tuning,
         critic_impl=args.critic_impl,
         seed=args.seed,
         logger=logger,

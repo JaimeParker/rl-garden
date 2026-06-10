@@ -59,6 +59,7 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     policy_lr: float = 3e-4
     q_lr: float = 3e-4
     critic_impl: Literal["vmap", "legacy"] = "vmap"
+    alpha_tuning: Literal["legacy_exp", "log_alpha", "lagrange_softplus"] = "legacy_exp"
 
 
 @dataclass

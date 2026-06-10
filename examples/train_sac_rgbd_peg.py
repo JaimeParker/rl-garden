@@ -135,6 +135,7 @@ def main() -> None:
         utd=args.utd,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
+        alpha_tuning=args.alpha_tuning,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
