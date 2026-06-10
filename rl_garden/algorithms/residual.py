@@ -157,7 +157,7 @@ class ResidualSAC(SAC):
         min_q = self.policy.min_q_value(features, action, subsample_size=None, target=False)
         return (alpha * log_prob - min_q).mean(), log_prob.detach()
 
-    def _actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
+    def _compute_actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
         return self.policy.actor_diagnostics(data.obs, data.base_actions)
 
     def _reset_base_action_provider(self, env_ids: Optional[torch.Tensor] = None) -> None:

@@ -96,13 +96,14 @@ def test_sac_actor_loss_uses_all_critics():
 
 def test_actor_diagnostics_preserves_cpu_rng_state():
     agent = _agent()
-    obs = torch.randn(agent.batch_size, *agent.env.single_observation_space.shape)
+    _fill(agent)
+    data = agent.replay_buffer.sample(agent.batch_size)
 
     torch.manual_seed(123)
     expected = torch.rand(4)
 
     torch.manual_seed(123)
-    diagnostics = agent._actor_diagnostics(obs)
+    diagnostics = agent._actor_diagnostics(data)
     actual = torch.rand(4)
 
     assert "action_saturation" in diagnostics
@@ -114,17 +115,14 @@ def test_actor_diagnostics_preserves_cuda_rng_state():
         pytest.skip("CUDA is not available")
 
     agent = _agent(device="cuda", buffer_device="cuda")
-    obs = torch.randn(
-        agent.batch_size,
-        *agent.env.single_observation_space.shape,
-        device="cuda",
-    )
+    _fill(agent)
+    data = agent.replay_buffer.sample(agent.batch_size)
 
     torch.cuda.manual_seed_all(123)
     expected = torch.rand(4, device="cuda")
 
     torch.cuda.manual_seed_all(123)
-    diagnostics = agent._actor_diagnostics(obs)
+    diagnostics = agent._actor_diagnostics(data)
     actual = torch.rand(4, device="cuda")
 
     assert "action_saturation" in diagnostics

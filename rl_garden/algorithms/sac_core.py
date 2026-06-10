@@ -65,12 +65,25 @@ class SACCore:
         return {}
 
     def _actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
+        """Run actor diagnostics without perturbing training RNG.
+
+        Subclasses should override ``_compute_actor_diagnostics`` instead of
+        this method so the RNG isolation invariant is preserved.
+        """
         device = torch.device(getattr(self, "device", "cpu"))
         devices: list[int] = []
         if device.type == "cuda" and torch.cuda.is_available():
             devices = [torch.cuda.current_device() if device.index is None else device.index]
         with torch.random.fork_rng(devices=devices):
-            return self.policy.actor_diagnostics(data.obs)
+            return self._compute_actor_diagnostics(data)
+
+    def _compute_actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
+        """Compute actor diagnostics for a sampled replay batch.
+
+        Subclasses may override this to pass algorithm-specific batch fields to
+        policy diagnostics.
+        """
+        return self.policy.actor_diagnostics(data.obs)
 
     def _target_update(self) -> None:
         polyak_update(
