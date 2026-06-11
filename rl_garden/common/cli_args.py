@@ -60,6 +60,12 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     q_lr: float = 3e-4
     critic_impl: Literal["vmap", "legacy"] = "vmap"
     alpha_tuning: Literal["legacy_exp", "log_alpha", "lagrange_softplus"] = "legacy_exp"
+    # Entropy-coefficient knobs, passed through to ``SAC`` unchanged. Defaults
+    # match the SAC constructor defaults exactly so existing runs reproduce
+    # bit-identically (no RNG stream is consumed by these parameters).
+    ent_coef: float | str = "auto"
+    target_entropy: float | str = "auto"
+    alpha_lr: Optional[float] = None
 
 
 @dataclass
