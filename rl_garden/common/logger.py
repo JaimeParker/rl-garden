@@ -123,6 +123,12 @@ class Logger:
         "target_q": "q/target",
         "cql_ood_values": "q/cql_ood",
         "cql_q_diff": "q/cql_diff",
+        # Q landscape diagnostics
+        "q_uniform_var": "qdiag/q_uniform_var",
+        "q_action_grad_norm": "qdiag/q_action_grad_norm",
+        "feature_norm": "qdiag/feature_norm",
+        "feature_dormant_ratio": "qdiag/feature_dormant_ratio",
+        "critic_hidden_dormant_ratio": "qdiag/critic_hidden_dormant_ratio",
         # Loss metrics
         "actor_loss": "losses/actor_loss",
         "critic_loss": "losses/critic_loss",

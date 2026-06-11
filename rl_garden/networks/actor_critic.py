@@ -322,6 +322,12 @@ class _QHead(nn.Module):
         x = torch.cat([features, actions], dim=-1)
         return self.head(self.trunk(x))
 
+    def trunk_features(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        x = torch.cat([features, actions], dim=-1)
+        return self.trunk(x)
+
 
 # Internal: separator used to encode dotted parameter names into nn.Module-safe
 # attribute names. Dots are illegal in attribute keys, so ``trunk.0.weight``
@@ -483,6 +489,27 @@ class EnsembleQCritic(nn.Module):
         if self.critic_impl == "legacy":
             return torch.stack(self.forward(features, actions), dim=0)
         return self._vmapped_forward(features, actions)
+
+    def trunk_features_first(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        """Return trunk activations for critic 0 for diagnostics only."""
+        if self.critic_impl == "legacy":
+            return self.q_nets[0].trunk_features(features, actions)
+
+        prototype = self._prototype
+        params = {
+            dotted[len("trunk.") :]: tensor[0]
+            for dotted, tensor in self._gather_params().items()
+            if dotted.startswith("trunk.")
+        }
+        buffers = {
+            dotted[len("trunk.") :]: tensor[0]
+            for dotted, tensor in self._gather_buffers().items()
+            if dotted.startswith("trunk.")
+        }
+        x = torch.cat([features, actions], dim=-1)
+        return torch.func.functional_call(prototype.trunk, (params, buffers), (x,))
 
     # ------------------------------------------------------------------
     # Legacy state_dict migration (q_nets.{i}.* → ens_p_*).

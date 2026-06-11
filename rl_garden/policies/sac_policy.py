@@ -81,6 +81,17 @@ def _softplus_inverse(x: float) -> float:
     return float(np.log(np.expm1(x)))
 
 
+def _dormant_ratio(activations: torch.Tensor, tau: float = 0.1) -> torch.Tensor:
+    """Fraction of units with mean |activation| <= ``tau`` times the layer mean.
+
+    Relative (Sokar et al. 2023) rather than absolute, so the result stays
+    comparable across encoder configs with different activation scales (e.g.
+    flatten vs. GAP pooling).
+    """
+    mean_abs = activations.abs().mean(dim=0)
+    return (mean_abs <= tau * mean_abs.mean()).float().mean()
+
+
 class CQLAlphaLagrange(nn.Module):
     """Lagrange multiplier for auto-tuning CQL alpha."""
 
@@ -336,6 +347,72 @@ class SACPolicy(BasePolicy):
                 "entropy_gaussian": -gaussian_term.mean(),
                 "tanh_correction": tanh_correction.mean(),
             }
+
+    def q_landscape_diagnostics(
+        self,
+        obs: Obs,
+        *,
+        num_actions: int = 8,
+        batch_size: int = 64,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Diagnostic-only Q landscape stats for a replay batch.
+
+        The caller owns RNG isolation. ``generator`` must be independent from
+        the training RNG if random uniform actions are sampled.
+        """
+        with torch.enable_grad():
+            features = self.extract_features(obs, stop_gradient=True)
+            if batch_size < features.shape[0]:
+                features = features[:batch_size]
+            features = features.detach()
+            feature_norm = features.norm(dim=-1).mean()
+            feature_dormant = _dormant_ratio(features)
+
+            batch = features.shape[0]
+            act_shape = self.action_space.shape
+            low = (self.actor.action_bias - self.actor.action_scale).to(features.device)
+            high = (self.actor.action_bias + self.actor.action_scale).to(features.device)
+            rand = torch.rand(
+                (num_actions, batch, *act_shape),
+                device=features.device,
+                generator=generator,
+            )
+            actions = low + (high - low) * rand
+            flat_features = (
+                features.unsqueeze(0)
+                .expand(num_actions, *features.shape)
+                .reshape(num_actions * batch, -1)
+            )
+            flat_actions = actions.reshape(num_actions * batch, -1).detach()
+            flat_actions.requires_grad_(True)
+
+            q_all = self.q_values_all(flat_features, flat_actions, target=False)
+            q_min = q_all.min(dim=0).values.reshape(num_actions, batch, 1)
+            q_var = q_min.squeeze(-1).var(dim=0, unbiased=False).mean()
+            q_sum = q_min.sum()
+            grad = torch.autograd.grad(
+                q_sum,
+                flat_actions,
+                retain_graph=False,
+                create_graph=False,
+                allow_unused=False,
+            )[0]
+            q_grad_norm = grad.norm(dim=-1).mean()
+
+            diagnostics = {
+                "q_uniform_var": q_var.detach(),
+                "q_action_grad_norm": q_grad_norm.detach(),
+                "feature_norm": feature_norm.detach(),
+                "feature_dormant_ratio": feature_dormant.detach(),
+            }
+            if hasattr(self.critic, "trunk_features_first"):
+                trunk = self.critic.trunk_features_first(
+                    flat_features.detach(),
+                    flat_actions.detach(),
+                )
+                diagnostics["critic_hidden_dormant_ratio"] = _dormant_ratio(trunk).detach()
+            return diagnostics
 
     def _sample_actor_actions(
         self, features: torch.Tensor, n: int

@@ -84,6 +84,28 @@ class SACCore:
         with torch.random.fork_rng(devices=devices):
             return self._compute_actor_diagnostics(data)
 
+    def _q_landscape_diagnostics(self, data) -> dict[str, torch.Tensor]:
+        """Run Q landscape diagnostics without perturbing training RNG."""
+        if not getattr(self, "q_landscape_diagnostics", False):
+            return {}
+        device = torch.device(getattr(self, "device", "cpu"))
+        devices: list[int] = []
+        if device.type == "cuda" and torch.cuda.is_available():
+            devices = [torch.cuda.current_device() if device.index is None else device.index]
+        with torch.random.fork_rng(devices=devices):
+            generator = torch.Generator(device=device)
+            generator.manual_seed(
+                int(getattr(self, "seed", 0))
+                + 2_000_003
+                + int(getattr(self, "_global_update", 0))
+            )
+            return self.policy.q_landscape_diagnostics(
+                data.obs,
+                num_actions=int(getattr(self, "q_landscape_num_actions", 8)),
+                batch_size=int(getattr(self, "q_landscape_batch_size", 64)),
+                generator=generator,
+            )
+
     def _compute_actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
         """Compute actor diagnostics for a sampled replay batch.
 
@@ -256,6 +278,8 @@ class SACCore:
                     info_accum.setdefault("entropy", []).append(-log_prob_detached.mean())
                     for key, value in self._actor_diagnostics(data).items():
                         info_accum.setdefault(key, []).append(value)
+                    for key, value in self._q_landscape_diagnostics(data).items():
+                        info_accum.setdefault(key, []).append(value)
                     for key, value in post_info.items():
                         info_accum.setdefault(key, []).append(value)
 
@@ -348,6 +372,7 @@ class SACCore:
 
         post_info["entropy"] = -log_prob_detached.mean()
         post_info.update(self._actor_diagnostics(full_batch))
+        post_info.update(self._q_landscape_diagnostics(full_batch))
 
         critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
         info_mean = self._reduce_tensor_lists(info_accum)

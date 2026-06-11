@@ -11,6 +11,7 @@ import pytest
 from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
     LoggingArgs,
+    OfflineVisionArgs,
     VisionArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
@@ -60,6 +61,12 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.batch_size == 512
     assert args.utd == 0.25
     assert args.encoder == "plain_conv"
+    assert args.plain_conv_weight_init == "kaiming_uniform"
+    assert args.plain_conv_last_act is True
+    assert args.plain_conv_pooling == "flatten"
+    assert args.image_augmentation == "none"
+    assert args.image_random_shift_pad == 4
+    assert args.q_landscape_diagnostics is False
 
 
 def test_robotwin_sac_defaults_are_memory_safe() -> None:
@@ -270,6 +277,11 @@ class _VitArgs:
     pretrained_weights: str | None = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
+    plain_conv_weight_init: str = "kaiming_uniform"
+    plain_conv_last_act: bool = True
+    plain_conv_pooling: str = "flatten"
+    image_augmentation: str = "none"
+    image_random_shift_pad: int = 4
 
 
 def test_plain_conv_rejects_resnet_only_options() -> None:
@@ -282,6 +294,19 @@ def test_vit_rejects_resnet_only_options() -> None:
     with pytest.raises(ValueError, match="only supported for resnet encoders"):
         image_encoder_factory_from_args(args)
 
+
+def test_non_plain_conv_rejects_plain_conv_only_options() -> None:
+    args = _VitArgs(plain_conv_weight_init="orthogonal")
+    with pytest.raises(ValueError, match="only supported for the plain_conv encoder"):
+        image_encoder_factory_from_args(args)
+
+    args = _VitArgs(plain_conv_last_act=False)
+    with pytest.raises(ValueError, match="only supported for the plain_conv encoder"):
+        image_encoder_factory_from_args(args)
+
+    args = _VitArgs(plain_conv_pooling="gap")
+    with pytest.raises(ValueError, match="only supported for the plain_conv encoder"):
+        image_encoder_factory_from_args(args)
 
 def test_vit_sac_kwargs_defaults_to_per_key() -> None:
     kwargs = vit_sac_kwargs_from_args(_VitArgs(), ("rgb_base", "rgb_wrist"))
@@ -317,6 +342,11 @@ def test_image_encoder_factory_returns_callable_for_each_encoder() -> None:
     for encoder in ENCODER_REGISTRY:
         factory = image_encoder_factory_from_args(VisionArgs(encoder=encoder))
         assert callable(factory)
+
+
+def test_offline_plain_conv_factory_uses_shared_defaults() -> None:
+    factory = image_encoder_factory_from_args(OfflineVisionArgs(encoder="plain_conv"))
+    assert callable(factory)
 
 
 def test_image_keys_from_obs_mode() -> None:

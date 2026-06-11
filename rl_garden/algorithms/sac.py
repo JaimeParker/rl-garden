@@ -65,6 +65,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
         ent_coef: float | str = "auto",
         target_entropy: float | str = "auto",
         alpha_tuning: AlphaTuning = "legacy_exp",
+        q_landscape_diagnostics: bool = False,
+        q_landscape_num_actions: int = 8,
+        q_landscape_batch_size: int = 64,
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -80,6 +83,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
         proprio_latent_dim: Optional[int] = None,
         image_fusion_mode: Optional[str] = None,
         enable_stacking: Optional[bool] = None,
+        image_augmentation: Optional[str] = None,
+        random_shift_pad: Optional[int] = None,
+        image_augmentation_seed: Optional[int] = None,
         detach_encoder_on_actor: bool = True,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
@@ -137,6 +143,19 @@ class SAC(SACCore, OffPolicyAlgorithm):
         if alpha_tuning not in ("legacy_exp", "log_alpha", "lagrange_softplus"):
             raise ValueError(f"Unknown alpha_tuning mode: {alpha_tuning!r}.")
         self.alpha_tuning = alpha_tuning
+        self.q_landscape_diagnostics = q_landscape_diagnostics
+        self.q_landscape_num_actions = q_landscape_num_actions
+        self.q_landscape_batch_size = q_landscape_batch_size
+        if self.q_landscape_num_actions <= 0:
+            raise ValueError(
+                "q_landscape_num_actions must be positive, "
+                f"got {q_landscape_num_actions}."
+            )
+        if self.q_landscape_batch_size <= 0:
+            raise ValueError(
+                "q_landscape_batch_size must be positive, "
+                f"got {q_landscape_batch_size}."
+            )
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
@@ -157,6 +176,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "proprio_latent_dim": proprio_latent_dim,
             "image_fusion_mode": image_fusion_mode,
             "enable_stacking": enable_stacking,
+            "image_augmentation": image_augmentation,
+            "random_shift_pad": random_shift_pad,
+            "image_augmentation_seed": image_augmentation_seed,
         }
         explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
 
@@ -188,6 +210,11 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 image_fusion_mode if image_fusion_mode is not None else "stack_channels"
             )
             self._enable_stacking = enable_stacking if enable_stacking is not None else False
+            self._image_augmentation = (
+                image_augmentation if image_augmentation is not None else "none"
+            )
+            self._random_shift_pad = random_shift_pad if random_shift_pad is not None else 4
+            self._image_augmentation_seed = image_augmentation_seed
         else:
             raise TypeError(
                 f"SAC supports Box or Dict observation spaces, got {type(obs_space)}"
@@ -216,6 +243,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
             "alpha_tuning": self.alpha_tuning,
+            "q_landscape_diagnostics": self.q_landscape_diagnostics,
+            "q_landscape_num_actions": self.q_landscape_num_actions,
+            "q_landscape_batch_size": self.q_landscape_batch_size,
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
@@ -230,6 +260,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
                     "proprio_latent_dim": self._proprio_latent_dim,
                     "image_fusion_mode": self._image_fusion_mode,
                     "enable_stacking": self._enable_stacking,
+                    "image_augmentation": self._image_augmentation,
+                    "random_shift_pad": self._random_shift_pad,
+                    "image_augmentation_seed": self._image_augmentation_seed,
                 }
             )
         return meta
@@ -316,6 +349,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 "use_proprio": self._use_proprio,
                 "fusion_mode": self._image_fusion_mode,
                 "enable_stacking": self._enable_stacking,
+                "image_augmentation": self._image_augmentation,
+                "random_shift_pad": self._random_shift_pad,
+                "augmentation_seed": self._image_augmentation_seed,
             }
         return {}
 
