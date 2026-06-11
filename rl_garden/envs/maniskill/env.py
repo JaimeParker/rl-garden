@@ -18,7 +18,7 @@ from rl_garden.envs.maniskill.config import ManiSkillEnvConfig
 
 
 def _is_visual_obs_mode(mode: str) -> bool:
-    return mode in ("rgb", "rgbd", "depth")
+    return any(part in ("rgb", "rgbd", "depth") for part in mode.split("+"))
 
 
 def make_maniskill_env(cfg: ManiSkillEnvConfig):
