@@ -311,6 +311,9 @@ def test_sac_box_checkpoint_metadata_omits_image_fields():
         "proprio_latent_dim",
         "image_fusion_mode",
         "enable_stacking",
+        "image_augmentation",
+        "random_shift_pad",
+        "image_augmentation_seed",
     ):
         assert key not in meta
 
@@ -320,6 +323,23 @@ def test_sac_dict_checkpoint_metadata_includes_image_fields():
     meta = agent._checkpoint_metadata()
     assert meta["image_keys"] == ("rgb",)
     assert meta["use_proprio"] is True
+
+
+def test_sac_passes_image_augmentation_to_combined_extractor():
+    agent = SAC(
+        env=_rgbd_env(),
+        **_agent_kwargs(),
+        image_keys=("rgb",),
+        image_augmentation="random_shift",
+        random_shift_pad=2,
+        image_augmentation_seed=123,
+    )
+    ext = agent.policy.features_extractor
+
+    assert isinstance(ext, CombinedExtractor)
+    assert ext.image_augmentation == "random_shift"
+    assert ext.random_shift_pad == 2
+    assert ext._augmentation_seed == 123
 
 
 def test_wsrl_uses_flatten_extractor_by_default():

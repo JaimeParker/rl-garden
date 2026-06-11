@@ -28,6 +28,7 @@ import torch.nn as nn
 from gymnasium import spaces
 
 from rl_garden.encoders.base import BaseFeaturesExtractor, image_needs_normalization
+from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.encoders.plain_conv import PlainConv
 
 # A factory takes the stacked image ``spaces.Box`` (channels-first) and returns
@@ -35,12 +36,29 @@ from rl_garden.encoders.plain_conv import PlainConv
 # without changing the CombinedExtractor.
 ImageEncoderFactory = Callable[[spaces.Box], BaseFeaturesExtractor]
 ImageFusionMode = Literal["stack_channels", "per_key"]
+ImageAugmentationMode = Literal["none", "random_shift"]
+
+_AUG_STACK_KEY = "_rl_garden_aug_stack_image"
+_AUG_IMAGES_KEY = "_rl_garden_aug_images"
+_AUG_SEED_SALT = 1_000_003
 
 
-def default_image_encoder_factory(features_dim: int = 256) -> ImageEncoderFactory:
+def default_image_encoder_factory(
+    features_dim: int = 256,
+    plain_conv_last_act: bool = True,
+    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform",
+    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten",
+) -> ImageEncoderFactory:
     def _factory(img_space: spaces.Box) -> BaseFeaturesExtractor:
         _, h, w = img_space.shape
-        return PlainConv(img_space, features_dim=features_dim, image_size=(h, w))
+        return PlainConv(
+            img_space,
+            features_dim=features_dim,
+            image_size=(h, w),
+            pooling=plain_conv_pooling,
+            last_act=plain_conv_last_act,
+            weight_init=plain_conv_weight_init,
+        )
 
     return _factory
 
@@ -74,12 +92,20 @@ class CombinedExtractor(BaseFeaturesExtractor):
         use_proprio: bool = True,
         fusion_mode: ImageFusionMode = "stack_channels",
         enable_stacking: bool = False,
+        image_augmentation: ImageAugmentationMode = "none",
+        random_shift_pad: int = 4,
+        augmentation_seed: Optional[int] = None,
     ) -> None:
         assert isinstance(observation_space, spaces.Dict)
         if fusion_mode not in ("stack_channels", "per_key"):
             raise ValueError(
                 "fusion_mode must be either 'stack_channels' or 'per_key', "
                 f"got {fusion_mode!r}"
+            )
+        if image_augmentation not in ("none", "random_shift"):
+            raise ValueError(
+                "image_augmentation must be either 'none' or 'random_shift', "
+                f"got {image_augmentation!r}"
             )
 
         # Determine which image keys are actually present.
@@ -162,6 +188,21 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.image_encoders = image_encoders
         self.proprio = proprio
         self.vector_extractors = vector_extractors
+        self.image_augmentation = image_augmentation
+        self.random_shift_pad = random_shift_pad
+        self.random_shift = (
+            RandomShiftsAug(random_shift_pad)
+            if image_augmentation == "random_shift" and self._has_images
+            else None
+        )
+        self._augmentation_seed = None
+        if self.random_shift is not None:
+            self._augmentation_seed = (
+                int(augmentation_seed)
+                if augmentation_seed is not None
+                else int(torch.initial_seed()) + _AUG_SEED_SALT
+            )
+        self._augmentation_generators: dict[str, torch.Generator] = {}
 
     @staticmethod
     def _image_space_to_hwc(
@@ -198,10 +239,61 @@ class CombinedExtractor(BaseFeaturesExtractor):
     def _to_nchw(x: torch.Tensor) -> torch.Tensor:
         return x.permute(0, 3, 1, 2).contiguous()
 
-    def _stack_images(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _stack_images_uncached(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         tensors = [self._prepare_image(k, obs[k]) for k in self.image_keys]
         x = torch.cat(tensors, dim=-1)  # (B, H, W, Ctotal)
         return self._to_nchw(x)
+
+    def _stack_images(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        cached = obs.get(_AUG_STACK_KEY)
+        if cached is not None:
+            return cached
+        return self._stack_images_uncached(obs)
+
+    def _image_for_key(self, obs: dict[str, torch.Tensor], key: str) -> torch.Tensor:
+        cached = obs.get(_AUG_IMAGES_KEY)
+        if cached is not None and key in cached:
+            return cached[key]
+        return self._to_nchw(self._prepare_image(key, obs[key]))
+
+    def _augmentation_generator(self, device: torch.device) -> torch.Generator:
+        device_key = str(device)
+        generator = self._augmentation_generators.get(device_key)
+        if generator is None:
+            assert self._augmentation_seed is not None
+            generator = torch.Generator(device=device)
+            generator.manual_seed(self._augmentation_seed)
+            self._augmentation_generators[device_key] = generator
+        return generator
+
+    def _augment_image(self, image: torch.Tensor) -> torch.Tensor:
+        assert self.random_shift is not None
+        return self.random_shift(
+            image,
+            generator=self._augmentation_generator(image.device),
+        )
+
+    def prepare_batch(
+        self,
+        obs: dict,
+        next_obs: Optional[dict] = None,
+    ) -> None:
+        if self.random_shift is None or not self._has_images:
+            return
+        self._prepare_augmented_images(obs)
+        if next_obs is not None:
+            with torch.no_grad():
+                self._prepare_augmented_images(next_obs)
+
+    def _prepare_augmented_images(self, obs: dict) -> None:
+        if self.fusion_mode == "stack_channels":
+            obs[_AUG_STACK_KEY] = self._augment_image(self._stack_images_uncached(obs))
+            return
+
+        obs[_AUG_IMAGES_KEY] = {
+            key: self._augment_image(self._to_nchw(self._prepare_image(key, obs[key])))
+            for key in self.image_keys
+        }
 
     def _encode_images(
         self, obs: dict[str, torch.Tensor], stop_gradient: bool
@@ -215,7 +307,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
 
         encoded = []
         for key in self.image_keys:
-            image = self._to_nchw(self._prepare_image(key, obs[key]))
+            image = self._image_for_key(obs, key)
             y = self.image_encoders[key](image)
             encoded.append(y.detach() if stop_gradient else y)
         return encoded

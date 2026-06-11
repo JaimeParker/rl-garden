@@ -66,6 +66,9 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     ent_coef: float | str = "auto"
     target_entropy: float | str = "auto"
     alpha_lr: Optional[float] = None
+    q_landscape_diagnostics: bool = False
+    q_landscape_num_actions: int = 8
+    q_landscape_batch_size: int = 64
 
 
 @dataclass
@@ -89,6 +92,13 @@ class VisionArgs:
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
+    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
+    plain_conv_last_act: bool = True
+    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
+    # Default is intentionally off: random shifts consume augmentation RNG and
+    # should be enabled only as an explicit visual-RL ablation.
+    image_augmentation: Literal["none", "random_shift"] = "none"
+    image_random_shift_pad: int = 4
     # Keep each camera as its own ``rgb_<cam>`` / ``depth_<cam>`` key instead of
     # channel-stacking. Required for multi-camera envs (e.g. peg) when each
     # camera should feed an independent encoder under ``per_key`` fusion.
@@ -370,6 +380,9 @@ class OfflineVisionArgs:
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
+    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
+    plain_conv_last_act: bool = True
+    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
     per_camera_rgbd: bool = False
 
 
@@ -494,7 +507,12 @@ class EncoderSpec:
 def _plain_conv_factory(args: VisionArgs):
     from rl_garden.encoders import default_image_encoder_factory
 
-    return default_image_encoder_factory(features_dim=args.encoder_features_dim)
+    return default_image_encoder_factory(
+        features_dim=args.encoder_features_dim,
+        plain_conv_last_act=args.plain_conv_last_act,
+        plain_conv_weight_init=args.plain_conv_weight_init,
+        plain_conv_pooling=args.plain_conv_pooling,
+    )
 
 
 def _resnet_factory(args: VisionArgs):
@@ -591,6 +609,16 @@ def image_encoder_factory_from_args(args: VisionArgs):
         raise ValueError(
             "--pretrained_weights, --freeze_resnet_encoder, and "
             "--freeze_resnet_backbone are only supported for resnet encoders."
+        )
+    if args.encoder != "plain_conv" and (
+        getattr(args, "plain_conv_weight_init", "kaiming_uniform") != "kaiming_uniform"
+        or getattr(args, "plain_conv_last_act", True) is not True
+        or getattr(args, "plain_conv_pooling", "flatten") != "flatten"
+    ):
+        raise ValueError(
+            "--plain_conv_weight_init, --plain_conv_last_act, and "
+            "--plain_conv_pooling are only "
+            "supported for the plain_conv encoder."
         )
     return spec.build_factory(args)
 

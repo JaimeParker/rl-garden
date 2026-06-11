@@ -165,6 +165,9 @@ def main() -> None:
         ent_coef=args.ent_coef,
         target_entropy=args.target_entropy,
         alpha_lr=args.alpha_lr,
+        q_landscape_diagnostics=args.q_landscape_diagnostics,
+        q_landscape_num_actions=args.q_landscape_num_actions,
+        q_landscape_batch_size=args.q_landscape_batch_size,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -178,6 +181,9 @@ def main() -> None:
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
+        image_augmentation=args.image_augmentation,
+        random_shift_pad=args.image_random_shift_pad,
+        image_augmentation_seed=args.seed + 1_000_003,
         **vit_sac_kwargs_from_args(args, image_keys),
     )
     if args.load_checkpoint is not None:

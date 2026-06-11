@@ -127,3 +127,53 @@ def test_actor_diagnostics_preserves_cuda_rng_state():
 
     assert "action_saturation" in diagnostics
     torch.testing.assert_close(actual, expected)
+
+
+def test_q_landscape_diagnostics_default_is_not_called(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent()
+    _fill(agent)
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("q landscape diagnostics should be disabled by default")
+
+    monkeypatch.setattr(agent.policy, "q_landscape_diagnostics", _forbidden)
+    info = agent.train(gradient_steps=1, compute_info=True)
+
+    assert "q_uniform_var" not in info
+
+
+def test_q_landscape_diagnostics_preserves_cpu_rng_state():
+    agent = _agent(q_landscape_diagnostics=True)
+    _fill(agent)
+    data = agent.replay_buffer.sample(agent.batch_size)
+
+    torch.manual_seed(123)
+    expected = torch.rand(4)
+
+    torch.manual_seed(123)
+    diagnostics = agent._q_landscape_diagnostics(data)
+    actual = torch.rand(4)
+
+    assert "q_uniform_var" in diagnostics
+    assert "q_action_grad_norm" in diagnostics
+    assert "feature_dormant_ratio" in diagnostics
+    torch.testing.assert_close(actual, expected)
+
+
+def test_q_landscape_diagnostics_preserves_cuda_rng_state():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    agent = _agent(device="cuda", buffer_device="cuda", q_landscape_diagnostics=True)
+    _fill(agent)
+    data = agent.replay_buffer.sample(agent.batch_size)
+
+    torch.cuda.manual_seed_all(123)
+    expected = torch.rand(4, device="cuda")
+
+    torch.cuda.manual_seed_all(123)
+    diagnostics = agent._q_landscape_diagnostics(data)
+    actual = torch.rand(4, device="cuda")
+
+    assert "q_uniform_var" in diagnostics
+    torch.testing.assert_close(actual, expected)

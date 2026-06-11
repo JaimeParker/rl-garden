@@ -31,6 +31,8 @@ class RandomCrop(nn.Module):
         if not self.training or self.padding <= 0:
             return x
         b, _c, h, w = x.shape
+        # TODO(rng-isolation): If RandomCrop is used in training again, thread an
+        # explicit torch.Generator through both randint calls, matching RandomShiftsAug.
         padded = F.pad(x, [self.padding] * 4, mode="reflect")
         offs_h = torch.randint(
             0, 2 * self.padding + 1, (b,), device=x.device
@@ -57,7 +59,11 @@ class RandomShiftsAug(nn.Module):
         self.padding = padding
         self.register_buffer("_base_grid", torch.empty(0), persistent=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
         if self.padding <= 0:
             return x
         n, _c, h, w = x.shape
@@ -88,6 +94,7 @@ class RandomShiftsAug(nn.Module):
             2 * self.padding + 1,
             size=(n, 1, 1, 2),
             device=x.device,
+            generator=generator,
         ).to(dtype=x.dtype)
         shift *= 2.0 / (h + 2 * self.padding)
         return F.grid_sample(
