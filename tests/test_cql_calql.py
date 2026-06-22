@@ -11,8 +11,10 @@ from gymnasium import spaces
 from rl_garden.algorithms import CQL, CalQL, OfflineEnvSpec, OfflineRLAlgorithm, WSRL
 from rl_garden.algorithms import __all__ as algorithm_exports
 from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
-from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+from rl_garden.buffers.dict_buffer import DictReplayBuffer
+from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.encoders.combined import CombinedExtractor
 
 
 class DummyVecEnv:
@@ -69,6 +71,57 @@ def _offline_env() -> OfflineEnvSpec:
         env.single_action_space,
         num_envs=env.num_envs,
     )
+
+
+def _dict_offline_env(num_envs: int = 2) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "rgb": spaces.Box(0, 255, shape=(64, 64, 3), dtype=np.uint8),
+                "state": spaces.Box(-np.inf, np.inf, shape=(4,), dtype=np.float32),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _fill_dict(agent, steps: int = 4) -> None:
+    env = agent.env
+    for _ in range(steps):
+        obs = {
+            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, 4),
+        }
+        next_obs = {
+            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, 4),
+        }
+        actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
+        rewards = torch.randn(env.num_envs)
+        dones = torch.zeros(env.num_envs)
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+
+
+def _dict_arch_kwargs() -> dict[str, object]:
+    return {
+        "net_arch": {"pi": [16], "qf": [16]},
+        "n_critics": 4,
+        "critic_subsample_size": 2,
+        "cql_n_actions": 3,
+        "cql_alpha": 1.0,
+        "image_keys": ("rgb",),
+        "image_fusion_mode": "stack_channels",
+        "proprio_latent_dim": 16,
+        "use_proprio": True,
+        "enable_stacking": False,
+        "backbone_type": "mlp",
+        "std_parameterization": "exp",
+        "actor_use_layer_norm": True,
+        "critic_use_layer_norm": True,
+        "actor_use_group_norm": False,
+        "critic_use_group_norm": False,
+    }
 
 
 def test_cql_standalone_train_step_without_calql_bound():
@@ -149,6 +202,73 @@ def test_calql_train_step_logs_bound_rate():
     assert agent.replay_buffer.sparse_negative_reward == -1.0
     assert "cql_loss" in info
     assert "calql_bound_rate" in info
+
+
+def test_cql_dict_obs_train_step_and_checkpoint(tmp_path):
+    agent = CQL(
+        env=_dict_offline_env(),
+        image_keys=("rgb",),
+        checkpoint_dir=str(tmp_path),
+        **_offline_kwargs(),
+    )
+    _fill_dict(agent)
+
+    info = agent.train(1, compute_info=True)
+    result = agent.learn_offline(2, save_filename="offline_cql_dict.pt")
+
+    assert isinstance(agent.replay_buffer, DictReplayBuffer)
+    assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert "cql_loss" in info
+    assert torch.isfinite(torch.tensor(info["critic_loss"]))
+    assert result.final_checkpoint == tmp_path / "offline_cql_dict.pt"
+    assert (tmp_path / "offline_cql_dict.pt").exists()
+
+
+def test_calql_dict_obs_uses_mc_dict_replay_buffer():
+    agent = CalQL(
+        env=_dict_offline_env(),
+        image_keys=("rgb",),
+        **_offline_kwargs(),
+    )
+
+    assert isinstance(agent.replay_buffer, MCDictReplayBuffer)
+
+
+def test_calql_dict_obs_checkpoint_loads_into_wsrl(tmp_path):
+    arch_kwargs = _dict_arch_kwargs()
+
+    calql_agent = CalQL(
+        env=_dict_offline_env(),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=32,
+        batch_size=4,
+        checkpoint_dir=str(tmp_path),
+        **arch_kwargs,
+    )
+    _fill_dict(calql_agent)
+    calql_agent.train(1)
+    result = calql_agent.learn_offline(1, save_filename="calql_dict.pt")
+    checkpoint_path = result.final_checkpoint
+    assert checkpoint_path is not None and checkpoint_path.exists()
+
+    wsrl_agent = WSRL(
+        env=_dict_offline_env(),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=32,
+        batch_size=4,
+        learning_starts=0,
+        training_freq=1,
+        eval_freq=0,
+        **arch_kwargs,
+    )
+    wsrl_agent.load(checkpoint_path)
+    _fill_dict(wsrl_agent)
+
+    info = wsrl_agent.train(1, compute_info=True)
+
+    assert torch.isfinite(torch.tensor(info["critic_loss"]))
 
 
 def test_wsrl_uses_private_rollout_shell_not_public_offline_calql():

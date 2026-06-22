@@ -9,9 +9,10 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from gymnasium import spaces
 
 from rl_garden.algorithms.cql import CQL, _CQLRolloutTrainingShell
-from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 
 
 class CalQLCore:
@@ -43,18 +44,22 @@ class CalQLCore:
         }
 
     def _build_replay_buffer(self):
-        return MCTensorReplayBuffer(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            num_envs=self.num_envs,
-            buffer_size=self.buffer_size,
-            gamma=self.gamma,
-            storage_device=self.buffer_device,
-            sample_device=self.device,
-            sparse_reward_mc=self.sparse_reward_mc,
-            sparse_negative_reward=self.sparse_negative_reward,
-            success_threshold=self.success_threshold,
-        )
+        obs_space = self.env.single_observation_space
+        kwargs = {
+            "observation_space": obs_space,
+            "action_space": self.env.single_action_space,
+            "num_envs": self.num_envs,
+            "buffer_size": self.buffer_size,
+            "gamma": self.gamma,
+            "storage_device": self.buffer_device,
+            "sample_device": self.device,
+            "sparse_reward_mc": self.sparse_reward_mc,
+            "sparse_negative_reward": self.sparse_negative_reward,
+            "success_threshold": self.success_threshold,
+        }
+        if isinstance(obs_space, spaces.Dict):
+            return MCDictReplayBuffer(**kwargs)
+        return MCTensorReplayBuffer(**kwargs)
 
     def _calql_lower_bound(
         self,

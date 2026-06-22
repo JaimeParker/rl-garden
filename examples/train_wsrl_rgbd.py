@@ -23,6 +23,7 @@ import tyro
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
+from rl_garden.algorithms.offline import _log_eval_stdout
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
@@ -62,6 +63,19 @@ def _offline_update_loop(
         losses = agent.train(gradient_steps, compute_info=should_log)
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
+
+        if (
+            agent.eval_freq > 0
+            and agent.eval_env is not None
+            and (step + 1) % agent.eval_freq == 0
+        ):
+            eval_t = time.perf_counter()
+            eval_metrics = agent._evaluate()
+            agent._log_eval_metrics(eval_metrics, step + 1)
+            if std_log:
+                _log_eval_stdout(agent, eval_metrics, step + 1)
+            logger.add_scalar("time/eval_time", time.perf_counter() - eval_t, step + 1)
+
         if log_freq > 0 and (step + 1) % log_freq == 0:
             logger.log_metrics(losses, step + 1)
             offline_update_fps = (
@@ -84,6 +98,9 @@ def _offline_update_loop(
                 )
             interval_update_time = 0.0
             interval_update_steps = 0
+
+        if agent.checkpoint_freq > 0 and (step + 1) % agent.checkpoint_freq == 0:
+            agent._save_checkpoint(f"checkpoint_{step + 1}.pt")
 
 
 def main() -> None:
@@ -258,6 +275,8 @@ def main() -> None:
     if args.num_online_steps > 0:
         online_target_step = agent._global_step + args.num_online_steps
         agent.learn(total_timesteps=online_target_step)
+    elif agent.checkpoint_dir is not None and agent.save_final_checkpoint:
+        agent._save_checkpoint("final.pt")
 
     logger.close()
     env.close()

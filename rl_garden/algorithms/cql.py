@@ -12,10 +12,16 @@ from gymnasium import spaces
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
+from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import (
+    CombinedExtractor,
+    ImageEncoderFactory,
+    default_image_encoder_factory,
+)
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.sac_policy import CQLAlphaLagrange, SACPolicy, TemperatureLagrange
 
@@ -157,7 +163,7 @@ class CQLCore(SACCore):
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             **super()._checkpoint_metadata(),
             "tau": self.tau,
             "utd": self.utd,
@@ -209,6 +215,16 @@ class CQLCore(SACCore):
             "cql_clip_diff_max": self.cql_clip_diff_max,
             "cql_action_sample_method": self.cql_action_sample_method,
         }
+        if self._is_dict_obs:
+            metadata.update(
+                image_keys=self._image_keys,
+                state_key=self._state_key,
+                use_proprio=self._use_proprio,
+                proprio_latent_dim=self._proprio_latent_dim,
+                image_fusion_mode=self._image_fusion_mode,
+                enable_stacking=self._enable_stacking,
+            )
+        return metadata
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {
@@ -251,13 +267,26 @@ class CQLCore(SACCore):
                     sched.load_state_dict(sched_state)
 
     def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        assert isinstance(self.env.single_observation_space, spaces.Box), (
-            "CQL expects a flat Box observation space; use a vision-specific subclass "
-            "for dict observations."
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Box):
+            return FlattenExtractor
+        if isinstance(obs_space, spaces.Dict):
+            return CombinedExtractor
+        raise TypeError(
+            "CQL supports Box or Dict observation spaces, got " + str(type(obs_space))
         )
-        return FlattenExtractor
 
     def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        if self._is_dict_obs:
+            return {
+                "image_keys": self._image_keys,
+                "state_key": self._state_key,
+                "image_encoder_factory": self._image_encoder_factory,
+                "proprio_latent_dim": self._proprio_latent_dim,
+                "use_proprio": self._use_proprio,
+                "fusion_mode": self._image_fusion_mode,
+                "enable_stacking": self._enable_stacking,
+            }
         return {}
 
     def _normalize_policy_kwargs(
@@ -358,8 +387,18 @@ class CQLCore(SACCore):
         return {"pi": [256, 256], "qf": [256, 256]}
 
     def _build_replay_buffer(self):
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Dict):
+            return DictReplayBuffer(
+                observation_space=obs_space,
+                action_space=self.env.single_action_space,
+                num_envs=self.num_envs,
+                buffer_size=self.buffer_size,
+                storage_device=self.buffer_device,
+                sample_device=self.device,
+            )
         return TensorReplayBuffer(
-            observation_space=self.env.single_observation_space,
+            observation_space=obs_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
@@ -968,6 +1007,13 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
         use_td_loss: bool = True,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        image_keys: Optional[tuple[str, ...]] = None,
+        state_key: Optional[str] = None,
+        use_proprio: Optional[bool] = None,
+        proprio_latent_dim: Optional[int] = None,
+        image_fusion_mode: Optional[str] = None,
+        enable_stacking: Optional[bool] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -1054,6 +1100,49 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             std_log=std_log,
             log_freq=log_freq,
         )
+
+        obs_space = self.env.single_observation_space
+        image_kwargs_explicit = {
+            "image_encoder_factory": image_encoder_factory,
+            "image_keys": image_keys,
+            "state_key": state_key,
+            "use_proprio": use_proprio,
+            "proprio_latent_dim": proprio_latent_dim,
+            "image_fusion_mode": image_fusion_mode,
+            "enable_stacking": enable_stacking,
+        }
+        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
+        if isinstance(obs_space, spaces.Box):
+            if explicitly_set:
+                raise ValueError(
+                    "CQL with Box observation space does not accept image-related "
+                    f"kwargs (got {explicitly_set}). Use Dict observations instead."
+                )
+            self._is_dict_obs = False
+        elif isinstance(obs_space, spaces.Dict):
+            self._is_dict_obs = True
+            self._image_encoder_factory = (
+                image_encoder_factory or default_image_encoder_factory()
+            )
+            self._image_keys = (
+                image_keys if image_keys is not None else ("rgb", "depth")
+            )
+            self._state_key = state_key if state_key is not None else "state"
+            self._use_proprio = use_proprio if use_proprio is not None else True
+            self._proprio_latent_dim = (
+                proprio_latent_dim if proprio_latent_dim is not None else 64
+            )
+            self._image_fusion_mode = (
+                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
+            )
+            self._enable_stacking = (
+                enable_stacking if enable_stacking is not None else False
+            )
+        else:
+            raise TypeError(
+                f"CQL supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
+
         self._setup_model()
 
     def _sample_train_batch(self, batch_size: int):
