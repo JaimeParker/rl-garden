@@ -365,6 +365,8 @@ class OfflineVisionArgs:
     # observation spaces.
     obs_mode: str = "rgb"
     include_state: bool = True
+    camera_width: Optional[int] = 64
+    camera_height: Optional[int] = 64
     encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
     encoder_features_dim: int = 256
     image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"

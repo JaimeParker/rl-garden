@@ -128,6 +128,12 @@ def _cql_kwargs(
     if isinstance(env_spec.single_observation_space, spaces.Dict):
         image_keys = discover_image_keys(env_spec.single_observation_space)
         kwargs.update(
+            image_encoder_factory=image_encoder_factory_from_args(args),
+            image_keys=image_keys,
+            state_key="state",
+            use_proprio=args.include_state,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=False,
             **vit_sac_kwargs_from_args(args, image_keys),
         )
     return kwargs
@@ -144,17 +150,6 @@ def _wsrl_kwargs(
         eval_freq=0,
         num_eval_steps=0,
     )
-    if isinstance(env_spec.single_observation_space, spaces.Dict):
-        image_keys = discover_image_keys(env_spec.single_observation_space)
-        kwargs.update(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys,
-            state_key="state",
-            use_proprio=args.include_state,
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=False,
-            **vit_sac_kwargs_from_args(args, image_keys),
-        )
     return kwargs
 
 
@@ -303,6 +298,25 @@ def build_offline_agent(
     raise ValueError(f"Unknown offline pretrain algorithm: {algorithm!r}")
 
 
+def _eval_env_config(args: OfflinePretrainArgs) -> ManiSkillEnvConfig:
+    """Build the optional periodic zero-shot eval env config from CLI args."""
+    return ManiSkillEnvConfig(
+        env_id=args.env_id,
+        num_envs=args.num_eval_envs,
+        obs_mode=args.obs_mode,
+        include_state=args.include_state,
+        control_mode=args.control_mode,
+        sim_backend=args.sim_backend,
+        render_backend=args.render_backend,
+        reconfiguration_freq=1,
+        camera_width=args.camera_width,
+        camera_height=args.camera_height,
+        reward_scale=args.reward_scale,
+        reward_bias=args.reward_bias,
+        per_camera_rgbd=args.per_camera_rgbd,
+    )
+
+
 def main(
     args_cls: type[OfflinePretrainArgs] = OfflinePretrainArgs,
     *,
@@ -367,11 +381,6 @@ def main(
         action_low=args.action_low,
         action_high=args.action_high,
     )
-    if isinstance(obs_space, spaces.Dict) and algorithm not in ("iql", "bc"):
-        raise SystemExit(
-            "Dict observations from offline H5 are currently supported by "
-            "--algorithm iql or --algorithm bc. Use a flat state dataset for cql/calql/wsrl."
-        )
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
     if args.std_log:
         obs_desc = obs_space.shape if isinstance(obs_space, spaces.Box) else obs_space
@@ -402,16 +411,7 @@ def main(
     # --- setup optional eval env ---
     eval_env = None
     if args.env_id is not None:
-        eval_env = make_maniskill_env(
-            ManiSkillEnvConfig(
-                env_id=args.env_id,
-                num_envs=args.num_eval_envs,
-                control_mode=args.control_mode,
-                sim_backend=args.sim_backend,
-                render_backend=args.render_backend,
-                reconfiguration_freq=1,
-            )
-        )
+        eval_env = make_maniskill_env(_eval_env_config(args))
         agent.eval_env = eval_env
         agent.eval_freq = args.eval_freq
         agent.num_eval_steps = args.num_eval_steps

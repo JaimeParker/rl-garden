@@ -242,3 +242,48 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
     args_iql = OfflinePretrainArgs(algorithm="iql", **base_kwargs)
     agent_iql = build_offline_agent(args_iql, env_spec, _NoopLogger(), "iql")
     assert isinstance(agent_iql, IQL)
+
+
+def test_eval_env_config_carries_dict_obs_vision_fields():
+    """The optional --env_id eval env must mirror dict-obs/vision CLI args.
+
+    Without this, pretrain_offline.py's periodic zero-shot eval env defaults
+    to a flat ``obs_mode="state"`` ManiSkill env, which crashes BC/IQL
+    policies built for per-camera RGB+state Dict observation spaces.
+    """
+    import sys
+    from pathlib import Path
+
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    if str(examples_dir) not in sys.path:
+        sys.path.insert(0, str(examples_dir))
+    from pretrain_offline import _eval_env_config  # type: ignore[import-not-found]
+
+    from rl_garden.common.cli_args import OfflinePretrainArgs
+
+    args = OfflinePretrainArgs(
+        algorithm="bc",
+        offline_dataset_path="/tmp/unused.h5",
+        env_id="StackCube-v1",
+        num_eval_envs=16,
+        obs_mode="rgb",
+        include_state=True,
+        per_camera_rgbd=True,
+        camera_width=64,
+        camera_height=64,
+        reward_scale=2.0,
+        reward_bias=-1.0,
+    )
+
+    cfg = _eval_env_config(args)
+
+    assert cfg.env_id == "StackCube-v1"
+    assert cfg.num_envs == 16
+    assert cfg.obs_mode == "rgb"
+    assert cfg.include_state is True
+    assert cfg.per_camera_rgbd is True
+    assert cfg.camera_width == 64
+    assert cfg.camera_height == 64
+    assert cfg.reward_scale == 2.0
+    assert cfg.reward_bias == -1.0
+    assert cfg.reconfiguration_freq == 1
