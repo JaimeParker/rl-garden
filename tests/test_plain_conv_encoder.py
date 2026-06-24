@@ -40,19 +40,26 @@ def test_plain_conv_default_init_does_not_reinitialize_weights(
 
     assert calls == 0
     for module in enc.modules():
-        if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d)) and module.bias is not None:
+        if (
+            isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d))
+            and module.bias is not None
+        ):
             assert torch.count_nonzero(module.bias) == 0
 
 
 def test_plain_conv_orthogonal_init_zeros_biases() -> None:
     enc = PlainConv(_image_space(), features_dim=16, weight_init="orthogonal")
 
-    first_conv = next(module for module in enc.modules() if isinstance(module, nn.Conv2d))
+    first_conv = next(
+        module for module in enc.modules() if isinstance(module, nn.Conv2d)
+    )
     rows = first_conv.weight.detach().flatten(1)
     expected = torch.eye(rows.shape[0]) * nn.init.calculate_gain("relu") ** 2
     assert torch.allclose(rows @ rows.T, expected, atol=1e-5, rtol=1e-5)
 
-    first_linear = next(module for module in enc.modules() if isinstance(module, nn.Linear))
+    first_linear = next(
+        module for module in enc.modules() if isinstance(module, nn.Linear)
+    )
     linear_rows = first_linear.weight.detach()
     assert torch.allclose(
         linear_rows @ linear_rows.T,
@@ -62,7 +69,10 @@ def test_plain_conv_orthogonal_init_zeros_biases() -> None:
     )
 
     for module in enc.modules():
-        if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d)) and module.bias is not None:
+        if (
+            isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d))
+            and module.bias is not None
+        ):
             assert torch.count_nonzero(module.bias) == 0
 
 
@@ -78,8 +88,66 @@ def test_plain_conv_pooled_modes_forward(pooling: str) -> None:
     out = enc(torch.zeros(2, 3, 64, 64))
 
     assert out.shape == (2, 16)
-    first_linear = next(module for module in enc.modules() if isinstance(module, nn.Linear))
+    first_linear = next(
+        module for module in enc.modules() if isinstance(module, nn.Linear)
+    )
     assert first_linear.in_features == 64
+
+
+def test_plain_conv_gap_is_spatial_mean_before_projection() -> None:
+    enc = PlainConv(_image_space(), features_dim=16, pooling="gap")
+    image = torch.randn(2, 3, 64, 64)
+
+    feature_map = enc.cnn(image)
+    pooled = enc.pool(feature_map).flatten(1)
+
+    assert torch.allclose(pooled, feature_map.mean(dim=(-2, -1)))
+
+
+def test_plain_conv_gap_reduces_bottleneck_parameters() -> None:
+    flatten = PlainConv(_image_space(), pooling="flatten")
+    gap = PlainConv(_image_space(), pooling="gap")
+    flatten_fc = next(
+        module for module in flatten.fc.modules() if isinstance(module, nn.Linear)
+    )
+    gap_fc = next(
+        module for module in gap.fc.modules() if isinstance(module, nn.Linear)
+    )
+
+    assert flatten_fc.in_features == 64 * 4 * 4
+    assert gap_fc.in_features == 64
+    assert sum(p.numel() for p in flatten.fc.parameters()) == 262_400
+    assert sum(p.numel() for p in gap.fc.parameters()) == 16_640
+
+
+def test_plain_conv_gap_applies_to_each_per_key_camera() -> None:
+    obs_space = spaces.Dict(
+        {
+            "rgb_base_camera": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "rgb_hand_camera": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
+        }
+    )
+    factory = image_encoder_factory_from_args(
+        VisionArgs(
+            encoder="plain_conv",
+            encoder_features_dim=16,
+            image_fusion_mode="per_key",
+            plain_conv_pooling="gap",
+        )
+    )
+    extractor = CombinedExtractor(
+        obs_space,
+        image_keys=("rgb_base_camera", "rgb_hand_camera"),
+        image_encoder_factory=factory,
+        fusion_mode="per_key",
+    )
+
+    assert set(extractor.image_encoders) == {"rgb_base_camera", "rgb_hand_camera"}
+    assert all(
+        isinstance(encoder, PlainConv) and encoder.pooling == "gap"
+        for encoder in extractor.image_encoders.values()
+    )
 
 
 def test_plain_conv_pool_feature_map_alias_uses_adaptive_max() -> None:

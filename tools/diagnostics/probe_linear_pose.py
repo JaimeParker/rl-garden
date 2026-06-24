@@ -12,7 +12,7 @@ remove the per-env GPU-parallelization scene offset; tcp_minus_cubeA/B are
 frame-invariant by construction.
 
 Example:
-    python examples/probe_linear_pose.py \
+    python tools/diagnostics/probe_linear_pose.py \
       --checkpoint_path runs/<run>/checkpoints/final.pt \
       --num_envs 16 --num_steps 1000
 """

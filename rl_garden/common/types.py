@@ -28,6 +28,13 @@ class ReplayBufferSample:
 
 
 @dataclass
+class NStepReplayBufferSample(ReplayBufferSample):
+    """Replay buffer sample with pre-accumulated n-step discounts."""
+
+    discounts: torch.Tensor
+
+
+@dataclass
 class ResidualReplayBufferSample(ReplayBufferSample):
     """Replay buffer sample with normalized base actions for residual RL."""
 
