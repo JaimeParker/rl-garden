@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from rl_garden.algorithms.wsrl import WSRL
 from rl_garden.common.logger import Logger
+from rl_garden.common.training_phase import InitialTrainingPhase
 
 
 class _RecordingLogger:
@@ -184,6 +185,77 @@ class TestWSRLHelperMethods:
         assert wsrl_agent._online_start_step == 123
         assert logger.scalars == []
         assert ("wsrl/online_start_step", 123) in logger.summaries
+
+    def test_switch_starts_collect_only_warmup(self, simple_env):
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [16], "qf": [16]},
+            n_critics=2,
+            device="cpu",
+            initial_training_phase=InitialTrainingPhase(
+                duration_steps=100,
+                update_actor=False,
+                update_critic=False,
+                update_encoder=False,
+            ),
+        )
+        agent._global_step = 40
+
+        agent.switch_to_online_mode()
+
+        assert agent._initial_phase_start_step == 40
+        assert agent.train(gradient_steps=1, compute_info=True) == {}
+        assert agent._global_update == 0
+
+    def test_repeated_switch_does_not_restart_warmup(self, simple_env):
+        agent = WSRL(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=8,
+            net_arch={"pi": [16], "qf": [16]},
+            n_critics=2,
+            device="cpu",
+            initial_training_phase=InitialTrainingPhase(
+                duration_steps=100,
+                update_actor=False,
+                update_critic=False,
+                update_encoder=False,
+            ),
+        )
+        agent._global_step = 40
+        agent.switch_to_online_mode()
+        agent._global_step = 80
+
+        agent.switch_to_online_mode()
+
+        assert agent._online_start_step == 40
+        assert agent._initial_phase_start_step == 40
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"offline_data_ratio": 1.5}, "offline_data_ratio"),
+            ({"online_replay_mode": "invalid"}, "online_replay_mode"),
+        ],
+    )
+    def test_invalid_switch_is_retryable(self, wsrl_agent, kwargs, message):
+        original_use_cql_loss = wsrl_agent.use_cql_loss
+        original_cql_alpha = wsrl_agent.cql_alpha
+
+        with pytest.raises(ValueError, match=message):
+            wsrl_agent.switch_to_online_mode(**kwargs)
+
+        assert wsrl_agent._online_start_step is None
+        assert wsrl_agent._initial_phase_start_step is None
+        assert wsrl_agent.use_cql_loss == original_use_cql_loss
+        assert wsrl_agent.cql_alpha == original_cql_alpha
+
+        wsrl_agent.switch_to_online_mode()
+        assert wsrl_agent._online_start_step == 0
 
     def test_switch_to_online_mode_empty_clears_replay(self, wsrl_agent):
         # Force the "half-WSRL" configuration (CQL on + empty buffer) to

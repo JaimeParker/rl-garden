@@ -8,6 +8,7 @@ from gymnasium import spaces
 from rl_garden.algorithms import SAC, WSRL
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
+from rl_garden.common.training_phase import InitialTrainingPhase
 
 
 class DummyVecEnv:
@@ -145,6 +146,29 @@ def test_sac_checkpoint_roundtrip_with_replay_buffer(tmp_path):
     assert torch.equal(loaded.replay_buffer.actions, agent.replay_buffer.actions)
 
 
+def test_sac_checkpoint_restores_initial_phase_progress(tmp_path):
+    phase = InitialTrainingPhase(
+        duration_steps=100,
+        update_actor=False,
+        update_critic=True,
+        update_encoder=True,
+    )
+    agent = SAC(env=_state_env(), **_sac_kwargs(), initial_training_phase=phase)
+    agent._global_step = 50
+    agent._start_initial_training_phase()
+    agent._global_step = 80
+    path = agent.save(tmp_path / "sac_phase.pt")
+
+    loaded = SAC(env=_state_env(), **_sac_kwargs(), initial_training_phase=phase)
+    loaded.load(path)
+
+    assert loaded._initial_phase_start_step == 50
+    assert loaded._global_step == 80
+    assert not loaded._training_update_mask().update_actor
+    loaded._global_step = 150
+    assert loaded._training_update_mask().update_actor
+
+
 def test_learn_writes_periodic_and_final_checkpoints(tmp_path):
     agent = SAC(
         env=_state_step_env(),
@@ -202,6 +226,37 @@ def test_wsrl_checkpoint_restores_extra_state(tmp_path):
     assert loaded.use_cql_loss == agent.use_cql_loss
     assert loaded.use_td_loss == agent.use_td_loss
     assert torch.allclose(loaded._current_alpha(), agent._current_alpha())
+
+
+def test_wsrl_checkpoint_restores_online_warmup_progress(tmp_path):
+    phase = InitialTrainingPhase(
+        duration_steps=100,
+        update_actor=False,
+        update_critic=False,
+        update_encoder=False,
+    )
+    agent = WSRL(
+        env=_state_env(),
+        **_wsrl_kwargs(),
+        initial_training_phase=phase,
+    )
+    agent._global_step = 20
+    agent.switch_to_online_mode()
+    agent._global_step = 60
+    path = agent.save(tmp_path / "wsrl_phase.pt")
+
+    loaded = WSRL(
+        env=_state_env(),
+        **_wsrl_kwargs(),
+        initial_training_phase=phase,
+    )
+    loaded.load(path)
+
+    assert loaded._online_start_step == 20
+    assert loaded._initial_phase_start_step == 20
+    assert loaded._active_initial_training_phase() is not None
+    loaded.switch_to_online_mode()
+    assert loaded._initial_phase_start_step == 20
 
 
 def test_wsrl_dict_checkpoint_roundtrip(tmp_path):

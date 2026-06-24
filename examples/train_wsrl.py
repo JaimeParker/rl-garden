@@ -28,6 +28,8 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
+    warn_if_wsrl_warmup_uses_uninitialized_policy,
+    wsrl_initial_training_phase_from_args,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
@@ -279,7 +281,7 @@ def main() -> None:
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
-        warmup_steps=args.warmup_steps,
+        initial_training_phase=wsrl_initial_training_phase_from_args(args),
         offline_sampling=args.offline_sampling,
         sparse_reward_mc=args.sparse_reward_mc,
         sparse_negative_reward=args.sparse_negative_reward,
@@ -342,14 +344,7 @@ def main() -> None:
         if args.std_log:
             print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
     elif args.num_offline_steps == 0:
-        if args.warmup_steps > 0 and args.load_checkpoint is None:
-            import warnings
-            warnings.warn(
-                "warmup_steps > 0 has no effect without an offline-trained policy. "
-                "Use --load_checkpoint or set --warmup_steps 0 for pure-online runs.",
-                UserWarning,
-                stacklevel=2,
-            )
+        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
         if args.load_checkpoint is not None and args.offline_dataset_path is not None:
             loaded = load_maniskill_h5_to_replay_buffer(
                 agent.replay_buffer,

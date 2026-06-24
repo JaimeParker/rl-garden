@@ -20,6 +20,11 @@ import torch
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.logger import Logger
+from rl_garden.common.training_phase import (
+    InitialTrainingPhase,
+    STANDARD_UPDATE_MASK,
+    TrainingUpdateMask,
+)
 
 
 class OffPolicyAlgorithm(BaseAlgorithm):
@@ -50,6 +55,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
         super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
         self.buffer_size = buffer_size
@@ -71,6 +77,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.save_replay_buffer = save_replay_buffer
         self.save_final_checkpoint = save_final_checkpoint
         self._last_checkpoint_step = -1
+        self.initial_training_phase = initial_training_phase
+        self._initial_phase_start_step: Optional[int] = None
 
         self.num_envs = env.num_envs
         self.steps_per_env = max(1, training_freq // self.num_envs)
@@ -128,11 +136,54 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def _rollout_action(
         self, obs, learning_has_started: bool
     ) -> tuple[torch.Tensor, torch.Tensor, Optional[dict[str, Any]]]:
+        phase = self._active_initial_training_phase()
+        if phase is not None:
+            actions = self._policy_action(obs)
+            if phase.random_action_prob > 0.0:
+                random_actions = self._explore_action(obs)
+                mask_shape = (actions.shape[0],) + (1,) * (actions.ndim - 1)
+                random_mask = (
+                    torch.rand(mask_shape, device=actions.device)
+                    < phase.random_action_prob
+                )
+                actions = torch.where(random_mask, random_actions, actions)
+            return actions, actions, None
         if not learning_has_started:
             actions = self._explore_action(obs)
         else:
             actions = self._policy_action(obs)
         return actions, actions, None
+
+    def _on_training_start(self, total_timesteps: int) -> None:
+        super()._on_training_start(total_timesteps)
+        if self._should_start_initial_training_phase_on_learn():
+            self._start_initial_training_phase()
+
+    def _should_start_initial_training_phase_on_learn(self) -> bool:
+        return True
+
+    def _start_initial_training_phase(
+        self, start_step: Optional[int] = None
+    ) -> None:
+        if self.initial_training_phase is None:
+            return
+        if self._initial_phase_start_step is None:
+            self._initial_phase_start_step = (
+                self._global_step if start_step is None else int(start_step)
+            )
+
+    def _active_initial_training_phase(self) -> Optional[InitialTrainingPhase]:
+        phase = self.initial_training_phase
+        start = self._initial_phase_start_step
+        if phase is None or phase.duration_steps == 0 or start is None:
+            return None
+        if self._global_step - start >= phase.duration_steps:
+            return None
+        return phase
+
+    def _training_update_mask(self) -> TrainingUpdateMask:
+        phase = self._active_initial_training_phase()
+        return phase.update_mask if phase is not None else STANDARD_UPDATE_MASK
 
     def _replay_buffer_add_kwargs(
         self,
@@ -218,7 +269,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     # --- checkpointing ---
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             **super()._checkpoint_metadata(),
             "buffer_size": self.buffer_size,
             "buffer_device": self.buffer_device,
@@ -230,6 +281,25 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             "utd": self.utd,
             "bootstrap_at_done": self.bootstrap_at_done,
         }
+        if self.initial_training_phase is not None:
+            metadata["initial_training_phase"] = (
+                self.initial_training_phase.to_dict()
+            )
+        return metadata
+
+    def _training_state_dict(self) -> dict[str, Any]:
+        state = super()._training_state_dict()
+        state["initial_phase_start_step"] = self._initial_phase_start_step
+        return state
+
+    def _load_training_state_dict(self, state: dict[str, Any]) -> None:
+        super()._load_training_state_dict(state)
+        if "initial_phase_start_step" in state:
+            start = state["initial_phase_start_step"]
+            self._initial_phase_start_step = None if start is None else int(start)
+        elif self.initial_training_phase is not None:
+            # Pre-phase-state checkpoints used absolute global-step thresholds.
+            self._initial_phase_start_step = 0
 
     def _checkpoint_path(self, name: str) -> Path:
         assert self.checkpoint_dir is not None
@@ -276,6 +346,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     # --- main loop ---
 
     def learn(self, total_timesteps: int) -> "OffPolicyAlgorithm":
+        self._on_training_start(total_timesteps)
         obs, _ = self.env.reset(seed=self.seed)
         self._on_env_reset(obs)
         learning_has_started = False

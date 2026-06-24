@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional
+
+from rl_garden.common.training_phase import InitialTrainingPhase
 
 
 @dataclass
@@ -59,6 +62,15 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     policy_lr: float = 3e-4
     q_lr: float = 3e-4
     critic_impl: Literal["vmap", "legacy"] = "vmap"
+    n_critics: int = 2
+    critic_subsample_size: Optional[int] = None
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = False
+    hidden_dim: int = 256
+    actor_hidden_layers: int = 3
+    critic_hidden_layers: int = 3
+    actor_log_std_min: float = -5.0
+    actor_log_std_mode: Literal["clamp", "tanh"] = "clamp"
     alpha_tuning: Literal["legacy_exp", "log_alpha", "lagrange_softplus"] = "legacy_exp"
     # Entropy-coefficient knobs, passed through to ``SAC`` unchanged. Defaults
     # match the SAC constructor defaults exactly so existing runs reproduce
@@ -69,6 +81,10 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     q_landscape_diagnostics: bool = False
     q_landscape_num_actions: int = 8
     q_landscape_batch_size: int = 64
+    critic_only_steps: int = 0
+    critic_only_freeze_encoder: bool = True
+    critic_only_random_action_prob: float = 0.0
+    load_actor_checkpoint: Optional[str] = None
 
 
 @dataclass
@@ -95,6 +111,9 @@ class VisionArgs:
     plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
     plain_conv_last_act: bool = True
     plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
+    # Optional comma-separated image-key subset, e.g. ``rgb_base_camera``.
+    # Leave unset to keep the env/default image-key discovery behavior.
+    image_keys: Optional[str] = None
     # Default is intentionally off: random shifts consume augmentation RNG and
     # should be enabled only as an explicit visual-RL ablation.
     image_augmentation: Literal["none", "random_shift"] = "none"
@@ -248,6 +267,46 @@ class VisionWSRLTrainingArgs(WSRLTrainingArgs, VisionArgs):
     buffer_size: int = 200_000
     batch_size: int = 512
     utd: float = 0.25
+
+
+def sac_initial_training_phase_from_args(
+    args: SACTrainingArgs,
+) -> Optional[InitialTrainingPhase]:
+    if args.critic_only_steps <= 0:
+        return None
+    return InitialTrainingPhase(
+        duration_steps=args.critic_only_steps,
+        update_actor=False,
+        update_critic=True,
+        update_encoder=not args.critic_only_freeze_encoder,
+        random_action_prob=args.critic_only_random_action_prob,
+    )
+
+
+def wsrl_initial_training_phase_from_args(
+    args: WSRLTrainingArgs,
+) -> Optional[InitialTrainingPhase]:
+    if args.warmup_steps <= 0:
+        return None
+    return InitialTrainingPhase(
+        duration_steps=args.warmup_steps,
+        update_actor=False,
+        update_critic=False,
+        update_encoder=False,
+        random_action_prob=0.0,
+    )
+
+
+def warn_if_wsrl_warmup_uses_uninitialized_policy(args: WSRLTrainingArgs) -> None:
+    if args.warmup_steps > 0 and args.load_checkpoint is None:
+        warnings.warn(
+            "warmup_steps > 0 without an offline-trained checkpoint will use "
+            "the randomly initialized policy to collect data while updates are "
+            "paused. Use --load_checkpoint or set --warmup_steps 0 unless this "
+            "is intentional.",
+            UserWarning,
+            stacklevel=2,
+        )
 
 
 @dataclass
@@ -654,6 +713,15 @@ def image_keys_from_obs_mode(obs_mode: str) -> tuple[str, ...]:
     return ("rgb",) if obs_mode == "rgb" else ("rgb", "depth")
 
 
+def _parse_image_key_filter(value: Optional[str]) -> Optional[tuple[str, ...]]:
+    if value is None:
+        return None
+    keys = tuple(k.strip() for k in value.split(",") if k.strip())
+    if not keys:
+        raise ValueError("image_keys must contain at least one key when provided.")
+    return keys
+
+
 def image_keys_from_env(env: Any, args: VisionArgs) -> tuple[str, ...]:
     """Resolve image keys for ``CombinedExtractor`` from the built env.
 
@@ -662,6 +730,17 @@ def image_keys_from_env(env: Any, args: VisionArgs) -> tuple[str, ...]:
     observation space. Otherwise we fall back to the single-key default that
     matches ``FlattenRGBDObservationWrapper``.
     """
+    explicit_keys = _parse_image_key_filter(args.image_keys)
+    if explicit_keys is not None:
+        obs_space = env.single_observation_space
+        if hasattr(obs_space, "spaces"):
+            missing = [key for key in explicit_keys if key not in obs_space.spaces]
+            if missing:
+                raise ValueError(
+                    "Requested image_keys are not present in the observation space: "
+                    + ", ".join(missing)
+                )
+        return explicit_keys
     if args.per_camera_rgbd:
         from rl_garden.encoders import discover_image_keys
 

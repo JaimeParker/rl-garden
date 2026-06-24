@@ -2,6 +2,7 @@ from rl_garden.common.action_scaler import ActionScaler
 from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
 from rl_garden.common.logger import Logger
 from rl_garden.common.perf import enable_fast_math
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.types import (
     Obs,
     ReplayBufferSample,
@@ -26,6 +27,7 @@ __all__ = [
     "ActionScaler",
     "AlphaTuner",
     "AlphaTuning",
+    "InitialTrainingPhase",
     "parse_auto_alpha_init",
     "constant_schedule",
     "enable_fast_math",
