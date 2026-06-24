@@ -197,6 +197,14 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         del action_context, obs, next_obs, real_next_obs, infos, need_final_obs
         return {}
 
+    def _replay_buffer_step_kwargs(
+        self,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+    ) -> dict[str, Any]:
+        del terminations, truncations
+        return {}
+
     def _post_rollout_step(
         self,
         action_context: Optional[dict[str, Any]],
@@ -431,6 +439,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     real_next_obs,
                     infos,
                     need_final_obs,
+                )
+                replay_kwargs.update(
+                    self._replay_buffer_step_kwargs(terminations, truncations)
                 )
                 self.replay_buffer.add(
                     obs, real_next_obs, actions, rewards, stop_bootstrap, **replay_kwargs

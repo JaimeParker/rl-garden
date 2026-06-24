@@ -8,7 +8,7 @@ the per-step TCP-cubeA distance, gripper finger opening, and the env's
 ``success``).
 
 Example:
-    python examples/probe_grasp_window.py \
+    python tools/diagnostics/probe_grasp_window.py \
       --checkpoint_path runs/<run>/checkpoints/final.pt \
       --num_envs 16 --num_steps 1000
 """

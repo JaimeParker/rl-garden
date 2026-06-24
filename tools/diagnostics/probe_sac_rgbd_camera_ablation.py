@@ -6,7 +6,7 @@ narrow question: does a trained dual-camera policy actually depend on each
 camera branch?
 
 Example:
-    python examples/probe_sac_rgbd_camera_ablation.py \
+    python tools/diagnostics/probe_sac_rgbd_camera_ablation.py \
       --checkpoint_path runs/<run>/checkpoints/final.pt \
       --encoder resnet10 \
       --pretrained_weights resnet10_pretrained_converted \

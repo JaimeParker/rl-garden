@@ -2,6 +2,7 @@ from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.bc import BC
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.cql import CQL
+from rl_garden.algorithms.ddpg import DDPG
 from rl_garden.algorithms.iql import IQL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
@@ -24,6 +25,7 @@ __all__ = [
     "BC",
     "CalQL",
     "CQL",
+    "DDPG",
     "IQL",
     "OfflineEnvSpec",
     "OfflinePretrainResult",

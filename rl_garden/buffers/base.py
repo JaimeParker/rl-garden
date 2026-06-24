@@ -1,8 +1,8 @@
 """Replay buffer interface.
 
-All buffers in ``rl_garden`` are GPU-native: they store transitions as torch
-tensors and never bounce through numpy. This keeps them compatible with
-ManiSkill's GPU-parallel envs, which return cuda tensors directly.
+Replay buffers expose torch tensors throughout the training path. The default
+storage is GPU-native; selected vision buffers can optionally use CPU memmaps
+and move sampled batches directly to the policy device.
 """
 from __future__ import annotations
 
