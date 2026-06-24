@@ -21,8 +21,10 @@ from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
+from rl_garden.common.checkpoint import load_checkpoint_file, validate_checkpoint_metadata
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
@@ -74,6 +76,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
         critic_impl: Literal["vmap", "legacy"] = "vmap",
+        actor_use_layer_norm: bool = False,
+        critic_use_layer_norm: bool = False,
+        actor_log_std_min: float = -5.0,
+        actor_log_std_mode: Literal["clamp", "tanh"] = "clamp",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
@@ -99,6 +105,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
         super().__init__(
             env=env,
@@ -123,6 +130,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             checkpoint_freq=checkpoint_freq,
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
+            initial_training_phase=initial_training_phase,
         )
         self.policy_lr = policy_lr
         self.q_lr = q_lr
@@ -164,6 +172,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
         self.critic_impl = critic_impl
+        self.actor_use_layer_norm = actor_use_layer_norm
+        self.critic_use_layer_norm = critic_use_layer_norm
+        self.actor_log_std_min = actor_log_std_min
+        self.actor_log_std_mode = actor_log_std_mode
         self.actor_feature_dim = actor_feature_dim
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
 
@@ -250,6 +262,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
             "critic_impl": self.critic_impl,
+            "actor_use_layer_norm": self.actor_use_layer_norm,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "actor_log_std_min": self.actor_log_std_min,
+            "actor_log_std_mode": self.actor_log_std_mode,
         }
         if self._is_dict_obs:
             meta.update(
@@ -325,6 +341,53 @@ class SAC(SACCore, OffPolicyAlgorithm):
             states = dict(states)
             states.pop("alpha_optimizer", None)
         super()._load_optimizer_state_dicts(states)
+
+    def load_actor_checkpoint(self, path: str, *, strict: bool = True) -> None:
+        """Load actor and shared encoder weights from a BC checkpoint."""
+        checkpoint = load_checkpoint_file(path, map_location=self.device)
+        validate_checkpoint_metadata(
+            checkpoint,
+            algorithm_class=type(self).__name__,
+            compatible_algorithms=("BC",),
+            observation_space=self.env.single_observation_space,
+            action_space=self.env.single_action_space,
+            strict=strict,
+        )
+        source = checkpoint["state"]["policy"]
+        target = self.policy.state_dict()
+        prefixes = ("features_extractor.", "actor.", "_actor_adapter.")
+        selected = {
+            key: value
+            for key, value in source.items()
+            if key.startswith(prefixes)
+        }
+        missing = [key for key in selected if key not in target]
+        not_loaded = [
+            key
+            for key in target
+            if key.startswith(prefixes) and key not in selected
+        ]
+        mismatched = [
+            key for key, value in selected.items()
+            if key in target and tuple(value.shape) != tuple(target[key].shape)
+        ]
+        if strict and (missing or not_loaded or mismatched):
+            details = []
+            if missing:
+                details.append("missing in SAC policy: " + ", ".join(missing))
+            if not_loaded:
+                details.append("missing in source checkpoint: " + ", ".join(not_loaded))
+            if mismatched:
+                details.append("shape mismatch: " + ", ".join(mismatched))
+            raise ValueError("Cannot load actor checkpoint:\n- " + "\n- ".join(details))
+
+        compatible = {
+            key: value
+            for key, value in selected.items()
+            if key in target and tuple(value.shape) == tuple(target[key].shape)
+        }
+        target.update(compatible)
+        self.policy.load_state_dict(target, strict=True)
 
     # --- construction hooks ---
 
@@ -448,6 +511,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
             critic_impl=self.critic_impl,
+            actor_use_layer_norm=self.actor_use_layer_norm,
+            critic_use_layer_norm=self.critic_use_layer_norm,
+            log_std_min=self.actor_log_std_min,
+            log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
         )

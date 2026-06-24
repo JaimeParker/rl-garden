@@ -20,6 +20,7 @@ from rl_garden.common.cli_args import (
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     resolve_checkpoint_dir,
+    sac_initial_training_phase_from_args,
     vit_sac_kwargs_from_args,
 )
 from rl_garden.encoders import discover_image_keys
@@ -147,6 +148,10 @@ def main() -> None:
     eval_env = _make_env(args, args.num_eval_envs, is_eval=True) if args.num_eval_envs > 0 else None
     factory = image_encoder_factory_from_args(args)
     image_keys = discover_image_keys(env.single_observation_space)
+    net_arch = {
+        "pi": [args.hidden_dim] * args.actor_hidden_layers,
+        "qf": [args.hidden_dim] * args.critic_hidden_layers,
+    }
 
     agent = SAC(
         env=env,
@@ -168,6 +173,14 @@ def main() -> None:
         q_landscape_diagnostics=args.q_landscape_diagnostics,
         q_landscape_num_actions=args.q_landscape_num_actions,
         q_landscape_batch_size=args.q_landscape_batch_size,
+        initial_training_phase=sac_initial_training_phase_from_args(args),
+        n_critics=args.n_critics,
+        critic_subsample_size=args.critic_subsample_size,
+        actor_use_layer_norm=args.actor_use_layer_norm,
+        critic_use_layer_norm=args.critic_use_layer_norm,
+        actor_log_std_min=args.actor_log_std_min,
+        actor_log_std_mode=args.actor_log_std_mode,
+        net_arch=net_arch,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -188,6 +201,8 @@ def main() -> None:
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+    if args.load_actor_checkpoint is not None:
+        agent.load_actor_checkpoint(args.load_actor_checkpoint)
     agent.learn(total_timesteps=args.total_timesteps)
 
     logger.close()

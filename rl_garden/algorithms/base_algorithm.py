@@ -21,6 +21,7 @@ from rl_garden.common.checkpoint import (
     validate_checkpoint_metadata,
 )
 from rl_garden.common.logger import Logger
+from rl_garden.common.training_phase import STANDARD_UPDATE_MASK, TrainingUpdateMask
 from rl_garden.common.utils import get_device, seed_everything
 from rl_garden.policies.base import BasePolicy
 
@@ -56,6 +57,13 @@ class BaseAlgorithm(ABC):
 
     @abstractmethod
     def learn(self, total_timesteps: int) -> "BaseAlgorithm": ...
+
+    def _on_training_start(self, total_timesteps: int) -> None:
+        """Lifecycle hook called immediately before a training loop starts."""
+        del total_timesteps
+
+    def _training_update_mask(self) -> TrainingUpdateMask:
+        return STANDARD_UPDATE_MASK
 
     def _obs_to_policy_device(self, obs):
         """Move CPU-backed env observations to the policy device for inference.
@@ -115,12 +123,19 @@ class BaseAlgorithm(ABC):
     def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
         del state
 
+    def _training_state_dict(self) -> dict[str, Any]:
+        return {}
+
+    def _load_training_state_dict(self, state: dict[str, Any]) -> None:
+        del state
+
     def state_dict(self) -> dict[str, Any]:
         return {
             "policy": self.policy.state_dict(),
             "optimizers": self._optimizer_state_dicts(),
             "global_step": self._global_step,
             "global_update": self._global_update,
+            "training_state": self._training_state_dict(),
             "extra": self._extra_checkpoint_state(),
         }
 
@@ -133,6 +148,7 @@ class BaseAlgorithm(ABC):
         self.policy.load_state_dict(sd["policy"], strict=strict)
         self._global_step = int(sd.get("global_step", 0))
         self._global_update = int(sd.get("global_update", 0))
+        self._load_training_state_dict(sd.get("training_state", {}))
         self._load_extra_checkpoint_state(sd.get("extra", {}))
         if load_optimizers:
             self._load_optimizer_state_dicts(sd.get("optimizers", {}))

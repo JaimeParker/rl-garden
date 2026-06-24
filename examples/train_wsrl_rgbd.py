@@ -34,6 +34,8 @@ from rl_garden.common.cli_args import (
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
     vit_sac_kwargs_from_args,
+    warn_if_wsrl_warmup_uses_uninitialized_policy,
+    wsrl_initial_training_phase_from_args,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
@@ -101,6 +103,25 @@ def _offline_update_loop(
 
         if agent.checkpoint_freq > 0 and (step + 1) % agent.checkpoint_freq == 0:
             agent._save_checkpoint(f"checkpoint_{step + 1}.pt")
+
+
+def _switch_to_online_mode(agent: WSRL, args: Args, logger: Logger) -> None:
+    if args.num_offline_steps == 0:
+        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
+        if args.load_checkpoint is not None and args.offline_dataset_path is not None:
+            loaded = load_maniskill_h5_to_replay_buffer(
+                agent.replay_buffer,
+                args.offline_dataset_path,
+                num_traj=args.offline_num_traj,
+                reward_scale=args.reward_scale,
+                reward_bias=args.reward_bias,
+                success_key=args.success_key,
+            )
+            logger.add_summary("wsrl/offline_loaded_transitions", loaded)
+    agent.switch_to_online_mode(
+        online_replay_mode=args.online_replay_mode,
+        offline_data_ratio=args.offline_data_ratio,
+    )
 
 
 def main() -> None:
@@ -223,7 +244,7 @@ def main() -> None:
         std_parameterization=args.std_parameterization,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
-        warmup_steps=args.warmup_steps,
+        initial_training_phase=wsrl_initial_training_phase_from_args(args),
         offline_sampling=args.offline_sampling,
         sparse_reward_mc=args.sparse_reward_mc,
         sparse_negative_reward=args.sparse_negative_reward,
@@ -265,11 +286,7 @@ def main() -> None:
             agent, args.num_offline_steps, logger, args.log_freq, args.std_log
         )
 
-        # Switch to online mode
-        agent.switch_to_online_mode(
-            online_replay_mode=args.online_replay_mode,
-            offline_data_ratio=args.offline_data_ratio,
-        )
+    _switch_to_online_mode(agent, args, logger)
 
     # Online training phase
     if args.num_online_steps > 0:

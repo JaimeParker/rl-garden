@@ -140,7 +140,13 @@ class SACCore:
     # --- SAC losses ---
 
     def _critic_forward(self, obs, actions, target: bool = False):
-        features = self.policy.extract_features(obs, stop_gradient=False)
+        stop_gradient = not self._training_update_mask().update_encoder
+        features = self.policy.extract_features(obs, stop_gradient=stop_gradient)
+        if stop_gradient:
+            # CombinedExtractor's stop-gradient mode intentionally detaches
+            # image branches only. A frozen training phase must detach the
+            # complete shared feature vector, including proprio branches.
+            features = features.detach()
         return self.policy.q_values_all(features, actions, target=target)
 
     def _target_q(self, data) -> torch.Tensor:
@@ -212,6 +218,10 @@ class SACCore:
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]:
+        update_mask = self._training_update_mask()
+        if not update_mask.update_actor and not update_mask.update_critic:
+            return {}
+
         high_utd_ratio = int(self.utd) if float(self.utd).is_integer() else 1
         if high_utd_ratio > 1:
             groups = gradient_steps // high_utd_ratio
@@ -243,19 +253,23 @@ class SACCore:
             data = self._sample_train_batch(self.batch_size)
             self.policy.features_extractor.prepare_batch(data.obs, data.next_obs)
 
-            critic_loss, critic_info = self._critic_loss(data)
-            self.q_optimizer.zero_grad()
-            critic_loss.backward()
-            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
-            self.q_optimizer.step()
-            self._step_critic_scheduler()
+            if update_mask.update_critic:
+                critic_loss, critic_info = self._critic_loss(data)
+                self.q_optimizer.zero_grad()
+                critic_loss.backward()
+                self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+                self.q_optimizer.step()
+                self._step_critic_scheduler()
 
-            if compute_info:
-                critic_losses_t.append(critic_loss.detach())
-                for key, value in critic_info.items():
-                    info_accum.setdefault(key, []).append(value)
+                if compute_info:
+                    critic_losses_t.append(critic_loss.detach())
+                    for key, value in critic_info.items():
+                        info_accum.setdefault(key, []).append(value)
 
-            if self._global_update % self.policy_frequency == 0:
+            if (
+                update_mask.update_actor
+                and self._global_update % self.policy_frequency == 0
+            ):
                 actor_loss, log_prob_detached = self._actor_loss_from_batch(data)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
@@ -282,11 +296,17 @@ class SACCore:
                         info_accum.setdefault(key, []).append(value)
                     for key, value in post_info.items():
                         info_accum.setdefault(key, []).append(value)
+            elif compute_info and not update_mask.update_actor:
+                for key, value in self._q_landscape_diagnostics(data).items():
+                    info_accum.setdefault(key, []).append(value)
 
             if compute_info:
                 alphas_t.append(self._current_alpha().detach())
 
-            if self._global_update % self.target_network_frequency == 0:
+            if (
+                update_mask.update_critic
+                and self._global_update % self.target_network_frequency == 0
+            ):
                 self._target_update()
 
         if not compute_info:
@@ -314,6 +334,10 @@ class SACCore:
     def train_high_utd(
         self, utd_ratio: int, compute_info: bool = False
     ) -> dict[str, float]:
+        update_mask = self._training_update_mask()
+        if not update_mask.update_actor and not update_mask.update_critic:
+            return {}
+
         assert utd_ratio >= 1, f"utd_ratio must be >= 1, got {utd_ratio}"
         assert (
             self.batch_size % utd_ratio == 0
@@ -325,55 +349,64 @@ class SACCore:
         critic_losses_t: list[torch.Tensor] = []
         info_accum: dict[str, list[torch.Tensor]] = {}
 
-        for j in range(utd_ratio):
+        if update_mask.update_critic:
+            for j in range(utd_ratio):
+                self._global_update += 1
+                mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
+                self.policy.features_extractor.prepare_batch(mb.obs, mb.next_obs)
+
+                critic_loss, critic_info = self._critic_loss(mb)
+                self.q_optimizer.zero_grad()
+                critic_loss.backward()
+                self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+                self.q_optimizer.step()
+                self._step_critic_scheduler()
+
+                if compute_info:
+                    critic_losses_t.append(critic_loss.detach())
+                    for key, value in critic_info.items():
+                        info_accum.setdefault(key, []).append(value)
+
+                if self._global_update % self.target_network_frequency == 0:
+                    self._target_update()
+        else:
             self._global_update += 1
-            mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
-            self.policy.features_extractor.prepare_batch(mb.obs, mb.next_obs)
-
-            critic_loss, critic_info = self._critic_loss(mb)
-            self.q_optimizer.zero_grad()
-            critic_loss.backward()
-            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
-            self.q_optimizer.step()
-            self._step_critic_scheduler()
-
-            if compute_info:
-                critic_losses_t.append(critic_loss.detach())
-                for key, value in critic_info.items():
-                    info_accum.setdefault(key, []).append(value)
-
-            if self._global_update % self.target_network_frequency == 0:
-                self._target_update()
 
         with torch.no_grad():
             self.policy.features_extractor.prepare_batch(full_batch.obs)
 
-        actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self._clip_grad_norm(self.policy.actor_parameters())
-        self.actor_optimizer.step()
-        self._step_actor_scheduler()
-
+        actor_loss: Optional[torch.Tensor] = None
+        log_prob_detached: Optional[torch.Tensor] = None
         alpha_loss_t: Optional[torch.Tensor] = None
-        if self.autotune:
-            alpha_loss = self._alpha_loss(log_prob_detached)
-            self.alpha_optimizer.zero_grad()
-            alpha_loss.backward()
-            self._clip_grad_norm(self._alpha_parameters())
-            self.alpha_optimizer.step()
-            if compute_info:
-                alpha_loss_t = alpha_loss.detach()
+        post_info: dict[str, torch.Tensor] = {}
+        if update_mask.update_actor:
+            actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self._clip_grad_norm(self.policy.actor_parameters())
+            self.actor_optimizer.step()
+            self._step_actor_scheduler()
 
-        post_info = self._post_actor_update(full_batch)
+            if self.autotune:
+                alpha_loss = self._alpha_loss(log_prob_detached)
+                self.alpha_optimizer.zero_grad()
+                alpha_loss.backward()
+                self._clip_grad_norm(self._alpha_parameters())
+                self.alpha_optimizer.step()
+                if compute_info:
+                    alpha_loss_t = alpha_loss.detach()
+
+            post_info = self._post_actor_update(full_batch)
 
         if not compute_info:
             return {}
 
-        post_info["entropy"] = -log_prob_detached.mean()
-        post_info.update(self._actor_diagnostics(full_batch))
-        post_info.update(self._q_landscape_diagnostics(full_batch))
-
+        if log_prob_detached is not None:
+            post_info["entropy"] = -log_prob_detached.mean()
+            post_info.update(self._actor_diagnostics(full_batch))
+            post_info.update(self._q_landscape_diagnostics(full_batch))
+        else:
+            post_info.update(self._q_landscape_diagnostics(full_batch))
         critic_mean = self._reduce_tensor_lists({"critic_loss": critic_losses_t})
         info_mean = self._reduce_tensor_lists(info_accum)
         post_mean = self._reduce_tensor_lists({k: [v] for k, v in post_info.items()})
@@ -381,7 +414,7 @@ class SACCore:
         out: dict[str, float] = {
             "critic_loss": critic_mean.get("critic_loss", 0.0),
             "qf_loss": critic_mean.get("critic_loss", 0.0),
-            "actor_loss": float(actor_loss.detach().item()),
+            "actor_loss": float(actor_loss.detach().item()) if actor_loss is not None else 0.0,
             "alpha": float(self._current_alpha().detach().item()),
             "utd_ratio": float(utd_ratio),
         }

@@ -12,11 +12,17 @@ from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
     LoggingArgs,
     OfflineVisionArgs,
+    SACTrainingArgs,
     VisionArgs,
+    WSRLTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
+    image_keys_from_env,
     image_keys_from_obs_mode,
+    sac_initial_training_phase_from_args,
     vit_sac_kwargs_from_args,
+    warn_if_wsrl_warmup_uses_uninitialized_policy,
+    wsrl_initial_training_phase_from_args,
 )
 
 
@@ -61,12 +67,88 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.batch_size == 512
     assert args.utd == 0.25
     assert args.encoder == "plain_conv"
+    assert args.n_critics == 2
+    assert args.critic_subsample_size is None
+    assert args.actor_use_layer_norm is False
+    assert args.critic_use_layer_norm is False
+    assert args.hidden_dim == 256
+    assert args.actor_hidden_layers == 3
+    assert args.critic_hidden_layers == 3
+    assert args.actor_log_std_min == -5.0
+    assert args.actor_log_std_mode == "clamp"
+    assert args.critic_only_steps == 0
+    assert args.critic_only_freeze_encoder is True
+    assert args.critic_only_random_action_prob == 0.0
+    assert args.load_actor_checkpoint is None
     assert args.plain_conv_weight_init == "kaiming_uniform"
     assert args.plain_conv_last_act is True
     assert args.plain_conv_pooling == "flatten"
     assert args.image_augmentation == "none"
     assert args.image_random_shift_pad == 4
     assert args.q_landscape_diagnostics is False
+
+
+def test_sac_critic_only_args_map_to_initial_training_phase() -> None:
+    args = SACTrainingArgs(
+        critic_only_steps=123,
+        critic_only_freeze_encoder=True,
+        critic_only_random_action_prob=0.25,
+    )
+
+    phase = sac_initial_training_phase_from_args(args)
+
+    assert phase is not None
+    assert phase.duration_steps == 123
+    assert phase.update_actor is False
+    assert phase.update_critic is True
+    assert phase.update_encoder is False
+    assert phase.random_action_prob == 0.25
+
+
+def test_wsrl_warmup_args_map_to_collect_only_phase() -> None:
+    phase = wsrl_initial_training_phase_from_args(WSRLTrainingArgs(warmup_steps=321))
+
+    assert phase is not None
+    assert phase.duration_steps == 321
+    assert phase.update_actor is False
+    assert phase.update_critic is False
+    assert phase.update_encoder is False
+
+
+def test_wsrl_uninitialized_warmup_warning_describes_actual_behavior() -> None:
+    args = WSRLTrainingArgs(warmup_steps=100, load_checkpoint=None)
+
+    with pytest.warns(
+        UserWarning,
+        match="randomly initialized policy.*updates are paused",
+    ):
+        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
+
+
+def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
+    module = _load_example_module("train_wsrl_rgbd.py")
+    args = module.Args(
+        num_offline_steps=0,
+        warmup_steps=0,
+        online_replay_mode="mixed",
+        offline_data_ratio=0.25,
+    )
+    agent = type(
+        "Agent",
+        (),
+        {
+            "switch_to_online_mode": lambda self, **kwargs: setattr(
+                self, "switch_kwargs", kwargs
+            )
+        },
+    )()
+
+    module._switch_to_online_mode(agent, args, logger=None)
+
+    assert agent.switch_kwargs == {
+        "online_replay_mode": "mixed",
+        "offline_data_ratio": 0.25,
+    }
 
 
 def test_robotwin_sac_defaults_are_memory_safe() -> None:
@@ -352,6 +434,45 @@ def test_offline_plain_conv_factory_uses_shared_defaults() -> None:
 def test_image_keys_from_obs_mode() -> None:
     assert image_keys_from_obs_mode("rgb") == ("rgb",)
     assert image_keys_from_obs_mode("rgbd") == ("rgb", "depth")
+
+
+def test_image_keys_from_env_can_filter_explicit_per_camera_keys() -> None:
+    from gymnasium import spaces
+
+    class _Env:
+        single_observation_space = spaces.Dict(
+            {
+                "rgb_base_camera": spaces.Box(
+                    low=0, high=255, shape=(64, 64, 3), dtype="uint8"
+                ),
+                "rgb_hand_camera": spaces.Box(
+                    low=0, high=255, shape=(64, 64, 3), dtype="uint8"
+                ),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype="float32"),
+            }
+        )
+
+    args = VisionArgs(per_camera_rgbd=True, image_keys="rgb_base_camera")
+
+    assert image_keys_from_env(_Env(), args) == ("rgb_base_camera",)
+
+
+def test_image_keys_from_env_rejects_missing_explicit_key() -> None:
+    from gymnasium import spaces
+
+    class _Env:
+        single_observation_space = spaces.Dict(
+            {
+                "rgb_base_camera": spaces.Box(
+                    low=0, high=255, shape=(64, 64, 3), dtype="uint8"
+                ),
+            }
+        )
+
+    args = VisionArgs(per_camera_rgbd=True, image_keys="rgb_missing")
+
+    with pytest.raises(ValueError, match="rgb_missing"):
+        image_keys_from_env(_Env(), args)
 
 
 def test_log_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

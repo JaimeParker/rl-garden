@@ -16,6 +16,7 @@ from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
@@ -858,6 +859,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
         super().__init__(
             env=env,
@@ -882,6 +884,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             checkpoint_freq=checkpoint_freq,
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
+            initial_training_phase=initial_training_phase,
         )
         self._init_cql_params(
             tau=tau,

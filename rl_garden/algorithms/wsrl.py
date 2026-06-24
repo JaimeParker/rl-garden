@@ -16,6 +16,7 @@ from rl_garden.buffers.mc_buffer import (
     MCTensorReplayBuffer,
 )
 from rl_garden.common.logger import Logger
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
@@ -111,7 +112,6 @@ class WSRL(_CalQLRolloutTrainingShell):
         use_td_loss: bool = True,
         online_cql_alpha: float = 0.0,
         online_use_cql_loss: bool = False,
-        warmup_steps: int = 5000,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         # Sparse-reward MC
         sparse_reward_mc: bool = False,
@@ -130,6 +130,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
         obs_space = env.single_observation_space
         image_kwargs_explicit = {
@@ -253,13 +254,12 @@ class WSRL(_CalQLRolloutTrainingShell):
             checkpoint_freq=checkpoint_freq,
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
+            initial_training_phase=initial_training_phase,
         )
         self.online_cql_alpha = online_cql_alpha
         self.online_use_cql_loss = online_use_cql_loss
-        self.warmup_steps: int = warmup_steps
         self.offline_sampling: Literal["with_replace", "without_replace"] = offline_sampling
         self._online_start_step: int | None = None
-        self._warmup_end_step: Optional[int] = None
         self._offline_probe_batch: MCReplayBufferSample | None = None
         self.offline_replay_buffer: Optional[Any] = None
         self.offline_data_ratio: float = 0.0
@@ -269,7 +269,6 @@ class WSRL(_CalQLRolloutTrainingShell):
             **super()._checkpoint_metadata(),
             "online_cql_alpha": self.online_cql_alpha,
             "online_use_cql_loss": self.online_use_cql_loss,
-            "warmup_steps": self.warmup_steps,
             "offline_sampling": self.offline_sampling,
         }
         if self._is_dict_obs:
@@ -284,6 +283,26 @@ class WSRL(_CalQLRolloutTrainingShell):
                 }
             )
         return meta
+
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        state = super()._extra_checkpoint_state()
+        state["online_start_step"] = self._online_start_step
+        return state
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        start = state.get("online_start_step")
+        self._online_start_step = None if start is None else int(start)
+
+    def _load_training_state_dict(self, state: dict[str, Any]) -> None:
+        super()._load_training_state_dict(state)
+        if not state:
+            # Legacy WSRL checkpoints start online warmup only when switched.
+            self._initial_phase_start_step = None
+
+    def _should_start_initial_training_phase_on_learn(self) -> bool:
+        # WSRL starts this phase at the offline-to-online mode switch.
+        return False
 
     def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
         obs_space = self.env.single_observation_space
@@ -395,25 +414,6 @@ class WSRL(_CalQLRolloutTrainingShell):
             out["normalized_score"] = float(success) * 100.0
         return out
 
-    def train(
-        self, gradient_steps: int, compute_info: bool = False
-    ) -> dict[str, float]:
-        if (
-            self._warmup_end_step is not None
-            and self._global_step <= self._warmup_end_step
-        ):
-            return {}
-        return super().train(gradient_steps, compute_info=compute_info)
-
-    def _explore_action(self, obs) -> torch.Tensor:
-        # Use the offline-trained policy for exploration only when warmup is
-        # configured (warmup_steps > 0 and switch_to_online_mode() was called).
-        # Falls back to random uniform when warmup_steps=0, preserving the
-        # base class behaviour for pure-online runs without a pre-trained policy.
-        if self._warmup_end_step is not None:
-            return self._policy_action(obs)
-        return super()._explore_action(obs)
-
     def set_offline_probe_batch(self, batch: MCReplayBufferSample | None) -> None:
         self._offline_probe_batch = batch
 
@@ -462,7 +462,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         is_online = online_start is not None and step >= online_start
         offline_step = min(step, online_start) if online_start is not None else step
         online_step = max(0, step - online_start) if online_start is not None else 0
-        is_warmup = self._warmup_end_step is not None and step <= self._warmup_end_step
+        is_warmup = self._active_initial_training_phase() is not None
         self.logger.add_scalar("phase/is_online", float(is_online), step)
         self.logger.add_scalar("phase/wsrl_warmup", float(is_warmup), step)
         self.logger.add_scalar("phase/offline_step", float(offline_step), step)
@@ -477,14 +477,17 @@ class WSRL(_CalQLRolloutTrainingShell):
         online_replay_mode: Literal["empty", "append", "mixed"] = "append",
         offline_data_ratio: float = 0.0,
     ) -> None:
-        self._online_start_step = self._global_step
-        if self.warmup_steps > 0:
-            self._warmup_end_step = self._global_step + self.warmup_steps
-        self.use_cql_loss = self.online_use_cql_loss
-        self.cql_alpha = self.online_cql_alpha
-
+        if self._online_start_step is not None:
+            return
         if not (0.0 <= offline_data_ratio <= 1.0):
             raise ValueError(f"offline_data_ratio must be in [0, 1]; got {offline_data_ratio}.")
+        if online_replay_mode not in {"empty", "append", "mixed"}:
+            raise ValueError(f"Unknown online_replay_mode: {online_replay_mode!r}")
+
+        self._online_start_step = self._global_step
+        self._start_initial_training_phase(self._global_step)
+        self.use_cql_loss = self.online_use_cql_loss
+        self.cql_alpha = self.online_cql_alpha
         self.offline_replay_buffer = None
         self.offline_data_ratio = 0.0
         cleared_transitions = 0
@@ -496,8 +499,6 @@ class WSRL(_CalQLRolloutTrainingShell):
             self.offline_replay_buffer = self.replay_buffer
             self.replay_buffer = self._build_replay_buffer()
             self.offline_data_ratio = offline_data_ratio
-        else:
-            raise ValueError(f"Unknown online_replay_mode: {online_replay_mode!r}")
 
         if self.use_cql_loss and online_replay_mode == "empty":
             warnings.warn(
@@ -515,9 +516,17 @@ class WSRL(_CalQLRolloutTrainingShell):
 
         if self.logger:
             self.logger.add_summary("wsrl/online_start_step", self._global_step)
-            self.logger.add_summary("wsrl/warmup_steps", self.warmup_steps)
-            if self._warmup_end_step is not None:
-                self.logger.add_summary("wsrl/warmup_end_step", self._warmup_end_step)
+            warmup_steps = (
+                self.initial_training_phase.duration_steps
+                if self.initial_training_phase is not None
+                else 0
+            )
+            self.logger.add_summary("wsrl/warmup_steps", warmup_steps)
+            if self._initial_phase_start_step is not None and warmup_steps > 0:
+                self.logger.add_summary(
+                    "wsrl/warmup_end_step",
+                    self._initial_phase_start_step + warmup_steps,
+                )
             self.logger.add_summary("wsrl/online_use_cql_loss", self.use_cql_loss)
             self.logger.add_summary("wsrl/online_cql_alpha", self.cql_alpha)
             self.logger.add_summary("wsrl/online_backup_entropy", self.backup_entropy)
