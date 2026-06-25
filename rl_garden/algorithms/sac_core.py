@@ -41,6 +41,20 @@ class SACCore:
     def _target_critic_subsample_size(self) -> Optional[int]:
         return getattr(self, "critic_subsample_size", None)
 
+    def _eval_q_mc_enabled(self) -> bool:
+        return True
+
+    def _eval_q_values(self, obs, actions) -> torch.Tensor:
+        if hasattr(actions, "device") and actions.device != self.device:
+            actions = actions.to(self.device)
+        features = self.policy.extract_features(obs, stop_gradient=True)
+        return self.policy.min_q_value(
+            features,
+            actions,
+            subsample_size=None,
+            target=False,
+        )
+
     def _step_critic_scheduler(self) -> None:
         return None
 

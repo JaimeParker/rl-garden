@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -37,6 +39,35 @@ class DummyDictVecEnv:
         self.single_action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(2,), dtype=np.float32
         )
+
+
+class FixedRewardEvalEnv(DummyVecEnv):
+    def __init__(self, rewards: list[float], dones: list[bool]) -> None:
+        super().__init__()
+        self.num_envs = 1
+        self.rewards = rewards
+        self.dones = dones
+        self.step_idx = 0
+
+    def reset(self, seed: int | None = None):
+        del seed
+        self.step_idx = 0
+        return torch.zeros(1, *self.single_observation_space.shape), {}
+
+    def step(self, actions):
+        del actions
+        reward = torch.tensor([self.rewards[self.step_idx]], dtype=torch.float32)
+        done = torch.tensor([self.dones[self.step_idx]], dtype=torch.bool)
+        obs = torch.full(
+            (1, *self.single_observation_space.shape),
+            float(self.step_idx + 1),
+        )
+        infos = {}
+        if done.any():
+            episode_return = torch.tensor([sum(self.rewards[: self.step_idx + 1])])
+            infos = {"final_info": {"episode": {"return": episode_return}}}
+        self.step_idx += 1
+        return obs, reward, done, torch.zeros_like(done), infos
 
 
 def _agent(**kwargs) -> SAC:
@@ -180,6 +211,55 @@ def test_sac_actor_loss_uses_all_critics():
     assert q_all.shape[0] == 5
     assert loss.shape == ()
     assert log_prob.shape == (agent.batch_size, 1)
+
+
+def test_eval_q_mc_metrics_use_complete_episode_returns():
+    eval_env = FixedRewardEvalEnv(
+        rewards=[1.0, 2.0, 3.0],
+        dones=[False, False, True],
+    )
+    agent = _agent(eval_env=eval_env, num_eval_steps=3, gamma=0.5)
+    q_values = iter(
+        [
+            torch.tensor([2.0]),
+            torch.tensor([2.0]),
+            torch.tensor([2.0]),
+        ]
+    )
+    agent._eval_q_values = lambda obs, actions: next(q_values)  # type: ignore[method-assign]
+
+    metrics = agent._evaluate()
+
+    expected_returns = torch.tensor([2.75, 3.5, 3.0])
+    expected_errors = torch.tensor([2.0, 2.0, 2.0]) - expected_returns
+    assert metrics["q_mc/num_steps"] == 3.0
+    assert metrics["q_mc/q_mean"] == 2.0
+    assert metrics["q_mc/mc_return_mean"] == pytest.approx(
+        float(expected_returns.mean().item())
+    )
+    assert metrics["q_mc/mean_error"] == pytest.approx(
+        float(expected_errors.mean().item())
+    )
+    assert metrics["q_mc/abs_error"] == pytest.approx(
+        float(expected_errors.abs().mean().item())
+    )
+    assert metrics["q_mc/rmse"] == pytest.approx(
+        math.sqrt(float(expected_errors.square().mean().item()))
+    )
+
+
+def test_eval_q_mc_metrics_skip_incomplete_episodes():
+    eval_env = FixedRewardEvalEnv(
+        rewards=[1.0, 2.0, 3.0],
+        dones=[False, False, False],
+    )
+    agent = _agent(eval_env=eval_env, num_eval_steps=3)
+    agent._eval_q_values = lambda obs, actions: torch.tensor([1.0])  # type: ignore[method-assign]
+
+    metrics = agent._evaluate()
+
+    assert "q_mc/abs_error" not in metrics
+    assert "q_mc/num_steps" not in metrics
 
 
 def test_actor_diagnostics_preserves_cpu_rng_state():

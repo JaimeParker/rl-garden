@@ -96,6 +96,7 @@ class ResidualSAC(SAC):
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
+            critic_impl=self.critic_impl,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
             critic_use_layer_norm=True,
@@ -252,6 +253,10 @@ class ResidualSAC(SAC):
 
     def _eval_action(self, obs) -> torch.Tensor:
         return self.get_action(obs, deterministic=True, return_info=False)
+
+    def _eval_action_and_critic_action(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
+        env_action, info = self.get_action(obs, deterministic=True, return_info=True)
+        return env_action, info["final_actions"]
 
     def _evaluate(self) -> dict[str, float]:
         self._reset_base_action_provider()

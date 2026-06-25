@@ -33,6 +33,8 @@ from rl_garden.policies.base_policies import make_base_policy
 @dataclass
 class ResidualRGBDArgs(VisionSACTrainingArgs):
     residual_action_scale: float = 0.1
+    n_critics: int = 2
+    critic_subsample_size: Optional[int] = None
     debug: bool = False
     base_policy: Literal["act", "sac", "zero"] = "act"
     base_ckpt_path: Optional[str] = "act-peg-only"
@@ -139,6 +141,10 @@ def run_residual_rgbd_training(
             utd=args.utd,
             policy_lr=args.policy_lr,
             q_lr=args.q_lr,
+            n_critics=args.n_critics,
+            critic_subsample_size=args.critic_subsample_size,
+            critic_impl=args.critic_impl,
+            alpha_tuning=args.alpha_tuning,
             seed=args.seed,
             logger=logger,
             std_log=args.std_log,

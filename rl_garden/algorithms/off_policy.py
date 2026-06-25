@@ -130,6 +130,16 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 self._obs_to_policy_device(obs), deterministic=True
             )
 
+    def _eval_action_and_critic_action(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
+        action = self._eval_action(obs)
+        return action, action
+
+    def _eval_q_mc_enabled(self) -> bool:
+        return False
+
+    def _eval_q_values(self, obs, actions) -> torch.Tensor:
+        raise NotImplementedError
+
     def _on_env_reset(self, obs) -> None:
         del obs
 
@@ -333,15 +343,88 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
     # --- evaluation ---
 
+    def _finish_eval_q_mc_episode(
+        self,
+        q_values: list[torch.Tensor],
+        rewards: list[torch.Tensor],
+        completed_q_values: list[torch.Tensor],
+        completed_mc_returns: list[torch.Tensor],
+        completed_errors: list[torch.Tensor],
+    ) -> None:
+        q_ep = torch.stack(q_values).reshape(-1)
+        rewards_ep = torch.stack(rewards).reshape(-1).to(q_ep.device)
+        returns = torch.empty_like(rewards_ep)
+        running = torch.zeros((), dtype=rewards_ep.dtype, device=rewards_ep.device)
+        for idx in range(rewards_ep.shape[0] - 1, -1, -1):
+            running = rewards_ep[idx] + self.gamma * running
+            returns[idx] = running
+        errors = q_ep - returns
+        completed_q_values.append(q_ep)
+        completed_mc_returns.append(returns)
+        completed_errors.append(errors)
+
+    @staticmethod
+    def _reduce_eval_q_mc_metrics(
+        completed_q_values: list[torch.Tensor],
+        completed_mc_returns: list[torch.Tensor],
+        completed_errors: list[torch.Tensor],
+    ) -> dict[str, float]:
+        if not completed_errors:
+            return {}
+        q_values = torch.cat(completed_q_values)
+        mc_returns = torch.cat(completed_mc_returns)
+        errors = torch.cat(completed_errors)
+        mse = errors.square().mean()
+        return {
+            "q_mc/mean_error": float(errors.mean().item()),
+            "q_mc/abs_error": float(errors.abs().mean().item()),
+            "q_mc/rmse": float(torch.sqrt(mse).item()),
+            "q_mc/q_mean": float(q_values.mean().item()),
+            "q_mc/mc_return_mean": float(mc_returns.mean().item()),
+            "q_mc/num_steps": float(errors.numel()),
+        }
+
     def _evaluate(self) -> dict[str, float]:
         if self.eval_env is None:
             return {}
         self.policy.eval()
         obs, _ = self.eval_env.reset()
         metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
+        q_mc_enabled = self._eval_q_mc_enabled()
+        num_eval_envs = self.eval_env.num_envs
+        pending_q_values: list[list[torch.Tensor]] = [[] for _ in range(num_eval_envs)]
+        pending_rewards: list[list[torch.Tensor]] = [[] for _ in range(num_eval_envs)]
+        completed_q_values: list[torch.Tensor] = []
+        completed_mc_returns: list[torch.Tensor] = []
+        completed_errors: list[torch.Tensor] = []
         for _ in range(self.num_eval_steps):
             with torch.no_grad():
-                obs, _, _, _, infos = self.eval_env.step(self._eval_action(obs))
+                env_action, critic_action = self._eval_action_and_critic_action(obs)
+                q_values: torch.Tensor | None = None
+                if q_mc_enabled:
+                    q_values = self._eval_q_values(
+                        self._obs_to_policy_device(obs), critic_action
+                    ).reshape(-1).detach()
+                obs, rewards, terminations, truncations, infos = self.eval_env.step(
+                    env_action
+                )
+                if q_mc_enabled:
+                    assert q_values is not None
+                    step_rewards = rewards.reshape(-1).to(q_values.device).detach()
+                    dones = (terminations | truncations).reshape(-1)
+                    for env_idx in range(num_eval_envs):
+                        pending_q_values[env_idx].append(q_values[env_idx])
+                        pending_rewards[env_idx].append(step_rewards[env_idx])
+                    for env_idx in torch.where(dones)[0].detach().cpu().tolist():
+                        self._finish_eval_q_mc_episode(
+                            pending_q_values[env_idx],
+                            pending_rewards[env_idx],
+                            completed_q_values,
+                            completed_mc_returns,
+                            completed_errors,
+                        )
+                        pending_q_values[env_idx] = []
+                        pending_rewards[env_idx] = []
                 if "final_info" in infos:
                     for k, v in infos["final_info"]["episode"].items():
                         metrics[k].append(v)
@@ -349,6 +432,12 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         out: dict[str, float] = {}
         for k, vs in metrics.items():
             out[k] = float(torch.stack(vs).float().mean().item())
+        if q_mc_enabled:
+            out.update(
+                self._reduce_eval_q_mc_metrics(
+                    completed_q_values, completed_mc_returns, completed_errors
+                )
+            )
         return out
 
     # --- main loop ---
