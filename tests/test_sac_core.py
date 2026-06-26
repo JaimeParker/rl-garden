@@ -213,12 +213,24 @@ def test_sac_actor_loss_uses_all_critics():
     assert log_prob.shape == (agent.batch_size, 1)
 
 
-def test_eval_q_mc_metrics_use_complete_episode_returns():
+def test_eval_q_mc_disabled_by_default():
     eval_env = FixedRewardEvalEnv(
         rewards=[1.0, 2.0, 3.0],
         dones=[False, False, True],
     )
     agent = _agent(eval_env=eval_env, num_eval_steps=3, gamma=0.5)
+    # q_mc_diagnostics defaults to False — no q_mc/* keys expected
+    metrics = agent._evaluate()
+
+    assert not any(k.startswith("q_mc/") for k in metrics)
+
+
+def test_eval_q_mc_metrics_use_complete_episode_returns():
+    eval_env = FixedRewardEvalEnv(
+        rewards=[1.0, 2.0, 3.0],
+        dones=[False, False, True],
+    )
+    agent = _agent(eval_env=eval_env, num_eval_steps=3, gamma=0.5, q_mc_diagnostics=True)
     q_values = iter(
         [
             torch.tensor([2.0]),
@@ -253,13 +265,52 @@ def test_eval_q_mc_metrics_skip_incomplete_episodes():
         rewards=[1.0, 2.0, 3.0],
         dones=[False, False, False],
     )
-    agent = _agent(eval_env=eval_env, num_eval_steps=3)
+    agent = _agent(eval_env=eval_env, num_eval_steps=3, q_mc_diagnostics=True)
     agent._eval_q_values = lambda obs, actions: torch.tensor([1.0])  # type: ignore[method-assign]
 
     metrics = agent._evaluate()
 
     assert "q_mc/abs_error" not in metrics
     assert "q_mc/num_steps" not in metrics
+
+
+class TruncatingEvalEnv(FixedRewardEvalEnv):
+    """Like FixedRewardEvalEnv but fires truncations instead of terminations."""
+
+    def step(self, actions):
+        obs, reward, terminations, _, infos = super().step(actions)
+        truncations = terminations.clone()
+        terminations = torch.zeros_like(terminations)
+        if truncations.any():
+            infos["final_observation"] = torch.full(
+                (1, *self.single_observation_space.shape), 99.0
+            )
+        return obs, reward, terminations, truncations, infos
+
+
+def test_eval_q_mc_bootstrap_at_truncation():
+    # Episode: rewards=[1,2,3], truncated at step 3, bootstrap V(s_final)=4.0
+    # gamma=0.5: G_2=3+0.5*4=5, G_1=2+0.5*5=4.5, G_0=1+0.5*4.5=3.25
+    eval_env = TruncatingEvalEnv(
+        rewards=[1.0, 2.0, 3.0],
+        dones=[False, False, True],
+    )
+    agent = _agent(eval_env=eval_env, num_eval_steps=3, gamma=0.5, q_mc_diagnostics=True)
+    # Steps 0-2: Q=2.0; step 2 also triggers bootstrap call: Q(s_final)=4.0
+    q_vals = iter([
+        torch.tensor([2.0]),
+        torch.tensor([2.0]),
+        torch.tensor([2.0]),
+        torch.tensor([4.0]),  # bootstrap V(s_final)
+    ])
+    agent._eval_q_values = lambda obs, actions: next(q_vals)  # type: ignore[method-assign]
+
+    metrics = agent._evaluate()
+
+    expected_returns = torch.tensor([3.25, 4.5, 5.0])
+    assert metrics["q_mc/mc_return_mean"] == pytest.approx(
+        float(expected_returns.mean().item())
+    )
 
 
 def test_actor_diagnostics_preserves_cpu_rng_state():

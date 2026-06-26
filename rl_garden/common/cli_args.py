@@ -81,6 +81,7 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     q_landscape_diagnostics: bool = False
     q_landscape_num_actions: int = 8
     q_landscape_batch_size: int = 64
+    q_mc_diagnostics: bool = False
     critic_only_steps: int = 0
     critic_only_freeze_encoder: bool = True
     critic_only_random_action_prob: float = 0.0

@@ -118,6 +118,7 @@ def main() -> None:
         q_landscape_diagnostics=args.q_landscape_diagnostics,
         q_landscape_num_actions=args.q_landscape_num_actions,
         q_landscape_batch_size=args.q_landscape_batch_size,
+        q_mc_diagnostics=args.q_mc_diagnostics,
         initial_training_phase=sac_initial_training_phase_from_args(args),
         critic_impl=args.critic_impl,
         n_critics=args.n_critics,

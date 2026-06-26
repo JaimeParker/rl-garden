@@ -41,9 +41,6 @@ class SACCore:
     def _target_critic_subsample_size(self) -> Optional[int]:
         return getattr(self, "critic_subsample_size", None)
 
-    def _eval_q_mc_enabled(self) -> bool:
-        return True
-
     def _eval_q_values(self, obs, actions) -> torch.Tensor:
         if hasattr(actions, "device") and actions.device != self.device:
             actions = actions.to(self.device)
@@ -54,6 +51,87 @@ class SACCore:
             subsample_size=None,
             target=False,
         )
+
+    def _eval_start_hook(self) -> None:
+        if not getattr(self, "q_mc_diagnostics", False):
+            return
+        n = self.eval_env.num_envs
+        self._q_mc_pending_q: list[list] = [[] for _ in range(n)]
+        self._q_mc_pending_r: list[list] = [[] for _ in range(n)]
+        self._q_mc_completed_q: list[torch.Tensor] = []
+        self._q_mc_completed_mc: list[torch.Tensor] = []
+        self._q_mc_completed_err: list[torch.Tensor] = []
+
+    def _eval_step_hook(
+        self,
+        obs_before,
+        critic_action: torch.Tensor,
+        rewards: torch.Tensor,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+        infos: dict,
+    ) -> None:
+        if not getattr(self, "q_mc_diagnostics", False):
+            return
+        q_values = self._eval_q_values(
+            self._obs_to_policy_device(obs_before), critic_action
+        ).reshape(-1).detach()
+        step_rewards = rewards.reshape(-1).to(q_values.device).detach()
+        for env_idx in range(len(self._q_mc_pending_q)):
+            self._q_mc_pending_q[env_idx].append(q_values[env_idx])
+            self._q_mc_pending_r[env_idx].append(step_rewards[env_idx])
+        dones = (terminations | truncations).reshape(-1)
+        for env_idx in torch.where(dones)[0].cpu().tolist():
+            is_trunc = bool(truncations.reshape(-1)[env_idx].item())
+            bootstrap_v = self._q_mc_bootstrap_value(infos, env_idx) if is_trunc else None
+            self._q_mc_finish_episode(env_idx, bootstrap_v)
+
+    def _q_mc_bootstrap_value(self, infos: dict, env_idx: int) -> torch.Tensor | None:
+        final_obs = infos.get("final_observation")
+        if final_obs is None:
+            return None
+        if isinstance(final_obs, dict):
+            obs_i = {k: v[env_idx : env_idx + 1] for k, v in final_obs.items()}
+        else:
+            obs_i = final_obs[env_idx : env_idx + 1]
+        obs_i = self._obs_to_policy_device(obs_i)
+        a_i = self._eval_action(obs_i)
+        return self._eval_q_values(obs_i, a_i).reshape(())
+
+    def _q_mc_finish_episode(
+        self, env_idx: int, bootstrap_v: torch.Tensor | None
+    ) -> None:
+        q_ep = torch.stack(self._q_mc_pending_q[env_idx]).reshape(-1)
+        rewards_ep = torch.stack(self._q_mc_pending_r[env_idx]).reshape(-1).to(q_ep.device)
+        returns = torch.empty_like(rewards_ep)
+        if bootstrap_v is not None:
+            running = bootstrap_v.to(dtype=rewards_ep.dtype, device=q_ep.device).detach()
+        else:
+            running = torch.zeros((), dtype=rewards_ep.dtype, device=q_ep.device)
+        for idx in range(len(rewards_ep) - 1, -1, -1):
+            running = rewards_ep[idx] + self.gamma * running
+            returns[idx] = running
+        self._q_mc_completed_q.append(q_ep)
+        self._q_mc_completed_mc.append(returns)
+        self._q_mc_completed_err.append(q_ep - returns)
+        self._q_mc_pending_q[env_idx] = []
+        self._q_mc_pending_r[env_idx] = []
+
+    def _eval_finalize_hook(self) -> dict[str, float]:
+        if not getattr(self, "q_mc_diagnostics", False) or not self._q_mc_completed_err:
+            return {}
+        errors = torch.cat(self._q_mc_completed_err)
+        q_vals = torch.cat(self._q_mc_completed_q)
+        mc_rets = torch.cat(self._q_mc_completed_mc)
+        mse = errors.square().mean()
+        return {
+            "q_mc/mean_error": float(errors.mean().item()),
+            "q_mc/abs_error": float(errors.abs().mean().item()),
+            "q_mc/rmse": float(torch.sqrt(mse).item()),
+            "q_mc/q_mean": float(q_vals.mean().item()),
+            "q_mc/mc_return_mean": float(mc_rets.mean().item()),
+            "q_mc/num_steps": float(errors.numel()),
+        }
 
     def _step_critic_scheduler(self) -> None:
         return None

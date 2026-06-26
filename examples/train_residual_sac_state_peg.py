@@ -185,6 +185,7 @@ def main() -> None:
             critic_subsample_size=args.critic_subsample_size,
             critic_impl=args.critic_impl,
             alpha_tuning=args.alpha_tuning,
+            q_mc_diagnostics=args.q_mc_diagnostics,
             seed=args.seed,
             logger=logger,
             std_log=args.std_log,
