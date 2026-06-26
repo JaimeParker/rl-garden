@@ -199,6 +199,29 @@ def test_residual_update_hooks_combine_base_and_residual_actions():
     assert torch.isfinite(torch.tensor(train_info["critic_loss"]))
 
 
+def test_residual_critic_configuration_is_forwarded_to_policy():
+    agent = _agent(n_critics=4, critic_subsample_size=2, critic_impl="legacy")
+
+    assert agent.n_critics == 4
+    assert agent.critic_subsample_size == 2
+    assert agent.critic_impl == "legacy"
+    assert agent.policy.n_critics == 4
+    assert agent.policy.critic_subsample_size == 2
+    assert agent.policy.critic.critic_impl == "legacy"
+
+
+def test_residual_eval_q_mc_uses_normalized_final_action_for_critic():
+    agent = _agent(residual_action_scale=0.0)
+    obs, _ = agent.env.reset()
+
+    env_action, critic_action = agent._eval_action_and_critic_action(obs)
+
+    expected_env_action = torch.tensor([[0.05, -0.05], [0.05, -0.05]])
+    expected_critic_action = torch.tensor([[0.5, -0.5], [0.5, -0.5]])
+    torch.testing.assert_close(env_action, expected_env_action)
+    torch.testing.assert_close(critic_action, expected_critic_action)
+
+
 def test_residual_actor_diagnostics_use_base_actions_without_advancing_rng():
     agent = _agent()
     env = agent.env

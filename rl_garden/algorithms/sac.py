@@ -70,6 +70,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         q_landscape_diagnostics: bool = False,
         q_landscape_num_actions: int = 8,
         q_landscape_batch_size: int = 64,
+        q_mc_diagnostics: bool = False,
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -154,6 +155,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         self.q_landscape_diagnostics = q_landscape_diagnostics
         self.q_landscape_num_actions = q_landscape_num_actions
         self.q_landscape_batch_size = q_landscape_batch_size
+        self.q_mc_diagnostics = q_mc_diagnostics
         if self.q_landscape_num_actions <= 0:
             raise ValueError(
                 "q_landscape_num_actions must be positive, "

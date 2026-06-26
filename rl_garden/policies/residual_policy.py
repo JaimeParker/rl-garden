@@ -12,8 +12,11 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.networks import SquashedGaussianActor as Actor
-from rl_garden.networks import get_actor_critic_arch
+from rl_garden.networks.actor_critic import (
+    CriticImpl,
+    SquashedGaussianActor as Actor,
+    get_actor_critic_arch,
+)
 from rl_garden.policies.sac_policy import LOG_STD_MAX, LOG_STD_MIN, SACPolicy
 
 
@@ -26,6 +29,7 @@ class ResidualSACPolicy(SACPolicy):
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        critic_impl: CriticImpl = "vmap",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         critic_use_layer_norm: bool = False,
@@ -37,6 +41,7 @@ class ResidualSACPolicy(SACPolicy):
             net_arch=net_arch,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
+            critic_impl=critic_impl,
             actor_feature_dim=actor_feature_dim,
             critic_spatial_emb_dim=critic_spatial_emb_dim,
             critic_use_layer_norm=critic_use_layer_norm,
