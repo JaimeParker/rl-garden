@@ -226,6 +226,14 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         del terminations, truncations
         return {}
 
+    def _on_env_step(
+        self,
+        rewards: torch.Tensor,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+    ) -> None:
+        del rewards, terminations, truncations
+
     def _post_rollout_step(
         self,
         action_context: Optional[dict[str, Any]],
@@ -433,6 +441,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 next_obs, rewards, terminations, truncations, infos = self.env.step(
                     env_actions
                 )
+                self._on_env_step(rewards, terminations, truncations)
                 rollout_reward_sum += float(rewards.float().sum().item())
                 rollout_reward_count += int(rewards.numel())
                 real_next_obs = self._clone_obs(next_obs)

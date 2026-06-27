@@ -2,12 +2,27 @@
 
 ``TruncatedNormal`` is ported from DrQ-v2's ``utils.py`` and used by the DDPG
 actor for exploration noise with straight-through clamping.
+
+``safe_tanh_log_det_jacobian`` is ported from FlashSAC's ``distribution.py``
+and used by ``NormalTanhPolicy`` for numerically stable tanh log-prob correction.
 """
 from __future__ import annotations
 
+import math
+
 import torch
+import torch.nn.functional as F
 from torch import distributions as pyd
 from torch.distributions.utils import _standard_normal
+
+
+def safe_tanh_log_det_jacobian(x: torch.Tensor) -> torch.Tensor:
+    """Numerically stable log|det J| of tanh: 2*(log2 - x - softplus(-2x)).
+
+    Ported from 3rd_party/FlashSAC/flash_rl/agents/utils/distribution.py.
+    Avoids the log(1 - tanh^2(x)) form which loses precision near |x| >> 1.
+    """
+    return 2.0 * (math.log(2.0) - x - F.softplus(-2.0 * x))
 
 
 class TruncatedNormal(pyd.Normal):

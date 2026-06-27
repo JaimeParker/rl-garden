@@ -1,5 +1,6 @@
 from rl_garden.policies.base import BasePolicy
 from rl_garden.policies.bc_policy import BCPolicy
+from rl_garden.policies.flash_sac_policy import FlashSACPolicy
 from rl_garden.policies.iql_policy import IQLPolicy
 from rl_garden.policies.ppo_policy import PPOPolicy
 from rl_garden.policies.residual_policy import ResidualSACPolicy
@@ -11,6 +12,7 @@ __all__ = [
     "BasePolicy",
     "BCPolicy",
     "ContinuousCritic",
+    "FlashSACPolicy",
     "IQLPolicy",
     "PPOPolicy",
     "ResidualSACPolicy",
