@@ -6,6 +6,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import DDPG
+from rl_garden.buffers.nstep_buffer import LazyNextNStepDictReplayBuffer
 from rl_garden.encoders.drqv2_conv import DrQv2Encoder
 from rl_garden.networks.ddpg_critic import DrQv2Critic
 
@@ -141,6 +142,62 @@ def test_ddpg_builds_mmap_nstep_buffer(tmp_path):
 
     assert agent.replay_buffer._mmap_store is not None
     assert (tmp_path / "manifest.json").is_file()
+
+
+def test_ddpg_builds_lazy_next_nstep_buffer():
+    agent = DDPG(
+        env=DummyDictVecEnv(),
+        image_keys=("rgb",),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=16,
+        batch_size=2,
+        eval_freq=0,
+        hidden_dim=16,
+        feature_dim=8,
+        image_augmentation="none",
+        replay_lazy_next_obs=True,
+        replay_pin_sampled_batch=True,
+    )
+
+    assert isinstance(agent.replay_buffer, LazyNextNStepDictReplayBuffer)
+    assert agent.replay_buffer.next_obs is None
+    assert agent.replay_buffer.pin_sampled_batch is True
+
+
+def test_ddpg_rejects_lazy_next_with_mmap(tmp_path):
+    with pytest.raises(ValueError, match="lazy next_obs"):
+        DDPG(
+            env=DummyDictVecEnv(),
+            image_keys=("rgb",),
+            device="cpu",
+            buffer_device="cpu",
+            buffer_size=16,
+            batch_size=2,
+            eval_freq=0,
+            hidden_dim=16,
+            feature_dim=8,
+            image_augmentation="none",
+            mmap_dir=tmp_path,
+            replay_lazy_next_obs=True,
+        )
+
+
+def test_ddpg_rejects_pinned_sampling_without_lazy_next():
+    with pytest.raises(ValueError, match="requires replay_lazy_next_obs"):
+        DDPG(
+            env=DummyDictVecEnv(),
+            image_keys=("rgb",),
+            device="cpu",
+            buffer_device="cpu",
+            buffer_size=16,
+            batch_size=2,
+            eval_freq=0,
+            hidden_dim=16,
+            feature_dim=8,
+            image_augmentation="none",
+            replay_pin_sampled_batch=True,
+        )
 
 
 def test_ddpg_rejects_mmap_replay_checkpoint(tmp_path):

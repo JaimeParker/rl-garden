@@ -37,10 +37,51 @@ def _resolve_dtype(np_dtype) -> torch.dtype:
     return torch.as_tensor(np.empty((), dtype=np_dtype)).dtype
 
 
-def _tree_to_device(value: Any, device: torch.device) -> Any:
+def _tensor_to_device(
+    value: torch.Tensor,
+    device: torch.device,
+    *,
+    non_blocking: bool = False,
+    pin_memory: bool = False,
+) -> torch.Tensor:
+    if (
+        pin_memory
+        and non_blocking
+        and device.type == "cuda"
+        and value.device.type == "cpu"
+    ):
+        try:
+            value = value.pin_memory()
+        except RuntimeError:
+            # Some CPU-only builds expose pin_memory but cannot allocate pinned
+            # pages. Fall back to the normal blocking copy in that case.
+            non_blocking = False
+    return value.to(device, non_blocking=non_blocking)
+
+
+def _tree_to_device(
+    value: Any,
+    device: torch.device,
+    *,
+    non_blocking: bool = False,
+    pin_memory: bool = False,
+) -> Any:
     if isinstance(value, dict):
-        return {key: _tree_to_device(item, device) for key, item in value.items()}
-    return value.to(device)
+        return {
+            key: _tree_to_device(
+                item,
+                device,
+                non_blocking=non_blocking,
+                pin_memory=pin_memory,
+            )
+            for key, item in value.items()
+        }
+    return _tensor_to_device(
+        value,
+        device,
+        non_blocking=non_blocking,
+        pin_memory=pin_memory,
+    )
 
 
 class DictArray:

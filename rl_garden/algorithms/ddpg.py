@@ -15,7 +15,10 @@ import torch.nn.functional as F
 from gymnasium import spaces
 
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
-from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
+from rl_garden.buffers.nstep_buffer import (
+    LazyNextNStepDictReplayBuffer,
+    NStepDictReplayBuffer,
+)
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.schedules import schedule
@@ -118,11 +121,24 @@ class DDPG(OffPolicyAlgorithm):
         save_final_checkpoint: bool = True,
         mmap_dir: Optional[str | Path] = None,
         mmap_mode: Literal["create", "open"] = "create",
+        replay_lazy_next_obs: bool = False,
+        replay_pin_sampled_batch: bool = False,
     ) -> None:
         if mmap_dir is not None and save_replay_buffer:
             raise ValueError(
                 "mmap replay buffers cannot be embedded in replay checkpoints; "
                 "set save_replay_buffer=False"
+            )
+        if replay_lazy_next_obs and mmap_dir is not None:
+            raise ValueError("lazy next_obs replay is not supported with mmap_dir")
+        if replay_lazy_next_obs and save_replay_buffer:
+            raise ValueError(
+                "lazy next_obs replay cannot be embedded in replay checkpoints; "
+                "set save_replay_buffer=False"
+            )
+        if replay_pin_sampled_batch and not replay_lazy_next_obs:
+            raise ValueError(
+                "replay_pin_sampled_batch currently requires replay_lazy_next_obs"
             )
         super().__init__(
             env=env,
@@ -151,6 +167,8 @@ class DDPG(OffPolicyAlgorithm):
 
         self.mmap_dir = mmap_dir
         self.mmap_mode = mmap_mode
+        self.replay_lazy_next_obs = replay_lazy_next_obs
+        self.replay_pin_sampled_batch = replay_pin_sampled_batch
         self.policy_lr = policy_lr
         self.q_lr = q_lr
         self.feature_dim = feature_dim
@@ -291,7 +309,17 @@ class DDPG(OffPolicyAlgorithm):
     def _build_replay_buffer(self):
         obs_space = self.env.single_observation_space
         if isinstance(obs_space, spaces.Dict):
-            return NStepDictReplayBuffer(
+            buffer_cls = (
+                LazyNextNStepDictReplayBuffer
+                if self.replay_lazy_next_obs
+                else NStepDictReplayBuffer
+            )
+            lazy_kwargs = (
+                {"pin_sampled_batch": self.replay_pin_sampled_batch}
+                if self.replay_lazy_next_obs
+                else {}
+            )
+            return buffer_cls(
                 observation_space=obs_space,
                 action_space=self.env.single_action_space,
                 num_envs=self.num_envs,
@@ -302,6 +330,7 @@ class DDPG(OffPolicyAlgorithm):
                 sample_device=self.device,
                 mmap_dir=self.mmap_dir,
                 mmap_mode=self.mmap_mode,
+                **lazy_kwargs,
             )
         raise NotImplementedError(
             "DDPG currently only supports Dict observation spaces "
@@ -473,6 +502,8 @@ class DDPG(OffPolicyAlgorithm):
             "lr_decay_steps": self.lr_decay_steps,
             "lr_min_ratio": self.lr_min_ratio,
             "grad_clip_norm": self.grad_clip_norm,
+            "replay_lazy_next_obs": self.replay_lazy_next_obs,
+            "replay_pin_sampled_batch": self.replay_pin_sampled_batch,
         }
         if self._is_dict_obs:
             meta.update(

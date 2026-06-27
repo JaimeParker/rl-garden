@@ -10,7 +10,10 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
-from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
+from rl_garden.buffers.nstep_buffer import (
+    LazyNextNStepDictReplayBuffer,
+    NStepDictReplayBuffer,
+)
 
 
 def test_tensor_replay_buffer_add_and_sample():
@@ -302,6 +305,94 @@ def _add_nstep_transition(
             [done if episode_end is None else episode_end]
         ),
     )
+
+
+def _make_nstep_buffer_pair(buffer_size: int = 8):
+    action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    common = dict(
+        observation_space=_nstep_state_space(),
+        action_space=action_space,
+        num_envs=1,
+        buffer_size=buffer_size,
+        nstep=3,
+        gamma=0.9,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+    return NStepDictReplayBuffer(**common), LazyNextNStepDictReplayBuffer(**common)
+
+
+def _assert_nstep_transition_equal(
+    left: NStepDictReplayBuffer,
+    right: NStepDictReplayBuffer,
+    t: int,
+) -> None:
+    assert left._valid_nstep(t, 0)
+    assert right._valid_nstep(t, 0)
+    left_reward, left_discount, left_next_obs = left._compute_nstep(t, 0)
+    right_reward, right_discount, right_next_obs = right._compute_nstep(t, 0)
+    assert torch.allclose(left_reward, right_reward)
+    assert torch.allclose(left_discount, right_discount)
+    assert torch.equal(left_next_obs["state"], right_next_obs["state"])
+
+
+def test_lazy_nstep_reconstructs_bootstrap_next_obs():
+    regular, lazy = _make_nstep_buffer_pair()
+    for step in range(4):
+        _add_nstep_transition(regular, step, float(step + 1))
+        _add_nstep_transition(lazy, step, float(step + 1))
+
+    _assert_nstep_transition_equal(regular, lazy, 0)
+    _, _, next_obs = lazy._compute_nstep(0, 0)
+    assert torch.equal(next_obs["state"], torch.tensor([3.0]))
+    assert lazy.next_obs is None
+    assert lazy._final_slot_ids.max().item() == -1
+
+
+def test_lazy_nstep_uses_sparse_final_obs_at_episode_boundary():
+    regular, lazy = _make_nstep_buffer_pair()
+    _add_nstep_transition(regular, 0, 1.0)
+    _add_nstep_transition(lazy, 0, 1.0)
+    _add_nstep_transition(regular, 1, 2.0, episode_end=True)
+    _add_nstep_transition(lazy, 1, 2.0, episode_end=True)
+    _add_nstep_transition(regular, 2, 100.0)
+    _add_nstep_transition(lazy, 2, 100.0)
+
+    _assert_nstep_transition_equal(regular, lazy, 0)
+    _, discount, next_obs = lazy._compute_nstep(0, 0)
+    assert torch.allclose(discount, torch.tensor(0.9**2))
+    assert torch.equal(next_obs["state"], torch.tensor([2.0]))
+    assert lazy._final_slot_ids[1, 0].item() >= 0
+
+
+def test_lazy_nstep_requires_bootstrap_obs_to_be_written():
+    _, lazy = _make_nstep_buffer_pair()
+    for step in range(3):
+        _add_nstep_transition(lazy, step, float(step + 1))
+
+    assert not lazy._valid_nstep(0, 0)
+
+
+def test_lazy_nstep_sample_matches_regular_vectorized_output():
+    regular, lazy = _make_nstep_buffer_pair()
+    for step in range(6):
+        episode_end = step == 3
+        _add_nstep_transition(
+            regular, step, float(step + 1), episode_end=episode_end
+        )
+        _add_nstep_transition(lazy, step, float(step + 1), episode_end=episode_end)
+
+    batch_inds = torch.tensor([0, 1, 3])
+    env_inds = torch.zeros(3, dtype=torch.long)
+    regular_rewards, regular_discounts, regular_next = regular._compute_nstep_batch(
+        batch_inds, env_inds
+    )
+    lazy_rewards, lazy_discounts, lazy_next = lazy._compute_nstep_batch(
+        batch_inds, env_inds
+    )
+    assert torch.allclose(regular_rewards, lazy_rewards)
+    assert torch.allclose(regular_discounts, lazy_discounts)
+    assert torch.equal(regular_next["state"], lazy_next["state"])
 
 
 def test_nstep_buffer_returns_accumulated_reward_and_discount():

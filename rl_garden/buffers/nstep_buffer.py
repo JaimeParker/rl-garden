@@ -7,13 +7,18 @@ across episode boundaries.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.buffers.dict_buffer import DictArray, _resolve_dtype, _tree_to_device
+from rl_garden.buffers.dict_buffer import (
+    DictArray,
+    _resolve_dtype,
+    _tensor_to_device,
+    _tree_to_device,
+)
 from rl_garden.buffers.mmap_storage import (
     MmapMode,
     MmapTensorStore,
@@ -70,6 +75,7 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
             )
         self.nstep = nstep
         self.gamma = gamma
+        self.observation_space = observation_space
 
         shape = (self.per_env_buffer_size, num_envs)
         self._mmap_store = None
@@ -111,13 +117,7 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
             mmap_store=self._mmap_store,
             mmap_path=("obs",),
         )
-        self.next_obs = DictArray(
-            shape,
-            observation_space,
-            device=self.storage_device,
-            mmap_store=self._mmap_store,
-            mmap_path=("next_obs",),
-        )
+        self.next_obs = self._build_next_obs_storage(shape, observation_space)
         if self._mmap_store is None:
             self.actions = torch.zeros(
                 shape + tuple(action_space.shape), device=self.storage_device
@@ -196,6 +196,35 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
     # Storage
     # ------------------------------------------------------------------
 
+    def _build_next_obs_storage(
+        self,
+        shape: tuple[int, int],
+        observation_space: spaces.Dict,
+    ) -> Optional[DictArray]:
+        return DictArray(
+            shape,
+            observation_space,
+            device=self.storage_device,
+            mmap_store=self._mmap_store,
+            mmap_path=("next_obs",),
+        )
+
+    def _before_overwrite(self, pos: int) -> None:
+        del pos
+
+    def _store_next_obs(
+        self,
+        next_obs: dict[str, torch.Tensor],
+        episode_end_bool: torch.Tensor,
+    ) -> None:
+        del episode_end_bool
+        assert self.next_obs is not None
+        self.next_obs[self.pos] = next_obs
+
+    def _next_obs_at(self, inds, env_inds) -> dict[str, torch.Tensor]:
+        assert self.next_obs is not None
+        return self.next_obs[inds, env_inds]
+
     def add(
         self,
         obs: dict[str, torch.Tensor],
@@ -213,12 +242,14 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
             done = done.cpu()
             episode_end = episode_end.cpu()
 
-        self.obs[self.pos] = obs
-        self.next_obs[self.pos] = next_obs
-        self.actions[self.pos] = action
-        self.rewards[self.pos] = reward
         done_bool = done.to(self.storage_device).bool()
         episode_end_bool = episode_end.to(self.storage_device).bool()
+        self._before_overwrite(self.pos)
+
+        self.obs[self.pos] = obs
+        self._store_next_obs(next_obs, episode_end_bool)
+        self.actions[self.pos] = action
+        self.rewards[self.pos] = reward
         self.dones[self.pos] = done_bool
         self.episode_ends[self.pos] = episode_end_bool
 
@@ -269,11 +300,11 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
             n_discount *= self.gamma
             if bool(self.dones[idx, e].item()):
                 n_discount = torch.zeros_like(n_discount)
-                return n_reward, n_discount, self.next_obs[idx, e]
+                return n_reward, n_discount, self._next_obs_at(idx, e)
             if bool(self.episode_ends[idx, e].item()):
-                return n_reward, n_discount, self.next_obs[idx, e]
+                return n_reward, n_discount, self._next_obs_at(idx, e)
         next_idx = (t + self.nstep - 1) % self.per_env_buffer_size
-        return n_reward, n_discount, self.next_obs[next_idx, e]
+        return n_reward, n_discount, self._next_obs_at(next_idx, e)
 
     def _valid_nstep_batch(
         self,
@@ -362,7 +393,7 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
             next_inds = torch.where(stopped, idx, next_inds)
             active &= ~stopped
 
-        return rewards, discounts, self.next_obs[next_inds, env_inds]
+        return rewards, discounts, self._next_obs_at(next_inds, env_inds)
 
     def sample(self, batch_size: int) -> NStepReplayBufferSample:
         upper = self.per_env_buffer_size if self.full else self.pos
@@ -386,4 +417,273 @@ class NStepDictReplayBuffer(BaseReplayBuffer):
             rewards=rewards.to(self.sample_device),
             dones=(discounts == 0.0).to(self.sample_device),
             discounts=discounts.to(self.sample_device),
+        )
+
+
+def _copy_dict_array(src: DictArray, dst: DictArray, count: int) -> None:
+    for key, value in src.data.items():
+        if isinstance(value, DictArray):
+            _copy_dict_array(value, dst.data[key], count)
+        else:
+            dst.data[key][:count].copy_(value[:count])
+
+
+class LazyNextNStepDictReplayBuffer(NStepDictReplayBuffer):
+    """N-step dict replay that stores only sparse episode-end next observations.
+
+    Normal bootstrap observations are reconstructed from later ``obs`` slots in
+    the same environment stream. Only reset/final observations are stored in a
+    compact side table, which saves the full ``next_obs`` tensor for long
+    fixed-horizon visual tasks.
+    """
+
+    def __init__(
+        self,
+        *args,
+        pin_sampled_batch: bool = False,
+        final_obs_capacity: Optional[int] = None,
+        mmap_dir: Optional[str | Path] = None,
+        storage_device: torch.device | str = "cuda",
+        **kwargs,
+    ) -> None:
+        if mmap_dir is not None:
+            raise ValueError("lazy next_obs replay is not supported with mmap_dir")
+        if torch.device(storage_device).type != "cpu":
+            raise ValueError("lazy next_obs replay requires CPU storage")
+        self.pin_sampled_batch = pin_sampled_batch
+        self._final_obs_capacity_arg = final_obs_capacity
+        super().__init__(
+            *args,
+            storage_device=storage_device,
+            mmap_dir=mmap_dir,
+            **kwargs,
+        )
+        initial_capacity = (
+            int(final_obs_capacity)
+            if final_obs_capacity is not None
+            else max(1024, self.buffer_size // 64)
+        )
+        if initial_capacity <= 0:
+            raise ValueError("final_obs_capacity must be positive")
+        self._final_obs = DictArray(
+            (initial_capacity,),
+            self.observation_space,
+            device=self.storage_device,
+        )
+        self._final_slot_ids = torch.full(
+            (self.per_env_buffer_size, self.num_envs),
+            -1,
+            dtype=torch.long,
+            device=self.storage_device,
+        )
+        self._free_final_slots: list[int] = []
+        self._next_final_slot = 0
+
+    def _build_next_obs_storage(
+        self,
+        shape: tuple[int, int],
+        observation_space: spaces.Dict,
+    ) -> Optional[DictArray]:
+        del shape, observation_space
+        return None
+
+    def _before_overwrite(self, pos: int) -> None:
+        old_slots = self._final_slot_ids[pos]
+        for slot in old_slots[old_slots >= 0].tolist():
+            self._free_final_slots.append(int(slot))
+        old_slots.fill_(-1)
+
+    def _grow_final_obs(self) -> None:
+        current = self._final_obs.shape[0]
+        grown = DictArray(
+            (current * 2,),
+            self.observation_space,
+            device=self.storage_device,
+        )
+        _copy_dict_array(self._final_obs, grown, current)
+        self._final_obs = grown
+
+    def _allocate_final_slot(self) -> int:
+        if self._free_final_slots:
+            return self._free_final_slots.pop()
+        if self._next_final_slot >= self._final_obs.shape[0]:
+            self._grow_final_obs()
+        slot = self._next_final_slot
+        self._next_final_slot += 1
+        return slot
+
+    def _store_tree_leaf(
+        self,
+        storage: Any,
+        slot: int,
+        value: Any,
+        env: int,
+    ) -> None:
+        if isinstance(storage, DictArray):
+            for key in storage.data:
+                self._store_tree_leaf(storage.data[key], slot, value[key], env)
+        else:
+            storage[slot] = value[env]
+
+    def _store_next_obs(
+        self,
+        next_obs: dict[str, torch.Tensor],
+        episode_end_bool: torch.Tensor,
+    ) -> None:
+        for env in episode_end_bool.nonzero(as_tuple=False).flatten().tolist():
+            slot = self._allocate_final_slot()
+            self._final_slot_ids[self.pos, env] = slot
+            self._store_tree_leaf(self._final_obs, slot, next_obs, int(env))
+
+    def _final_obs_at_slots(self, slots: torch.Tensor) -> dict[str, torch.Tensor]:
+        return self._final_obs[slots]
+
+    def _next_obs_at(self, inds, env_inds) -> dict[str, torch.Tensor]:
+        if not torch.is_tensor(inds):
+            slot = int(self._final_slot_ids[int(inds), int(env_inds)].item())
+            if slot >= 0:
+                return self._final_obs[slot]
+            next_idx = (int(inds) + 1) % self.per_env_buffer_size
+            return self.obs[next_idx, int(env_inds)]
+
+        slots = self._final_slot_ids[inds, env_inds]
+        normal_next_inds = (inds + 1) % self.per_env_buffer_size
+        normal_next = self.obs[normal_next_inds, env_inds]
+        if not (slots >= 0).any():
+            return normal_next
+
+        result = {
+            key: value.clone() if torch.is_tensor(value) else value
+            for key, value in normal_next.items()
+        }
+        final_mask = slots >= 0
+        final_values = self._final_obs_at_slots(slots[final_mask])
+        for key, value in result.items():
+            value[final_mask] = final_values[key]
+        return result
+
+    def _valid_nstep_batch(
+        self,
+        batch_inds: torch.Tensor,
+        env_inds: torch.Tensor,
+    ) -> torch.Tensor:
+        valid = super()._valid_nstep_batch(batch_inds, env_inds)
+        target_ep = self._ep_id[batch_inds, env_inds]
+        base_step = self._step_id[batch_inds, env_inds]
+        active = valid.clone()
+
+        for i in range(self.nstep):
+            idx = (batch_inds + i) % self.per_env_buffer_size
+            stopped = self.dones[idx, env_inds] | self.episode_ends[idx, env_inds]
+            active &= ~stopped
+
+        next_idx = (batch_inds + self.nstep) % self.per_env_buffer_size
+        has_bootstrap_obs = (
+            (self._ep_id[next_idx, env_inds] == target_ep)
+            & (self._step_id[next_idx, env_inds] == base_step + self.nstep)
+        )
+        return valid & (~active | has_bootstrap_obs)
+
+    def _valid_nstep(self, t: int, e: int) -> bool:
+        if not super()._valid_nstep(t, e):
+            return False
+        target_ep = self._ep_id[t, e].item()
+        base_step = self._step_id[t, e].item()
+        for i in range(self.nstep):
+            idx = (t + i) % self.per_env_buffer_size
+            if bool(self.dones[idx, e].item()) or bool(
+                self.episode_ends[idx, e].item()
+            ):
+                return True
+        next_idx = (t + self.nstep) % self.per_env_buffer_size
+        return (
+            self._ep_id[next_idx, e].item() == target_ep
+            and self._step_id[next_idx, e].item() == base_step + self.nstep
+        )
+
+    def _compute_nstep_batch(
+        self,
+        batch_inds: torch.Tensor,
+        env_inds: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        rewards = torch.zeros_like(self.rewards[batch_inds, env_inds])
+        discounts = torch.ones_like(rewards)
+        active = torch.ones_like(rewards, dtype=torch.bool)
+        next_inds = (batch_inds + self.nstep - 1) % self.per_env_buffer_size
+
+        for i in range(self.nstep):
+            idx = (batch_inds + i) % self.per_env_buffer_size
+            step_rewards = self.rewards[idx, env_inds]
+            rewards += torch.where(active, discounts * step_rewards, 0.0)
+
+            discounts = torch.where(active, discounts * self.gamma, discounts)
+            terminal = active & self.dones[idx, env_inds]
+            episode_end = active & self.episode_ends[idx, env_inds]
+            stopped = terminal | episode_end
+            discounts = torch.where(terminal, 0.0, discounts)
+            next_inds = torch.where(stopped, idx, next_inds)
+            active &= ~stopped
+
+        next_obs = self._next_obs_at(next_inds, env_inds)
+        bootstrap_next = active
+        if bootstrap_next.any():
+            bootstrap_inds = (batch_inds[bootstrap_next] + self.nstep) % (
+                self.per_env_buffer_size
+            )
+            bootstrap_envs = env_inds[bootstrap_next]
+            bootstrap_obs = self.obs[bootstrap_inds, bootstrap_envs]
+            for key, value in next_obs.items():
+                value[bootstrap_next] = bootstrap_obs[key]
+        return rewards, discounts, next_obs
+
+    def sample(self, batch_size: int) -> NStepReplayBufferSample:
+        upper = self.per_env_buffer_size if self.full else self.pos
+        if upper < self.nstep + 1:
+            raise RuntimeError(
+                f"Buffer has only {upper} transitions per env but lazy "
+                f"nstep={self.nstep} sampling needs at least nstep+1."
+            )
+
+        batch_inds, env_inds = self._sample_valid_indices(batch_size, upper)
+        rewards, discounts, next_obs = self._compute_nstep_batch(
+            batch_inds, env_inds
+        )
+        pin = self.pin_sampled_batch and self.sample_device.type == "cuda"
+        return NStepReplayBufferSample(
+            obs=_tree_to_device(
+                self.obs[batch_inds, env_inds],
+                self.sample_device,
+                non_blocking=pin,
+                pin_memory=pin,
+            ),
+            next_obs=_tree_to_device(
+                next_obs,
+                self.sample_device,
+                non_blocking=pin,
+                pin_memory=pin,
+            ),
+            actions=_tensor_to_device(
+                self.actions[batch_inds, env_inds],
+                self.sample_device,
+                non_blocking=pin,
+                pin_memory=pin,
+            ),
+            rewards=_tensor_to_device(
+                rewards,
+                self.sample_device,
+                non_blocking=pin,
+                pin_memory=pin,
+            ),
+            dones=_tensor_to_device(
+                discounts == 0.0,
+                self.sample_device,
+                non_blocking=pin,
+                pin_memory=pin,
+            ),
+            discounts=_tensor_to_device(
+                discounts,
+                self.sample_device,
+                non_blocking=pin,
+                pin_memory=pin,
+            ),
         )

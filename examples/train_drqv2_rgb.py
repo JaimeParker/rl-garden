@@ -96,6 +96,8 @@ class Args:
     save_final_checkpoint: bool = True
     load_checkpoint: Optional[str] = None
     load_replay_buffer: bool = False
+    replay_lazy_next_obs: bool = False
+    replay_pin_sampled_batch: bool = False
 
 
 def main() -> None:
@@ -176,6 +178,8 @@ def main() -> None:
         buffer_device=args.buffer_device,
         mmap_dir=args.mmap_dir,
         mmap_mode=args.mmap_mode,
+        replay_lazy_next_obs=args.replay_lazy_next_obs,
+        replay_pin_sampled_batch=args.replay_pin_sampled_batch,
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
