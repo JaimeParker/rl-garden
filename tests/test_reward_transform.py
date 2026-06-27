@@ -9,7 +9,10 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
+from rl_garden.envs.wrappers.reward_transform import (
+    RewardScaleBiasWrapper,
+    SuccessRewardOverrideWrapper,
+)
 
 
 class _DummyEnv(gym.Env):
@@ -82,12 +85,49 @@ def test_reward_scale_bias_wrapper_works_with_tensor_reward():
     torch.testing.assert_close(r, torch.tensor([1.5, 2.0]))
 
 
+def test_success_reward_override_applies_only_to_success_mask():
+    class _SuccessEnv(gym.Env):
+        observation_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+
+        def reset(self, *, seed=None, options=None):
+            return np.zeros(2, dtype=np.float32), {}
+
+        def step(self, action):
+            return (
+                np.zeros(2, dtype=np.float32),
+                torch.tensor([0.8, 1.0]),
+                False,
+                False,
+                {"success": torch.tensor([False, True])},
+            )
+
+    env = SuccessRewardOverrideWrapper(_SuccessEnv(), reward=2.0)
+    env.reset()
+    _, reward, *_ = env.step(env.action_space.sample())
+
+    torch.testing.assert_close(reward, torch.tensor([0.8, 2.0]))
+
+
+def test_success_reward_override_requires_success_info():
+    env = SuccessRewardOverrideWrapper(_DummyEnv([1.0]), reward=2.0)
+    env.reset()
+
+    with pytest.raises(KeyError, match=r"info\['success'\]"):
+        env.step(env.action_space.sample())
+
+
 def test_maniskill_env_config_accepts_reward_transform_fields():
     from rl_garden.envs import ManiSkillEnvConfig
 
-    cfg = ManiSkillEnvConfig(reward_scale=2.0, reward_bias=-0.5)
+    cfg = ManiSkillEnvConfig(
+        reward_scale=2.0,
+        reward_bias=-0.5,
+        success_reward_override=2.0,
+    )
     assert cfg.reward_scale == 2.0
     assert cfg.reward_bias == -0.5
+    assert cfg.success_reward_override == 2.0
 
 
 def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):

@@ -29,6 +29,8 @@ class ManiSkillEnvConfig:
     record_metrics: bool = True
     reward_scale: float = 1.0
     reward_bias: float = 0.0
+    # Experimental final reward override for states where info["success"] is true.
+    success_reward_override: Optional[float] = None
     # When True, keep each camera as its own ``rgb_<cam>`` / ``depth_<cam>`` key
     # instead of channel-stacking all cameras into a single ``rgb`` / ``depth``
     # tensor. Required for multi-camera envs (e.g. peg) when each camera should

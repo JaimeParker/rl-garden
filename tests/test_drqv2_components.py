@@ -307,6 +307,25 @@ def test_ddpg_rollout_does_not_clip_exploration_noise(monkeypatch):
     assert observed["clip"] is None
 
 
+def test_ddpg_actor_stddev_defaults_to_shared_schedule():
+    agent = DDPG(
+        env=DummyDictVecEnv(),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=16,
+        batch_size=2,
+        eval_freq=0,
+        hidden_dim=16,
+        feature_dim=8,
+        image_keys=("rgb",),
+        image_augmentation="none",
+        stddev_schedule="linear(1.0,0.1,500000)",
+    )
+    agent._global_step = 750_000
+
+    assert agent._current_actor_stddev() == pytest.approx(agent._current_stddev())
+
+
 def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
     monkeypatch,
 ):
@@ -326,6 +345,7 @@ def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
         image_keys=("rgb",),
         proprio_latent_dim=4,
         image_augmentation="none",
+        actor_stddev_schedule="0.0",
     )
     for step in range(5):
         obs = {
@@ -354,9 +374,11 @@ def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
         return original_extract(obs, stop_gradient=stop_gradient)
 
     clips: list[float | None] = []
+    stddevs: list[float] = []
     original_forward = agent.policy.actor.forward
 
     def wrapped_forward(features, std):
+        stddevs.append(std)
         dist = original_forward(features, std)
         original_sample = dist.sample
 
@@ -374,6 +396,7 @@ def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
 
     assert extract_count == 2
     assert clips == [agent.stddev_clip, agent.stddev_clip]
+    assert stddevs == [agent._current_stddev(), 0.0]
 
 
 def test_ddpg_one_update_uses_nstep_discount_path():

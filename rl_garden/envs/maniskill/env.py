@@ -105,6 +105,13 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
         from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
         env = RewardScaleBiasWrapper(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
+    if cfg.success_reward_override is not None:
+        from rl_garden.envs.wrappers.reward_transform import (
+            SuccessRewardOverrideWrapper,
+        )
+
+        env = SuccessRewardOverrideWrapper(env, cfg.success_reward_override)
+
     if cfg.record_dir is not None and (cfg.save_video or cfg.save_trajectory):
         env = RecordEpisode(
             env,

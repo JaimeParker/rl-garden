@@ -37,6 +37,8 @@ class Args:
     per_camera_rgbd: bool = False
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
+    reward_mode: Optional[str] = None
+    success_reward_override: Optional[float] = None
 
     # --- Training ---
     total_timesteps: int = 1_000_000
@@ -59,6 +61,7 @@ class Args:
     hidden_dim: int = 1024
     nstep: int = 3
     stddev_schedule: str = "linear(1.0,0.1,500000)"
+    actor_stddev_schedule: Optional[str] = None
     stddev_clip: float = 0.3
     num_expl_steps: int = 2000
     grad_clip_norm: Optional[float] = None
@@ -145,8 +148,18 @@ def main() -> None:
         per_camera_rgbd=args.per_camera_rgbd,
         sim_backend=args.sim_backend,
         render_backend=args.render_backend,
+        reward_mode=args.reward_mode,
+        success_reward_override=args.success_reward_override,
     )
     env = make_maniskill_env(env_cfg)
+    if (
+        args.success_reward_override is not None
+        and env.unwrapped.reward_mode != "normalized_dense"
+    ):
+        raise ValueError(
+            "--success-reward-override requires reward_mode='normalized_dense'; "
+            f"got {env.unwrapped.reward_mode!r}"
+        )
     image_keys = discover_image_keys(env.single_observation_space)
     eval_env = None
     if args.eval_freq > 0:
@@ -168,6 +181,8 @@ def main() -> None:
             per_camera_rgbd=args.per_camera_rgbd,
             sim_backend=args.sim_backend,
             render_backend=args.render_backend,
+            reward_mode=args.reward_mode,
+            success_reward_override=args.success_reward_override,
         )
         eval_env = make_maniskill_env(eval_cfg)
 
@@ -192,6 +207,7 @@ def main() -> None:
         hidden_dim=args.hidden_dim,
         nstep=args.nstep,
         stddev_schedule=args.stddev_schedule,
+        actor_stddev_schedule=args.actor_stddev_schedule,
         stddev_clip=args.stddev_clip,
         num_expl_steps=args.num_expl_steps,
         weight_decay=args.weight_decay,

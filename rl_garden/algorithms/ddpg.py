@@ -85,6 +85,7 @@ class DDPG(OffPolicyAlgorithm):
         hidden_dim: int = 1024,
         nstep: int = 3,
         stddev_schedule: str = "linear(1.0,0.1,500000)",
+        actor_stddev_schedule: Optional[str] = None,
         stddev_clip: float = 0.3,
         num_expl_steps: int = 2000,
         # --- Optimizer ---
@@ -175,6 +176,7 @@ class DDPG(OffPolicyAlgorithm):
         self.hidden_dim = hidden_dim
         self.nstep = nstep
         self.stddev_schedule = stddev_schedule
+        self.actor_stddev_schedule = actor_stddev_schedule
         self.stddev_clip = stddev_clip
         self.num_expl_steps = num_expl_steps
         self.weight_decay = weight_decay
@@ -373,6 +375,14 @@ class DDPG(OffPolicyAlgorithm):
     def _current_stddev(self) -> float:
         return schedule(self.stddev_schedule, self._global_step)
 
+    def _current_actor_stddev(self) -> float:
+        actor_schedule = (
+            self.stddev_schedule
+            if self.actor_stddev_schedule is None
+            else self.actor_stddev_schedule
+        )
+        return schedule(actor_schedule, self._global_step)
+
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]:
@@ -389,8 +399,8 @@ class DDPG(OffPolicyAlgorithm):
             obs_features = self.policy.extract_features(data.obs)
             with torch.no_grad():
                 next_features = self.policy.extract_features(data.next_obs)
-                stddev = self._current_stddev()
-                dist = self.policy.actor(next_features, stddev)
+                target_stddev = self._current_stddev()
+                dist = self.policy.actor(next_features, target_stddev)
                 next_action = dist.sample(clip=self.stddev_clip)
                 target_q_all = self.policy.q_values_all(
                     next_features, next_action, target=True
@@ -415,11 +425,11 @@ class DDPG(OffPolicyAlgorithm):
                 self._lr_schedulers[0].step()
 
             # --- Actor update ---
-            stddev = self._current_stddev()
+            actor_stddev = self._current_actor_stddev()
             features_detached = obs_features.detach()
             action = self.policy.actor_action_from_features(
                 features_detached,
-                stddev,
+                actor_stddev,
                 noise_clip=self.stddev_clip,
             )
             q_actor_all = self.policy.q_values_all(
@@ -451,7 +461,10 @@ class DDPG(OffPolicyAlgorithm):
                 info_accum.setdefault("target_q", []).append(target_q.mean().detach())
                 info_accum.setdefault("predicted_q", []).append(q_all.mean().detach())
                 info_accum.setdefault("stddev", []).append(
-                    torch.tensor(stddev, device=self.device)
+                    torch.tensor(target_stddev, device=self.device)
+                )
+                info_accum.setdefault("actor_stddev", []).append(
+                    torch.tensor(actor_stddev, device=self.device)
                 )
 
         if not compute_info:
@@ -464,6 +477,7 @@ class DDPG(OffPolicyAlgorithm):
             "critic_loss": _mean(critic_losses),
             "actor_loss": _mean(actor_losses),
             "stddev": _mean(info_accum.get("stddev", [])),
+            "actor_stddev": _mean(info_accum.get("actor_stddev", [])),
         }
         for key in ("target_q", "predicted_q"):
             if key in info_accum:
@@ -493,6 +507,7 @@ class DDPG(OffPolicyAlgorithm):
             "hidden_dim": self.hidden_dim,
             "nstep": self.nstep,
             "stddev_schedule": self.stddev_schedule,
+            "actor_stddev_schedule": self.actor_stddev_schedule,
             "stddev_clip": self.stddev_clip,
             "num_expl_steps": self.num_expl_steps,
             "weight_decay": self.weight_decay,
