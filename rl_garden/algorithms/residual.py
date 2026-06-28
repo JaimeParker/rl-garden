@@ -1,6 +1,8 @@
 """Residual SAC following the resfit action-coordinate convention."""
+
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -12,7 +14,12 @@ from rl_garden.buffers.residual_buffer import (
     ResidualDictReplayBuffer,
     ResidualTensorReplayBuffer,
 )
+from rl_garden.buffers.maniskill_h5 import (
+    count_residual_h5_transitions,
+    load_residual_h5_to_replay_buffer,
+)
 from rl_garden.common.action_scaler import ActionScaler
+from rl_garden.common.types import ResidualReplayBufferSample
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.policies.base_policies import BasePolicyProvider
 from rl_garden.policies.residual_policy import ResidualSACPolicy
@@ -41,11 +48,13 @@ class ResidualSAC(SAC):
         if residual_action_scale < 0:
             raise ValueError(
                 f"residual_action_scale must be non-negative, got {residual_action_scale}."
-        )
+            )
         self.base_action_provider = base_action_provider
         self.residual_action_scale = float(residual_action_scale)
         self.action_scaler = action_scaler
         self._cached_base_actions: Optional[torch.Tensor] = None
+        self.offline_replay_buffer = None
+        self.offline_data_ratio = 0.0
         self._residual_action_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -66,23 +75,107 @@ class ResidualSAC(SAC):
         return meta
 
     def _build_replay_buffer(self):
+        return self._make_residual_replay_buffer(self.buffer_size)
+
+    def _make_residual_replay_buffer(
+        self, buffer_size: int, *, num_envs: Optional[int] = None
+    ):
+        num_envs = self.num_envs if num_envs is None else int(num_envs)
         obs_space = self.env.single_observation_space
         if isinstance(obs_space, spaces.Dict):
             return ResidualDictReplayBuffer(
                 observation_space=obs_space,
                 action_space=self._residual_action_space,
-                num_envs=self.num_envs,
-                buffer_size=self.buffer_size,
+                num_envs=num_envs,
+                buffer_size=buffer_size,
                 storage_device=self.buffer_device,
                 sample_device=self.device,
             )
         return ResidualTensorReplayBuffer(
             observation_space=obs_space,
             action_space=self._residual_action_space,
-            num_envs=self.num_envs,
-            buffer_size=self.buffer_size,
+            num_envs=num_envs,
+            buffer_size=buffer_size,
             storage_device=self.buffer_device,
             sample_device=self.device,
+        )
+
+    def load_offline_replay_buffer(
+        self,
+        path: str | Path,
+        *,
+        num_traj: Optional[int] = None,
+        buffer_size: Optional[int] = None,
+        offline_data_ratio: float = 0.5,
+    ) -> int:
+        if not (0.0 <= offline_data_ratio <= 1.0):
+            raise ValueError(
+                f"offline_data_ratio must be in [0, 1], got {offline_data_ratio}."
+            )
+        if buffer_size is None:
+            buffer_size = count_residual_h5_transitions(
+                path, num_traj=num_traj, num_envs=1
+            )
+            if buffer_size <= 0:
+                raise ValueError(
+                    f"Offline residual dataset has no transitions to load: path={path}."
+                )
+        self.offline_replay_buffer = self._make_residual_replay_buffer(
+            int(buffer_size), num_envs=1
+        )
+        loaded = load_residual_h5_to_replay_buffer(
+            self.offline_replay_buffer,
+            path,
+            num_traj=num_traj,
+            bootstrap_at_done=self.bootstrap_at_done,
+        )
+        self.offline_data_ratio = float(offline_data_ratio)
+        if self.logger is not None:
+            self.logger.add_summary("residual/offline_loaded_transitions", loaded)
+            self.logger.add_summary(
+                "residual/offline_data_ratio", self.offline_data_ratio
+            )
+            self.logger.add_summary("residual/offline_buffer_size", int(buffer_size))
+        return loaded
+
+    def _sample_train_batch(self, batch_size: int):
+        if self.offline_replay_buffer is None or self.offline_data_ratio <= 0.0:
+            return self.replay_buffer.sample(batch_size)
+        if len(self.offline_replay_buffer) == 0:
+            return self.replay_buffer.sample(batch_size)
+        if len(self.replay_buffer) == 0:
+            return self.offline_replay_buffer.sample(batch_size)
+
+        n_offline = int(round(batch_size * self.offline_data_ratio))
+        n_offline = min(max(n_offline, 0), batch_size)
+        n_online = batch_size - n_offline
+        if n_offline == 0:
+            return self.replay_buffer.sample(batch_size)
+        if n_online == 0:
+            return self.offline_replay_buffer.sample(batch_size)
+        return self._concat_replay_samples(
+            self.replay_buffer.sample(n_online),
+            self.offline_replay_buffer.sample(n_offline),
+        )
+
+    @staticmethod
+    def _concat_replay_samples(
+        a: ResidualReplayBufferSample,
+        b: ResidualReplayBufferSample,
+    ) -> ResidualReplayBufferSample:
+        def _cat(x, y):
+            if isinstance(x, dict):
+                return {k: torch.cat([x[k], y[k]], dim=0) for k in x}
+            return torch.cat([x, y], dim=0)
+
+        return ResidualReplayBufferSample(
+            obs=_cat(a.obs, b.obs),
+            next_obs=_cat(a.next_obs, b.next_obs),
+            actions=_cat(a.actions, b.actions),
+            rewards=_cat(a.rewards, b.rewards),
+            dones=_cat(a.dones, b.dones),
+            base_actions=_cat(a.base_actions, b.base_actions),
+            next_base_actions=_cat(a.next_base_actions, b.next_base_actions),
         )
 
     def _policy_action_space(self) -> spaces.Box:

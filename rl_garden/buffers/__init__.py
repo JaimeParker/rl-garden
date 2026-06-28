@@ -6,9 +6,15 @@ from rl_garden.buffers.mc_buffer import (
     MCTensorReplayBuffer,
 )
 from rl_garden.buffers.maniskill_h5 import (
+    count_residual_h5_transitions,
     infer_box_specs_from_h5,
     infer_specs_from_h5,
     load_maniskill_h5_to_replay_buffer,
+    load_residual_h5_to_replay_buffer,
+)
+from rl_garden.buffers.minari_dataset import (
+    infer_specs_from_minari,
+    load_minari_dataset_to_replay_buffer,
 )
 from rl_garden.buffers.minari_dataset import (
     infer_specs_from_minari,
@@ -40,9 +46,11 @@ __all__ = [
     "RolloutBuffer",
     "RolloutBufferSample",
     "TensorReplayBuffer",
+    "count_residual_h5_transitions",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",
     "infer_specs_from_minari",
     "load_maniskill_h5_to_replay_buffer",
     "load_minari_dataset_to_replay_buffer",
+    "load_residual_h5_to_replay_buffer",
 ]

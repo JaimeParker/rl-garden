@@ -7,6 +7,7 @@ Usage:
 Default mode uses an ACT base policy. Debug mode uses a zero base policy,
 which exercises the residual rollout/update path without checkpoint loading.
 """
+
 from __future__ import annotations
 
 import time
@@ -44,6 +45,10 @@ class ResidualRGBDArgs(VisionSACTrainingArgs):
     base_sac_encoder_features_dim: int = 256
     base_sac_image_fusion_mode: Optional[Literal["stack_channels", "per_key"]] = None
     base_sac_deterministic: bool = True
+    offline_dataset_path: Optional[str] = None
+    offline_num_traj: Optional[int] = None
+    offline_buffer_size: Optional[int] = None
+    offline_data_ratio: float = 0.5
 
 
 def make_base_action_provider(args: ResidualRGBDArgs, env):
@@ -163,6 +168,21 @@ def run_residual_rgbd_training(
         )
         if args.load_checkpoint is not None:
             agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+        if args.offline_dataset_path is not None:
+            loaded = agent.load_offline_replay_buffer(
+                args.offline_dataset_path,
+                num_traj=args.offline_num_traj,
+                buffer_size=args.offline_buffer_size,
+                offline_data_ratio=args.offline_data_ratio,
+            )
+            if args.std_log:
+                print(
+                    "[residual] "
+                    f"offline_dataset={args.offline_dataset_path} "
+                    f"loaded_transitions={loaded} "
+                    f"offline_data_ratio={args.offline_data_ratio}",
+                    flush=True,
+                )
         agent.learn(total_timesteps=args.total_timesteps)
     finally:
         logger.close()

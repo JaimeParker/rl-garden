@@ -4,6 +4,7 @@ Usage:
     python examples/train_residual_sac_state_peg.py --base_policy act --base_ckpt_path act-peg-only
     python examples/train_residual_sac_state_peg.py --debug
 """
+
 from __future__ import annotations
 
 import time
@@ -46,6 +47,10 @@ class Args(SACTrainingArgs):
     base_act_temporal_agg: bool = True
     base_act_temporal_agg_k: float = 0.01
     base_sac_deterministic: bool = True
+    offline_dataset_path: Optional[str] = None
+    offline_num_traj: Optional[int] = None
+    offline_buffer_size: Optional[int] = None
+    offline_data_ratio: float = 0.5
 
     # Deprecated aliases kept so older launch commands continue to work.
     policy: Optional[Literal["act", "zero"]] = None
@@ -199,6 +204,21 @@ def main() -> None:
         )
         if args.load_checkpoint is not None:
             agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+        if args.offline_dataset_path is not None:
+            loaded = agent.load_offline_replay_buffer(
+                args.offline_dataset_path,
+                num_traj=args.offline_num_traj,
+                buffer_size=args.offline_buffer_size,
+                offline_data_ratio=args.offline_data_ratio,
+            )
+            if args.std_log:
+                print(
+                    "[residual] "
+                    f"offline_dataset={args.offline_dataset_path} "
+                    f"loaded_transitions={loaded} "
+                    f"offline_data_ratio={args.offline_data_ratio}",
+                    flush=True,
+                )
         agent.learn(total_timesteps=args.total_timesteps)
     finally:
         logger.close()
