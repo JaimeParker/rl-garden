@@ -18,11 +18,15 @@ from tqdm import tqdm
 
 import mani_skill.envs  # noqa: F401
 from mani_skill.trajectory import utils as trajectory_utils
-from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
+from mani_skill.utils.wrappers.flatten import (
+    FlattenActionSpaceWrapper,
+    FlattenRGBDObservationWrapper,
+)
 from mani_skill.utils.wrappers.record import RecordEpisode
 
 from rl_garden.common.action_scaler import ActionScaler
 from rl_garden.envs import register_custom_envs
+from rl_garden.envs.wrappers import PerCameraRGBDWrapper
 from rl_garden.policies.base_policies import make_base_policy
 
 
@@ -36,6 +40,11 @@ class Args:
     video_fps: int = 30
     use_env_states: bool = True
     device: str = "auto"
+    obs: Literal["state", "rgb"] = "state"
+    include_state: bool = True
+    camera_width: Optional[int] = 64
+    camera_height: Optional[int] = 64
+    per_camera_rgbd: bool = True
 
     base_policy: Literal["act", "sac", "zero"] = "act"
     base_ckpt_path: Optional[str] = "act-peg-only"
@@ -67,8 +76,11 @@ def _json_path_for(path: Path) -> Path:
     return path.with_suffix(".json")
 
 
-def _default_output_path(path: Path) -> Path:
-    return path.with_suffix(".residual.h5")
+def _default_output_path(path: Path, args: Args) -> Path:
+    if args.obs == "state":
+        return path.with_suffix(".residual.h5")
+    suffix = ".residual.rgb_state.h5" if args.include_state else ".residual.rgb.h5"
+    return path.with_suffix(suffix)
 
 
 def _default_output_dir(path: Path) -> Path:
@@ -149,7 +161,29 @@ def _build_env(metadata: dict[str, Any], args: Args):
     env_kwargs = dict(env_info.get("env_kwargs") or {})
     env_kwargs["num_envs"] = 1
     env_kwargs.setdefault("render_mode", "rgb_array")
+    if args.obs == "rgb":
+        env_kwargs["obs_mode"] = "rgb"
+        env_kwargs.setdefault("sensor_configs", {})
+        if args.camera_width is not None:
+            env_kwargs["sensor_configs"]["width"] = args.camera_width
+        if args.camera_height is not None:
+            env_kwargs["sensor_configs"]["height"] = args.camera_height
     env = gym.make(env_info["env_id"], **env_kwargs)
+    if args.obs == "rgb":
+        if args.per_camera_rgbd:
+            env = PerCameraRGBDWrapper(
+                env,
+                rgb=True,
+                depth=False,
+                state=args.include_state,
+            )
+        else:
+            env = FlattenRGBDObservationWrapper(
+                env,
+                rgb=True,
+                depth=False,
+                state=args.include_state,
+            )
     if isinstance(env.action_space, gym.spaces.Dict):
         env = FlattenActionSpaceWrapper(env)
     if args.capture_video:
@@ -178,6 +212,21 @@ def _space(env: Any, name: str):
     return getattr(env, f"{name}_space")
 
 
+def _source_state_observation_space(path: Path, episodes: list[dict[str, Any]]):
+    h5py = _require_h5py()
+    episode_id = int(episodes[0]["episode_id"])
+    with h5py.File(path, "r") as f:
+        node = f[f"traj_{episode_id}"]["obs"]
+        if isinstance(node, h5py.Group):
+            if "state" in node:
+                node = node["state"]
+            else:
+                node = node[next(iter(node.keys()))]
+        shape = tuple(node.shape[1:])
+        dtype = np.dtype(node.dtype)
+    return gym.spaces.Box(low=-np.inf, high=np.inf, shape=shape, dtype=dtype)
+
+
 def _read_node(node: Any) -> Any:
     h5py = _require_h5py()
     if isinstance(node, h5py.Dataset):
@@ -197,6 +246,34 @@ def _slice_tree(x: Any, start: int, end: int) -> Any:
     if isinstance(x, dict):
         return {key: _slice_tree(value, start, end) for key, value in x.items()}
     return x[start:end]
+
+
+def _unbatch_tree(x: Any) -> Any:
+    if isinstance(x, dict):
+        return {key: _unbatch_tree(value) for key, value in x.items()}
+    array = _to_numpy(x)
+    if array.shape and array.shape[0] == 1:
+        return array[0]
+    return array
+
+
+def _stack_tree(xs: list[Any]) -> Any:
+    if isinstance(xs[0], dict):
+        return {key: _stack_tree([x[key] for x in xs]) for key in xs[0].keys()}
+    return np.stack([_to_numpy(x) for x in xs], axis=0)
+
+
+def _wrapped_current_obs(env: Any) -> Any:
+    wrappers = []
+    current = env
+    while hasattr(current, "env"):
+        wrappers.append(current)
+        current = current.env
+    obs = current.unwrapped.get_obs()
+    for wrapper in reversed(wrappers):
+        if isinstance(wrapper, gym.ObservationWrapper):
+            obs = wrapper.observation(obs)
+    return _unbatch_tree(obs)
 
 
 def _to_batched_tensor(x: Any, device: torch.device) -> Any:
@@ -245,7 +322,7 @@ def generate(args: Args) -> dict[str, Any]:
     output_path = (
         Path(args.output_path).expanduser()
         if args.output_path
-        else _default_output_path(traj_path)
+        else _default_output_path(traj_path, args)
     )
     metadata = json.loads(json_path.read_text())
     episodes = list(metadata.get("episodes") or [])
@@ -258,7 +335,7 @@ def generate(args: Args) -> dict[str, Any]:
     action_scaler = ActionScaler.from_action_space(_space(env, "action"), device=device)
     provider = make_base_policy(
         base_policy=args.base_policy,
-        observation_space=_space(env, "observation"),
+        observation_space=_source_state_observation_space(traj_path, episodes),
         action_space=_space(env, "action"),
         env=env,
         base_ckpt_path=args.base_ckpt_path,
@@ -290,6 +367,9 @@ def generate(args: Args) -> dict[str, Any]:
                 env.reset(**_normalize_reset_kwargs(episode))
                 if env_states:
                     _set_env_state(env, env_states[0])
+                recorded_obs = []
+                if args.obs == "rgb":
+                    recorded_obs.append(_wrapped_current_obs(env))
 
                 base_actions: list[np.ndarray] = []
                 next_base_actions: list[np.ndarray] = []
@@ -308,6 +388,8 @@ def generate(args: Args) -> dict[str, Any]:
                     _, reward, term, trunc, info = env.step(env_action)
                     if env_states and step + 1 < len(env_states):
                         _set_env_state(env, env_states[step + 1])
+                    if args.obs == "rgb":
+                        recorded_obs.append(_wrapped_current_obs(env))
                     next_obs_t = _index_tree(source_obs, step + 1)
                     next_base = _base_naction(
                         provider, action_scaler, next_obs_t, device
@@ -336,7 +418,11 @@ def generate(args: Args) -> dict[str, Any]:
                     {
                         "source_episode_id": episode_id,
                         "episode_seed": episode.get("episode_seed"),
-                        "obs": _slice_tree(source_obs, 0, len(env_actions) + 1),
+                        "obs": (
+                            _slice_tree(source_obs, 0, len(env_actions) + 1)
+                            if args.obs == "state"
+                            else _stack_tree(recorded_obs)
+                        ),
                         "actions": action_scaler.scale(
                             torch.as_tensor(
                                 env_actions, dtype=torch.float32, device=device
@@ -365,6 +451,15 @@ def generate(args: Args) -> dict[str, Any]:
         out.attrs["format_version"] = 1
         out.attrs["source_traj_path"] = str(traj_path)
         out.attrs["source_json_path"] = str(json_path)
+        out.attrs["obs_mode"] = args.obs
+        out.attrs["include_state"] = bool(args.include_state)
+        out.attrs["per_camera_rgbd"] = bool(args.per_camera_rgbd)
+        out.attrs["camera_width"] = (
+            -1 if args.camera_width is None else args.camera_width
+        )
+        out.attrs["camera_height"] = (
+            -1 if args.camera_height is None else args.camera_height
+        )
         out.attrs["action_coordinates"] = "normalized"
         out.attrs["env_action_coordinates"] = "env"
         out.attrs["base_policy"] = args.base_policy

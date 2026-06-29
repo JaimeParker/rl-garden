@@ -8,6 +8,7 @@ from gymnasium import spaces
 from rl_garden.buffers import (
     MCDictReplayBuffer,
     MCTensorReplayBuffer,
+    ResidualDictReplayBuffer,
     ResidualTensorReplayBuffer,
     load_maniskill_h5_to_replay_buffer,
     load_residual_h5_to_replay_buffer,
@@ -163,3 +164,48 @@ def test_load_residual_h5_to_residual_replay_buffer(tmp_path):
     torch.testing.assert_close(
         buffer.dones[:2].reshape(-1), torch.tensor([0, 0, 0, 1.0])
     )
+
+
+def test_load_residual_dict_h5_to_residual_dict_replay_buffer(tmp_path):
+    path = tmp_path / "residual_rgb_demo.h5"
+    with h5py.File(path, "w") as f:
+        f.attrs["dataset_type"] = "rl_garden_residual_offline"
+        group = f.create_group("traj_0")
+        obs = group.create_group("obs")
+        obs.create_dataset("state", data=np.ones((5, 3), dtype=np.float32))
+        obs.create_dataset(
+            "rgb_base_camera", data=np.ones((5, 8, 8, 3), dtype=np.uint8)
+        )
+        group.create_dataset("actions", data=np.ones((4, 2), dtype=np.float32))
+        group.create_dataset("base_actions", data=np.ones((4, 2), dtype=np.float32))
+        group.create_dataset(
+            "next_base_actions", data=np.ones((4, 2), dtype=np.float32)
+        )
+        group.create_dataset("rewards", data=np.ones(4, dtype=np.float32))
+        group.create_dataset("terminated", data=np.array([False, False, False, True]))
+        group.create_dataset("truncated", data=np.array([False, False, False, False]))
+
+    buffer = ResidualDictReplayBuffer(
+        observation_space=spaces.Dict(
+            {
+                "state": spaces.Box(low=-10, high=10, shape=(3,), dtype=np.float32),
+                "rgb_base_camera": spaces.Box(
+                    low=0, high=255, shape=(8, 8, 3), dtype=np.uint8
+                ),
+            }
+        ),
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=4,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    loaded = load_residual_h5_to_replay_buffer(buffer, path, bootstrap_at_done="never")
+    sample = buffer.sample(2)
+
+    assert loaded == 4
+    assert sample.obs["state"].shape == (2, 3)
+    assert sample.obs["rgb_base_camera"].shape == (2, 8, 8, 3)
+    assert sample.obs["rgb_base_camera"].dtype == torch.uint8
+    assert sample.base_actions.shape == (2, 2)
