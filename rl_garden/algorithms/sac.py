@@ -19,6 +19,8 @@ from gymnasium import spaces
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
+from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
+from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
 from rl_garden.common.checkpoint import load_checkpoint_file, validate_checkpoint_metadata
@@ -48,6 +50,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         learning_starts: int = 4_000,
         batch_size: int = 1024,
         gamma: float = 0.8,
+        nstep: int = 1,
         tau: float = 0.01,
         training_freq: int = 64,
         utd: float = 0.5,
@@ -135,6 +138,11 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
         self.policy_lr = policy_lr
         self.q_lr = q_lr
+        if nstep < 1:
+            raise ValueError(f"nstep must be >= 1, got {nstep}")
+        self.nstep = nstep
+        if self.nstep > 1:
+            self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "discounts")
         self.alpha_lr = alpha_lr if alpha_lr is not None else q_lr
         self.policy_frequency = policy_frequency
         self.target_network_frequency = target_network_frequency
@@ -243,6 +251,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             **super()._checkpoint_metadata(),
             "policy_lr": self.policy_lr,
             "q_lr": self.q_lr,
+            "nstep": self.nstep,
             "alpha_lr": self.alpha_lr,
             "policy_frequency": self.policy_frequency,
             "target_network_frequency": self.target_network_frequency,
@@ -484,11 +493,33 @@ class SAC(SACCore, OffPolicyAlgorithm):
     def _build_replay_buffer(self):
         obs_space = self.env.single_observation_space
         if isinstance(obs_space, spaces.Dict):
+            if self.nstep > 1:
+                return NStepDictReplayBuffer(
+                    observation_space=obs_space,
+                    action_space=self.env.single_action_space,
+                    num_envs=self.num_envs,
+                    buffer_size=self.buffer_size,
+                    nstep=self.nstep,
+                    gamma=self.gamma,
+                    storage_device=self.buffer_device,
+                    sample_device=self.device,
+                )
             return DictReplayBuffer(
                 observation_space=obs_space,
                 action_space=self.env.single_action_space,
                 num_envs=self.num_envs,
                 buffer_size=self.buffer_size,
+                storage_device=self.buffer_device,
+                sample_device=self.device,
+            )
+        if self.nstep > 1:
+            return NStepTensorReplayBuffer(
+                observation_space=obs_space,
+                action_space=self.env.single_action_space,
+                num_envs=self.num_envs,
+                buffer_size=self.buffer_size,
+                nstep=self.nstep,
+                gamma=self.gamma,
                 storage_device=self.buffer_device,
                 sample_device=self.device,
             )
@@ -500,6 +531,20 @@ class SAC(SACCore, OffPolicyAlgorithm):
             storage_device=self.buffer_device,
             sample_device=self.device,
         )
+
+    def _replay_buffer_step_kwargs(
+        self,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+    ) -> dict[str, Any]:
+        if self.nstep == 1:
+            return {}
+        return {"episode_end": terminations | truncations}
+
+    def _target_discounts(self, data) -> torch.Tensor:
+        if self.nstep == 1:
+            return super()._target_discounts(data)
+        return data.discounts.reshape(-1, 1)
 
     def _policy_action_space(self) -> spaces.Box:
         return self.env.single_action_space

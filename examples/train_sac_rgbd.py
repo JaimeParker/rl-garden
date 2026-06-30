@@ -70,6 +70,7 @@ def main() -> None:
         camera_height=args.camera_height,
         render_mode=args.render_mode,
         per_camera_rgbd=args.per_camera_rgbd,
+        frame_stack=args.frame_stack,
     )
     eval_record_dir = resolve_eval_record_dir(args, run_name)
     eval_cfg = ManiSkillEnvConfig(
@@ -87,6 +88,7 @@ def main() -> None:
         video_fps=args.video_fps,
         max_steps_per_video=args.num_eval_steps,
         per_camera_rgbd=args.per_camera_rgbd,
+        frame_stack=args.frame_stack,
     )
     env = make_maniskill_env(env_cfg)
     eval_env = make_maniskill_env(eval_cfg)
@@ -106,6 +108,7 @@ def main() -> None:
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
+        nstep=args.nstep,
         tau=args.tau,
         training_freq=args.training_freq,
         utd=args.utd,
@@ -141,6 +144,7 @@ def main() -> None:
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
+        enable_stacking=args.frame_stack > 1,
         image_augmentation=args.image_augmentation,
         random_shift_pad=args.image_random_shift_pad,
         image_augmentation_seed=args.seed + 1_000_003,

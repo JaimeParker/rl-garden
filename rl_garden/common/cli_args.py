@@ -58,6 +58,7 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
     training_freq: int = 64
     utd: float = 0.5
     gamma: float = 0.8
+    nstep: int = 1
     tau: float = 0.01
     policy_lr: float = 3e-4
     q_lr: float = 3e-4
@@ -92,6 +93,7 @@ class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
 class VisionArgs:
     obs_mode: str = "rgb"
     include_state: bool = True
+    frame_stack: int = 1
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64
     encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
