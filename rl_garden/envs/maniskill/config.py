@@ -34,6 +34,9 @@ class ManiSkillEnvConfig:
     # tensor. Required for multi-camera envs (e.g. peg) when each camera should
     # feed an independent encoder under ``fusion_mode="per_key"``.
     per_camera_rgbd: bool = False
+    # Number of visual frames exposed along a leading time dimension. Vector
+    # state remains single-frame. A value of 1 disables stacking.
+    frame_stack: int = 1
     # Recording
     record_dir: Optional[str] = None
     save_video: bool = False

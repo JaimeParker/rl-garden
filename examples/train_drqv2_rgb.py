@@ -69,7 +69,7 @@ class Args:
     image_fusion_mode: str = "stack_channels"
     image_augmentation: str = "random_shift"
     image_random_shift_pad: int = 4
-    enable_stacking: bool = False
+    frame_stack: int = 1
 
     # --- Logging ---
     log_type: str = "wandb"
@@ -145,6 +145,7 @@ def main() -> None:
         per_camera_rgbd=args.per_camera_rgbd,
         sim_backend=args.sim_backend,
         render_backend=args.render_backend,
+        frame_stack=args.frame_stack,
     )
     env = make_maniskill_env(env_cfg)
     image_keys = discover_image_keys(env.single_observation_space)
@@ -168,6 +169,7 @@ def main() -> None:
             per_camera_rgbd=args.per_camera_rgbd,
             sim_backend=args.sim_backend,
             render_backend=args.render_backend,
+            frame_stack=args.frame_stack,
         )
         eval_env = make_maniskill_env(eval_cfg)
 
@@ -201,7 +203,7 @@ def main() -> None:
         image_fusion_mode=args.image_fusion_mode,
         image_augmentation=args.image_augmentation,
         random_shift_pad=args.image_random_shift_pad,
-        enable_stacking=args.enable_stacking,
+        enable_stacking=args.frame_stack > 1,
         image_augmentation_seed=args.seed + 1_000_003,
         seed=args.seed,
         logger=logger,
