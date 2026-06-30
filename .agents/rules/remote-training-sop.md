@@ -23,7 +23,8 @@ The active local runtime must provide:
 - `<container-workspace-path>`: project path inside the container.
 - `<python-env-bin-path>`: directory containing the intended Python executable.
 - `<container-robotwin-root-path>`: RoboTwin checkout path inside the
-  container, required when running RoboTwin tasks with `--robotwin-root`.
+  container, required when running RoboTwin tasks with
+  `--robotwin.robotwin-root`.
 - `<mutagen-session-name>`: Mutagen session name, if Mutagen is used.
 
 ## Execution Model

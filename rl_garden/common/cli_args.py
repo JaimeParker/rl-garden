@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import os
-import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional
-
-from rl_garden.common.training_phase import InitialTrainingPhase
-
 
 @dataclass
 class LoggingArgs:
@@ -33,60 +29,6 @@ class CheckpointArgs:
     save_replay_buffer: bool = False
     load_replay_buffer: bool = True
     save_final_checkpoint: bool = True
-
-
-@dataclass
-class ManiSkillRunArgs(LoggingArgs):
-    env_id: str = "PickCube-v1"
-    num_envs: int = 16
-    num_eval_envs: int = 16
-    seed: int = 1
-    control_mode: str = "pd_joint_delta_pos"
-    render_mode: str = "rgb_array"
-    capture_video: bool = True
-    video_fps: int = 30
-    eval_output_dir: Optional[str] = None
-
-
-@dataclass
-class SACTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
-    total_timesteps: int = 1_000_000
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    batch_size: int = 1024
-    learning_starts: int = 4_000
-    training_freq: int = 64
-    utd: float = 0.5
-    gamma: float = 0.8
-    nstep: int = 1
-    tau: float = 0.01
-    policy_lr: float = 3e-4
-    q_lr: float = 3e-4
-    critic_impl: Literal["vmap", "legacy"] = "vmap"
-    n_critics: int = 2
-    critic_subsample_size: Optional[int] = None
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = False
-    hidden_dim: int = 256
-    actor_hidden_layers: int = 3
-    critic_hidden_layers: int = 3
-    actor_log_std_min: float = -5.0
-    actor_log_std_mode: Literal["clamp", "tanh"] = "clamp"
-    alpha_tuning: Literal["legacy_exp", "log_alpha", "lagrange_softplus"] = "legacy_exp"
-    # Entropy-coefficient knobs, passed through to ``SAC`` unchanged. Defaults
-    # match the SAC constructor defaults exactly so existing runs reproduce
-    # bit-identically (no RNG stream is consumed by these parameters).
-    ent_coef: float | str = "auto"
-    target_entropy: float | str = "auto"
-    alpha_lr: Optional[float] = None
-    q_landscape_diagnostics: bool = False
-    q_landscape_num_actions: int = 8
-    q_landscape_batch_size: int = 64
-    q_mc_diagnostics: bool = False
-    critic_only_steps: int = 0
-    critic_only_freeze_encoder: bool = True
-    critic_only_random_action_prob: float = 0.0
-    load_actor_checkpoint: Optional[str] = None
 
 
 @dataclass
@@ -127,370 +69,6 @@ class VisionArgs:
     per_camera_rgbd: bool = False
 
 
-@dataclass
-class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
-    buffer_size: int = 200_000
-    batch_size: int = 512
-    utd: float = 0.25
-
-
-@dataclass
-class PPOTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
-    total_timesteps: int = 10_000_000
-    sim_backend: str = "gpu"
-    render_backend: str = "gpu"
-    num_steps: int = 50
-    gamma: float = 0.8
-    gae_lambda: float = 0.9
-    learning_rate: float = 3e-4
-    num_minibatches: int = 32
-    update_epochs: int = 4
-    norm_adv: bool = True
-    clip_coef: float = 0.2
-    clip_vloss: bool = False
-    ent_coef: float = 0.0
-    vf_coef: float = 0.5
-    max_grad_norm: float = 0.5
-    target_kl: Optional[float] = 0.1
-    anneal_lr: bool = False
-    finite_horizon_gae: bool = False
-    detach_encoder_on_actor: Optional[bool] = None
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    actor_use_layer_norm: bool = False
-    value_use_layer_norm: bool = False
-    actor_use_group_norm: bool = False
-    value_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    value_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    log_std_init: float = -0.5
-
-
-@dataclass
-class VisionPPOTrainingArgs(PPOTrainingArgs, VisionArgs):
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
-
-
-@dataclass
-class WSRLTrainingArgs(ManiSkillRunArgs, CheckpointArgs):
-    num_offline_steps: int = 0
-    num_online_steps: int = 1_000_000
-    offline_dataset_path: Optional[str] = None
-    offline_num_traj: Optional[int] = None
-    online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
-    offline_data_ratio: float = 0.0
-
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    batch_size: int = 256
-    learning_starts: int = 4_000
-    training_freq: int = 64
-    utd: float = 4.0
-    gamma: float = 0.99
-    tau: float = 0.005
-
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    alpha_lr: float = 1e-4
-    cql_alpha_lr: float = 3e-4
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-
-    use_compile: bool = False
-    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
-
-    n_critics: int = 10
-    critic_subsample_size: int = 2
-
-    use_cql_loss: bool = True
-    cql_n_actions: int = 10
-    cql_action_sample_method: Literal["uniform", "normal"] = "uniform"
-    cql_alpha: float = 5.0
-    cql_autotune_alpha: bool = False
-    cql_alpha_lagrange_init: float = 1.0
-    cql_target_action_gap: float = 1.0
-    cql_importance_sample: bool = True
-    cql_max_target_backup: bool = True
-    cql_temp: float = 1.0
-    cql_clip_diff_min: float = float("-inf")
-    cql_clip_diff_max: float = float("inf")
-    backup_entropy: bool = False
-
-    use_calql: bool = True
-    calql_bound_random_actions: bool = False
-
-    actor_use_layer_norm: bool = True
-    critic_use_layer_norm: bool = True
-    actor_use_group_norm: bool = False
-    critic_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    std_parameterization: Literal["exp", "uniform"] = "exp"
-
-    online_cql_alpha: float = 0.0
-    online_use_cql_loss: bool = False
-    warmup_steps: int = 5000
-    offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
-
-    sparse_reward_mc: bool = False
-    sparse_negative_reward: float = 0.0
-    success_threshold: float = 0.5
-    success_key: Optional[str] = None
-
-    reward_scale: float = 1.0
-    reward_bias: float = 0.0
-
-
-@dataclass
-class VisionWSRLTrainingArgs(WSRLTrainingArgs, VisionArgs):
-    camera_width: Optional[int] = 128
-    camera_height: Optional[int] = 128
-    buffer_size: int = 200_000
-    batch_size: int = 512
-    utd: float = 0.25
-
-
-def sac_initial_training_phase_from_args(
-    args: SACTrainingArgs,
-) -> Optional[InitialTrainingPhase]:
-    if args.critic_only_steps <= 0:
-        return None
-    return InitialTrainingPhase(
-        duration_steps=args.critic_only_steps,
-        update_actor=False,
-        update_critic=True,
-        update_encoder=not args.critic_only_freeze_encoder,
-        random_action_prob=args.critic_only_random_action_prob,
-    )
-
-
-def wsrl_initial_training_phase_from_args(
-    args: WSRLTrainingArgs,
-) -> Optional[InitialTrainingPhase]:
-    if args.warmup_steps <= 0:
-        return None
-    return InitialTrainingPhase(
-        duration_steps=args.warmup_steps,
-        update_actor=False,
-        update_critic=False,
-        update_encoder=False,
-        random_action_prob=0.0,
-    )
-
-
-def warn_if_wsrl_warmup_uses_uninitialized_policy(args: WSRLTrainingArgs) -> None:
-    if args.warmup_steps > 0 and args.load_checkpoint is None:
-        warnings.warn(
-            "warmup_steps > 0 without an offline-trained checkpoint will use "
-            "the randomly initialized policy to collect data while updates are "
-            "paused. Use --load_checkpoint or set --warmup_steps 0 unless this "
-            "is intentional.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-
-@dataclass
-class OfflineAlgorithmArgs:
-    # ``wsrl-calql`` is a deprecated alias for ``wsrl`` kept so historical
-    # commands keep working; both produce the same WSRL agent.
-    algorithm: Literal["cql", "calql", "wsrl", "wsrl-calql", "iql", "bc"] = "calql"
-    # Backward-compatible alias used by examples/pretrain_cql_offline.py.
-    agent: Optional[Literal["cql", "calql"]] = None
-
-
-@dataclass
-class OfflineDatasetArgs:
-    num_offline_steps: int = 100_000
-    offline_dataset_path: Optional[str] = None
-    offline_num_traj: Optional[int] = None
-    save_filename: Optional[str] = None
-    reward_scale: float = 1.0
-    reward_bias: float = 0.0
-    action_low: float = -1.0
-    action_high: float = 1.0
-    spec_num_envs: int = 1
-
-
-@dataclass
-class OfflineBufferArgs:
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    batch_size: int = 256
-    gamma: float = 0.99
-    tau: float = 0.005
-    training_freq: int = 64
-    utd: float = 1.0
-    offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
-
-
-@dataclass
-class OfflineOptimizerArgs:
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-
-    use_compile: bool = True
-
-
-@dataclass
-class OfflineSACFamilyArgs:
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    alpha_lr: float = 1e-4
-    cql_alpha_lr: float = 3e-4
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-    use_compile: bool = True
-    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
-    use_cql_loss: bool = True
-    use_td_loss: bool = True
-    cql_n_actions: int = 10
-    cql_action_sample_method: Literal["uniform", "normal"] = "uniform"
-    cql_alpha: float = 5.0
-    cql_autotune_alpha: bool = False
-    cql_alpha_lagrange_init: float = 1.0
-    cql_target_action_gap: float = 1.0
-    cql_importance_sample: bool = True
-    cql_max_target_backup: bool = True
-    cql_temp: float = 1.0
-    cql_clip_diff_min: float = float("-inf")
-    cql_clip_diff_max: float = float("inf")
-    backup_entropy: bool = False
-    use_calql: bool = True
-    calql_bound_random_actions: bool = False
-    sparse_reward_mc: bool = False
-    sparse_negative_reward: float = 0.0
-    success_threshold: float = 0.5
-    success_key: Optional[str] = None
-
-
-@dataclass
-class OfflineIQLArgs:
-    actor_lr: float = 3e-4
-    critic_value_lr: float = 3e-4
-    expectile: float = 0.7
-    temperature: float = 3.0
-    adv_clip_max: float = 100.0
-
-
-@dataclass
-class OfflineNetworkArgs:
-    n_critics: int = 10
-    critic_subsample_size: int = 2
-    actor_use_layer_norm: bool = True
-    critic_use_layer_norm: bool = True
-    value_use_layer_norm: bool = False
-    actor_use_group_norm: bool = False
-    critic_use_group_norm: bool = False
-    value_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    value_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    std_parameterization: Literal["exp", "uniform"] = "exp"
-
-
-@dataclass
-class OfflineVisionArgs:
-    # These mirror VisionArgs without requiring an online ManiSkill env to infer
-    # observation spaces.
-    obs_mode: str = "rgb"
-    include_state: bool = True
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
-    encoder_features_dim: int = 256
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
-    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: Optional[str] = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
-    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
-    plain_conv_last_act: bool = True
-    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
-    per_camera_rgbd: bool = False
-
-
-@dataclass
-class OfflineRuntimeArgs:
-    seed: int = 1
-    device: str = "auto"
-
-
-@dataclass
-class OfflineEvalArgs:
-    env_id: Optional[str] = None
-    num_eval_envs: int = 1
-    control_mode: str = "pd_joint_delta_pos"
-    sim_backend: str = "gpu"
-    render_backend: str = "gpu"
-
-
-@dataclass
-class OfflinePretrainArgs(
-    OfflineEvalArgs,
-    OfflineRuntimeArgs,
-    OfflineVisionArgs,
-    OfflineNetworkArgs,
-    OfflineIQLArgs,
-    OfflineSACFamilyArgs,
-    OfflineOptimizerArgs,
-    OfflineBufferArgs,
-    OfflineDatasetArgs,
-    OfflineAlgorithmArgs,
-    LoggingArgs,
-    CheckpointArgs,
-):
-    """Generic offline pretraining CLI.
-
-    The CLI remains backward-compatible and flat, but fields are grouped above
-    by ownership so builders can consume only the parameters relevant to the
-    selected algorithm.
-    """
-
-
-CQLTrainingArgs = OfflinePretrainArgs
-
-
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -506,7 +84,8 @@ def _env_str(name: str, default: Optional[str]) -> Optional[str]:
     return raw if raw else None
 
 
-def apply_log_env_overrides(args: LoggingArgs) -> None:
+def apply_log_env_defaults(args: LoggingArgs) -> None:
+    """Apply RLG_* values to a default config before explicit CLI parsing."""
     args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
     args.log_type = _env_str("RLG_LOG_TYPE", args.log_type) or args.log_type
     args.log_keywords = _env_str("RLG_LOG_KEYWORDS", args.log_keywords)
@@ -515,6 +94,15 @@ def apply_log_env_overrides(args: LoggingArgs) -> None:
     )
     args.wandb_entity = _env_str("RLG_WANDB_ENTITY", args.wandb_entity)
     args.wandb_group = _env_str("RLG_WANDB_GROUP", args.wandb_group)
+
+
+apply_log_env_overrides = apply_log_env_defaults
+
+
+def logging_args_from(args: Any) -> Optional[LoggingArgs]:
+    """Return flat or nested logging arguments from a training config."""
+    logging_args = getattr(args, "logging", args)
+    return logging_args if hasattr(logging_args, "std_log") else None
 
 
 def resolve_checkpoint_dir(args: Any, run_name: str) -> Optional[str]:

@@ -15,7 +15,7 @@ default configuration now applies three optimizations:
 1. **`.item()` deferred to log steps** — hot losses return tensor dicts;
    GPU→CPU syncs only happen on steps where metrics are actually logged
    (`global_step % log_freq == 0`).
-2. **`torch.compile` enabled by default** for `OfflinePretrainArgs`
+2. **`torch.compile` enabled by default** for offline SAC-family Args
    (`use_compile=True`).
 3. **TF32 matmul + cuDNN benchmark** enabled via
    `rl_garden.common.enable_fast_math()` at entrypoint setup.
@@ -85,16 +85,14 @@ Callers pass `compute_info=True` only on log steps:
   `compute_info=should_log` to the online update path.
 - `rl_garden/algorithms/offline.py:run_offline_pretraining()` — passes
   `compute_info=(global_step % log_freq == 0 or global_step == final_target)`.
-- `examples/train_wsrl.py:_offline_update_loop` and
-  `examples/train_wsrl_rgbd.py:_offline_update_loop` — same pattern.
+- `rl_garden/training/off2on/wsrl.py:_offline_update_loop` — same pattern.
 
 This isolates the `torch.compile`-friendly hot path from the
 metrics-building path that contains `.item()` and Python-level reductions.
 
 ### 3. `torch.compile` enabled by default for offline
 
-`OfflinePretrainArgs.use_compile` flipped from `False` to `True` in
-`rl_garden/common/cli_args.py:214`. `WSRLTrainingArgs.use_compile`
+Offline SAC-family `use_compile` defaults to `True`. `WSRLTrainingArgs.use_compile`
 remains `False` for now (the online rollout path interacts with ManiSkill
 GPU envs in ways that need separate validation).
 
@@ -122,8 +120,7 @@ The first enables cuDNN's heuristic-based algorithm selection (real win
 for the RGBD ResNet encoder path; mild improvement for state MLPs). The
 second enables TF32 matmul on Ampere+ GPUs.
 
-It is called once at the top of `main()` in `examples/pretrain_offline.py`,
-`examples/train_wsrl.py`, and `examples/train_wsrl_rgbd.py`, right after
+It is called once at the top of the offline and off2on run functions, right after
 `seed_everything()`.
 
 ## Numerical equivalence

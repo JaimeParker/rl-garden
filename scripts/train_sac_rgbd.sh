@@ -80,7 +80,7 @@ if [[ "$ENCODER" == resnet* && "$HAS_Q_LR" -eq 0 ]]; then
     FORWARD_ARGS+=(--q_lr 1e-4)
 fi
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_sac_rgbd.py" \
+exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" sac \
     --env_id PickCube-v1 \
     --obs_mode rgb \
     --num_envs 16 \

@@ -18,7 +18,6 @@ import tyro
 from rl_garden.algorithms import ResidualSAC
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
-    VisionSACTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_env,
@@ -26,6 +25,7 @@ from rl_garden.common.cli_args import (
     resolve_eval_record_dir,
     vit_sac_kwargs_from_args,
 )
+from rl_garden.training.online._args import VisionSACTrainingArgs
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 from rl_garden.policies.base_policies import make_base_policy
 

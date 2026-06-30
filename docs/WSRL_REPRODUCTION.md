@@ -79,7 +79,7 @@ ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
     cd /workspace/rl-garden && \
     export PATH=/opt/venv/openvla/bin:\$PATH && \
     export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
-    MPLCONFIGDIR=/tmp python -u examples/train_sac_state.py \
+    MPLCONFIGDIR=/tmp python -u examples/train_online.py sac --obs_mode state \
       --env_id PickCube-v1 \
       --num_envs 16 \
       --total_timesteps 2000000 \
@@ -262,13 +262,13 @@ PY
 The codebase now exposes CQL and Cal-QL as standalone algorithms as well as
 WSRL flow components. Use one of two paths:
 
-- **Standalone offline pretrain**: `examples/pretrain_offline.py --algorithm cql`
-  or `--algorithm calql` trains `CQL` / `CalQL` without
-  constructing a ManiSkill env. `--algorithm wsrl-calql` builds the
+- **Standalone offline pretrain**: `examples/pretrain_offline.py cql`
+  or `examples/pretrain_offline.py calql` trains `CQL` / `CalQL` without
+  constructing a simulator env. The `wsrl` subcommand builds the
   WSRL-compatible Cal-QL pretrain path. This mirrors the upstream idea
   that CQL and Cal-QL can be trained independently while keeping the example
   extensible to future offline algorithms.
-- **WSRL offline→online**: `examples/train_wsrl.py` builds `WSRL`, runs
+- **WSRL offline→online**: `examples/train_off2on.py wsrl` builds `WSRL`, runs
   offline updates, switches replay mode, then continues online interaction.
 
 The smoke command below uses the WSRL offline→online path.
@@ -284,7 +284,7 @@ ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
     cd /workspace/rl-garden && \
     export PATH=/opt/venv/openvla/bin:\$PATH && \
     export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
-    MPLCONFIGDIR=/tmp python -u examples/train_wsrl.py \
+    MPLCONFIGDIR=/tmp python -u examples/train_off2on.py wsrl \
       --env_id PickCube-v1 \
       --num_envs 16 \
       --offline_dataset_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
@@ -314,8 +314,8 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
   cd /workspace/rl-garden && \
   export PATH=/opt/venv/openvla/bin:\$PATH && \
   export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
-  MPLCONFIGDIR=/tmp python -u examples/pretrain_offline.py \
-    --algorithm cql \
+  MPLCONFIGDIR=/tmp python -u examples/pretrain_offline.py cql \
+
     --offline_dataset_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
     --num_offline_steps 20000 \
     --checkpoint_dir runs/pickcube_cql_state_smoke_20koff_seed1/checkpoints \
@@ -328,11 +328,10 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
 '"
 ```
 
-Switch `--algorithm cql` to `--algorithm calql` to run standalone Cal-QL. Use
-`--algorithm wsrl-calql` when the checkpoint should resume through the WSRL
-offline→online path. The default final checkpoint names are
+Switch the `cql` subcommand to `calql` to run standalone Cal-QL. Use `wsrl`
+when the checkpoint should resume through the WSRL offline→online path. The default final checkpoint names are
 `cql_offline_pretrained.pt`, `calql_offline_pretrained.pt`, and
-`wsrl_calql_offline_pretrained.pt`.
+`wsrl_offline_pretrained.pt`.
 
 Expected checkpoint layout:
 
@@ -394,5 +393,5 @@ ssh 6017 "sudo chown -R liuzhaohong:liuzhaohong \
 - `python` is missing in the container: prepend `export PATH=/opt/venv/openvla/bin:$PATH`.
 - W&B login fails after container rebuild: copy or reconfigure credentials, then verify with `wandb status`.
 - Container code differs from remote host code: verify the bind mount with `cd /workspace/rl-garden && git status --short`; do not use `docker cp` unless the bind mount is absent.
-- Online W&B metrics stop at the offline step: ensure `examples/train_wsrl.py` is the version where online training continues from the offline `global_step`.
+- Online W&B metrics stop at the offline step: ensure `examples/train_off2on.py wsrl` is the version where online training continues from the offline `global_step`.
 - Dataset loading fails due missing Monte Carlo returns: use the WSRL dataset generator from this repository; the ManiSkill H5 loader computes/caches MC returns when loading into MC replay buffers.
