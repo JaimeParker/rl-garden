@@ -26,6 +26,9 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
 
     Returns the wrapped ``ManiSkillVectorEnv`` instance.
     """
+    if cfg.frame_stack < 1:
+        raise ValueError("frame_stack must be at least 1")
+
     # Lazy imports so the package doesn't hard-depend on mani_skill being installed.
     import mani_skill.envs  # noqa: F401  (registers envs)
     from rl_garden.envs import register_custom_envs
@@ -97,6 +100,13 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
                 depth=("depth" in cfg.obs_mode),
                 state=cfg.include_state,
             )
+
+        if cfg.frame_stack > 1:
+            from rl_garden.envs.wrappers import ImageFrameStackWrapper
+
+            env = ImageFrameStackWrapper(env, frame_stack=cfg.frame_stack)
+    elif cfg.frame_stack > 1:
+        raise ValueError("frame_stack > 1 requires a visual observation mode")
 
     if isinstance(env.action_space, gym.spaces.Dict):
         env = FlattenActionSpaceWrapper(env)
