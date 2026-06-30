@@ -166,44 +166,48 @@ The RoboTwin adapter uses the same `CombinedExtractor` + `PlainConv`/`ResNet` vi
 and shares the same `VisionSACTrainingArgs` / `VisionPPOTrainingArgs` CLI surface, so encoder and
 replay-buffer flags work identically across both simulators.
 
+Use `--print-config` with any registry-managed training entrypoint to print the
+fully resolved recursive JSON configuration and exit. Normal runs save that
+configuration to `{log_dir}/{run_name}/config.json`. Explicit CLI flags override
+`RLG_*` logging environment defaults.
+
 ### Offline Pretraining
 
-Use `--algorithm` to choose the offline algorithm. Supports flat Box and Dict (image+state) H5 datasets:
+Choose the offline algorithm with a required subcommand. Flat Box and Dict (image+state) H5 datasets are supported:
 
 ```bash
 # BC baseline (actor-only imitation learning)
-python examples/pretrain_offline.py --algorithm bc \
+python examples/pretrain_offline.py bc \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
 
 # IQL (Implicit Q-Learning)
-python examples/pretrain_offline.py --algorithm iql \
+python examples/pretrain_offline.py iql \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 300000
 
 # Cal-QL (default, best for offline→online transfer)
-python examples/pretrain_offline.py --algorithm calql \
+python examples/pretrain_offline.py calql \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
 
 # CQL (pure conservative Q-learning)
-python examples/pretrain_offline.py --algorithm cql \
+python examples/pretrain_offline.py cql \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
 
 # WSRL agent (Cal-QL backbone, for later WSRL offline→online flow)
-python examples/pretrain_offline.py --algorithm wsrl \
+python examples/pretrain_offline.py wsrl \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
 ```
 
-Dict observations (image+state H5) are supported by `--algorithm iql` and `--algorithm bc`. Use a flat state dataset for `cql`/`calql`/`wsrl`.
+Dict observations (image+state H5) are supported by the `iql` and `bc` subcommands. Use a flat state dataset for `cql`/`calql`/`wsrl`.
 
 Shell launchers wrap the same entrypoint:
 
 ```bash
-scripts/pretrain_offline.sh --algorithm calql --offline_dataset_path demos/pickcube.h5
-scripts/pretrain_offline.sh --algorithm cql --offline_dataset_path demos/pickcube.h5
+scripts/pretrain_offline.sh calql --offline_dataset_path demos/pickcube.h5
+scripts/pretrain_offline.sh cql --offline_dataset_path demos/pickcube.h5
 ```
 
-The primary entrypoint is `examples/pretrain_offline.py --algorithm
-cql|calql|wsrl-calql`; `scripts/pretrain_offline.sh` wraps it for shell
-launches. The final checkpoint defaults to
+The primary entrypoint provides `cql`, `calql`, `wsrl`, `iql`, and `bc`
+subcommands; `scripts/pretrain_offline.sh` wraps it for shell launches. The final checkpoint defaults to
 `<algorithm>_offline_pretrained.pt` and can be loaded into compatible
 SAC-family agents for later evaluation or fine-tuning.
 
@@ -212,7 +216,7 @@ SAC-family agents for later evaluation or fine-tuning.
 Pass `--env_id` to spin up a ManiSkill eval env during offline training for periodic success/return metrics:
 
 ```bash
-python examples/pretrain_offline.py --algorithm iql \
+python examples/pretrain_offline.py iql \
   --offline_dataset_path demos/pickcube.h5 \
   --env_id PickCube-v1 --eval_freq 10000 --num_eval_steps 50
 ```
@@ -473,7 +477,7 @@ separate `_replay_buffer.pt` file next to the checkpoint.
 Load a checkpoint:
 
 ```bash
-python examples/pretrain_offline.py --algorithm calql \
+python examples/pretrain_offline.py calql \
   --load_checkpoint runs/<run_name>/checkpoints/calql_offline_pretrained.pt
 ```
 

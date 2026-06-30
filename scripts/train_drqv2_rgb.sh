@@ -4,7 +4,7 @@ set -euo pipefail
 # DrQ-v2 RGB training on PickCube-v1 with default hyperparameters
 # matching the reference implementation in 3rd_party/drqv2.
 
-python examples/train_drqv2_rgb.py \
+python examples/train_online.py drqv2 \
   --env_id PickCube-v1 \
   --total_timesteps 1000000 \
   --buffer_size 1000000 \

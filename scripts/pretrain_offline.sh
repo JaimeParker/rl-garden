@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generic pure offline pretraining launcher.
-# Pass --algorithm cql|calql|wsrl-calql and --offline_dataset_path /path/to/demo.h5.
+# Pass the cql|calql|wsrl|iql|bc subcommand and --offline_dataset_path /path/to/demo.h5.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -1,42 +1,50 @@
-"""State-based WSRL on ManiSkill with offline→online training.
+"""WSRL on ManiSkill with offline→online training. Supports state and visual obs.
 
 Usage:
+    # State observations (override visual defaults)
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode state \\
+        --buffer_size 1000000 --batch_size 256 --utd 4.0
+
+    # RGB observations with plain_conv encoder
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode rgb --encoder plain_conv
+
+    # RGBD observations with ResNet encoder
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode rgbd --encoder resnet10
+
     # Online-only (no offline pre-training)
-    python examples/train_wsrl.py --env_id PickCube-v1 --num_offline_steps 0
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 --num_offline_steps 0
 
-    # Offline→online training
-    python examples/train_wsrl.py --env_id PickCube-v1 --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000 --num_online_steps 50000
-
-    # Disable REDQ (use 2 critics like standard SAC)
-    python examples/train_wsrl.py --env_id PickCube-v1 --n_critics 2
+    # Offline→online from a ManiSkill trajectory H5
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import tyro
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
+from rl_garden.algorithms.offline import _log_eval_stdout
 from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
-    WSRLTrainingArgs,
-    apply_log_env_overrides,
+    image_encoder_factory_from_args,
+    image_keys_from_env,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
+    vit_sac_kwargs_from_args,
     warn_if_wsrl_warmup_uses_uninitialized_policy,
     wsrl_initial_training_phase_from_args,
 )
-from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.common.resolved_config import persist_resolved_config
+from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
 
-
-@dataclass
-class Args(WSRLTrainingArgs):
-    pass
+if TYPE_CHECKING:
+    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
 
 def _offline_update_loop(
@@ -47,13 +55,11 @@ def _offline_update_loop(
     std_log: bool,
     *,
     start_step: int = 0,
-    eval_freq: int = 0,
-) -> int:
+) -> None:
     gradient_steps = 1
     interval_update_time = 0.0
     interval_update_steps = 0
     for step in trange(steps, desc="offline"):
-        global_step = start_step + step + 1
         should_log = log_freq > 0 and (
             (step + 1) % log_freq == 0 or (step + 1) == steps
         )
@@ -61,24 +67,45 @@ def _offline_update_loop(
         losses = agent.train(gradient_steps, compute_info=should_log)
         interval_update_time += time.perf_counter() - update_t
         interval_update_steps += gradient_steps
+
+        if (
+            agent.eval_freq > 0
+            and agent.eval_env is not None
+            and (step + 1) % agent.eval_freq == 0
+        ):
+            eval_t = time.perf_counter()
+            eval_metrics = agent._evaluate()
+            agent._log_eval_metrics(eval_metrics, start_step + step + 1)
+            if std_log:
+                _log_eval_stdout(agent, eval_metrics, start_step + step + 1)
+            logger.add_scalar(
+                "time/eval_time", time.perf_counter() - eval_t, start_step + step + 1
+            )
+
         if log_freq > 0 and (step + 1) % log_freq == 0:
-            agent._log_update_metrics(losses, global_step)
+            logger.log_metrics(losses, start_step + step + 1)
             offline_update_fps = (
                 interval_update_steps / interval_update_time
                 if interval_update_time > 0
                 else float("nan")
             )
-            logger.add_scalar("time/offline_update_time", interval_update_time, global_step)
-            logger.add_scalar("time/offline_update_fps", offline_update_fps, global_step)
+            logger.add_scalar(
+                "time/offline_update_time",
+                interval_update_time,
+                start_step + step + 1,
+            )
+            logger.add_scalar(
+                "time/offline_update_fps",
+                offline_update_fps,
+                start_step + step + 1,
+            )
             if std_log:
                 progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
                 loss_summary, q_summary = logger.format_metrics(losses)
                 q_part = f" q={q_summary}" if q_summary else ""
                 print(
                     "[offline] "
-                    f"step={step + 1}/{steps} "
-                    f"global_step={global_step} "
-                    f"({progress:.2f}%) "
+                    f"step={step + 1}/{steps} ({progress:.2f}%) "
                     f"fps={offline_update_fps:.4f} "
                     f"{loss_summary}{q_part}",
                     flush=True,
@@ -86,40 +113,13 @@ def _offline_update_loop(
             interval_update_time = 0.0
             interval_update_steps = 0
 
-        if (
-            eval_freq > 0
-            and agent.eval_env is not None
-            and (step + 1) % eval_freq == 0
-        ):
-            eval_metrics = agent._evaluate()
-            if eval_metrics:
-                agent._log_eval_metrics(eval_metrics, global_step)
-                if std_log:
-                    eval_return = _first_metric(eval_metrics, ("return",))
-                    eval_success = _first_metric(eval_metrics, ("success_at_end", "success_once"))
-                    print(
-                        "[offline_eval] "
-                        f"step={step + 1}/{steps} "
-                        f"return={_fmt_metric(eval_return)} "
-                        f"success_at_end={_fmt_metric(eval_success)}",
-                        flush=True,
-                    )
-
-    return start_step + steps
+        if agent.checkpoint_freq > 0 and (step + 1) % agent.checkpoint_freq == 0:
+            agent._save_checkpoint(f"checkpoint_{step + 1}.pt")
 
 
-def _first_metric(metrics: dict[str, float], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        if key in metrics:
-            return metrics[key]
-    return None
-
-
-def _fmt_metric(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.4f}"
-
-
-def _evaluate_offline_end(agent: WSRL, logger: Logger, step: int, std_log: bool) -> None:
+def _evaluate_offline_end(
+    agent: WSRL, logger: Logger, step: int, std_log: bool
+) -> None:
     metrics = agent._evaluate()
     if not metrics:
         return
@@ -127,15 +127,7 @@ def _evaluate_offline_end(agent: WSRL, logger: Logger, step: int, std_log: bool)
     for key, value in agent.canonical_eval_metrics(metrics).items():
         logger.add_summary(f"wsrl/offline_final_eval/{key}", value)
     if std_log:
-        eval_return = _first_metric(metrics, ("return",))
-        eval_success = _first_metric(metrics, ("success_at_end", "success_once"))
-        print(
-            "[offline_eval] "
-            f"step={step} "
-            f"return={_fmt_metric(eval_return)} "
-            f"success_at_end={_fmt_metric(eval_success)}",
-            flush=True,
-        )
+        _log_eval_stdout(agent, metrics, step)
 
 
 def _save_offline_checkpoint(
@@ -166,22 +158,54 @@ def _set_offline_probe(agent: WSRL, logger: Logger, std_log: bool) -> None:
         print(f"[offline] probe_size={probe_size}", flush=True)
 
 
-def main() -> None:
-    args = tyro.cli(Args)
-    apply_log_env_overrides(args)
+def _switch_to_online_mode(
+    agent: WSRL, args: WSRLOff2OnArgs, logger: Logger
+) -> None:
+    if args.num_offline_steps == 0:
+        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
+        if args.load_checkpoint is not None and args.offline_dataset_path is not None:
+            loaded = load_maniskill_h5_to_replay_buffer(
+                agent.replay_buffer,
+                args.offline_dataset_path,
+                num_traj=args.offline_num_traj,
+                reward_scale=args.reward_scale,
+                reward_bias=args.reward_bias,
+                success_key=args.success_key,
+            )
+            logger.add_summary("wsrl/offline_loaded_transitions", loaded)
+            _set_offline_probe(agent, logger, args.std_log)
+    agent.switch_to_online_mode(
+        online_replay_mode=args.online_replay_mode,
+        offline_data_ratio=args.offline_data_ratio,
+    )
+    if args.std_log:
+        print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+
+
+def run_wsrl(args: WSRLOff2OnArgs) -> None:
     seed_everything(args.seed)
     enable_fast_math()
 
+    is_visual = args.obs_mode != "state"
+    obs_label = f"rgbd_{args.encoder}" if is_visual else "state"
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
-        args.exp_name or f"{args.env_id}__wsrl_state__{args.seed}__{int(time.time())}"
+        args.exp_name
+        or f"{args.env_id}__wsrl_{obs_label}__{args.seed}__{int(time.time())}"
     )
     checkpoint_dir = resolve_checkpoint_dir(args, run_name)
+    resolved_config = persist_resolved_config(
+        args,
+        training_phase="off2on",
+        algorithm="wsrl",
+        run_name=run_name,
+        log_dir=args.log_dir,
+    )
     logger = Logger.create(
         log_type=args.log_type,
         log_dir=args.log_dir,
         run_name=run_name,
-        config=vars(args),
+        config=resolved_config,
         start_time=start_time,
         log_keywords=args.log_keywords,
         wandb_project=args.wandb_project,
@@ -194,36 +218,44 @@ def main() -> None:
         + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
 
-    env_cfg = ManiSkillEnvConfig(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        reward_scale=args.reward_scale,
-        reward_bias=args.reward_bias,
-    )
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    eval_cfg = ManiSkillEnvConfig(
-        env_id=args.env_id,
-        num_envs=args.num_eval_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        reconfiguration_freq=1,
-        render_mode=args.render_mode,
-        record_dir=eval_record_dir,
-        save_video=args.capture_video,
-        video_fps=args.video_fps,
-        max_steps_per_video=args.num_eval_steps,
-        reward_scale=args.reward_scale,
-        reward_bias=args.reward_bias,
-    )
-    env = make_maniskill_env(env_cfg)
-    eval_env = make_maniskill_env(eval_cfg)
-
     if args.eval_freq > 0 and args.num_eval_envs <= 0:
         raise SystemExit(
             "--eval_freq > 0 requires --num_eval_envs > 0 to provide an eval environment."
+        )
+
+    backend_config = args.resolve_backend_config()
+    eval_record_dir = resolve_eval_record_dir(args, run_name)
+    req = EnvRequest(
+        env_id=args.env_id,
+        num_envs=args.num_envs,
+        obs_mode=args.obs_mode,
+        control_mode=args.control_mode,
+        render_mode=args.render_mode,
+        seed=args.seed,
+        camera_width=args.camera_width if is_visual else None,
+        camera_height=args.camera_height if is_visual else None,
+        include_state=args.include_state if is_visual else True,
+        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
+        reward_scale=args.reward_scale,
+        reward_bias=args.reward_bias,
+        num_eval_envs=args.num_eval_envs,
+        eval_record_dir=eval_record_dir,
+        capture_video=args.capture_video,
+        video_fps=args.video_fps,
+        num_eval_steps=args.num_eval_steps,
+        backend_config=backend_config,
+    )
+    env, eval_env = make_training_envs(args.env_backend, req)
+
+    image_kwargs: dict = {}
+    if is_visual:
+        factory = image_encoder_factory_from_args(args)
+        image_keys = image_keys_from_env(env, args)
+        image_kwargs = dict(
+            image_keys=image_keys,
+            image_encoder_factory=factory,
+            image_fusion_mode=args.image_fusion_mode,
+            **vit_sac_kwargs_from_args(args, image_keys),
         )
 
     agent = WSRL(
@@ -296,6 +328,7 @@ def main() -> None:
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -317,15 +350,15 @@ def main() -> None:
         offline_start_step = agent._global_step
         logger.add_summary("wsrl/offline_loaded_transitions", loaded)
         logger.add_summary("wsrl/offline_start_step", offline_start_step)
-        offline_end_step = _offline_update_loop(
+        _offline_update_loop(
             agent,
             args.num_offline_steps,
             logger,
             args.log_freq,
             args.std_log,
             start_step=offline_start_step,
-            eval_freq=args.eval_freq,
         )
+        offline_end_step = offline_start_step + args.num_offline_steps
         agent._global_step = offline_end_step
         _evaluate_offline_end(agent, logger, offline_end_step, args.std_log)
         _save_offline_checkpoint(
@@ -336,42 +369,15 @@ def main() -> None:
         )
         _set_offline_probe(agent, logger, args.std_log)
 
-        # Switch to online mode. The algorithm owns empty/append/mixed buffer handling.
-        agent.switch_to_online_mode(
-            online_replay_mode=args.online_replay_mode,
-            offline_data_ratio=args.offline_data_ratio,
-        )
-        if args.std_log:
-            print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
-    elif args.num_offline_steps == 0:
-        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
-        if args.load_checkpoint is not None and args.offline_dataset_path is not None:
-            loaded = load_maniskill_h5_to_replay_buffer(
-                agent.replay_buffer,
-                args.offline_dataset_path,
-                num_traj=args.offline_num_traj,
-                reward_scale=args.reward_scale,
-                reward_bias=args.reward_bias,
-                success_key=args.success_key,
-            )
-            logger.add_summary("wsrl/offline_loaded_transitions", loaded)
-            _set_offline_probe(agent, logger, args.std_log)
-        agent.switch_to_online_mode(
-            online_replay_mode=args.online_replay_mode,
-            offline_data_ratio=args.offline_data_ratio,
-        )
-        if args.std_log:
-            print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+    _switch_to_online_mode(agent, args, logger)
 
     # Online training phase
     if args.num_online_steps > 0:
         online_target_step = agent._global_step + args.num_online_steps
         agent.learn(total_timesteps=online_target_step)
+    elif agent.checkpoint_dir is not None and agent.save_final_checkpoint:
+        agent._save_checkpoint("final.pt")
 
     logger.close()
     env.close()
     eval_env.close()
-
-
-if __name__ == "__main__":
-    main()

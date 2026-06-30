@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -296,12 +297,11 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
     dataset = tmp_path / "demo.h5"
     _write_demo_h5(dataset)
 
-    for algorithm in ("cql", "calql", "wsrl-calql", "iql"):
+    for algorithm in ("bc", "cql", "calql", "wsrl", "iql"):
         checkpoint_dir = tmp_path / algorithm
         cmd = [
             sys.executable,
             "examples/pretrain_offline.py",
-            "--algorithm",
             algorithm,
             "--offline_dataset_path",
             str(dataset),
@@ -309,108 +309,70 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
             "2",
             "--buffer_device",
             "cpu",
-            "--device",
-            "cpu",
             "--log_type",
             "none",
             "--no-std-log",
             "--checkpoint_dir",
             str(checkpoint_dir),
+            "--log_dir",
+            str(tmp_path / "logs"),
+            "--exp_name",
+            algorithm,
             "--batch_size",
             "4",
             "--buffer_size",
             "32",
-            "--n_critics",
-            "4",
-            "--critic_subsample_size",
-            "2",
-            "--cql_n_actions",
-            "2",
         ]
+        if algorithm in {"cql", "calql", "wsrl"}:
+            cmd.extend(
+                [
+                    "--n_critics",
+                    "4",
+                    "--critic_subsample_size",
+                    "2",
+                    "--cql_n_actions",
+                    "2",
+                    "--no-use-compile",
+                ]
+            )
+        elif algorithm == "iql":
+            cmd.extend(
+                [
+                    "--device",
+                    "cpu",
+                    "--n_critics",
+                    "4",
+                    "--critic_subsample_size",
+                    "2",
+                ]
+            )
+        else:
+            cmd.extend(["--device", "cpu"])
         subprocess.run(cmd, check=True)
-        expected = f"{algorithm.replace('-', '_')}_offline_pretrained.pt"
+        expected = f"{algorithm}_offline_pretrained.pt"
         assert (checkpoint_dir / expected).exists()
+        config = json.loads(
+            (tmp_path / "logs" / algorithm / "config.json").read_text()
+        )
+        assert config["training_phase"] == "offline"
+        assert config["algorithm"] == algorithm
 
 
-def test_pretrain_cql_offline_cli_legacy_agent_alias(tmp_path):
-    dataset = tmp_path / "demo.h5"
-    _write_demo_h5(dataset)
-
-    checkpoint_dir = tmp_path / "legacy_cql"
+def test_pretrain_offline_cli_rejects_legacy_algorithm_flag():
     cmd = [
         sys.executable,
-        "examples/pretrain_cql_offline.py",
-        "--agent",
+        "examples/pretrain_offline.py",
+        "--algorithm",
         "cql",
-        "--offline_dataset_path",
-        str(dataset),
-        "--num_offline_steps",
-        "1",
-        "--buffer_device",
-        "cpu",
-        "--device",
-        "cpu",
-        "--log_type",
-        "none",
-        "--no-std-log",
-        "--checkpoint_dir",
-        str(checkpoint_dir),
-        "--batch_size",
-        "4",
-        "--buffer_size",
-        "32",
-        "--n_critics",
-        "4",
-        "--critic_subsample_size",
-        "2",
-        "--cql_n_actions",
-        "2",
     ]
-    subprocess.run(cmd, check=True)
-    assert (checkpoint_dir / "cql_offline_pretrained.pt").exists()
-
-
-def test_pretrain_wsrl_offline_cli_legacy_filename(tmp_path):
-    dataset = tmp_path / "demo.h5"
-    _write_demo_h5(dataset)
-
-    checkpoint_dir = tmp_path / "legacy_wsrl"
-    cmd = [
-        sys.executable,
-        "examples/pretrain_wsrl_offline.py",
-        "--offline_dataset_path",
-        str(dataset),
-        "--num_offline_steps",
-        "1",
-        "--buffer_device",
-        "cpu",
-        "--device",
-        "cpu",
-        "--log_type",
-        "none",
-        "--no-std-log",
-        "--checkpoint_dir",
-        str(checkpoint_dir),
-        "--batch_size",
-        "4",
-        "--buffer_size",
-        "32",
-        "--n_critics",
-        "4",
-        "--critic_subsample_size",
-        "2",
-        "--cql_n_actions",
-        "2",
-    ]
-    subprocess.run(cmd, check=True)
-    assert (checkpoint_dir / "offline_pretrained.pt").exists()
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    assert result.returncode != 0
 
 
 def test_pretrain_cql_offline_cli_requires_dataset():
     cmd = [
         sys.executable,
         "examples/pretrain_offline.py",
-        "--algorithm",
         "cql",
         "--num_offline_steps",
         "1",

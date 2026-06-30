@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from examples import train_ppo_robotwin_rgbd
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
@@ -300,30 +299,32 @@ def test_stack_bowls_three_dense_reward_factory_builds():
     assert task.reward is reward
 
 
-def test_robotwin_ppo_eval_env_wires_video_dir(monkeypatch, tmp_path):
-    captured = []
+def test_robotwin_backend_eval_env_wires_video_dir(tmp_path):
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    def fake_make_robotwin_env(cfg):
-        captured.append(cfg)
-        return cfg
+    rt = RoboTwinConfig()
 
-    monkeypatch.setattr(train_ppo_robotwin_rgbd, "make_robotwin_env", fake_make_robotwin_env)
-    args = train_ppo_robotwin_rgbd.Args(log_type="none")
-    train_ppo_robotwin_rgbd._make_env(
-        args,
-        num_envs=1,
-        is_eval=True,
-        eval_record_dir=str(tmp_path),
-    )
-    train_ppo_robotwin_rgbd._make_env(
-        args,
-        num_envs=1,
-        is_eval=False,
-        eval_record_dir=str(tmp_path),
-    )
+    def _req(is_eval):
+        return EnvRequest(
+            env_id="place_shoe",
+            num_envs=1,
+            num_eval_envs=1,
+            obs_mode="rgb",
+            control_mode="delta_joint_pos",
+            render_mode="rgb_array",
+            seed=1,
+            camera_width=64,
+            camera_height=64,
+            capture_video=True,
+            eval_record_dir=str(tmp_path),
+            backend_config=rt,
+        )
 
-    eval_cfg = captured[0].task_config
-    train_cfg = captured[1].task_config
+    eval_cfg = RoboTwinBackend._make_cfg(_req(is_eval=True), is_eval=True).task_config
+    train_cfg = RoboTwinBackend._make_cfg(_req(is_eval=False), is_eval=False).task_config
+
     assert eval_cfg["eval_video_log"] is True
     assert eval_cfg["eval_video_save_dir"] == str(tmp_path)
     assert train_cfg["eval_video_log"] is False

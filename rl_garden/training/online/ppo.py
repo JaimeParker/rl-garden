@@ -1,46 +1,42 @@
-"""PPO on ManiSkill Dict RGBD observations with pluggable image encoder."""
-
+"""PPO run function."""
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass
+def run_ppo(args) -> None:
+    import time
 
-import tyro
+    from rl_garden.algorithms import PPO
+    from rl_garden.common import Logger, seed_everything
+    from rl_garden.common.cli_args import (
+        image_encoder_factory_from_args,
+        image_keys_from_env,
+        resolve_checkpoint_dir,
+        resolve_eval_record_dir,
+    )
+    from rl_garden.common.resolved_config import persist_resolved_config
+    from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
 
-from rl_garden.algorithms import PPO
-from rl_garden.common import Logger, seed_everything
-from rl_garden.common.cli_args import (
-    VisionPPOTrainingArgs,
-    apply_log_env_overrides,
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    resolve_checkpoint_dir,
-    resolve_eval_record_dir,
-)
-from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
-
-
-@dataclass
-class Args(VisionPPOTrainingArgs):
-    pass
-
-
-def main() -> None:
-    args = tyro.cli(Args)
-    apply_log_env_overrides(args)
     seed_everything(args.seed)
 
+    is_visual = args.obs_mode != "state"
+    obs_label = f"rgbd_{args.encoder}" if is_visual else "state"
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
         args.exp_name
-        or f"{args.env_id}__ppo_rgbd_{args.encoder}__{args.seed}__{int(time.time())}"
+        or f"{args.env_id}__ppo_{obs_label}__{args.seed}__{int(time.time())}"
     )
     checkpoint_dir = resolve_checkpoint_dir(args, run_name)
+    resolved_config = persist_resolved_config(
+        args,
+        training_phase="online",
+        algorithm="ppo",
+        run_name=run_name,
+        log_dir=args.log_dir,
+    )
     logger = Logger.create(
         log_type=args.log_type,
         log_dir=args.log_dir,
         run_name=run_name,
-        config=vars(args),
+        config=resolved_config,
         start_time=start_time,
         log_keywords=args.log_keywords,
         wandb_project=args.wandb_project,
@@ -53,47 +49,38 @@ def main() -> None:
         + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
 
-    env_cfg = ManiSkillEnvConfig(
+    backend_config = args.resolve_backend_config()
+    eval_record_dir = resolve_eval_record_dir(args, run_name)
+    req = EnvRequest(
         env_id=args.env_id,
         num_envs=args.num_envs,
         obs_mode=args.obs_mode,
-        include_state=args.include_state,
         control_mode=args.control_mode,
-        camera_width=args.camera_width,
-        camera_height=args.camera_height,
         render_mode=args.render_mode,
-        sim_backend=args.sim_backend,
-        render_backend=args.render_backend,
-        per_camera_rgbd=args.per_camera_rgbd,
-    )
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    eval_cfg = ManiSkillEnvConfig(
-        env_id=args.env_id,
-        num_envs=args.num_eval_envs,
-        obs_mode=args.obs_mode,
-        include_state=args.include_state,
-        control_mode=args.control_mode,
-        reconfiguration_freq=1,
-        camera_width=args.camera_width,
-        camera_height=args.camera_height,
-        render_mode=args.render_mode,
-        sim_backend=args.sim_backend,
-        render_backend=args.render_backend,
-        record_dir=eval_record_dir,
-        save_video=args.capture_video,
+        seed=args.seed,
+        camera_width=args.camera_width if is_visual else None,
+        camera_height=args.camera_height if is_visual else None,
+        include_state=args.include_state if is_visual else True,
+        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
+        frame_stack=1,
+        num_eval_envs=args.num_eval_envs,
+        eval_record_dir=eval_record_dir,
+        capture_video=args.capture_video,
         video_fps=args.video_fps,
-        max_steps_per_video=args.num_eval_steps,
-        per_camera_rgbd=args.per_camera_rgbd,
+        num_eval_steps=args.num_eval_steps,
+        backend_config=backend_config,
     )
-    env = make_maniskill_env(env_cfg)
-    eval_env = make_maniskill_env(eval_cfg)
+    env, eval_env = make_training_envs(args.env_backend, req)
 
-    # NOTE: encoder="vit" yields the flat ViT image encoder via CombinedExtractor.
-    # The structured ViTTokenAndPropExtractor path is SAC-family only.
-    # TODO(ppo-vit): wire structured ViT for PPO (see EncoderSpec in
-    # rl_garden/common/cli_args.py).
-    factory = image_encoder_factory_from_args(args)
-    image_keys = image_keys_from_env(env, args)
+    image_kwargs: dict = {}
+    if is_visual:
+        factory = image_encoder_factory_from_args(args)
+        image_keys = image_keys_from_env(env, args)
+        image_kwargs = dict(
+            image_keys=image_keys,
+            image_encoder_factory=factory,
+            image_fusion_mode=args.image_fusion_mode,
+        )
 
     agent = PPO(
         env=env,
@@ -139,9 +126,7 @@ def main() -> None:
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
         save_final_checkpoint=args.save_final_checkpoint,
-        image_keys=image_keys,
-        image_encoder_factory=factory,
-        image_fusion_mode=args.image_fusion_mode,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
@@ -152,5 +137,24 @@ def main() -> None:
     eval_env.close()
 
 
-if __name__ == "__main__":
-    main()
+# ---------------------------------------------------------------------------
+# Args + registration
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass  # noqa: E402
+
+from rl_garden.common.cli_args import VisionPPOTrainingArgs  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
+from rl_garden.training.online._registry import registry  # noqa: E402
+
+
+@dataclass
+class PPOArgs(VisionPPOTrainingArgs, EnvBackendArgs):
+    """PPO — visual defaults; pass ``--obs_mode state`` for state obs.
+
+    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    ManiSkill-specific: ``--maniskill.sim_backend``, ``--maniskill.render_backend``.
+    """
+
+
+registry.register("ppo", PPOArgs, run_ppo)

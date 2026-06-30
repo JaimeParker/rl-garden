@@ -11,7 +11,6 @@ import pytest
 from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
     LoggingArgs,
-    OfflineVisionArgs,
     SACTrainingArgs,
     VisionArgs,
     WSRLTrainingArgs,
@@ -24,6 +23,7 @@ from rl_garden.common.cli_args import (
     warn_if_wsrl_warmup_uses_uninitialized_policy,
     wsrl_initial_training_phase_from_args,
 )
+from rl_garden.training.offline._args import OfflineVisionArgs
 
 
 def _args(script_name: str):
@@ -44,7 +44,7 @@ def _load_example_module(script_name: str):
 
 
 def test_state_sac_defaults_match_existing_cli() -> None:
-    args = _args("train_sac_state.py")
+    args = SACTrainingArgs()
 
     assert args.env_id == "PickCube-v1"
     assert args.control_mode == "pd_joint_delta_pos"
@@ -56,7 +56,8 @@ def test_state_sac_defaults_match_existing_cli() -> None:
 
 
 def test_rgbd_sac_defaults_match_existing_cli() -> None:
-    args = _args("train_sac_rgbd.py")
+    from rl_garden.training.online.sac import SACArgs
+    args = SACArgs()
 
     assert args.env_id == "PickCube-v1"
     assert args.obs_mode == "rgb"
@@ -128,8 +129,10 @@ def test_wsrl_uninitialized_warmup_warning_describes_actual_behavior() -> None:
 
 
 def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
-    module = _load_example_module("train_wsrl_rgbd.py")
-    args = module.Args(
+    from rl_garden.training.off2on._wsrl_runner import _switch_to_online_mode
+    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+
+    args = WSRLOff2OnArgs(
         num_offline_steps=0,
         warmup_steps=0,
         online_replay_mode="mixed",
@@ -145,7 +148,7 @@ def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
         },
     )()
 
-    module._switch_to_online_mode(agent, args, logger=None)
+    _switch_to_online_mode(agent, args, logger=None)
 
     assert agent.switch_kwargs == {
         "online_replay_mode": "mixed",
@@ -153,35 +156,79 @@ def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
     }
 
 
-def test_robotwin_sac_defaults_are_memory_safe() -> None:
-    args = _args("train_sac_robotwin_rgbd.py")
+def _make_rt_req(
+    rt,
+    *,
+    num_envs: int = 2,
+    num_eval_envs: int = 2,
+    capture_video: bool = False,
+    reward_scale: float = 1.0,
+    reward_bias: float = 0.0,
+):
+    from rl_garden.envs.backend_registry import EnvRequest
 
-    assert args.env_id == "place_shoe"
-    assert args.camera_width == 64
-    assert args.camera_height == 64
-    assert args.buffer_device == "cuda"
-    assert args.buffer_size == 100_000
-    assert args.batch_size == 512
-    assert args.utd == 0.25
-    assert args.include_wrist_cameras is True
-    assert args.reward_mode == "dense"
-    assert args.control_mode == "delta_joint_pos"
+    return EnvRequest(
+        env_id="place_shoe",
+        num_envs=num_envs,
+        num_eval_envs=num_eval_envs,
+        obs_mode="rgb",
+        control_mode="delta_joint_pos",
+        render_mode="rgb_array",
+        seed=1,
+        camera_width=64,
+        camera_height=64,
+        capture_video=capture_video,
+        reward_scale=reward_scale,
+        reward_bias=reward_bias,
+        backend_config=rt,
+    )
 
 
-def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_sac_robotwin_rgbd.py")
-    captured = {}
+def test_robotwin_config_defaults() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
 
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
+    rt = RoboTwinConfig()
 
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
+    assert rt.include_wrist_cameras is True
+    assert rt.reward_mode == "dense"
+    assert rt.step_lim == 400
+    assert rt.planner_backend == "mplib"
+    assert rt.embodiment == ["aloha-agilex"]
+    assert rt.wrist_camera_type == "D435"
+    assert rt.head_camera_type == "D435"
+    assert rt.device == "auto"
+    assert rt.joint_delta_scale == 0.05
+    assert rt.gripper_delta_scale == 0.2
+    assert rt.disable_topp is False
+    assert rt.random_light is False
 
-    cfg = module._make_env(args, num_envs=3, is_eval=True)
 
-    assert cfg is captured["cfg"]
+def test_env_backend_args_resolves_registered_config_without_algorithm_branching() -> None:
+    from rl_garden.common.env_args import EnvBackendArgs
+
+    args = EnvBackendArgs(env_backend="robotwin")
+
+    assert args.resolve_backend_config() is args.robotwin
+
+
+def test_env_backend_args_rejects_unknown_backend() -> None:
+    from rl_garden.common.env_args import EnvBackendArgs
+
+    args = EnvBackendArgs(env_backend="missing")
+
+    with pytest.raises(KeyError, match="Available.*maniskill.*robotwin"):
+        args.resolve_backend_config()
+
+
+def test_robotwin_backend_make_cfg_64px() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    rt = RoboTwinConfig()
+    req = _make_rt_req(rt, num_envs=3, num_eval_envs=3, capture_video=True)
+
+    cfg = RoboTwinBackend._make_cfg(req, is_eval=True)
+
     assert cfg.num_envs == 3
     assert cfg.image_size == (64, 64)
     assert cfg.include_wrist_cameras is True
@@ -195,20 +242,15 @@ def test_robotwin_sac_make_env_uses_64px_images(monkeypatch: pytest.MonkeyPatch)
     assert cfg.task_config["eval_video_log"] is True
 
 
-def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_ppo_robotwin_rgbd.py")
-    captured = {}
+def test_robotwin_backend_make_cfg_device() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
+    rt = RoboTwinConfig()
+    req = _make_rt_req(rt, num_envs=2)
 
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
+    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
 
-    cfg = module._make_env(args, num_envs=2)
-
-    assert cfg is captured["cfg"]
     assert cfg.num_envs == 2
     assert cfg.device == "auto"
     assert cfg.image_size == (64, 64)
@@ -223,46 +265,36 @@ def test_robotwin_ppo_make_env_uses_auto_device(monkeypatch: pytest.MonkeyPatch)
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
 
 
-def test_robotwin_ppo_make_env_can_disable_wrist_cameras(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_ppo_robotwin_rgbd.py")
-    captured = {}
+def test_robotwin_backend_disable_wrist_cameras() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
+    rt = RoboTwinConfig(include_wrist_cameras=False)
+    req = _make_rt_req(rt, num_envs=2)
 
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
-    args.collect_wrist_camera = False
+    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
 
-    cfg = module._make_env(args, num_envs=2)
-
-    assert cfg is captured["cfg"]
     assert cfg.include_wrist_cameras is False
     assert cfg.task_config["camera"]["collect_wrist_camera"] is False
 
 
-def test_robotwin_ppo_make_env_forwards_profile_timing(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_ppo_robotwin_rgbd.py")
-    captured = {}
+def test_robotwin_backend_forwards_all_options() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
+    rt = RoboTwinConfig(
+        profile_timing=True,
+        profile_interval=7,
+        render_every_control_step=True,
+        control_step_cap=16,
+        random_light=True,
+        crazy_random_light_rate=0.1,
+        head_camera_type="Train_D435_128x96",
+    )
+    req = _make_rt_req(rt, num_envs=2, reward_scale=2.0, reward_bias=-1.0)
 
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
-    args.profile_timing = True
-    args.profile_interval = 7
-    args.render_every_control_step = True
-    args.control_step_cap = 16
-    args.random_light = True
-    args.crazy_random_light_rate = 0.1
-    args.head_camera_type = "Train_D435_128x96"
+    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
 
-    cfg = module._make_env(args, num_envs=2)
-
-    assert cfg is captured["cfg"]
     assert cfg.profile_timing is True
     assert cfg.profile_interval == 7
     assert cfg.render_every_control_step is True
@@ -273,23 +305,19 @@ def test_robotwin_ppo_make_env_forwards_profile_timing(monkeypatch: pytest.Monke
     assert cfg.task_config["render_every_control_step"] is True
     assert cfg.task_config["control_step_cap"] == 16
     assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"
+    assert cfg.reward_scale == 2.0
+    assert cfg.reward_bias == -1.0
 
 
-def test_robotwin_ppo_make_env_can_disable_topp(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_example_module("train_ppo_robotwin_rgbd.py")
-    captured = {}
+def test_robotwin_backend_disable_topp() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    def fake_make_robotwin_env(cfg):
-        captured["cfg"] = cfg
-        return cfg
+    rt = RoboTwinConfig(disable_topp=True)
+    req = _make_rt_req(rt, num_envs=2)
 
-    monkeypatch.setattr(module, "make_robotwin_env", fake_make_robotwin_env)
-    args = module.Args()
-    args.disable_topp = True
+    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
 
-    cfg = module._make_env(args, num_envs=2)
-
-    assert cfg is captured["cfg"]
     assert cfg.task_config["need_topp"] is False
 
 
@@ -309,7 +337,7 @@ def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
 
 
 def test_state_wsrl_defaults_match_existing_cli() -> None:
-    args = _args("train_wsrl.py")
+    args = WSRLTrainingArgs()
 
     assert args.env_id == "PickCube-v1"
     assert args.num_offline_steps == 0
@@ -323,7 +351,9 @@ def test_state_wsrl_defaults_match_existing_cli() -> None:
 
 
 def test_rgbd_wsrl_defaults_match_existing_cli() -> None:
-    args = _args("train_wsrl_rgbd.py")
+    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+
+    args = WSRLOff2OnArgs()
 
     assert args.obs_mode == "rgb"
     assert args.camera_width == 128

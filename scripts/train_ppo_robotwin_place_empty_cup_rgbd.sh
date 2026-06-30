@@ -80,23 +80,25 @@ exec env \
     RLG_LOG_TYPE="$LOG_TYPE" \
     RLG_LOG_KEYWORDS="$LOG_KEYWORDS" \
     ROBOT_PLATFORM="${ROBOT_PLATFORM:-ALOHA}" \
-    "$PYTHON_BIN" -u "$REPO_DIR/examples/train_ppo_robotwin_rgbd.py" \
+    "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" ppo \
+    --env-backend robotwin \
+    --obs-mode rgb \
     --env-id place_empty_cup \
-    --robotwin-root "$ROBOTWIN_ROOT" \
-    --assets-path "$ASSETS_PATH_ARG" \
-    --head-camera-type Train_D435_128x96 \
+    --robotwin.robotwin-root "$ROBOTWIN_ROOT" \
+    --robotwin.assets-path "$ASSETS_PATH_ARG" \
+    --robotwin.head-camera-type Train_D435_128x96 \
     --camera-width 64 \
     --camera-height 64 \
     --num-envs 4 \
     --num-eval-envs 2 \
     --total-timesteps 1000000 \
     --num-steps 16 \
-    --step-lim 200 \
-    --embodiment piper piper 0.6 \
-    --no-collect-wrist-camera \
+    --robotwin.step-lim 200 \
+    --robotwin.embodiment piper piper 0.6 \
+    --no-robotwin.include-wrist-cameras \
     --encoder plain_conv \
     --image-fusion-mode per_key \
-    --reward-mode dense \
+    --robotwin.reward-mode dense \
     --control-mode delta_joint_pos \
-    --control-step-cap 16 \
+    --robotwin.control-step-cap 16 \
     "${FORWARD_ARGS[@]}"

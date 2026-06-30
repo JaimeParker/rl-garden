@@ -174,24 +174,10 @@ def test_run_offline_pretraining_can_skip_final_checkpoint(tmp_path):
     assert not (tmp_path / "offline_pretrained.pt").exists()
 
 
-def test_pretrain_offline_accepts_wsrl_algorithm():
-    """Both ``--algorithm wsrl`` and the deprecated ``wsrl-calql`` build WSRL.
-
-    This exercises the CLI normalization in examples/pretrain_offline.py
-    indirectly: ``OfflinePretrainArgs.algorithm`` must accept both values and
-    ``build_offline_agent`` must dispatch them to the same code path.
-    """
-    import sys
-    import warnings as _warnings
-    from pathlib import Path
-
-    examples_dir = Path(__file__).resolve().parents[1] / "examples"
-    if str(examples_dir) not in sys.path:
-        sys.path.insert(0, str(examples_dir))
-    from pretrain_offline import build_offline_agent  # type: ignore[import-not-found]
-
+def test_offline_registry_builders_create_wsrl_and_iql():
     from rl_garden.algorithms import IQL, OfflineEnvSpec, WSRL
-    from rl_garden.common.cli_args import OfflinePretrainArgs
+    from rl_garden.training.offline.iql import IQLArgs, build_iql
+    from rl_garden.training.offline.wsrl import WSRLOfflineArgs, build_wsrl
 
     obs_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=float)
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
@@ -207,10 +193,7 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
         critic_subsample_size=2,
         cql_n_actions=4,
         cql_alpha=1.0,
-        training_freq=1,
         log_type="none",
-        # torch.compile internally emits unrelated DeprecationWarnings; the
-        # filter below targets our wsrl-calql alias warning, not torch's.
         use_compile=False,
     )
 
@@ -227,20 +210,16 @@ def test_pretrain_offline_accepts_wsrl_algorithm():
         def close(self):
             pass
 
-    args_new = OfflinePretrainArgs(algorithm="wsrl", **base_kwargs)
-    with _warnings.catch_warnings():
-        _warnings.simplefilter("error", DeprecationWarning)
-        agent_new = build_offline_agent(args_new, env_spec, _NoopLogger(), "wsrl")
-    assert isinstance(agent_new, WSRL)
+    args_wsrl = WSRLOfflineArgs(training_freq=1, **base_kwargs)
+    assert isinstance(build_wsrl(args_wsrl, env_spec, _NoopLogger()), WSRL)
 
-    args_legacy = OfflinePretrainArgs(algorithm="wsrl-calql", **base_kwargs)
-    agent_legacy = build_offline_agent(
-        args_legacy, env_spec, _NoopLogger(), "wsrl-calql"
-    )
-    assert isinstance(agent_legacy, WSRL)
-
-    args_iql = OfflinePretrainArgs(algorithm="iql", **base_kwargs)
-    agent_iql = build_offline_agent(args_iql, env_spec, _NoopLogger(), "iql")
+    iql_kwargs = {
+        key: value
+        for key, value in base_kwargs.items()
+        if key not in {"cql_n_actions", "cql_alpha", "use_compile"}
+    }
+    args_iql = IQLArgs(device="cpu", **iql_kwargs)
+    agent_iql = build_iql(args_iql, env_spec, _NoopLogger())
     assert isinstance(agent_iql, IQL)
 
 
@@ -251,18 +230,10 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
     to a flat ``obs_mode="state"`` ManiSkill env, which crashes BC/IQL
     policies built for per-camera RGB+state Dict observation spaces.
     """
-    import sys
-    from pathlib import Path
+    from rl_garden.training.offline._runner import _eval_env_request
+    from rl_garden.training.offline.bc import BCArgs
 
-    examples_dir = Path(__file__).resolve().parents[1] / "examples"
-    if str(examples_dir) not in sys.path:
-        sys.path.insert(0, str(examples_dir))
-    from pretrain_offline import _eval_env_config  # type: ignore[import-not-found]
-
-    from rl_garden.common.cli_args import OfflinePretrainArgs
-
-    args = OfflinePretrainArgs(
-        algorithm="bc",
+    args = BCArgs(
         offline_dataset_path="/tmp/unused.h5",
         env_id="StackCube-v1",
         num_eval_envs=16,
@@ -275,15 +246,14 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
         reward_bias=-1.0,
     )
 
-    cfg = _eval_env_config(args)
+    req = _eval_env_request(args)
 
-    assert cfg.env_id == "StackCube-v1"
-    assert cfg.num_envs == 16
-    assert cfg.obs_mode == "rgb"
-    assert cfg.include_state is True
-    assert cfg.per_camera_rgbd is True
-    assert cfg.camera_width == 64
-    assert cfg.camera_height == 64
-    assert cfg.reward_scale == 2.0
-    assert cfg.reward_bias == -1.0
-    assert cfg.reconfiguration_freq == 1
+    assert req.env_id == "StackCube-v1"
+    assert req.num_eval_envs == 16
+    assert req.obs_mode == "rgb"
+    assert req.include_state is True
+    assert req.per_camera_rgbd is True
+    assert req.camera_width == 64
+    assert req.camera_height == 64
+    assert req.reward_scale == 2.0
+    assert req.reward_bias == -1.0

@@ -7,9 +7,9 @@ Brief for AI coding agents working on `rl-garden`. For broader context, read
 
 ## Execution Environment
 
-`rl-garden` is a PyTorch-native SAC framework for ManiSkill. Training is GPU-first: normal rollouts, replay buffers, sampled batches, policy inference, and updates should stay on CUDA tensors.
+`rl-garden` is a PyTorch-native Reinforcement Learning framework. Training is GPU-first: normal rollouts, replay buffers, sampled batches, policy inference, and updates should stay on CUDA tensors.
 
-CPU simulator paths are compatibility fallbacks only, mainly for short local smoke tests or CPU-backed ManiSkill envs such as `physx_cpu`. Do not make CPU the default training path.
+For Maniskill, CPU simulator paths are compatibility fallbacks only, mainly for short local smoke tests or CPU-backed ManiSkill envs such as `physx_cpu`. Do not make CPU the default training path.
 
 For remote training/evaluation/debugging, read `.agents/rules/remote-training-sop.md`.
 For Mutagen sync setup or repair, read `.agents/rules/mutagen-sync-sop.md`.
@@ -41,11 +41,12 @@ Core design constraints:
 - `rl_garden/buffers/` - GPU-native tensor (`TensorReplayBuffer`) and dict (`DictReplayBuffer`) replay buffers, plus MC-return variants (`MCTensorReplayBuffer`, `MCDictReplayBuffer`).
 - `rl_garden/encoders/` - flatten, plain CNN, combined RGBD/proprio, pooling, FiLM, augmentation, and ResNet encoders.
 - `rl_garden/networks/` - `EnsembleQCritic`, `SquashedGaussianActor`, MLP/MLPResNet backbone builders.
-- `rl_garden/common/` - `Logger`, `cli_args` (tyro dataclasses), `checkpoint` (`.pt` I/O), `optim`, types, utilities.
+- `rl_garden/common/` - `Logger`, `cli_args` (tyro dataclasses), `env_args` (`EnvBackendArgs` + per-backend configs), `checkpoint` (`.pt` I/O), `optim`, types, utilities.
 - `rl_garden/datasets/` - WSRL dataset generation from SAC checkpoints.
-- `rl_garden/envs/` - ManiSkill env factory (`ManiSkillEnvConfig` + `make_maniskill_env()`), plus vendored custom ManiSkill envs and wrappers.
+- `rl_garden/envs/` - ManiSkill + RoboTwin env factories, `backend_registry` (`EnvRequest` + `make_training_envs()`), `backends/` (ManiSkill and RoboTwin backend implementations), plus vendored custom ManiSkill envs.
+- `rl_garden/training/` - Shared registry base plus independent `online/`, `offline/`, and `off2on/` algorithm packages. Public modules contain an Args dataclass, run function, and package-local registry call.
 - `robot_infra/teleop/` - EE twist teleoperation interface (Pico/spacemouse) and WSRL recording.
-- `examples/` - Python training entrypoints (`train_sac_state`, `train_sac_rgbd`, `train_sac_rgbd_peg`, `train_wsrl`, `train_wsrl_rgbd`, `pretrain_offline`, `pretrain_cql_offline`, `pretrain_wsrl_offline`, `generate_wsrl_dataset`).
+- `examples/` - Python training entrypoints (`train_online` thin dispatcher, `train_off2on` WSRL offline→online, `train_sac_rgbd_peg`, `pretrain_offline`, `generate`).
 - `scripts/` - shell launchers for common training runs.
 - `tests/` - CPU unit tests and CUDA ManiSkill smoke tests (20 test files).
 - `3rd_party/` - reference submodules and external clones. Do not edit these unless the user explicitly asks.
@@ -61,13 +62,47 @@ State SAC:
 
 ```bash
 scripts/train_sac_state.sh
+# equivalent: python examples/train_online.py sac --obs_mode state --env_id PickCube-v1 ...
 ```
 
-Generic RGB SAC:
+Generic RGB/RGBD SAC:
 
 ```bash
 scripts/train_sac_rgbd.sh --encoder plain_conv
 scripts/train_sac_rgbd.sh --encoder resnet10
+# equivalent: python examples/train_online.py sac --env_id PickCube-v1 --encoder plain_conv ...
+```
+
+DrQ-v2:
+
+```bash
+scripts/train_drqv2_rgb.sh
+# equivalent: python examples/train_online.py drqv2 --env_id PickCube-v1 ...
+```
+
+FlashSAC:
+
+```bash
+python examples/train_online.py flash_sac --env_id PickCube-v1 ...
+```
+
+PPO (state):
+
+```bash
+python examples/train_online.py ppo --env_id PickCube-v1 --obs_mode state ...
+```
+
+PPO (visual):
+
+```bash
+python examples/train_online.py ppo --env_id PickCube-v1 --obs_mode rgb ...
+```
+
+WSRL offline→online:
+
+```bash
+scripts/train_wsrl_rgbd.sh
+# equivalent: python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode rgb ...
 ```
 
 Peg-only RGB SAC with GPU defaults:
@@ -85,6 +120,12 @@ The peg launcher uses:
 - `panda_wristcam_gripper_closed_wo_norm`
 - `pd_ee_delta_pose`
 - RGB observations with state included
+
+All registry-managed training entrypoints accept `--print-config`. It prints the
+resolved recursive JSON configuration and exits without creating environments,
+loggers, or agents. Normal runs always save the same configuration under
+`{log_dir}/{run_name}/config.json`. Logging environment variables provide CLI
+defaults; explicit CLI flags take precedence.
 
 Short local peg smoke fallback, when CPU simulator mode is needed:
 
@@ -111,25 +152,22 @@ Use `MPLCONFIGDIR=/tmp` when running ManiSkill commands if matplotlib cache warn
 
 ## Offline Pretraining (No Sim Env)
 
-Use `examples/pretrain_offline.py` with `--algorithm` to pretrain from a flat
+Use an `examples/pretrain_offline.py` algorithm subcommand to pretrain from a flat
 ManiSkill H5 dataset without spinning up a simulator env:
 
 ```bash
 # Cal-QL (default, best for offline→online transfer)
-python examples/pretrain_offline.py --algorithm calql \
+python examples/pretrain_offline.py calql \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
 
 # CQL (pure conservative Q-learning)
-python examples/pretrain_offline.py --algorithm cql \
+python examples/pretrain_offline.py cql \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
 
 # WSRL agent (Cal-QL backbone, for later WSRL offline→online flow)
-python examples/pretrain_offline.py --algorithm wsrl \
+python examples/pretrain_offline.py wsrl \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
 ```
-
-`--algorithm wsrl-calql` is a deprecated alias for `wsrl` that still works for
-backward compatibility.
 
 `scripts/pretrain_offline.sh` wraps `pretrain_offline.py` for shell launches.
 
@@ -139,7 +177,7 @@ Pass `--env_id` to spin up a ManiSkill eval env during offline training for
 periodic success/return metrics:
 
 ```bash
-python examples/pretrain_offline.py --algorithm calql \
+python examples/pretrain_offline.py calql \
   --offline_dataset_path demos/pickcube.h5 \
   --env_id PickCube-v1 --eval_freq 1000 --num_eval_steps 50
 ```
@@ -196,7 +234,7 @@ separate `_replay_buffer.pt` file next to the checkpoint.
 Load a checkpoint later with:
 
 ```bash
-python examples/pretrain_offline.py --algorithm calql \
+python examples/pretrain_offline.py calql \
   --load_checkpoint runs/<run_name>/checkpoints/calql_offline_pretrained.pt
 ```
 
@@ -215,7 +253,9 @@ Before finishing code changes:
 
 ## Development Rules
 
-- Keep `examples/train_sac_rgbd.py` generic for standard ManiSkill RGBD SAC. Put peg-specific defaults in `examples/train_sac_rgbd_peg.py`.
+- Training examples are thin dispatchers — never edit them to add algorithms. Add a public module under `rl_garden/training/online/`, `offline/`, or `off2on/` with its Args class, run function, and package-local registry call. The corresponding entrypoint discovers it automatically.
+- New env backends go in `rl_garden/envs/backends/<name>.py` (subclass `EnvBackend`, call `register_env_backend`). Run functions access backend-specific settings via the `EnvRequest.backend_config` field — they never call `make_maniskill_env` directly.
+- Put peg-specific defaults in `examples/train_sac_rgbd_peg.py` (not in `train_online.py`).
 - Prefer extending `ManiSkillEnvConfig` and `make_maniskill_env()` for shared env features rather than duplicating wrapper logic in examples.
 - Prefer inheritance and method overrides in subclasses over modifying parent classes. When a new algorithm/policy/encoder needs a behavior the base does not yet expose, first try to satisfy it by overriding existing hooks. Only add a hook to the parent when it is generic-shaped (no algorithm-specific name or concept in its signature) and has a no-op or trivially correct default. Algorithm-specific field names (e.g., `base_actions`, `mc_returns`) belong in the subclass, not in mixin signatures or `hasattr` branches in parents. When parent-side variability is unavoidable, prefer a class attribute (e.g., `_extra_batch_slice_keys: tuple[str, ...] = ()`) that subclasses override, over special-case branches in the parent.
 - Preserve CUDA-first behavior. Do not introduce CPU copies on the normal GPU path.
@@ -242,9 +282,11 @@ Before finishing code changes:
 - Use `policy_kwargs` with `features_extractor_class` and `features_extractor_kwargs` for injection.
 - Add shape/device tests, and test CPU fallback only as compatibility behavior.
 
-### New Environment
+### New Environment Backend
 
-- Add reusable env factory support in `rl_garden/envs/maniskill.py` when the setting is broadly useful.
+- Create `rl_garden/envs/backends/<name>.py`: subclass `EnvBackend`, implement `make_train_env(req)` and `make_eval_env(req)`, call `register_env_backend("<name>", MyBackend)`.
+- Import the new backend module in `rl_garden/envs/backends/__init__.py`.
+- Add a `<Name>Config` dataclass to `rl_garden/common/env_args.py` and reference it in `EnvBackendArgs`.
 - Add custom ManiSkill env registrations under `rl_garden/envs/custom/`.
 - Register custom envs lazily through `rl_garden.envs.register_custom_envs()`.
 - Keep env-specific training defaults in a dedicated example/script.
