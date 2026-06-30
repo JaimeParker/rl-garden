@@ -309,8 +309,11 @@ buffer_size = 100000
 Use larger images only with a smaller buffer or explicit CPU replay:
 
 ```bash
-python examples/train_sac_robotwin_rgbd.py \
+python examples/train_online.py sac \
+  --env-backend robotwin \
+  --obs-mode rgb \
   --env-id place_shoe \
+  --robotwin.robotwin-root /path/to/RoboTwin \
   --camera-width 224 \
   --camera-height 224 \
   --buffer-device cpu \
@@ -334,8 +337,8 @@ pip install -e ".[robotwin]"
 ```
 
 RoboTwin itself must be available separately. Either install it into the
-environment so `import envs.<task_name>` works, or pass `--robotwin-root` to a
-RoboTwin checkout.
+environment so `import envs.<task_name>` works, or pass
+`--robotwin.robotwin-root` to a RoboTwin checkout.
 
 The default PPO path is compatible with RoboTwin `main` and uses RoboTwin's
 standard `take_action()` API. We also tested RoboTwin's `RLinf_support` branch
@@ -348,7 +351,7 @@ RoboTwin may load curobo/warp during reset. In containers, set `HOME=/tmp` and
 directory instead of `/.cache` or a synced workspace. This avoids permission
 failures and root-owned cache files.
 
-When using `RLinf_support`, pass `--assets-path` as the RoboTwin repository
+When using `RLinf_support`, pass `--robotwin.assets-path` as the RoboTwin repository
 root, not the `assets/` subdirectory. That branch resolves assets as
 `$ASSETS_PATH/assets/...`.
 
@@ -356,20 +359,22 @@ Minimal PPO command:
 
 ```bash
 HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
-python examples/train_ppo_robotwin_rgbd.py \
+python examples/train_online.py ppo \
+  --env-backend robotwin \
+  --obs-mode rgb \
   --env-id place_shoe \
-  --robotwin-root /path/to/RoboTwin \
-  --head-camera-type Train_D435_128x96 \
+  --robotwin.robotwin-root /path/to/RoboTwin \
+  --robotwin.head-camera-type Train_D435_128x96 \
   --camera-width 64 \
   --camera-height 64 \
   --num-envs 4 \
   --num-eval-envs 2 \
   --total-timesteps 10000 \
   --num-steps 16 \
-  --step-lim 400 \
+  --robotwin.step-lim 400 \
   --encoder plain_conv \
   --image-fusion-mode per_key \
-  --reward-mode dense \
+  --robotwin.reward-mode dense \
   --control-mode delta_joint_pos
 ```
 
@@ -377,23 +382,25 @@ For `place_empty_cup`, prefer the RLinf-aligned defaults:
 
 ```bash
 HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
-python examples/train_ppo_robotwin_rgbd.py \
+python examples/train_online.py ppo \
+  --env-backend robotwin \
+  --obs-mode rgb \
   --env-id place_empty_cup \
-  --robotwin-root /path/to/RoboTwin \
-  --head-camera-type Train_D435_128x96 \
+  --robotwin.robotwin-root /path/to/RoboTwin \
+  --robotwin.head-camera-type Train_D435_128x96 \
   --camera-width 64 \
   --camera-height 64 \
   --num-envs 4 \
   --num-eval-envs 2 \
   --total-timesteps 10000 \
   --num-steps 16 \
-  --step-lim 200 \
-  --assets-path /path/to/RoboTwin \
-  --embodiment piper piper 0.6 \
-  --no-collect-wrist-camera \
+  --robotwin.step-lim 200 \
+  --robotwin.assets-path /path/to/RoboTwin \
+  --robotwin.embodiment piper piper 0.6 \
+  --robotwin.no-include-wrist-cameras \
   --encoder plain_conv \
   --image-fusion-mode per_key \
-  --reward-mode dense \
+  --robotwin.reward-mode dense \
   --control-mode delta_joint_pos
 ```
 
@@ -460,9 +467,11 @@ Minimal SAC command:
 
 ```bash
 HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
-python examples/train_sac_robotwin_rgbd.py \
+python examples/train_online.py sac \
+  --env-backend robotwin \
+  --obs-mode rgb \
   --env-id place_shoe \
-  --robotwin-root /path/to/RoboTwin \
+  --robotwin.robotwin-root /path/to/RoboTwin \
   --num-envs 4 \
   --num-eval-envs 2 \
   --total-timesteps 10000 \
@@ -470,10 +479,10 @@ python examples/train_sac_robotwin_rgbd.py \
   --training-freq 8 \
   --batch-size 32 \
   --buffer-size 1024 \
-  --step-lim 400 \
+  --robotwin.step-lim 400 \
   --encoder plain_conv \
   --image-fusion-mode per_key \
-  --reward-mode dense \
+  --robotwin.reward-mode dense \
   --control-mode delta_joint_pos \
   --buffer-device cuda
 ```
@@ -511,17 +520,19 @@ ssh <ssh-alias> "mkdir -p <remote-project-path>/logs && \
     cd <container-workspace-path> && \
     export PATH=<python-env-bin-path>:\\\$PATH && \
     export PYTHONPATH=<container-workspace-path>:<container-robotwin-root-path>:\\\${PYTHONPATH:-} && \
-    MPLCONFIGDIR=/tmp python -u examples/train_ppo_robotwin_rgbd.py \
+    MPLCONFIGDIR=/tmp python -u examples/train_online.py ppo \
+      --env-backend robotwin \
+      --obs-mode rgb \
       --env-id place_shoe \
-      --robotwin-root <container-robotwin-root-path> \
+      --robotwin.robotwin-root <container-robotwin-root-path> \
       --num-envs 4 \
       --num-eval-envs 2 \
       --total-timesteps 200000 \
       --num-steps 16 \
-      --step-lim 400 \
+      --robotwin.step-lim 400 \
       --encoder plain_conv \
       --image-fusion-mode per_key \
-      --reward-mode dense \
+      --robotwin.reward-mode dense \
   ' 2>&1 | tee <remote-project-path>/logs/rlg_robotwin_place_shoe_ppo_\$(date +%Y%m%d_%H%M%S).log\""
 ```
 

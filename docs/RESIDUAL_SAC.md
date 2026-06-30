@@ -200,7 +200,7 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_sac_state_peg.sh \
 - `--log_type tensorboard`：写 TensorBoard 日志。
 
 `scripts/train_residual_sac.sh` 保留为兼容别名，转发到 generic
-`scripts/train_residual_sac_rgbd.sh`。generic 入口参考 `train_sac_rgbd.py`，
+`scripts/train_residual_sac_rgbd.sh`。generic 入口参考注册制 SAC trainer，
 不会传 peg-only kwargs；peg-only 的 `fix_peg_pose`、`fix_box`、`robot_uids`
 和 `reward_mode` 只在 peg residual entrypoints 中出现。
 

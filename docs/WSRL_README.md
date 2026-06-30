@@ -55,10 +55,10 @@ pip install -e .
 
 ```bash
 # Online-only training (no offline pre-training)
-python examples/train_wsrl.py --env_id PickCube-v1 --num_offline_steps 0
+python examples/train_off2on.py wsrl --env_id PickCube-v1 --num_offline_steps 0
 
 # Offline→online training
-python examples/train_wsrl.py \
+python examples/train_off2on.py wsrl \
     --env_id PickCube-v1 \
     --offline_dataset_path demos/pickcube_state.h5 \
     --num_offline_steps 100000 \
@@ -74,13 +74,13 @@ python examples/train_wsrl.py \
 
 ```bash
 # RGB observations with plain_conv encoder
-python examples/train_wsrl_rgbd.py \
+python examples/train_off2on.py wsrl \
     --env_id PickCube-v1 \
     --obs_mode rgb \
     --encoder plain_conv
 
 # RGBD observations with ResNet encoder
-python examples/train_wsrl_rgbd.py \
+python examples/train_off2on.py wsrl \
     --env_id PickCube-v1 \
     --obs_mode rgbd \
     --encoder resnet10
@@ -95,21 +95,21 @@ Use this when you have a static offline dataset (e.g., real-robot teleop H5)
 and want a pretrained actor + critic checkpoint without spinning up a sim
 env or running any eval.
 
-Use the generic offline pretraining entrypoint and select the algorithm with
-`--algorithm`:
+Use the generic offline pretraining entrypoint and pass the algorithm as a
+subcommand:
 
 ```bash
 # Pure offline CQL
-python examples/pretrain_offline.py \
-    --algorithm cql \
+python examples/pretrain_offline.py cql \
+
     --offline_dataset_path /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/cql_pretrain \
     --buffer_device cuda
 
 # Pure offline Cal-QL
-python examples/pretrain_offline.py \
-    --algorithm calql \
+python examples/pretrain_offline.py calql \
+
     --offline_dataset_path /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/calql_pretrain \
@@ -117,8 +117,8 @@ python examples/pretrain_offline.py \
     --use_calql --cql_alpha 5.0
 
 # Equivalent shell launchers
-scripts/pretrain_offline.sh --algorithm cql --offline_dataset_path /path/to/real_robot.h5
-scripts/pretrain_offline.sh --algorithm calql --offline_dataset_path /path/to/real_robot.h5
+scripts/pretrain_offline.sh cql --offline_dataset_path /path/to/real_robot.h5
+scripts/pretrain_offline.sh calql --offline_dataset_path /path/to/real_robot.h5
 ```
 
 These write `cql_offline_pretrained.pt` or `calql_offline_pretrained.pt` by
@@ -126,13 +126,13 @@ default. The script infers obs/action specs from the H5, constructs an
 `OfflineEnvSpec`, loads the dataset into the algorithm replay buffer, and runs
 `run_offline_pretraining()`.
 
-For WSRL-specific offline pretraining, use `--algorithm wsrl`. It builds a
+For WSRL-specific offline pretraining, use the `wsrl` subcommand. It builds a
 `WSRL` agent directly (Cal-QL by definition) and is useful when the checkpoint
 will be resumed by WSRL's offline→online flow:
 
 ```bash
-python examples/pretrain_offline.py \
-    --algorithm wsrl \
+python examples/pretrain_offline.py wsrl \
+
     --offline_dataset_path /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/robot_pretrain \
@@ -146,15 +146,10 @@ The WSRL mode writes
 contains the policy, critic ensemble, target critic, optimizer state, and
 Lagrange multipliers — everything needed to resume.
 
-`--algorithm wsrl-calql` is a deprecated alias for `--algorithm wsrl`; it still
-works but emits a `DeprecationWarning`. `examples/pretrain_cql_offline.py` and
-`examples/pretrain_wsrl_offline.py` remain as thin compatibility wrappers for
-older commands.
-
 **Online fine-tune on a deployment machine** (which does have an env):
 
 ```bash
-python examples/train_wsrl.py \
+python examples/train_off2on.py wsrl \
     --env_id <your_env_id> \
     --load_checkpoint runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt \
     --num_offline_steps 0 \
@@ -227,11 +222,11 @@ retention, override:
 
 ```bash
 # WSRL paper recipe (default — no flags needed)
-python examples/train_wsrl.py --env_id <id> --offline_dataset_path <h5> \
+python examples/train_off2on.py wsrl --env_id <id> --offline_dataset_path <h5> \
     --num_offline_steps 200000 --num_online_steps 200000
 
 # Cal-QL retention recipe
-python examples/train_wsrl.py --env_id <id> --offline_dataset_path <h5> \
+python examples/train_off2on.py wsrl --env_id <id> --offline_dataset_path <h5> \
     --num_offline_steps 200000 --num_online_steps 200000 \
     --online_use_cql_loss True --online_cql_alpha 5.0 \
     --online_replay_mode mixed --offline_data_ratio 0.5
@@ -257,11 +252,9 @@ either pure WSRL (CQL off) or Cal-QL retention (mixed/append buffer).
   recompile transients from real unlearning when reading post-switch curves
 
 ### Standalone Offline CQL/Cal-QL Control
-- `--algorithm cql`: Use `CQL` with a normal tensor replay buffer.
-- `--algorithm calql`: Use `CalQL` with an MC replay buffer and Cal-QL bounds.
-- `--algorithm wsrl`: Build `WSRL` for checkpoints intended for the WSRL
-  offline→online flow. `wsrl-calql` is accepted as a deprecated alias.
-- `--agent cql|calql`: Backward-compatible alias accepted by the CQL wrapper.
+- `cql`: Use `CQL` with a normal tensor replay buffer.
+- `calql`: Use `CalQL` with an MC replay buffer and Cal-QL bounds.
+- `wsrl`: Build `WSRL` for checkpoints intended for the WSRL offline→online flow.
 - `--save_filename`: Override the default
   `<algorithm>_offline_pretrained.pt` checkpoint name.
 - `--offline_sampling without_replace`: Sample offline batches without repeating
@@ -295,8 +288,8 @@ and `_target_q` with `torch.compile(mode="default")`. First step pays a
 
 ```bash
 # Enable compile-based acceleration
-python examples/pretrain_offline.py \
-    --algorithm wsrl \
+python examples/pretrain_offline.py wsrl \
+
     --offline_dataset_path real_robot.h5 \
     --num_offline_steps 100000 \
     --batch_size 1024 \

@@ -34,12 +34,12 @@ off-policy learning, not a bug in the checkpoint mechanism.
 
 ```bash
 # Resume SAC training from checkpoint
-python examples/train_sac_state.py \
+python examples/train_online.py sac --obs_mode state \
   --load_checkpoint runs/<run>/checkpoints/final.pt \
   --total_timesteps 500000
 
 # Load with replay buffer
-python examples/train_sac_state.py \
+python examples/train_online.py sac --obs_mode state \
   --load_checkpoint runs/<run>/checkpoints/final.pt \
   --load_replay_buffer True \
   --total_timesteps 500000

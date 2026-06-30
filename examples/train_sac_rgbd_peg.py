@@ -15,14 +15,16 @@ import tyro
 from rl_garden.algorithms import SAC
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
-    VisionSACTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_env,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
-    sac_initial_training_phase_from_args,
     vit_sac_kwargs_from_args,
+)
+from rl_garden.training.online._args import (
+    VisionSACTrainingArgs,
+    sac_initial_training_phase_from_args,
 )
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 
