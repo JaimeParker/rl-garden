@@ -253,10 +253,14 @@ class SACCore:
             )
             if self._backup_entropy_enabled():
                 min_q_next = min_q_next - alpha * next_log_prob
-            target = data.rewards.reshape(-1, 1) + (
-                1 - data.dones.reshape(-1, 1)
-            ) * self.gamma * min_q_next
+            target = (
+                data.rewards.reshape(-1, 1)
+                + self._target_discounts(data) * min_q_next
+            )
         return target
+
+    def _target_discounts(self, data) -> torch.Tensor:
+        return (1 - data.dones.reshape(-1, 1)) * self.gamma
 
     def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         target_q = self._target_q(data)

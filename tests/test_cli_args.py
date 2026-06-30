@@ -61,11 +61,13 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.env_id == "PickCube-v1"
     assert args.obs_mode == "rgb"
     assert args.include_state is True
+    assert args.frame_stack == 1
     assert args.camera_width == 64
     assert args.camera_height == 64
     assert args.buffer_size == 200_000
     assert args.batch_size == 512
     assert args.utd == 0.25
+    assert args.nstep == 1
     assert args.encoder == "plain_conv"
     assert args.n_critics == 2
     assert args.critic_subsample_size is None
