@@ -8,7 +8,10 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import SAC
+from rl_garden.buffers.dict_buffer import DictReplayBuffer
+from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
 from rl_garden.common.checkpoint import checkpoint_dict, save_checkpoint_file
+from rl_garden.common.types import NStepReplayBufferSample
 from rl_garden.common.training_phase import InitialTrainingPhase
 
 
@@ -116,7 +119,12 @@ def _fill(agent: SAC, steps: int = 8) -> None:
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
-        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+        kwargs = (
+            {"episode_end": torch.zeros(env.num_envs, dtype=torch.bool)}
+            if agent.nstep > 1
+            else {}
+        )
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones, **kwargs)
 
 
 def _fill_dict(agent: SAC, steps: int = 8) -> None:
@@ -143,7 +151,12 @@ def _fill_dict(agent: SAC, steps: int = 8) -> None:
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
-        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+        kwargs = (
+            {"episode_end": torch.zeros(env.num_envs, dtype=torch.bool)}
+            if agent.nstep > 1
+            else {}
+        )
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones, **kwargs)
 
 
 def _clone_params(module: torch.nn.Module) -> list[torch.Tensor]:
@@ -193,6 +206,34 @@ def test_sac_core_high_utd_update_runs():
     info = agent.train(gradient_steps=2, compute_info=True)
 
     assert agent._global_update == 2
+    assert info["utd_ratio"] == 2.0
+    assert torch.isfinite(torch.tensor(info["critic_loss"]))
+
+
+def test_sac_nstep_defaults_to_existing_replay_buffer():
+    agent = _dict_agent()
+
+    assert agent.nstep == 1
+    assert agent._extra_batch_slice_keys == ()
+    assert isinstance(agent.replay_buffer, DictReplayBuffer)
+    assert not isinstance(agent.replay_buffer, NStepDictReplayBuffer)
+
+
+def test_sac_nstep_uses_buffer_discounts_and_supports_high_utd():
+    agent = _dict_agent(nstep=3, gamma=0.8, utd=2.0, batch_size=8)
+    _fill_dict(agent)
+
+    assert isinstance(agent.replay_buffer, NStepDictReplayBuffer)
+    assert agent._extra_batch_slice_keys == ("discounts",)
+    data = agent.replay_buffer.sample(agent.batch_size)
+    assert isinstance(data, NStepReplayBufferSample)
+    torch.testing.assert_close(
+        agent._target_discounts(data),
+        data.discounts.reshape(-1, 1),
+    )
+
+    info = agent.train(gradient_steps=2, compute_info=True)
+
     assert info["utd_ratio"] == 2.0
     assert torch.isfinite(torch.tensor(info["critic_loss"]))
 
