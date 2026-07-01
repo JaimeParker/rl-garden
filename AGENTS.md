@@ -8,6 +8,10 @@ for user-facing installation, features, and quick-start documentation.
 - Before changing training entrypoints, argument ownership, algorithm registration,
   environment backends, or replay/device behavior, read
   [`.agents/rules/training-development.md`](.agents/rules/training-development.md).
+- Before adding a new environment backend, read
+  [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
+- Before adding a new algorithm or training entrypoint, read
+  [`.agents/rules/adding-algorithm.md`](.agents/rules/adding-algorithm.md).
 - Before launching training or evaluation, read
   [`.agents/runbooks/training.md`](.agents/runbooks/training.md).
 - Before saving, loading, or resuming checkpoints, read

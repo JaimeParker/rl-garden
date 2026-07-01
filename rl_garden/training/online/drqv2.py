@@ -1,52 +1,9 @@
 """DrQ-v2 run function."""
 from __future__ import annotations
 
-def run_drqv2(args) -> None:
-    import time
 
-    from rl_garden.algorithms.ddpg import DDPG
-    from rl_garden.common import Logger, seed_everything
-    from rl_garden.common.cli_args import resolve_checkpoint_dir
-    from rl_garden.common.resolved_config import persist_resolved_config
-    from rl_garden.encoders import discover_image_keys
-    from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
-
-    if args.mmap_dir is not None and args.load_replay_buffer:
-        raise SystemExit(
-            "--load-replay-buffer is not supported with --mmap-dir; "
-            "use --mmap-mode open to resume the disk-backed buffer"
-        )
-    seed_everything(args.seed)
-
-    start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    run_name = (
-        args.exp_name
-        or f"{args.env_id}__drqv2__{args.seed}__{int(time.time())}"
-    )
-    checkpoint_dir = resolve_checkpoint_dir(args, run_name)
-    resolved_config = persist_resolved_config(
-        args,
-        training_phase="online",
-        algorithm="drqv2",
-        run_name=run_name,
-        log_dir=args.log_dir,
-    )
-    logger = Logger.create(
-        log_type=args.log_type,
-        log_dir=args.log_dir,
-        run_name=run_name,
-        config=resolved_config,
-        start_time=start_time,
-        log_keywords=args.log_keywords,
-        wandb_project=args.wandb_project,
-        wandb_entity=args.wandb_entity,
-        wandb_group=args.wandb_group or args.env_id,
-    )
-    logger.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n"
-        + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
-    )
+def _drqv2_env_request(args, run_name):
+    from rl_garden.envs.backend_registry import EnvRequest
 
     backend_config = args.resolve_backend_config()
     eval_record_dir = (
@@ -55,7 +12,7 @@ def run_drqv2(args) -> None:
         else args.eval_output_dir
         or f"{args.log_dir}/{run_name}/eval_videos"
     )
-    req = EnvRequest(
+    return EnvRequest(
         env_id=args.env_id,
         num_envs=args.num_envs,
         obs_mode=args.obs_mode,
@@ -75,9 +32,13 @@ def run_drqv2(args) -> None:
         create_eval_env=args.eval_freq > 0,
         backend_config=backend_config,
     )
-    env, eval_env = make_training_envs(args.env_backend, req)
-    image_keys = discover_image_keys(env.single_observation_space)
 
+
+def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms.ddpg import DDPG
+    from rl_garden.encoders import discover_image_keys
+
+    image_keys = discover_image_keys(env.single_observation_space)
     agent = DDPG(
         env=env,
         eval_env=eval_env,
@@ -124,13 +85,23 @@ def run_drqv2(args) -> None:
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
-    agent.learn(total_timesteps=args.total_timesteps)
-    agent.replay_buffer.flush()
+    return agent
 
-    logger.close()
-    env.close()
-    if eval_env is not None:
-        eval_env.close()
+
+def run_drqv2(args: DrQv2Args) -> None:
+    from rl_garden.training.online._runner import run_online
+
+    if args.mmap_dir is not None and args.load_replay_buffer:
+        raise SystemExit(
+            "--load-replay-buffer is not supported with --mmap-dir; "
+            "use --mmap-mode open to resume the disk-backed buffer"
+        )
+    run_online(
+        args,
+        make_env_request=_drqv2_env_request,
+        build_agent=build_drqv2,
+        post_learn=lambda agent: agent.replay_buffer.flush(),
+    )
 
 
 # ---------------------------------------------------------------------------

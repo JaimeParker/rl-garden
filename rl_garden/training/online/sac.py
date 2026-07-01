@@ -1,65 +1,15 @@
 """SAC run function."""
 from __future__ import annotations
 
-def run_sac(args) -> None:
-    import time
 
-    from rl_garden.algorithms import SAC
-    from rl_garden.common import Logger, seed_everything
-    from rl_garden.common.cli_args import (
-        image_encoder_factory_from_args,
-        image_keys_from_env,
-        resolve_checkpoint_dir,
-        resolve_eval_record_dir,
-        vit_sac_kwargs_from_args,
-    )
-    from rl_garden.common.resolved_config import persist_resolved_config
-    from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
-    from rl_garden.training.online._args import sac_initial_training_phase_from_args
+def _sac_env_request(args, run_name):
+    from rl_garden.common.cli_args import resolve_eval_record_dir
+    from rl_garden.envs.backend_registry import EnvRequest
 
-    seed_everything(args.seed)
-
-    import warnings
-    import torch
-    if args.buffer_device == "cuda" and not torch.cuda.is_available():
-        warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
-        args.buffer_device = "cpu"
-
-    start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     is_visual = args.obs_mode != "state"
-    obs_label = f"rgbd_{args.encoder}" if is_visual else "state"
-    run_name = (
-        args.exp_name
-        or f"{args.env_id}__sac_{obs_label}__{args.seed}__{int(time.time())}"
-    )
-    checkpoint_dir = resolve_checkpoint_dir(args, run_name)
-    resolved_config = persist_resolved_config(
-        args,
-        training_phase="online",
-        algorithm="sac",
-        run_name=run_name,
-        log_dir=args.log_dir,
-    )
-    logger = Logger.create(
-        log_type=args.log_type,
-        log_dir=args.log_dir,
-        run_name=run_name,
-        config=resolved_config,
-        start_time=start_time,
-        log_keywords=args.log_keywords,
-        wandb_project=args.wandb_project,
-        wandb_entity=args.wandb_entity,
-        wandb_group=args.wandb_group or args.env_id,
-    )
-    logger.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n"
-        + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
-    )
-
     backend_config = args.resolve_backend_config()
     eval_record_dir = resolve_eval_record_dir(args, run_name)
-    req = EnvRequest(
+    return EnvRequest(
         env_id=args.env_id,
         num_envs=args.num_envs,
         obs_mode=args.obs_mode,
@@ -78,8 +28,18 @@ def run_sac(args) -> None:
         num_eval_steps=args.num_eval_steps,
         backend_config=backend_config,
     )
-    env, eval_env = make_training_envs(args.env_backend, req)
 
+
+def build_sac(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms import SAC
+    from rl_garden.common.cli_args import (
+        image_encoder_factory_from_args,
+        image_keys_from_env,
+        vit_sac_kwargs_from_args,
+    )
+    from rl_garden.training.online._args import sac_initial_training_phase_from_args
+
+    is_visual = args.obs_mode != "state"
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
@@ -146,11 +106,20 @@ def run_sac(args) -> None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     if args.load_actor_checkpoint is not None:
         agent.load_actor_checkpoint(args.load_actor_checkpoint)
-    agent.learn(total_timesteps=args.total_timesteps)
+    return agent
 
-    logger.close()
-    env.close()
-    eval_env.close()
+
+def run_sac(args: SACArgs) -> None:
+    from rl_garden.training.online._runner import run_online
+
+    is_visual = args.obs_mode != "state"
+    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    run_online(
+        args,
+        obs_tag=obs_tag,
+        make_env_request=_sac_env_request,
+        build_agent=build_sac,
+    )
 
 
 # ---------------------------------------------------------------------------
