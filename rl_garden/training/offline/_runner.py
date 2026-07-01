@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import warnings
 from typing import Any, Callable
 
 import torch
@@ -65,7 +66,7 @@ def run_offline(
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
     if args.buffer_device == "cuda" and not torch.cuda.is_available():
-        print("[pretrain] CUDA not available; falling back to CPU buffer.")
+        warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
         args.buffer_device = "cpu"
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())

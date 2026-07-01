@@ -11,13 +11,19 @@ def run_sac(args) -> None:
         image_keys_from_env,
         resolve_checkpoint_dir,
         resolve_eval_record_dir,
-        sac_initial_training_phase_from_args,
         vit_sac_kwargs_from_args,
     )
     from rl_garden.common.resolved_config import persist_resolved_config
     from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
+    from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
     seed_everything(args.seed)
+
+    import warnings
+    import torch
+    if args.buffer_device == "cuda" and not torch.cuda.is_available():
+        warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
+        args.buffer_device = "cpu"
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     is_visual = args.obs_mode != "state"
@@ -153,8 +159,8 @@ def run_sac(args) -> None:
 
 from dataclasses import dataclass  # noqa: E402
 
-from rl_garden.common.cli_args import VisionSACTrainingArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
+from rl_garden.training.online._args import VisionSACTrainingArgs  # noqa: E402
 from rl_garden.training.online._registry import registry  # noqa: E402
 
 

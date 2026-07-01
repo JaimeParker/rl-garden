@@ -143,8 +143,8 @@ def run_ppo(args) -> None:
 
 from dataclasses import dataclass  # noqa: E402
 
-from rl_garden.common.cli_args import VisionPPOTrainingArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
+from rl_garden.training.online._args import VisionPPOTrainingArgs  # noqa: E402
 from rl_garden.training.online._registry import registry  # noqa: E402
 
 

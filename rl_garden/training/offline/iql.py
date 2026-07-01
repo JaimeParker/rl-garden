@@ -36,7 +36,7 @@ def _iql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
     from gymnasium import spaces
 
     from rl_garden.common.cli_args import image_encoder_factory_from_args
-    from rl_garden.encoders.combined import discover_image_keys
+    from rl_garden.encoders import discover_image_keys
 
     obs_space = env_spec.single_observation_space
     kwargs = dict(

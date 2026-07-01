@@ -95,7 +95,7 @@ exec env \
     --num-steps 16 \
     --robotwin.step-lim 200 \
     --robotwin.embodiment piper piper 0.6 \
-    --no-robotwin.include-wrist-cameras \
+    --robotwin.no-include-wrist-cameras \
     --encoder plain_conv \
     --image-fusion-mode per_key \
     --robotwin.reward-mode dense \

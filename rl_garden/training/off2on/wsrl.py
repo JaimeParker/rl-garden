@@ -1,8 +1,8 @@
 """WSRL offline-to-online training registration."""
 from dataclasses import dataclass
 
-from rl_garden.common.cli_args import VisionWSRLTrainingArgs
 from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.off2on._args import VisionWSRLTrainingArgs
 from rl_garden.training.off2on._registry import registry
 
 

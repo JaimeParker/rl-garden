@@ -79,7 +79,7 @@ ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
     cd /workspace/rl-garden && \
     export PATH=/opt/venv/openvla/bin:\$PATH && \
     export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
-    MPLCONFIGDIR=/tmp python -u examples/train_sac_state.py \
+    MPLCONFIGDIR=/tmp python -u examples/train_online.py sac --obs_mode state \
       --env_id PickCube-v1 \
       --num_envs 16 \
       --total_timesteps 2000000 \

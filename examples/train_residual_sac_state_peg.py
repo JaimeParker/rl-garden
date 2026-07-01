@@ -15,11 +15,11 @@ import tyro
 from rl_garden.algorithms import ResidualSAC
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.cli_args import (
-    SACTrainingArgs,
     apply_log_env_overrides,
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
 )
+from rl_garden.training.online._args import SACTrainingArgs
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 from rl_garden.policies.base_policies import make_base_policy
 

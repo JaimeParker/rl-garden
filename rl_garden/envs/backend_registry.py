@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib
 import pkgutil
+import threading
 from typing import Any, Optional
 
 
@@ -79,6 +80,7 @@ class EnvBackend:
 
 _REGISTRY: dict[str, type[EnvBackend]] = {}
 _DISCOVERED = False
+_DISCOVERY_LOCK = threading.Lock()
 
 
 def register_env_backend(name: str, cls: type[EnvBackend]) -> None:
@@ -91,11 +93,14 @@ def discover_env_backends() -> None:
     global _DISCOVERED
     if _DISCOVERED:
         return
-    package = importlib.import_module("rl_garden.envs.backends")
-    for info in pkgutil.iter_modules(package.__path__):
-        if not info.name.startswith("_"):
-            importlib.import_module(f"rl_garden.envs.backends.{info.name}")
-    _DISCOVERED = True
+    with _DISCOVERY_LOCK:
+        if _DISCOVERED:
+            return
+        package = importlib.import_module("rl_garden.envs.backends")
+        for info in pkgutil.iter_modules(package.__path__):
+            if not info.name.startswith("_"):
+                importlib.import_module(f"rl_garden.envs.backends.{info.name}")
+        _DISCOVERED = True
 
 
 def _get_backend(backend_name: str) -> type[EnvBackend]:

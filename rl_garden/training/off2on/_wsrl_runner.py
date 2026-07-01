@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import time
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,11 +38,13 @@ from rl_garden.common.cli_args import (
     resolve_checkpoint_dir,
     resolve_eval_record_dir,
     vit_sac_kwargs_from_args,
+    )
+from rl_garden.common.resolved_config import persist_resolved_config
+from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
+from rl_garden.training.off2on._args import (
     warn_if_wsrl_warmup_uses_uninitialized_policy,
     wsrl_initial_training_phase_from_args,
 )
-from rl_garden.common.resolved_config import persist_resolved_config
-from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
 
 if TYPE_CHECKING:
     from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
@@ -183,8 +186,13 @@ def _switch_to_online_mode(
 
 
 def run_wsrl(args: WSRLOff2OnArgs) -> None:
+    import torch
     seed_everything(args.seed)
     enable_fast_math()
+
+    if args.buffer_device == "cuda" and not torch.cuda.is_available():
+        warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
+        args.buffer_device = "cpu"
 
     is_visual = args.obs_mode != "state"
     obs_label = f"rgbd_{args.encoder}" if is_visual else "state"

@@ -138,89 +138,10 @@ def run_drqv2(args) -> None:
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass  # noqa: E402
-from typing import Literal, Optional  # noqa: E402
 
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
+from rl_garden.training.online._args import DrQv2TrainingArgs  # noqa: E402
 from rl_garden.training.online._registry import registry  # noqa: E402
-
-
-@dataclass
-class DrQv2TrainingArgs:
-    """DrQ-v2 (DDPG + augmentation + n-step returns) hyperparameters."""
-
-    # --- Env ---
-    env_id: str = "PickCube-v1"
-    num_envs: int = 16
-    num_eval_envs: int = 16
-    obs_mode: str = "rgbd"
-    include_state: bool = True
-    control_mode: str = "pd_ee_delta_pose"
-    camera_width: int = 128
-    camera_height: int = 128
-    render_mode: str = "rgb_array"
-    per_camera_rgbd: bool = False
-
-    # --- Training ---
-    total_timesteps: int = 1_000_000
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    mmap_dir: Optional[str] = None
-    mmap_mode: Literal["create", "open"] = "create"
-    learning_starts: int = 4_000
-    batch_size: int = 256
-    seed: int = 1
-
-    # --- DDPG ---
-    gamma: float = 0.99
-    tau: float = 0.01
-    training_freq: int = 32
-    utd: float = 0.5
-    policy_lr: float = 1e-4
-    q_lr: float = 1e-4
-    feature_dim: int = 50
-    hidden_dim: int = 1024
-    nstep: int = 3
-    stddev_schedule: str = "linear(1.0,0.1,500000)"
-    actor_stddev_schedule: Optional[str] = None
-    stddev_clip: float = 0.3
-    num_expl_steps: int = 2000
-    grad_clip_norm: Optional[float] = None
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-
-    # --- Vision ---
-    image_fusion_mode: str = "stack_channels"
-    image_augmentation: str = "random_shift"
-    image_random_shift_pad: int = 4
-    frame_stack: int = 1
-
-    # --- Logging ---
-    log_type: str = "wandb"
-    log_dir: str = "runs"
-    exp_name: str = ""
-    wandb_project: str = "rl-garden"
-    wandb_entity: str = ""
-    wandb_group: str = ""
-    log_keywords: str = ""
-    std_log: bool = True
-    log_freq: int = 1_000
-
-    # --- Eval ---
-    eval_freq: int = 10_000
-    num_eval_steps: int = 50
-    capture_video: bool = True
-    eval_output_dir: Optional[str] = None
-    video_fps: int = 30
-
-    # --- Checkpoint ---
-    checkpoint_dir: Optional[str] = None
-    checkpoint_freq: int = 0
-    save_replay_buffer: bool = False
-    save_final_checkpoint: bool = True
-    load_checkpoint: Optional[str] = None
-    load_replay_buffer: bool = False
-    replay_lazy_next_obs: bool = False
-    replay_pin_sampled_batch: bool = False
 
 
 @dataclass

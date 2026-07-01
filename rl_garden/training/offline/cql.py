@@ -37,7 +37,7 @@ def _cql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
         image_encoder_factory_from_args,
         vit_sac_kwargs_from_args,
     )
-    from rl_garden.encoders.combined import discover_image_keys
+    from rl_garden.encoders import discover_image_keys
 
     kwargs = dict(
         env=env_spec,

@@ -15,6 +15,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from rl_garden.common.cli_args import LoggingArgs
+
+
+@dataclass
+class EnvRunArgs(LoggingArgs):
+    """Environment runtime fields shared by online and off2on training."""
+
+    env_id: str = "PickCube-v1"
+    num_envs: int = 16
+    num_eval_envs: int = 16
+    seed: int = 1
+    control_mode: str = "pd_joint_delta_pos"
+    render_mode: str = "rgb_array"
+    capture_video: bool = True
+    video_fps: int = 30
+    eval_output_dir: Optional[str] = None
+
 
 @dataclass
 class ManiSkillConfig:

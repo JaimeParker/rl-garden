@@ -11,19 +11,25 @@ import pytest
 from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
     LoggingArgs,
-    SACTrainingArgs,
     VisionArgs,
-    WSRLTrainingArgs,
     apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_env,
     image_keys_from_obs_mode,
-    sac_initial_training_phase_from_args,
     vit_sac_kwargs_from_args,
+)
+from rl_garden.training.offline._args import OfflineVisionArgs
+from rl_garden.training.off2on._args import (
+    WSRLTrainingArgs,
     warn_if_wsrl_warmup_uses_uninitialized_policy,
     wsrl_initial_training_phase_from_args,
 )
-from rl_garden.training.offline._args import OfflineVisionArgs
+from rl_garden.training.online._args import (
+    DrQv2TrainingArgs,
+    FlashSACTrainingArgs,
+    SACTrainingArgs,
+    sac_initial_training_phase_from_args,
+)
 
 
 def _args(script_name: str):
@@ -89,6 +95,46 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.image_augmentation == "none"
     assert args.image_random_shift_pad == 4
     assert args.q_landscape_diagnostics is False
+
+
+def test_online_specialized_args_keep_existing_defaults() -> None:
+    drq = DrQv2TrainingArgs()
+    flash = FlashSACTrainingArgs()
+
+    assert drq.obs_mode == "rgbd"
+    assert drq.batch_size == 256
+    assert drq.hidden_dim == 1024
+    assert drq.load_replay_buffer is False
+    assert flash.num_envs == 512
+    assert flash.batch_size == 2048
+    assert flash.capture_video is False
+    assert flash.log_type == "wandb"
+    assert flash.log_dir == "runs"
+
+
+def test_algorithm_args_are_not_exported_from_common_cli_args() -> None:
+    import rl_garden.common.cli_args as cli_args
+
+    for name in (
+        "SACTrainingArgs",
+        "VisionSACTrainingArgs",
+        "PPOTrainingArgs",
+        "VisionPPOTrainingArgs",
+        "WSRLTrainingArgs",
+        "VisionWSRLTrainingArgs",
+    ):
+        assert not hasattr(cli_args, name)
+
+
+def test_flash_sac_logging_cli_is_flat() -> None:
+    from rl_garden.training.online import registry
+
+    args = registry.parse_args(["flash_sac", "--log-type", "none"])
+    assert args.log_type == "none"
+    assert not hasattr(args, "logging")
+
+    with pytest.raises(SystemExit):
+        registry.parse_args(["flash_sac", "--logging.log-type", "none"])
 
 
 def test_sac_critic_only_args_map_to_initial_training_phase() -> None:
