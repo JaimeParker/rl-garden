@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import h5py
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -7,6 +8,7 @@ from gymnasium import spaces
 from rl_garden.algorithms import ResidualSAC
 from rl_garden.buffers import ResidualDictReplayBuffer, ResidualTensorReplayBuffer
 from rl_garden.common import ActionScaler
+from rl_garden.common.types import ResidualReplayBufferSample
 from rl_garden.policies.base_policies import BasePolicyOutput, BasePolicyProvider
 
 
@@ -252,3 +254,74 @@ def test_residual_actor_diagnostics_use_base_actions_without_advancing_rng():
     assert "action_saturation" in diagnostics
     assert "entropy_gaussian" in diagnostics
     torch.testing.assert_close(actual, expected)
+
+
+def test_residual_sample_train_batch_mixes_online_and_offline_samples():
+    agent = _agent()
+    agent.offline_replay_buffer = agent._make_residual_replay_buffer(16)
+    agent.offline_data_ratio = 0.5
+    env = agent.env
+    for replay_buffer in (agent.replay_buffer, agent.offline_replay_buffer):
+        replay_buffer.add(
+            torch.zeros(env.num_envs, 3),
+            torch.ones(env.num_envs, 3),
+            torch.zeros(env.num_envs, 2),
+            torch.zeros(env.num_envs),
+            torch.zeros(env.num_envs),
+            base_actions=torch.zeros(env.num_envs, 2),
+            next_base_actions=torch.zeros(env.num_envs, 2),
+        )
+
+    calls: list[tuple[str, int]] = []
+
+    def sample_from(name: str, value: float):
+        def _sample(batch_size: int) -> ResidualReplayBufferSample:
+            calls.append((name, batch_size))
+            return ResidualReplayBufferSample(
+                obs=torch.full((batch_size, 3), value),
+                next_obs=torch.full((batch_size, 3), value + 0.1),
+                actions=torch.full((batch_size, 2), value),
+                rewards=torch.full((batch_size,), value),
+                dones=torch.zeros(batch_size),
+                base_actions=torch.full((batch_size, 2), value + 0.2),
+                next_base_actions=torch.full((batch_size, 2), value + 0.3),
+            )
+
+        return _sample
+
+    agent.replay_buffer.sample = sample_from("online", 1.0)
+    agent.offline_replay_buffer.sample = sample_from("offline", 2.0)
+
+    batch = agent._sample_train_batch(4)
+
+    assert calls == [("online", 2), ("offline", 2)]
+    torch.testing.assert_close(batch.obs[:2], torch.full((2, 3), 1.0))
+    torch.testing.assert_close(batch.obs[2:], torch.full((2, 3), 2.0))
+    torch.testing.assert_close(batch.base_actions[:2], torch.full((2, 2), 1.2))
+    torch.testing.assert_close(batch.base_actions[2:], torch.full((2, 2), 2.2))
+
+
+def test_residual_offline_buffer_defaults_to_loadable_dataset_size(tmp_path):
+    path = tmp_path / "residual_demo.h5"
+    with h5py.File(path, "w") as f:
+        f.attrs["dataset_type"] = "rl_garden_residual_offline"
+        group = f.create_group("traj_0")
+        group.create_dataset("obs", data=np.ones((5, 3), dtype=np.float32))
+        group.create_dataset("actions", data=np.ones((4, 2), dtype=np.float32))
+        group.create_dataset("base_actions", data=np.ones((4, 2), dtype=np.float32))
+        group.create_dataset(
+            "next_base_actions", data=np.ones((4, 2), dtype=np.float32)
+        )
+        group.create_dataset("rewards", data=np.ones(4, dtype=np.float32))
+        group.create_dataset("terminated", data=np.array([False, False, False, True]))
+        group.create_dataset("truncated", data=np.array([False, False, False, False]))
+
+    agent = _agent(buffer_size=128)
+
+    loaded = agent.load_offline_replay_buffer(path)
+
+    assert loaded == 4
+    assert agent.offline_replay_buffer.num_envs == 1
+    assert agent.offline_replay_buffer.buffer_size == 4
+    assert agent.offline_replay_buffer.per_env_buffer_size == 4
+    assert len(agent.offline_replay_buffer) == 4

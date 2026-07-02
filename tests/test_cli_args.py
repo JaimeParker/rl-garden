@@ -1,10 +1,7 @@
 """Tests for shared training example CLI argument defaults."""
 from __future__ import annotations
 
-import importlib.util
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 
@@ -30,23 +27,6 @@ from rl_garden.training.online._args import (
     SACTrainingArgs,
     sac_initial_training_phase_from_args,
 )
-
-
-def _args(script_name: str):
-    module = _load_example_module(script_name)
-    return module.Args()
-
-
-def _load_example_module(script_name: str):
-    path = Path(__file__).resolve().parents[1] / "examples" / script_name
-    module_name = f"_rl_garden_test_{path.stem}"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_state_sac_defaults_match_existing_cli() -> None:
@@ -95,6 +75,29 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.image_augmentation == "none"
     assert args.image_random_shift_pad == 4
     assert args.q_landscape_diagnostics is False
+
+
+def test_residual_sac_defaults_match_existing_cli() -> None:
+    from rl_garden.training.online.residual_sac import ResidualSACArgs
+
+    args = ResidualSACArgs()
+
+    assert args.env_id == "PickCube-v1"
+    assert args.obs_mode == "rgb"
+    assert args.residual_action_scale == 0.1
+    assert args.debug is False
+    assert args.base_policy == "act"
+    assert args.base_ckpt_path == "act-peg-only"
+    assert args.base_act_temporal_agg is True
+    assert args.base_act_temporal_agg_k == 0.01
+    assert args.base_sac_encoder == "plain_conv"
+    assert args.base_sac_encoder_features_dim == 256
+    assert args.base_sac_image_fusion_mode is None
+    assert args.base_sac_deterministic is True
+    assert args.offline_dataset_path is None
+    assert args.offline_num_traj is None
+    assert args.offline_buffer_size is None
+    assert args.offline_data_ratio == 0.5
 
 
 def test_online_specialized_args_keep_existing_defaults() -> None:
@@ -228,6 +231,64 @@ def _make_rt_req(
         reward_bias=reward_bias,
         backend_config=rt,
     )
+
+
+def _make_ms_req(ms):
+    from rl_garden.envs.backend_registry import EnvRequest
+
+    return EnvRequest(
+        env_id="PegInsertionSidePegOnly-v1",
+        num_envs=2,
+        num_eval_envs=3,
+        obs_mode="rgb",
+        control_mode="pd_ee_delta_pose",
+        render_mode="rgb_array",
+        seed=1,
+        camera_width=64,
+        camera_height=64,
+        capture_video=True,
+        backend_config=ms,
+    )
+
+
+def test_maniskill_config_has_no_task_specific_named_fields() -> None:
+    from rl_garden.common.env_args import ManiSkillConfig
+
+    field_names = set(ManiSkillConfig.__dataclass_fields__.keys())
+
+    assert field_names == {"sim_backend", "render_backend", "reward_mode", "env_kwargs_json"}
+
+
+def test_maniskill_backend_forwards_env_kwargs_json() -> None:
+    import json
+
+    from rl_garden.common.env_args import ManiSkillConfig
+    from rl_garden.envs.backends.maniskill import ManiSkillBackend
+
+    ms = ManiSkillConfig(
+        reward_mode="normalized_dense",
+        env_kwargs_json=json.dumps({"robot_uids": "panda_wristcam_gripper_closed", "fix_box": True}),
+    )
+    req = _make_ms_req(ms)
+
+    cfg = ManiSkillBackend._make_cfg(req, is_eval=True)
+
+    assert cfg.reward_mode == "normalized_dense"
+    assert cfg.env_kwargs == {"robot_uids": "panda_wristcam_gripper_closed", "fix_box": True}
+    assert cfg.num_envs == 3
+    assert cfg.save_video is True
+
+
+def test_maniskill_backend_env_kwargs_json_empty_string_is_no_op() -> None:
+    from rl_garden.common.env_args import ManiSkillConfig
+    from rl_garden.envs.backends.maniskill import ManiSkillBackend
+
+    ms = ManiSkillConfig(env_kwargs_json="")
+    req = _make_ms_req(ms)
+
+    cfg = ManiSkillBackend._make_cfg(req, is_eval=True)
+
+    assert cfg.env_kwargs == {}
 
 
 def test_robotwin_config_defaults() -> None:
@@ -367,19 +428,31 @@ def test_robotwin_backend_disable_topp() -> None:
     assert cfg.task_config["need_topp"] is False
 
 
-def test_peg_sac_defaults_keep_peg_specific_overrides() -> None:
-    args = _args("train_sac_rgbd_peg.py")
+def test_peg_defaults_require_no_backend_config_overrides() -> None:
+    """Peg's known-good config matches the vendored task class's own defaults,
+    so a zero-override ManiSkillConfig must already produce them."""
+    from rl_garden.common.env_args import ManiSkillConfig
+    from rl_garden.envs.backends.maniskill import ManiSkillBackend
 
-    assert args.env_id == "PegInsertionSidePegOnly-v1"
-    assert args.control_mode == "pd_ee_delta_pose"
-    assert args.sim_backend == "gpu"
-    assert args.render_backend == "gpu"
-    assert args.reward_mode == "normalized_dense"
-    assert args.robot_uids == "panda_wristcam_gripper_closed_wo_norm"
-    assert args.fix_peg_pose is False
-    assert args.fix_box is True
-    assert args.fixed_peg_xy == (-0.05, -0.15)
-    assert args.fixed_peg_z_rot_deg == 67.5
+    ms = ManiSkillConfig(sim_backend="gpu", render_backend="gpu", reward_mode="normalized_dense")
+    req = _make_ms_req(ms)
+
+    cfg = ManiSkillBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.env_id == "PegInsertionSidePegOnly-v1"
+    assert cfg.control_mode == "pd_ee_delta_pose"
+    assert cfg.sim_backend == "gpu"
+    assert cfg.render_backend == "gpu"
+    assert cfg.reward_mode == "normalized_dense"
+    assert cfg.env_kwargs == {}
+    # robot_uids/fix_peg_pose/fix_box/fixed_peg_xy/fixed_peg_z_rot_deg are left
+    # None here on purpose: PegInsertionSidePegOnly-v1's own constructor defaults
+    # already reproduce the deleted residual peg scripts' behavior.
+    assert cfg.robot_uids is None
+    assert cfg.fix_peg_pose is None
+    assert cfg.fix_box is None
+    assert cfg.fixed_peg_xy is None
+    assert cfg.fixed_peg_z_rot_deg is None
 
 
 def test_state_wsrl_defaults_match_existing_cli() -> None:

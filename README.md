@@ -18,7 +18,7 @@ platforms can be integrated without creating platform-specific training entrypoi
 - **Offline-to-online:** WSRL pretraining, warm start, and online fine-tuning.
 - **Observations:** flat state tensors and dict observations containing RGB, depth,
   proprioception, or mixed vector inputs.
-- **Visual encoders:** PlainConv and ResNet backbones with configurable image-key
+- **Visual encoders:** PlainConv, ResNet, and ViT backbones with configurable image-key
   fusion, pooling, augmentation, and proprioception fusion.
 - **Replay:** tensor, dict, Monte-Carlo return, residual-action, and PPO rollout
   buffers with explicit storage and sample devices.
@@ -78,7 +78,7 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `residual_sac` |
 | Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl` |
 
@@ -93,7 +93,7 @@ State SAC:
 
 ```bash
 python examples/train_online.py sac \
-  --env_id PickCube-v1 --obs_mode state --num_envs 16
+  --env-id PickCube-v1 --obs-mode state --num-envs 16
 
 # Launcher with experiment defaults
 scripts/train_sac_state.sh
@@ -103,11 +103,29 @@ Visual SAC and PPO:
 
 ```bash
 python examples/train_online.py sac \
-  --env_id PickCube-v1 --obs_mode rgb --encoder plain_conv
+  --env-id PickCube-v1 --obs-mode rgb --encoder plain_conv
 
 python examples/train_online.py ppo \
-  --env_id PickCube-v1 --obs_mode rgb --encoder plain_conv
+  --env-id PickCube-v1 --obs-mode rgb --encoder plain_conv
 ```
+
+ResidualSAC:
+
+```bash
+python examples/train_online.py residual_sac \
+  --env-id PickCube-v1 \
+  --obs-mode rgb \
+  --control-mode pd_ee_twist \
+  --base-policy act \
+  --base-ckpt-path act-peg-only \
+  --residual-action-scale 0.1
+```
+
+ResidualSAC-specific options include `--base-policy {act,sac,zero}`,
+`--base-ckpt-path`, `--residual-action-scale`, ACT temporal aggregation controls,
+base-SAC reconstruction options, and residual demo loading via
+`--offline-dataset-path` / `--offline-data-ratio`. Demo loading is currently
+supported only by `residual_sac`.
 
 Additional launchers include:
 
@@ -116,6 +134,8 @@ scripts/train_sac_rgbd.sh --encoder resnet10
 scripts/train_ppo_state.sh
 scripts/train_ppo_rgbd.sh --encoder plain_conv
 scripts/train_drqv2_rgb.sh
+scripts/train_residual_rgbd.sh
+scripts/train_residual_state.sh
 ```
 
 ### Offline Pretraining
@@ -166,21 +186,28 @@ python examples/train_online.py ppo \
 See [RoboTwin Integration](docs/ROBOTWIN.md) for installation, assets, observation
 mapping, rewards, and performance controls.
 
-The peg-insertion environment has dedicated camera, controller, and robot defaults:
+The peg-insertion environment has dedicated camera, controller, and robot defaults
+that can be passed through the unified training entrypoint:
 
 ```bash
-scripts/train_sac_rgbd_peg.sh
-# equivalent specialized entrypoint
-python examples/train_sac_rgbd_peg.py
+python examples/train_online.py sac \
+  --env-id PegInsertionSidePegOnly-v1 \
+  --obs-mode rgb \
+  --control-mode pd_ee_delta_pose \
+  --maniskill.reward-mode normalized_dense \
+  --maniskill.robot-uids panda_wristcam_gripper_closed_wo_norm \
+  --per-camera-rgbd \
+  --image-fusion-mode per_key
 ```
 
-Environment-specific defaults belong in specialized examples and launchers rather
-than the generic registry dispatcher.
+Residual peg experiments use the same env flags with `residual_sac` through
+`scripts/train_residual_rgbd.sh` or `scripts/train_residual_state.sh`.
 
 ## Visual Training
 
-Use `--encoder plain_conv` for the lightweight CNN path or a ResNet name such as
-`--encoder resnet10`. Image keys can be fused in two ways:
+Use `--encoder plain_conv` for the lightweight CNN path, a ResNet name such as
+`--encoder resnet10`, or `--encoder vit` for the ViT path. Image keys can be fused
+in two ways:
 
 - `stack_channels`: concatenate visual keys before a single encoder. This is the
   default and the simplest path for a single RGB stream.
@@ -191,16 +218,30 @@ Example with a pretrained ResNet backbone:
 
 ```bash
 python examples/train_online.py sac \
-  --env_id PickCube-v1 \
-  --obs_mode rgb \
+  --env-id PickCube-v1 \
+  --obs-mode rgb \
   --encoder resnet10 \
-  --image_fusion_mode per_key \
-  --pretrained_weights resnet10-imagenet \
-  --freeze_resnet_backbone
+  --image-fusion-mode per_key \
+  --pretrained-weights resnet10-imagenet \
+  --freeze-resnet-backbone
 ```
 
-`--freeze_resnet_backbone` keeps the stem and residual blocks fixed while leaving
-the pooling/bottleneck head trainable. `--freeze_resnet_encoder` freezes the full
+ViT example:
+
+```bash
+python examples/train_online.py residual_sac \
+  --env-id PegInsertionSidePegOnly-v1 \
+  --obs-mode rgb \
+  --include-state \
+  --per-camera-rgbd \
+  --image-fusion-mode per_key \
+  --encoder vit \
+  --base-policy act \
+  --base-ckpt-path act-peg-only
+```
+
+`--freeze-resnet-backbone` keeps the stem and residual blocks fixed while leaving
+the pooling/bottleneck head trainable. `--freeze-resnet-encoder` freezes the full
 visual extractor. For dict observations, SAC shares the encoder between actor and
 critic; actor updates detach encoder features while critic updates train it.
 
@@ -212,35 +253,6 @@ python scripts/convert_resnet_checkpoint.py \
   --output pretrained_models/resnet10_pretrained_converted.pt \
   --arch resnet10
 ```
-
-## Residual SAC
-
-ResidualSAC learns a residual action on top of an ACT, SAC, or zero-action base
-policy. A debug run can exercise the rollout and update path without loading a base
-checkpoint:
-
-```bash
-scripts/train_residual_sac_rgbd.sh \
-  --control_mode pd_ee_twist \
-  --residual-action-scale 1 \
-  --debug
-```
-
-Peg-specific training and evaluation have dedicated launchers:
-
-```bash
-scripts/train_residual_sac_rgbd_peg.sh \
-  --base_policy act \
-  --base_ckpt_path act-peg-only
-
-scripts/eval_residual_sac_rgbd_peg.sh \
-  --checkpoint_path runs/<run_name>/checkpoints/final.pt \
-  --base_policy act \
-  --base_ckpt_path act-peg-only
-```
-
-See [Residual SAC](docs/RESIDUAL_SAC.md) for action conventions, base-policy
-providers, checkpoint reconstruction, and peg-specific options.
 
 ## Checkpoints
 

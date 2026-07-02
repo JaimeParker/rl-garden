@@ -109,8 +109,8 @@ Backend sub-configs use a dot-separated prefix matching the field name in
 ```bash
 python examples/train_online.py sac \
     --env_backend maniskill \
-    --maniskill.sim_backend physx_cpu \
-    --maniskill.reward_mode normalized_dense
+    --maniskill.sim-backend physx_cpu \
+    --maniskill.reward-mode normalized_dense
 
 python examples/train_online.py sac \
     --env_backend robotwin \
@@ -138,7 +138,7 @@ result as JSON. No environments, agents, or buffers are created.
 ```bash
 python examples/train_online.py sac \
     --env_id StackCube-v1 \
-    --maniskill.sim_backend physx_cpu \
+    --maniskill.sim-backend physx_cpu \
     --print-config 2>/dev/null | python -m json.tool
 ```
 

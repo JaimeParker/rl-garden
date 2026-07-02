@@ -8,7 +8,7 @@ Inherit :class:`EnvBackendArgs` alongside any algorithm Args class to add
         pass
 
     # CLI: python train_online.py sac --env_backend robotwin --robotwin.task_name pick_cube
-    # CLI: python train_online.py sac --maniskill.sim_backend physx_cpu
+    # CLI: python train_online.py sac --maniskill.sim-backend physx_cpu
 """
 from __future__ import annotations
 
@@ -40,6 +40,10 @@ class ManiSkillConfig:
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     reward_mode: Optional[str] = None
+    # JSON-encoded dict forwarded verbatim to ManiSkillEnvConfig.env_kwargs, which
+    # takes precedence over any named field there. Escape hatch for task-specific
+    # kwargs (e.g. peg overrides) without adding named fields here per task.
+    env_kwargs_json: str = "{}"
 
 
 @dataclass

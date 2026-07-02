@@ -1,6 +1,8 @@
 """ManiSkill env backend — registered as ``"maniskill"``."""
 from __future__ import annotations
 
+import json
+
 from rl_garden.envs.backend_registry import (
     EnvBackend,
     EnvRequest,
@@ -17,6 +19,9 @@ class ManiSkillBackend(EnvBackend):
         sim_backend = ms.sim_backend if ms is not None else "gpu"
         render_backend = ms.render_backend if ms is not None else "gpu"
         reward_mode = ms.reward_mode if ms is not None else None
+        env_kwargs = (
+            json.loads(ms.env_kwargs_json) if ms is not None and ms.env_kwargs_json else {}
+        )
         return ManiSkillEnvConfig(
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
@@ -33,6 +38,7 @@ class ManiSkillBackend(EnvBackend):
             sim_backend=sim_backend,
             render_backend=render_backend,
             reward_mode=reward_mode,
+            env_kwargs=env_kwargs,
             reconfiguration_freq=1 if is_eval else 0,
             record_dir=req.eval_record_dir if is_eval else None,
             save_video=req.capture_video if is_eval else False,
@@ -45,8 +51,7 @@ class ManiSkillBackend(EnvBackend):
         from rl_garden.envs.maniskill import make_maniskill_env
 
         cfg = cls._make_cfg(req, is_eval=False)
-        env = make_maniskill_env(cfg)
-        return env
+        return make_maniskill_env(cfg)
 
     @classmethod
     def make_eval_env(cls, req: EnvRequest):

@@ -43,6 +43,7 @@ data/
 3rd_party/RoboTwin
 pretrained_models/*
 prompts/
+demos/
 
 # 默认忽略模型权重文件
 *.pt
