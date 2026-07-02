@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# State-based Residual SAC launcher for PegInsertionSidePegOnly-v1.
-# Defaults to --base_policy act; use --base_policy sac for SAC checkpoints or
-# --debug to run with a zero base policy.
+# Generic state-observation ResidualSAC launcher. Pass env-specific options explicitly.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -56,12 +54,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_residual_sac_state_peg.py" \
-    --env_id PegInsertionSidePegOnly-v1 \
-    --control_mode pd_ee_delta_pose \
-    --capture_video \
-    --video_fps 30 \
-    --render_mode rgb_array \
-    --eval_freq 10000 \
-    --total_timesteps 1000000 \
+exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" residual_sac \
+    --env-id PickCube-v1 \
+    --obs-mode state \
+    --num-envs 16 \
+    --capture-video \
+    --video-fps 30 \
+    --render-mode rgb_array \
+    --eval-freq 10000 \
+    --total-timesteps 1000000 \
     "${FORWARD_ARGS[@]}"

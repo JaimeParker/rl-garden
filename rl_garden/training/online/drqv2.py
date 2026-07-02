@@ -130,8 +130,8 @@ from rl_garden.training.online._registry import registry  # noqa: E402
 class DrQv2Args(EnvBackendArgs):
     """DrQ-v2 with multi-env backend support.
 
-    ManiSkill-specific: ``--maniskill.sim_backend``, ``--maniskill.render_backend``,
-    ``--maniskill.reward_mode``.
+    ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``,
+    ``--maniskill.reward-mode``, ``--maniskill.success-reward-override``.
     """
 
     # --- Env ---

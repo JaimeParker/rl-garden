@@ -1,8 +1,16 @@
-"""SAC run function."""
+"""ResidualSAC run function."""
 from __future__ import annotations
 
+from typing import Literal, Optional
 
-def _sac_env_request(args, run_name):
+
+def _effective_base_policy(args) -> Literal["act", "sac", "zero"]:
+    if args.debug:
+        return "zero"
+    return args.base_policy
+
+
+def _residual_sac_env_request(args, run_name):
     from rl_garden.common.cli_args import resolve_eval_record_dir
     from rl_garden.envs.backend_registry import EnvRequest
 
@@ -26,19 +34,63 @@ def _sac_env_request(args, run_name):
         capture_video=args.capture_video,
         video_fps=args.video_fps,
         num_eval_steps=args.num_eval_steps,
-        create_eval_env=args.eval_freq > 0,
         backend_config=backend_config,
     )
 
 
-def build_sac(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.algorithms import SAC
+def _make_base_action_provider(args, env):
+    from rl_garden.policies.base_policies import make_base_policy
+
+    base_policy = _effective_base_policy(args)
+    provider = make_base_policy(
+        base_policy=base_policy,
+        observation_space=env.single_observation_space,
+        action_space=env.single_action_space,
+        env=env,
+        base_ckpt_path=args.base_ckpt_path,
+        base_act_temporal_agg=args.base_act_temporal_agg,
+        base_act_temporal_agg_k=args.base_act_temporal_agg_k,
+        base_sac_encoder=args.base_sac_encoder,
+        base_sac_encoder_features_dim=args.base_sac_encoder_features_dim,
+        base_sac_image_fusion_mode=args.base_sac_image_fusion_mode,
+        base_sac_deterministic=args.base_sac_deterministic,
+    )
+    if base_policy == "act":
+        print(
+            "[residual] base_policy=act "
+            f"ckpt={provider.checkpoint_path} "
+            f"state_dim={provider.spec.state_dim} "
+            f"action_dim={provider.spec.action_dim} "
+            f"num_queries={provider.config.num_queries}",
+            flush=True,
+        )
+    elif base_policy == "sac":
+        print(
+            "[residual] base_policy=sac "
+            f"ckpt={args.base_ckpt_path} "
+            f"deterministic={args.base_sac_deterministic}",
+            flush=True,
+        )
+    else:
+        print("[residual] base_policy=zero", flush=True)
+    return provider
+
+
+def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms import ResidualSAC
     from rl_garden.common.cli_args import (
         image_encoder_factory_from_args,
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
+
+    if args.load_actor_checkpoint is not None:
+        raise ValueError(
+            "ResidualSAC does not support --load_actor_checkpoint; "
+            "use --load_checkpoint for ResidualSAC checkpoints or "
+            "--base_ckpt_path for the frozen base policy."
+        )
 
     is_visual = args.obs_mode != "state"
     net_arch = {
@@ -60,9 +112,12 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = SAC(
+    base_action_provider = _make_base_action_provider(args, env)
+    agent = ResidualSAC(
         env=env,
         eval_env=eval_env,
+        base_action_provider=base_action_provider,
+        residual_action_scale=args.residual_action_scale,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
@@ -105,21 +160,36 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
-    if args.load_actor_checkpoint is not None:
-        agent.load_actor_checkpoint(args.load_actor_checkpoint)
+    if args.offline_dataset_path is not None:
+        loaded = agent.load_offline_replay_buffer(
+            args.offline_dataset_path,
+            num_traj=args.offline_num_traj,
+            buffer_size=args.offline_buffer_size,
+            offline_data_ratio=args.offline_data_ratio,
+        )
+        if args.std_log:
+            print(
+                "[residual] "
+                f"offline_dataset={args.offline_dataset_path} "
+                f"loaded_transitions={loaded} "
+                f"offline_data_ratio={args.offline_data_ratio}",
+                flush=True,
+            )
     return agent
 
 
-def run_sac(args: SACArgs) -> None:
+def run_residual_sac(args: ResidualSACArgs) -> None:
     from rl_garden.training.online._runner import run_online
 
     is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    base_policy = _effective_base_policy(args)
+    base_tag = "debug_zero_base" if args.debug else f"{base_policy}_base"
+    obs_tag = f"{base_tag}_rgbd_{args.encoder}" if is_visual else f"{base_tag}_state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_sac_env_request,
-        build_agent=build_sac,
+        make_env_request=_residual_sac_env_request,
+        build_agent=build_residual_sac,
     )
 
 
@@ -135,12 +205,27 @@ from rl_garden.training.online._registry import registry  # noqa: E402
 
 
 @dataclass
-class SACArgs(VisionSACTrainingArgs, EnvBackendArgs):
-    """SAC — visual defaults; pass ``--obs_mode state`` for state obs.
+class ResidualSACArgs(VisionSACTrainingArgs, EnvBackendArgs):
+    """ResidualSAC — residual actions on top of ACT, SAC, or zero base policies.
 
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
-    ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.
+    ManiSkill-specific peg options are available under ``--maniskill.*``.
     """
 
+    residual_action_scale: float = 0.1
+    debug: bool = False
+    base_policy: Literal["act", "sac", "zero"] = "act"
+    base_ckpt_path: Optional[str] = "act-peg-only"
+    base_act_temporal_agg: bool = True
+    base_act_temporal_agg_k: float = 0.01
+    base_sac_encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    base_sac_encoder_features_dim: int = 256
+    base_sac_image_fusion_mode: Optional[Literal["stack_channels", "per_key"]] = None
+    base_sac_deterministic: bool = True
+    offline_dataset_path: Optional[str] = None
+    offline_num_traj: Optional[int] = None
+    offline_buffer_size: Optional[int] = None
+    offline_data_ratio: float = 0.5
 
-registry.register("sac", SACArgs, run_sac)
+
+registry.register("residual_sac", ResidualSACArgs, run_residual_sac)

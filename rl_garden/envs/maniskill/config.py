@@ -15,6 +15,7 @@ class ManiSkillEnvConfig:
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     reward_mode: Optional[str] = None
+    success_reward_override: Optional[float] = None
     robot_uids: Optional[str] = None
     fix_peg_pose: Optional[bool] = None
     fix_box: Optional[bool] = None

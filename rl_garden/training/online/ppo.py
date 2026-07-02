@@ -128,7 +128,7 @@ class PPOArgs(VisionPPOTrainingArgs, EnvBackendArgs):
     """PPO — visual defaults; pass ``--obs_mode state`` for state obs.
 
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
-    ManiSkill-specific: ``--maniskill.sim_backend``, ``--maniskill.render_backend``.
+    ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.
     """
 
 

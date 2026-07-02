@@ -108,7 +108,7 @@ from rl_garden.training.online._registry import registry  # noqa: E402
 class FlashSACArgs(FlashSACTrainingArgs, EnvBackendArgs):
     """FlashSAC with multi-env backend support (state-only).
 
-    ManiSkill-specific: ``--maniskill.sim_backend``, ``--maniskill.render_backend``.
+    ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.
     """
 
 

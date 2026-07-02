@@ -8,7 +8,7 @@ Inherit :class:`EnvBackendArgs` alongside any algorithm Args class to add
         pass
 
     # CLI: python train_online.py sac --env_backend robotwin --robotwin.task_name pick_cube
-    # CLI: python train_online.py sac --maniskill.sim_backend physx_cpu
+    # CLI: python train_online.py sac --maniskill.sim-backend physx_cpu
 """
 from __future__ import annotations
 
@@ -40,6 +40,12 @@ class ManiSkillConfig:
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     reward_mode: Optional[str] = None
+    success_reward_override: Optional[float] = None
+    robot_uids: Optional[str] = None
+    fix_peg_pose: Optional[bool] = None
+    fix_box: Optional[bool] = None
+    fixed_peg_xy: Optional[tuple[float, float]] = None
+    fixed_peg_z_rot_deg: Optional[float] = None
 
 
 @dataclass
