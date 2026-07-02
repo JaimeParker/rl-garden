@@ -1,6 +1,9 @@
 """DrQ-v2 run function."""
 from __future__ import annotations
 
+import warnings
+from typing import Literal, Optional
+
 
 def _drqv2_env_request(args, run_name):
     from rl_garden.envs.backend_registry import EnvRequest
@@ -36,8 +39,16 @@ def _drqv2_env_request(args, run_name):
 
 def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms.ddpg import DDPG
+    from rl_garden.common.cli_args import image_encoder_factory_from_args
     from rl_garden.encoders import discover_image_keys
 
+    if args.encoder != "drqv2_conv":
+        warnings.warn(
+            f"DrQv2's validated default encoder is 'drqv2_conv'; overriding "
+            f"with --encoder {args.encoder!r} deviates from the DrQ-v2 paper "
+            "architecture.",
+            stacklevel=2,
+        )
     image_keys = discover_image_keys(env.single_observation_space)
     agent = DDPG(
         env=env,
@@ -70,6 +81,7 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
         image_augmentation=args.image_augmentation,
         random_shift_pad=args.image_random_shift_pad,
         enable_stacking=args.frame_stack > 1,
+        image_encoder_factory=image_encoder_factory_from_args(args),
         image_augmentation_seed=args.seed + 1_000_003,
         seed=args.seed,
         logger=logger,
@@ -166,6 +178,13 @@ class DrQv2Args(EnvBackendArgs):
     image_augmentation: str = "random_shift"
     image_random_shift_pad: int = 4
     frame_stack: int = 1
+    encoder: Literal["drqv2_conv", "cnn3d"] = "drqv2_conv"
+    encoder_features_dim: int = 256
+    # Unused for drqv2_conv/cnn3d; required attributes for
+    # image_encoder_factory_from_args()'s resnet-only-flag validation.
+    pretrained_weights: Optional[str] = None
+    freeze_resnet_encoder: bool = False
+    freeze_resnet_backbone: bool = False
 
     # --- Logging ---
     log_type: str = "wandb"

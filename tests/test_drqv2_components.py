@@ -418,3 +418,91 @@ def test_ddpg_one_update_uses_nstep_discount_path():
 
     assert set(metrics) >= {"critic_loss", "actor_loss", "target_q", "predicted_q"}
     assert all(np.isfinite(v) for v in metrics.values())
+
+
+def _drqv2_build_args(encoder: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        encoder=encoder,
+        encoder_features_dim=256,
+        pretrained_weights=None,
+        freeze_resnet_encoder=False,
+        freeze_resnet_backbone=False,
+        buffer_size=1000,
+        buffer_device="cpu",
+        mmap_dir=None,
+        mmap_mode="create",
+        replay_lazy_next_obs=False,
+        replay_pin_sampled_batch=False,
+        learning_starts=10,
+        batch_size=8,
+        gamma=0.99,
+        tau=0.01,
+        training_freq=1,
+        utd=0.5,
+        policy_lr=1e-4,
+        q_lr=1e-4,
+        feature_dim=50,
+        hidden_dim=64,
+        nstep=1,
+        stddev_schedule="linear(1.0,0.1,100)",
+        stddev_clip=0.3,
+        num_expl_steps=100,
+        weight_decay=0.0,
+        use_adamw=False,
+        grad_clip_norm=None,
+        image_fusion_mode="stack_channels",
+        image_augmentation="none",
+        image_random_shift_pad=4,
+        frame_stack=3,
+        seed=1,
+        std_log=False,
+        log_freq=100,
+        eval_freq=0,
+        num_eval_steps=10,
+        checkpoint_freq=0,
+        save_replay_buffer=False,
+        save_final_checkpoint=False,
+        load_checkpoint=None,
+        load_replay_buffer=False,
+    )
+
+
+def test_build_drqv2_warns_when_encoder_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rl_garden.algorithms.ddpg as ddpg_module
+    from rl_garden.training.online.drqv2 import build_drqv2
+
+    captured_kwargs: dict = {}
+
+    class _FakeDDPG:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(ddpg_module, "DDPG", _FakeDDPG)
+    args = _drqv2_build_args(encoder="cnn3d")
+
+    with pytest.warns(UserWarning, match="drqv2_conv"):
+        build_drqv2(args, DummyDictVecEnv(), None, None, None)
+
+    assert captured_kwargs["image_encoder_factory"] is not None
+
+
+def test_build_drqv2_default_encoder_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+) -> None:
+    import rl_garden.algorithms.ddpg as ddpg_module
+    from rl_garden.training.online.drqv2 import build_drqv2
+
+    class _FakeDDPG:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(ddpg_module, "DDPG", _FakeDDPG)
+    args = _drqv2_build_args(encoder="drqv2_conv")
+
+    build_drqv2(args, DummyDictVecEnv(), None, None, None)
+
+    assert len(recwarn) == 0

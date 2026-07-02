@@ -38,7 +38,9 @@ class VisionArgs:
     frame_stack: int = 1
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
+    encoder: Literal[
+        "plain_conv", "resnet10", "resnet18", "vit", "drqv2_conv", "cnn3d"
+    ] = "plain_conv"
     encoder_features_dim: int = 256
     image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
     vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
@@ -196,6 +198,21 @@ def _vit_factory(args: VisionArgs):
     )
 
 
+def _drqv2_conv_factory(args: VisionArgs):
+    from rl_garden.encoders import drq_v2_encoder_factory
+
+    return drq_v2_encoder_factory()
+
+
+def _cnn3d_factory(args: VisionArgs):
+    from rl_garden.encoders import cnn3d_encoder_factory
+
+    return cnn3d_encoder_factory(
+        num_frames=args.frame_stack,
+        features_dim=args.encoder_features_dim,
+    )
+
+
 def _no_sac_kwargs(args: VisionArgs, image_keys: tuple[str, ...]) -> dict[str, Any]:
     return {}
 
@@ -234,6 +251,8 @@ ENCODER_REGISTRY: dict[str, EncoderSpec] = {
     "resnet10": EncoderSpec(_resnet_factory, _no_sac_kwargs, allows_resnet_weights=True),
     "resnet18": EncoderSpec(_resnet_factory, _no_sac_kwargs, allows_resnet_weights=True),
     "vit": EncoderSpec(_vit_factory, _vit_sac_kwargs, allows_resnet_weights=False),
+    "drqv2_conv": EncoderSpec(_drqv2_conv_factory, _no_sac_kwargs, allows_resnet_weights=False),
+    "cnn3d": EncoderSpec(_cnn3d_factory, _no_sac_kwargs, allows_resnet_weights=False),
 }
 
 

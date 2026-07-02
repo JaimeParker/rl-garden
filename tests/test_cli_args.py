@@ -488,7 +488,9 @@ def test_encoder_registry_matches_literal() -> None:
     assert literal_choices == set(ENCODER_REGISTRY)
 
 
-@pytest.mark.parametrize("encoder", ["plain_conv", "resnet10", "resnet18"])
+@pytest.mark.parametrize(
+    "encoder", ["plain_conv", "resnet10", "resnet18", "drqv2_conv", "cnn3d"]
+)
 def test_vit_sac_kwargs_empty_for_non_vit(encoder: str) -> None:
     # Regression guard: non-vit encoders must NOT inject actor_feature_dim, which
     # crashed every non-vit RGBD run when forwarded to SACPolicy. Empty bundle ->
