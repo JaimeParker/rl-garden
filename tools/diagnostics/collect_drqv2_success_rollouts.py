@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -29,7 +29,6 @@ class Args:
     target_near_successes: int = 20
     max_episodes: int = 20_000
     stddev: float = 0.1
-    success_reward_override: Optional[float] = None
     seed: int = 1001
     device: str = "auto"
 
@@ -217,7 +216,6 @@ def main() -> None:
             render_backend="gpu",
             render_mode="rgb_array",
             reward_mode="normalized_dense",
-            success_reward_override=args.success_reward_override,
             ignore_terminations=True,
             record_metrics=True,
         )
@@ -236,11 +234,6 @@ def main() -> None:
         "num_envs": args.num_envs,
         "control_mode": "pd_joint_delta_pos",
         "reward_mode": "normalized_dense",
-        "success_reward_override": (
-            "none"
-            if args.success_reward_override is None
-            else args.success_reward_override
-        ),
     }
     writer = SuccessRolloutWriter(args.output_path, metadata)
 

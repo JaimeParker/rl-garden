@@ -210,7 +210,6 @@ The following wrappers in `rl_garden/envs/wrappers/` are available for reuse:
 | `ImageFrameStackWrapper` | Visual obs with `frame_stack > 1` |
 | `PerCameraRGBDWrapper` | Multi-camera envs where each camera feeds a separate encoder |
 | `RewardScaleBiasWrapper` | Dense reward normalisation (`r * scale + bias`) |
-| `SuccessRewardOverrideWrapper` | Replace terminal reward with a fixed value on success |
 
 Wrappers are applied inside `make_my_backend_env()` — the backend owns its
 wrapper stack. Run functions and algorithms are unaware of wrappers.

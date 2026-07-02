@@ -15,6 +15,38 @@ from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.types import Obs
 
 
+def _first_existing(data: dict[str, Any], names: tuple[str, ...]) -> Any:
+    for name in names:
+        if name in data:
+            return data[name]
+    raise KeyError(f"None of the expected keys exist: {names}")
+
+
+def _transition_done(
+    traj: dict[str, Any], length: int, device: torch.device
+) -> torch.Tensor:
+    done_parts = []
+    for key in (
+        "dones",
+        "done",
+        "terminated",
+        "terminations",
+        "truncated",
+        "truncations",
+    ):
+        if key in traj:
+            value = torch.as_tensor(traj[key][:length], device=device).bool()
+            done_parts.append(value)
+    if not done_parts:
+        done = torch.zeros(length, device=device, dtype=torch.bool)
+        done[-1] = True
+        return done.float()
+    done = done_parts[0]
+    for part in done_parts[1:]:
+        done = done | part
+    return done.float()
+
+
 def _find_nested(data: dict[str, Any], key: str) -> Any | None:
     """Find ``key`` in a dataset dict; supports slash paths and one-level common nests."""
     if "/" in key:

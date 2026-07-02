@@ -219,7 +219,6 @@ def main() -> None:
             sim_backend="gpu",
             render_backend="gpu",
             reward_mode="normalized_dense",
-            success_reward_override=2.0,
         )
     )
     agent = _make_agent(args, env)

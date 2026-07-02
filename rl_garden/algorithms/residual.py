@@ -14,7 +14,7 @@ from rl_garden.buffers.residual_buffer import (
     ResidualDictReplayBuffer,
     ResidualTensorReplayBuffer,
 )
-from rl_garden.buffers.maniskill_h5 import (
+from rl_garden.buffers.residual_h5 import (
     count_residual_h5_transitions,
     load_residual_h5_to_replay_buffer,
 )
