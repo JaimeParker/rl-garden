@@ -10,6 +10,7 @@ from rl_garden.training.offline._args import (
     OfflineDeviceArgs,
     OfflineDiscountArgs,
     OfflineIQLArgs,
+    OfflineQNetworkArgs,
     OfflineValueArgs,
 )
 from rl_garden.training.offline._registry import registry
@@ -25,6 +26,7 @@ class IQLArgs(
     OfflineDeviceArgs,
     OfflineDiscountArgs,
     OfflineActorArgs,
+    OfflineQNetworkArgs,
     OfflineCriticArgs,
     OfflineValueArgs,
     OfflineIQLArgs,
@@ -60,6 +62,7 @@ def _iql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
         expectile=args.expectile,
         temperature=args.temperature,
         adv_clip_max=args.adv_clip_max,
+        net_arch=args.net_arch,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         actor_use_layer_norm=args.actor_use_layer_norm,

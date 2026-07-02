@@ -9,7 +9,9 @@ from rl_garden.training.offline._args import (
     OfflineCompileArgs,
     OfflineCQLArgs,
     OfflineCriticArgs,
+    OfflineDeviceArgs,
     OfflineDiscountArgs,
+    OfflineQNetworkArgs,
 )
 from rl_garden.training.offline._registry import registry
 
@@ -21,8 +23,10 @@ if TYPE_CHECKING:
 @dataclass
 class CQLArgs(
     OfflineCommonArgs,
+    OfflineDeviceArgs,
     OfflineDiscountArgs,
     OfflineActorArgs,
+    OfflineQNetworkArgs,
     OfflineCriticArgs,
     OfflineCompileArgs,
     OfflineCQLArgs,
@@ -66,6 +70,7 @@ def _cql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
         ent_coef="auto",
         target_entropy="auto",
         backup_entropy=args.backup_entropy,
+        net_arch=args.net_arch,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,
@@ -92,6 +97,7 @@ def _cql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
         backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
         seed=args.seed,
+        device=args.device,
         logger=logger,
         std_log=args.std_log,
         log_freq=args.log_freq,

@@ -188,7 +188,9 @@ def test_offline_registry_builders_create_wsrl_and_iql():
         num_offline_steps=1,
         buffer_size=64,
         buffer_device="cpu",
+        device="cpu",
         batch_size=4,
+        net_arch=[16],
         n_critics=4,
         critic_subsample_size=2,
         cql_n_actions=4,
@@ -211,16 +213,21 @@ def test_offline_registry_builders_create_wsrl_and_iql():
             pass
 
     args_wsrl = WSRLOfflineArgs(training_freq=1, **base_kwargs)
-    assert isinstance(build_wsrl(args_wsrl, env_spec, _NoopLogger()), WSRL)
+    agent_wsrl = build_wsrl(args_wsrl, env_spec, _NoopLogger())
+    assert isinstance(agent_wsrl, WSRL)
+    assert agent_wsrl.device.type == "cpu"
+    assert agent_wsrl.net_arch == [16]
 
     iql_kwargs = {
         key: value
         for key, value in base_kwargs.items()
         if key not in {"cql_n_actions", "cql_alpha", "use_compile"}
     }
-    args_iql = IQLArgs(device="cpu", **iql_kwargs)
+    args_iql = IQLArgs(**iql_kwargs)
     agent_iql = build_iql(args_iql, env_spec, _NoopLogger())
     assert isinstance(agent_iql, IQL)
+    assert agent_iql.device.type == "cpu"
+    assert agent_iql.net_arch == [16]
 
 
 def test_eval_env_config_carries_dict_obs_vision_fields():

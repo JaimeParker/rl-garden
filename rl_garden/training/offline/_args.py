@@ -128,6 +128,11 @@ class OfflineActorArgs:
 
 
 @dataclass
+class OfflineQNetworkArgs:
+    net_arch: Optional[list[int] | dict[str, list[int]]] = None
+
+
+@dataclass
 class OfflineCriticArgs:
     n_critics: int = 10
     critic_subsample_size: int = 2

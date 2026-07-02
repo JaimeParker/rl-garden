@@ -68,7 +68,10 @@ def validate_checkpoint_metadata(
             f"expected {FORMAT_VERSION}"
         )
     checkpoint_algorithm = _canonical_algorithm_class(metadata.get("algorithm_class"))
-    if checkpoint_algorithm not in compatible_algorithms:
+    if (
+        checkpoint_algorithm != algorithm_class
+        and checkpoint_algorithm not in compatible_algorithms
+    ):
         errors.append(
             f"algorithm mismatch: checkpoint has {metadata.get('algorithm_class')!r}, "
             f"current agent is {algorithm_class!r}"
