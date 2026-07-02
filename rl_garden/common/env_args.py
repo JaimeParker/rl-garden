@@ -79,6 +79,14 @@ class RoboTwinConfig:
 
 
 @dataclass
+class MinariConfig:
+    """Minari-specific env settings. CLI prefix: ``--minari.<field>``"""
+
+    device: str = "cpu"
+    download: bool = True
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -89,6 +97,7 @@ class EnvBackendArgs:
     env_backend: str = "maniskill"
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
+    minari: MinariConfig = field(default_factory=MinariConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

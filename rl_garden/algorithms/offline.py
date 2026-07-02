@@ -147,12 +147,16 @@ class OfflineRLAlgorithm(BaseAlgorithm):
             with torch.no_grad():
                 obs, _, _, _, infos = self.eval_env.step(self._eval_action(obs))
                 if "final_info" in infos:
+                    done_mask = infos["_final_info"]
                     for k, v in infos["final_info"]["episode"].items():
-                        metrics[k].append(v)
+                        done_values = v[done_mask]
+                        if done_values.numel() == 0:
+                            continue
+                        metrics[k].append(done_values)
         self.policy.train()
         out: dict[str, float] = {}
         for k, vs in metrics.items():
-            out[k] = float(torch.stack(vs).float().mean().item())
+            out[k] = float(torch.cat(vs).float().mean().item())
         return out
 
     def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
