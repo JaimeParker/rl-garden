@@ -40,6 +40,10 @@ class OfflineVisionArgs:
 @dataclass
 class OfflineDatasetArgs:
     num_offline_steps: int = 100_000
+    # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
+    # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
+    # instead (e.g. "D4RL/halfcheetah/medium-v2").
+    dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
     save_filename: Optional[str] = None

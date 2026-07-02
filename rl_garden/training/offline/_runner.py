@@ -14,7 +14,11 @@ from rl_garden.algorithms import (
     infer_specs_from_h5,
     run_offline_pretraining,
 )
-from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
+from rl_garden.buffers import (
+    infer_specs_from_minari,
+    load_maniskill_h5_to_replay_buffer,
+    load_minari_dataset_to_replay_buffer,
+)
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import resolve_checkpoint_dir
 from rl_garden.common.resolved_config import persist_resolved_config
@@ -100,11 +104,14 @@ def run_offline(
         + f"\n|resolved_algorithm|{algorithm}|",
     )
 
-    obs_space, action_space = infer_specs_from_h5(
-        args.offline_dataset_path,
-        action_low=args.action_low,
-        action_high=args.action_high,
-    )
+    if args.dataset_source == "minari":
+        obs_space, action_space = infer_specs_from_minari(args.offline_dataset_path)
+    else:
+        obs_space, action_space = infer_specs_from_h5(
+            args.offline_dataset_path,
+            action_low=args.action_low,
+            action_high=args.action_high,
+        )
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=args.spec_num_envs)
     if args.std_log:
         obs_desc = obs_space.shape if isinstance(obs_space, spaces.Box) else obs_space
@@ -115,14 +122,24 @@ def run_offline(
         )
 
     agent = build_agent(args, env_spec, logger)
-    loaded = load_maniskill_h5_to_replay_buffer(
-        agent.replay_buffer,
-        args.offline_dataset_path,
-        num_traj=args.offline_num_traj,
-        reward_scale=args.reward_scale,
-        reward_bias=args.reward_bias,
-        success_key=args.success_key,
-    )
+    if args.dataset_source == "minari":
+        loaded = load_minari_dataset_to_replay_buffer(
+            agent.replay_buffer,
+            args.offline_dataset_path,
+            num_episodes=args.offline_num_traj,
+            reward_scale=args.reward_scale,
+            reward_bias=args.reward_bias,
+            success_key=args.success_key,
+        )
+    else:
+        loaded = load_maniskill_h5_to_replay_buffer(
+            agent.replay_buffer,
+            args.offline_dataset_path,
+            num_traj=args.offline_num_traj,
+            reward_scale=args.reward_scale,
+            reward_bias=args.reward_bias,
+            success_key=args.success_key,
+        )
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:
         print(f"[pretrain] loaded_transitions={loaded}", flush=True)

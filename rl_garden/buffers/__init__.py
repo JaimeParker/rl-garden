@@ -10,6 +10,10 @@ from rl_garden.buffers.maniskill_h5 import (
     infer_specs_from_h5,
     load_maniskill_h5_to_replay_buffer,
 )
+from rl_garden.buffers.minari_dataset import (
+    infer_specs_from_minari,
+    load_minari_dataset_to_replay_buffer,
+)
 from rl_garden.buffers.residual_buffer import (
     ResidualDictReplayBuffer,
     ResidualTensorReplayBuffer,
@@ -38,5 +42,7 @@ __all__ = [
     "TensorReplayBuffer",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",
+    "infer_specs_from_minari",
     "load_maniskill_h5_to_replay_buffer",
+    "load_minari_dataset_to_replay_buffer",
 ]
