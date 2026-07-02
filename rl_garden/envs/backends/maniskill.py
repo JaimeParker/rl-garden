@@ -17,7 +17,6 @@ class ManiSkillBackend(EnvBackend):
         sim_backend = ms.sim_backend if ms is not None else "gpu"
         render_backend = ms.render_backend if ms is not None else "gpu"
         reward_mode = ms.reward_mode if ms is not None else None
-        success_reward_override = ms.success_reward_override if ms is not None else None
         return ManiSkillEnvConfig(
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
@@ -34,7 +33,6 @@ class ManiSkillBackend(EnvBackend):
             sim_backend=sim_backend,
             render_backend=render_backend,
             reward_mode=reward_mode,
-            success_reward_override=success_reward_override,
             reconfiguration_freq=1 if is_eval else 0,
             record_dir=req.eval_record_dir if is_eval else None,
             save_video=req.capture_video if is_eval else False,
@@ -48,14 +46,6 @@ class ManiSkillBackend(EnvBackend):
 
         cfg = cls._make_cfg(req, is_eval=False)
         env = make_maniskill_env(cfg)
-        ms = req.backend_config
-        if ms is not None and ms.success_reward_override is not None:
-            if env.unwrapped.reward_mode != "normalized_dense":
-                raise ValueError(
-                    "--maniskill.success_reward_override requires "
-                    "reward_mode='normalized_dense'; "
-                    f"got {env.unwrapped.reward_mode!r}"
-                )
         return env
 
     @classmethod

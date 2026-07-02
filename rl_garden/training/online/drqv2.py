@@ -131,7 +131,7 @@ class DrQv2Args(EnvBackendArgs):
     """DrQ-v2 with multi-env backend support.
 
     ManiSkill-specific: ``--maniskill.sim_backend``, ``--maniskill.render_backend``,
-    ``--maniskill.reward_mode``, ``--maniskill.success_reward_override``.
+    ``--maniskill.reward_mode``.
     """
 
     # --- Env ---

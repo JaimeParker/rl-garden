@@ -40,7 +40,6 @@ class ManiSkillConfig:
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     reward_mode: Optional[str] = None
-    success_reward_override: Optional[float] = None
 
 
 @dataclass

@@ -98,6 +98,14 @@ def test_environment_logging_defaults_are_overridden_by_explicit_cli(monkeypatch
     assert args.log_type == "none"
 
 
+def test_sac_disables_eval_env_when_eval_frequency_is_zero():
+    from rl_garden.training.online.sac import SACArgs, _sac_env_request
+
+    args = SACArgs(eval_freq=0)
+
+    assert not _sac_env_request(args, "test-run").create_eval_env
+
+
 def test_print_config_is_recursive_and_does_not_create_run_dir(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ | {"RLG_LOG_TYPE": "wandb", "MPLCONFIGDIR": "/tmp"}

@@ -26,6 +26,7 @@ def _sac_env_request(args, run_name):
         capture_video=args.capture_video,
         video_fps=args.video_fps,
         num_eval_steps=args.num_eval_steps,
+        create_eval_env=args.eval_freq > 0,
         backend_config=backend_config,
     )
 
