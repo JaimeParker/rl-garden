@@ -40,12 +40,10 @@ class ManiSkillConfig:
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     reward_mode: Optional[str] = None
-    success_reward_override: Optional[float] = None
-    robot_uids: Optional[str] = None
-    fix_peg_pose: Optional[bool] = None
-    fix_box: Optional[bool] = None
-    fixed_peg_xy: Optional[tuple[float, float]] = None
-    fixed_peg_z_rot_deg: Optional[float] = None
+    # JSON-encoded dict forwarded verbatim to ManiSkillEnvConfig.env_kwargs, which
+    # takes precedence over any named field there. Escape hatch for task-specific
+    # kwargs (e.g. peg overrides) without adding named fields here per task.
+    env_kwargs_json: str = "{}"
 
 
 @dataclass

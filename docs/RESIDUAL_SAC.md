@@ -114,7 +114,6 @@ scripts/train_residual_rgbd.sh \
   --env-id PegInsertionSidePegOnly-v1 \
   --control-mode pd_ee_delta_pose \
   --maniskill.reward-mode normalized_dense \
-  --maniskill.robot-uids panda_wristcam_gripper_closed \
   --per-camera-rgbd \
   --image-fusion-mode per_key \
   --base-policy act \
@@ -143,7 +142,6 @@ scripts/train_residual_rgbd.sh \
   --env-id PegInsertionSidePegOnly-v1 \
   --control-mode pd_ee_delta_pose \
   --maniskill.reward-mode normalized_dense \
-  --maniskill.robot-uids panda_wristcam_gripper_closed \
   --per-camera-rgbd \
   --image-fusion-mode per_key \
   --base-policy sac \
@@ -194,8 +192,6 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_state.sh \
   --env-id PegInsertionSidePegOnly-v1 \
   --control-mode pd_ee_delta_pose \
   --maniskill.reward-mode normalized_dense \
-  --maniskill.robot-uids panda_wristcam_gripper_closed \
-  --maniskill.fix-box True \
   --residual-action-scale 1 \
   --base-policy act \
   --base-ckpt-path act-peg-only \
@@ -211,7 +207,11 @@ CUDA_VISIBLE_DEVICES=2 scripts/train_residual_state.sh \
 - `--residual-action-scale 1`：actor 输出的 unit residual 不缩小，residual normalized delta 范围为 `[-1, 1]`。
 - `--control-mode pd_ee_twist`：使用 EE twist 控制模式。
 - `--log-type tensorboard`：写 TensorBoard 日志。
-- peg custom env 参数通过 `--maniskill.*` 显式传入，不再维护 peg 专用 residual launcher。
+- peg 的默认物理配置（`robot_uids`/`fix_box`/`fix_peg_pose`/`fixed_peg_xy`/`fixed_peg_z_rot_deg`）
+  由 `PegInsertionSidePegOnly-v1` 任务类自身的构造函数默认值提供，不需要任何 `--maniskill.*` 覆盖；
+  不再维护 peg 专用 residual launcher。确需临时覆盖某个 ManiSkill env 构造参数时，用
+  `--maniskill.env-kwargs-json '{"key": value}'` 透传（JSON 字符串，直接转发给
+  `gym.make()` 的 kwargs，优先级最高）。
 
 ## 对原有代码的改动
 
@@ -291,8 +291,6 @@ scripts/train_residual_rgbd.sh \
   --maniskill.sim-backend physx_cpu \
   --maniskill.render-backend gpu \
   --maniskill.reward-mode normalized_dense \
-  --maniskill.robot-uids panda_wristcam_gripper_closed \
-  --maniskill.fix-box True \
   --per-camera-rgbd \
   --image-fusion-mode per_key \
   --base-policy act \

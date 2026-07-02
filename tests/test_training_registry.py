@@ -153,13 +153,8 @@ def test_residual_sac_print_config_does_not_create_training_resources(tmp_path):
             "none",
             "--log-dir",
             str(tmp_path),
-            "--maniskill.robot-uids",
-            "panda_wristcam_gripper_closed",
-            "--maniskill.fix-box",
-            "True",
-            "--maniskill.fixed-peg-xy",
-            "-0.05",
-            "-0.15",
+            "--maniskill.env-kwargs-json",
+            '{"robot_uids": "panda_wristcam_gripper_closed", "fix_box": true}',
         ],
         cwd=repo_root,
         env=env,
@@ -172,9 +167,9 @@ def test_residual_sac_print_config_does_not_create_training_resources(tmp_path):
     assert config["training_phase"] == "online"
     assert config["algorithm"] == "residual_sac"
     assert config["args"]["debug"] is True
-    assert config["args"]["maniskill"]["robot_uids"] == "panda_wristcam_gripper_closed"
-    assert config["args"]["maniskill"]["fix_box"] is True
-    assert config["args"]["maniskill"]["fixed_peg_xy"] == [-0.05, -0.15]
+    assert config["args"]["maniskill"]["env_kwargs_json"] == (
+        '{"robot_uids": "panda_wristcam_gripper_closed", "fix_box": true}'
+    )
     assert list(tmp_path.iterdir()) == []
     assert "mani_skill" not in result.stderr
 

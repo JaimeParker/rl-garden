@@ -58,9 +58,11 @@ algorithm registration, environment backends, or replay/device behavior.
 
 ## Specialized Defaults
 
-- Environment- or experiment-specific defaults belong in a dedicated example or
-  launcher, not in a generic registry dispatcher.
-- Peg defaults belong in `examples/train_sac_rgbd_peg.py` and its launcher.
-- `PegInsertionSidePegOnly-v1` exposes `base_camera` and `hand_camera`. The peg
-  RGBD entrypoint uses per-camera keys and `image_fusion_mode="per_key"` so
-  pretrained three-channel ResNet weights remain compatible.
+- Never add named, task-specific fields to a backend's `EnvBackendArgs` config
+  (e.g. `ManiSkillConfig`) — it is shared across every task the backend runs
+  and must stay generic. Customized or task-specific env parameters go one of
+  two ways: change them directly in the env's own file (the vendored task
+  class's constructor defaults), or pass them in via the backend's generic
+  JSON passthrough (e.g. `--maniskill.env-kwargs-json '{"key": value}'`,
+  forwarded to `ManiSkillEnvConfig.env_kwargs`, which takes precedence over
+  any named field).

@@ -159,10 +159,10 @@ def make_my_backend_env(cfg: MyBackendConfig):
 
 Edit `rl_garden/common/env_args.py`:
 
-1. Add a `MyBackendConfig` dataclass (backend-level CLI knobs, e.g. task-specific
-   flags). Keep its import **lazy inside the field's `default_factory`** or add
-   it as a direct import — but guard it so the file can be imported without the
-   backend installed.
+1. Add a `MyBackendConfig` dataclass (CLI-facing, cross-task backend knobs only —
+   e.g. `sim_backend`, `render_backend`). Keep its import **lazy inside the
+   field's `default_factory`** or add it as a direct import — but guard it so
+   the file can be imported without the backend installed.
 
 2. Add the field to `EnvBackendArgs`:
 
@@ -171,7 +171,7 @@ Edit `rl_garden/common/env_args.py`:
 
 @dataclass
 class MyBackendConfig:
-    """MyBackend-specific env settings. CLI prefix: ``--my_backend.<field>``"""
+    """MyBackend-specific env settings. CLI prefix: ``--my-backend.<field>``"""
     backend_specific_knob: Optional[str] = None
     # add only settings that users should be able to tune via CLI
 
@@ -191,9 +191,13 @@ class EnvBackendArgs:
 - The field name (`my_backend`) must match `MyBackend.config_field`.
 - All fields must have defaults so the dataclass can be constructed without
   the backend installed (lazy loading invariant).
-- Backend config in `EnvBackendArgs` is for **CLI-tuneable** knobs only.
-  Internal implementation details belong in `MyBackendConfig` inside the
-  implementation package, not here.
+- Backend config in `EnvBackendArgs` is for **CLI-tuneable, cross-task** knobs
+  only. Task-specific values (e.g. one task's fixed object pose or robot
+  variant) do not belong here, even as `Optional` fields defaulting to `None`
+  — they belong either in the implementation-layer config's own field defaults
+  (e.g. the vendored task's own constructor defaults), or behind a generic
+  passthrough field already on the implementation-layer config (e.g.
+  `env_kwargs`), never as a new named field on the CLI-facing config.
 
 ---
 

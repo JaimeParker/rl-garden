@@ -251,42 +251,44 @@ def _make_ms_req(ms):
     )
 
 
-def test_maniskill_config_peg_defaults_are_opt_in() -> None:
+def test_maniskill_config_has_no_task_specific_named_fields() -> None:
     from rl_garden.common.env_args import ManiSkillConfig
 
-    ms = ManiSkillConfig()
+    field_names = set(ManiSkillConfig.__dataclass_fields__.keys())
 
-    assert ms.robot_uids is None
-    assert ms.fix_peg_pose is None
-    assert ms.fix_box is None
-    assert ms.fixed_peg_xy is None
-    assert ms.fixed_peg_z_rot_deg is None
+    assert field_names == {"sim_backend", "render_backend", "reward_mode", "env_kwargs_json"}
 
 
-def test_maniskill_backend_forwards_peg_options() -> None:
+def test_maniskill_backend_forwards_env_kwargs_json() -> None:
+    import json
+
     from rl_garden.common.env_args import ManiSkillConfig
     from rl_garden.envs.backends.maniskill import ManiSkillBackend
 
     ms = ManiSkillConfig(
         reward_mode="normalized_dense",
-        robot_uids="panda_wristcam_gripper_closed",
-        fix_peg_pose=False,
-        fix_box=True,
-        fixed_peg_xy=(-0.05, -0.15),
-        fixed_peg_z_rot_deg=67.5,
+        env_kwargs_json=json.dumps({"robot_uids": "panda_wristcam_gripper_closed", "fix_box": True}),
     )
     req = _make_ms_req(ms)
 
     cfg = ManiSkillBackend._make_cfg(req, is_eval=True)
 
     assert cfg.reward_mode == "normalized_dense"
-    assert cfg.robot_uids == "panda_wristcam_gripper_closed"
-    assert cfg.fix_peg_pose is False
-    assert cfg.fix_box is True
-    assert cfg.fixed_peg_xy == (-0.05, -0.15)
-    assert cfg.fixed_peg_z_rot_deg == 67.5
+    assert cfg.env_kwargs == {"robot_uids": "panda_wristcam_gripper_closed", "fix_box": True}
     assert cfg.num_envs == 3
     assert cfg.save_video is True
+
+
+def test_maniskill_backend_env_kwargs_json_empty_string_is_no_op() -> None:
+    from rl_garden.common.env_args import ManiSkillConfig
+    from rl_garden.envs.backends.maniskill import ManiSkillBackend
+
+    ms = ManiSkillConfig(env_kwargs_json="")
+    req = _make_ms_req(ms)
+
+    cfg = ManiSkillBackend._make_cfg(req, is_eval=True)
+
+    assert cfg.env_kwargs == {}
 
 
 def test_robotwin_config_defaults() -> None:
@@ -426,20 +428,13 @@ def test_robotwin_backend_disable_topp() -> None:
     assert cfg.task_config["need_topp"] is False
 
 
-def test_peg_sac_launcher_defaults_are_expressible_with_backend_config() -> None:
+def test_peg_defaults_require_no_backend_config_overrides() -> None:
+    """Peg's known-good config matches the vendored task class's own defaults,
+    so a zero-override ManiSkillConfig must already produce them."""
     from rl_garden.common.env_args import ManiSkillConfig
     from rl_garden.envs.backends.maniskill import ManiSkillBackend
 
-    ms = ManiSkillConfig(
-        sim_backend="gpu",
-        render_backend="gpu",
-        reward_mode="normalized_dense",
-        robot_uids="panda_wristcam_gripper_closed_wo_norm",
-        fix_peg_pose=False,
-        fix_box=True,
-        fixed_peg_xy=(-0.05, -0.15),
-        fixed_peg_z_rot_deg=67.5,
-    )
+    ms = ManiSkillConfig(sim_backend="gpu", render_backend="gpu", reward_mode="normalized_dense")
     req = _make_ms_req(ms)
 
     cfg = ManiSkillBackend._make_cfg(req, is_eval=False)
@@ -449,11 +444,15 @@ def test_peg_sac_launcher_defaults_are_expressible_with_backend_config() -> None
     assert cfg.sim_backend == "gpu"
     assert cfg.render_backend == "gpu"
     assert cfg.reward_mode == "normalized_dense"
-    assert cfg.robot_uids == "panda_wristcam_gripper_closed_wo_norm"
-    assert cfg.fix_peg_pose is False
-    assert cfg.fix_box is True
-    assert cfg.fixed_peg_xy == (-0.05, -0.15)
-    assert cfg.fixed_peg_z_rot_deg == 67.5
+    assert cfg.env_kwargs == {}
+    # robot_uids/fix_peg_pose/fix_box/fixed_peg_xy/fixed_peg_z_rot_deg are left
+    # None here on purpose: PegInsertionSidePegOnly-v1's own constructor defaults
+    # already reproduce the deleted residual peg scripts' behavior.
+    assert cfg.robot_uids is None
+    assert cfg.fix_peg_pose is None
+    assert cfg.fix_box is None
+    assert cfg.fixed_peg_xy is None
+    assert cfg.fixed_peg_z_rot_deg is None
 
 
 def test_state_wsrl_defaults_match_existing_cli() -> None:
