@@ -83,7 +83,9 @@ def test_phase_registries_discover_expected_algorithms():
     offline.discover()
     off2on.discover()
 
-    assert set(online.entries()) == {"sac", "ppo", "drqv2", "flash_sac", "residual_sac"}
+    assert set(online.entries()) == {
+        "sac", "ppo", "recurrent_ppo", "drqv2", "flash_sac", "residual_sac"
+    }
     assert set(offline.entries()) == {"bc", "iql", "cql", "calql", "wsrl"}
     assert set(off2on.entries()) == {"wsrl"}
 

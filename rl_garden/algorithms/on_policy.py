@@ -144,7 +144,14 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     def _env_action(self, raw_action: torch.Tensor) -> torch.Tensor:
         return self.policy.clamp_action(raw_action).detach()
 
-    def _compute_final_values(self, infos, done_mask: torch.Tensor) -> torch.Tensor:
+    def _compute_final_values(self, infos, done_mask: torch.Tensor, hidden) -> torch.Tensor:
+        """Bootstrap value for envs that just finished this step.
+
+        ``hidden`` is unused by this stateless default; recurrent subclasses
+        override this method to bootstrap from the POST-step, UNMASKED hidden
+        state (``final_observation`` continues the same episode, it is not a
+        fresh start).
+        """
         final_values = torch.zeros(self.num_envs, device=self.device)
         if "final_observation" not in infos or not done_mask.any():
             return final_values
@@ -159,6 +166,36 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             ).view(-1)
         final_values[done_mask] = values
         return final_values
+
+    # ------------------------------------------------------------------
+    # Recurrent-state hooks. Trivial, hidden-agnostic defaults so subclasses
+    # that never carry a recurrent hidden state are completely unaffected;
+    # recurrent subclasses (e.g. RecurrentPPO) override these directly rather
+    # than the base class branching on any "is this recurrent" flag.
+    # ------------------------------------------------------------------
+
+    def _initial_hidden_state(self, batch_size: int):
+        """Opaque recurrent state carried across rollout steps, or None for
+        stateless policies."""
+        return None
+
+    def _snapshot_window_initial_hidden(self, hidden, next_done: torch.Tensor):
+        """Hidden-state snapshot to use as the BPTT initial state for the
+        upcoming rollout window. Default: pass through unchanged (irrelevant
+        when hidden is None)."""
+        return hidden
+
+    def _rollout_step(self, obs, hidden, episode_starts: torch.Tensor):
+        """Single rollout step. Returns (actions, values, log_probs, entropy,
+        new_hidden). Default: stateless _rollout_policy(obs), hidden passed
+        through unchanged."""
+        actions, values, log_probs, entropy = self._rollout_policy(obs)
+        return actions, values, log_probs, entropy, hidden
+
+    def _predict_last_values(self, obs, hidden) -> torch.Tensor:
+        """Bootstrap value for GAE at the end of a rollout window. Default:
+        stateless policy.predict_values(obs)."""
+        return self.policy.predict_values(obs).view(-1)
 
     def _evaluate(self) -> dict[str, float]:
         if self.eval_env is None:
@@ -181,6 +218,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         obs, _ = self.env.reset(seed=self.seed)
         next_done = torch.zeros(self.num_envs, device=self.device)
         cumulative = defaultdict(float)
+        hidden = self._initial_hidden_state(self.num_envs)
 
         while self._global_step < total_timesteps:
             previous_step = self._global_step
@@ -206,18 +244,27 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     )
 
             self.rollout_buffer.reset()
+            # Fold the episode-boundary reset from the END of the previous
+            # rollout window into the snapshot BEFORE this window starts. This
+            # is what lets RolloutBuffer.get_sequences() reconstruct BPTT
+            # windows without needing to store dones[-1] anywhere -- see
+            # rollout_buffer.py::get_sequences() docstring. No-op (hidden is
+            # None) for stateless policies.
+            window_initial_hidden = self._snapshot_window_initial_hidden(hidden, next_done)
             rollout_t = time.perf_counter()
             rollout_reward_sum = 0.0
             rollout_reward_count = 0
             rollout_episode_metrics: dict[str, list[float]] = defaultdict(list)
             for _ in range(self.num_steps):
                 self._global_step += self.num_envs
-                actions, values, log_probs, _ = self._rollout_policy(obs)
+                actions, values, log_probs, _, hidden = self._rollout_step(
+                    obs, hidden, next_done
+                )
                 next_obs, rewards, terminations, truncations, infos = self.env.step(
                     self._env_action(actions)
                 )
                 next_done = torch.logical_or(terminations, truncations).to(self.device)
-                final_values = self._compute_final_values(infos, next_done.bool())
+                final_values = self._compute_final_values(infos, next_done.bool(), hidden)
                 self.rollout_buffer.add(
                     obs,
                     actions,
@@ -245,14 +292,15 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             cumulative["rollout_time"] += rollout_time
 
             with torch.no_grad():
-                last_values = self.policy.predict_values(
-                    self._obs_to_policy_device(obs)
-                ).view(-1)
+                last_values = self._predict_last_values(
+                    self._obs_to_policy_device(obs), hidden
+                )
             self.rollout_buffer.compute_returns_and_advantage(
                 last_values,
                 next_done,
                 finite_horizon_gae=self.finite_horizon_gae,
             )
+            self._rollout_initial_hidden = window_initial_hidden
 
             update_t = time.perf_counter()
             losses = self.train()

@@ -21,6 +21,7 @@ from rl_garden.networks.flash_sac_layers import (
     UnitRMSNorm,
 )
 from rl_garden.networks.mlp import KernelInit, MLPResNet, create_mlp
+from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
 from rl_garden.networks.spatial_critic import SpatialEmbQEnsemble, SpatialEmbQHead
 from rl_garden.networks.value import ValueNetwork
 
@@ -40,6 +41,9 @@ __all__ = [
     "KernelInit",
     "MLPResNet",
     "NormalTanhPolicy",
+    "RecurrentLatentEncoder",
+    "RecurrentState",
+    "RNNType",
     "SpatialEmbQEnsemble",
     "SpatialEmbQHead",
     "SquashedGaussianActor",

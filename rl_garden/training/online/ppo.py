@@ -30,25 +30,25 @@ def _ppo_env_request(args, run_name):
     )
 
 
-def build_ppo(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.algorithms import PPO
+def _ppo_image_kwargs(args, env) -> dict:
     from rl_garden.common.cli_args import (
         image_encoder_factory_from_args,
         image_keys_from_env,
     )
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        factory = image_encoder_factory_from_args(args)
-        image_keys = image_keys_from_env(env, args)
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode=args.image_fusion_mode,
-        )
+    if args.obs_mode == "state":
+        return {}
+    return dict(
+        image_keys=image_keys_from_env(env, args),
+        image_encoder_factory=image_encoder_factory_from_args(args),
+        image_fusion_mode=args.image_fusion_mode,
+    )
 
-    agent = PPO(
+
+def _ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict) -> dict:
+    """Kwargs shared by ``PPO`` and ``RecurrentPPO`` construction -- everything
+    except the rnn-specific params that only ``RecurrentPPO`` accepts."""
+    return dict(
         env=env,
         eval_env=eval_env,
         num_steps=args.num_steps,
@@ -94,6 +94,13 @@ def build_ppo(args, env, eval_env, logger, checkpoint_dir):
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
     )
+
+
+def build_ppo(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms import PPO
+
+    image_kwargs = _ppo_image_kwargs(args, env)
+    agent = PPO(**_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs))
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
     return agent

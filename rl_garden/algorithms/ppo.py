@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Iterator, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from gymnasium import spaces
 
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
-from rl_garden.buffers.rollout_buffer import DictRolloutBuffer, RolloutBuffer
+from rl_garden.buffers.rollout_buffer import DictRolloutBuffer, RolloutBuffer, RolloutBufferSample
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
@@ -27,6 +27,7 @@ from rl_garden.policies.ppo_policy import PPOPolicy
 class PPO(OnPolicyAlgorithm):
     """SB3/ManiSkill-style PPO with rl-garden feature extractors."""
 
+    _compatible_checkpoint_algorithms = ("PPO",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {"features_extractor_class", "features_extractor_kwargs"}
     )
@@ -457,6 +458,76 @@ class PPO(OnPolicyAlgorithm):
         pg_loss2 = -advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
         return torch.max(pg_loss1, pg_loss2).mean()
 
+    def _ppo_minibatch_update(
+        self,
+        *,
+        values: torch.Tensor,
+        log_prob: torch.Tensor,
+        entropy: torch.Tensor,
+        old_values: torch.Tensor,
+        old_log_prob: torch.Tensor,
+        advantages: torch.Tensor,
+        returns: torch.Tensor,
+        clip_coef: float,
+    ) -> dict[str, float | bool]:
+        """One PPO minibatch gradient step on 1-D tensors. ``result["stop"]`` is
+        True if target_kl triggered an early stop (caller should break after
+        recording ``clipfrac``, matching the pre-refactor loop's behavior of
+        recording clipfrac for the aborting minibatch but no other metric)."""
+        if self.norm_adv and len(advantages) > 1:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        logratio = log_prob - old_log_prob
+        ratio = logratio.exp()
+        with torch.no_grad():
+            old_approx_kl = (-logratio).mean()
+            approx_kl = ((ratio - 1.0) - logratio).mean()
+            clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
+        if self.target_kl is not None and approx_kl > self.target_kl:
+            return {"stop": True, "clipfrac": clipfrac}
+
+        policy_loss = self._policy_loss(advantages=advantages, ratio=ratio, clip_coef=clip_coef)
+        if self.clip_vloss:
+            v_loss_unclipped = (values - returns) ** 2
+            values_clipped = old_values + torch.clamp(values - old_values, -clip_coef, clip_coef)
+            v_loss_clipped = (values_clipped - returns) ** 2
+            value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        else:
+            value_loss = 0.5 * F.mse_loss(values, returns)
+        entropy_loss = entropy.mean()
+        loss = policy_loss - self.ent_coef * entropy_loss + self.vf_coef * value_loss
+
+        self.policy_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+        self.policy_optimizer.step()
+
+        return {
+            "stop": False,
+            "policy_loss": float(policy_loss.detach().item()),
+            "value_loss": float(value_loss.detach().item()),
+            "entropy_loss": float(entropy_loss.detach().item()),
+            "approx_kl": float(approx_kl.detach().item()),
+            "old_approx_kl": float(old_approx_kl.detach().item()),
+            "clipfrac": clipfrac,
+            "loss": float(loss.detach().item()),
+        }
+
+    def _iter_minibatches(self) -> Iterator[RolloutBufferSample]:
+        return self.rollout_buffer.get(self.minibatch_size)
+
+    def _evaluate_minibatch(
+        self, data: RolloutBufferSample
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns 1-D (values, log_prob, entropy, old_values, old_log_prob, advantages, returns)."""
+        values, log_prob, entropy = self.policy.evaluate_actions(
+            data.obs, data.actions, stop_gradient_actor=self._actor_stop_gradient()
+        )
+        return (
+            values.flatten(), log_prob.flatten(), entropy.flatten(),
+            data.old_values, data.old_log_prob, data.advantages, data.returns,
+        )
+
     def train(self) -> dict[str, float]:
         self.policy.train()
         self._global_update += 1
@@ -475,71 +546,32 @@ class PPO(OnPolicyAlgorithm):
         continue_training = True
 
         for _ in range(self.update_epochs):
-            for data in self.rollout_buffer.get(self.minibatch_size):
-                values, log_prob, entropy = self.policy.evaluate_actions(
-                    data.obs,
-                    data.actions,
-                    stop_gradient_actor=self._actor_stop_gradient(),
+            for data in self._iter_minibatches():
+                values, log_prob, entropy, old_values, old_log_prob, advantages, returns = (
+                    self._evaluate_minibatch(data)
                 )
-                values = values.flatten()
-                log_prob = log_prob.flatten()
-                entropy = entropy.flatten()
-                advantages = data.advantages
-                if self.norm_adv and len(advantages) > 1:
-                    advantages = (advantages - advantages.mean()) / (
-                        advantages.std() + 1e-8
-                    )
+                result = self._ppo_minibatch_update(
+                    values=values,
+                    log_prob=log_prob,
+                    entropy=entropy,
+                    old_values=old_values,
+                    old_log_prob=old_log_prob,
+                    advantages=advantages,
+                    returns=returns,
+                    clip_coef=clip_coef,
+                )
 
-                logratio = log_prob - data.old_log_prob
-                ratio = logratio.exp()
-                with torch.no_grad():
-                    old_approx_kl = (-logratio).mean()
-                    approx_kl = ((ratio - 1.0) - logratio).mean()
-                    clipfracs.append(
-                        ((ratio - 1.0).abs() > clip_coef).float().mean().item()
-                    )
-                if self.target_kl is not None and approx_kl > self.target_kl:
+                clipfracs.append(result["clipfrac"])
+                if result["stop"]:
                     continue_training = False
                     break
 
-                policy_loss = self._policy_loss(
-                    advantages=advantages,
-                    ratio=ratio,
-                    clip_coef=clip_coef,
-                )
-                if self.clip_vloss:
-                    v_loss_unclipped = (values - data.returns) ** 2
-                    values_clipped = data.old_values + torch.clamp(
-                        values - data.old_values,
-                        -clip_coef,
-                        clip_coef,
-                    )
-                    v_loss_clipped = (values_clipped - data.returns) ** 2
-                    value_loss = (
-                        0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
-                    )
-                else:
-                    value_loss = 0.5 * F.mse_loss(values, data.returns)
-                entropy_loss = entropy.mean()
-                loss = (
-                    policy_loss
-                    - self.ent_coef * entropy_loss
-                    + self.vf_coef * value_loss
-                )
-
-                self.policy_optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.policy.parameters(), self.max_grad_norm
-                )
-                self.policy_optimizer.step()
-
-                policy_losses.append(float(policy_loss.detach().item()))
-                value_losses.append(float(value_loss.detach().item()))
-                entropy_losses.append(float(entropy_loss.detach().item()))
-                approx_kls.append(float(approx_kl.detach().item()))
-                old_approx_kls.append(float(old_approx_kl.detach().item()))
-                losses.append(float(loss.detach().item()))
+                policy_losses.append(result["policy_loss"])
+                value_losses.append(result["value_loss"])
+                entropy_losses.append(result["entropy_loss"])
+                approx_kls.append(result["approx_kl"])
+                old_approx_kls.append(result["old_approx_kl"])
+                losses.append(result["loss"])
             if not continue_training:
                 break
 

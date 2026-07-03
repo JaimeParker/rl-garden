@@ -100,6 +100,19 @@ class VisionPPOTrainingArgs(PPOTrainingArgs, VisionArgs):
 
 
 @dataclass
+class RecurrentPPOTrainingArgs(PPOTrainingArgs):
+    rnn_type: Literal["lstm", "gru"] = "lstm"
+    rnn_hidden_size: int = 256
+    rnn_num_layers: int = 1
+
+
+@dataclass
+class VisionRecurrentPPOTrainingArgs(RecurrentPPOTrainingArgs, VisionArgs):
+    camera_width: Optional[int] = 64
+    camera_height: Optional[int] = 64
+
+
+@dataclass
 class DrQv2TrainingArgs:
     env_id: str = "PickCube-v1"
     num_envs: int = 16
