@@ -9,6 +9,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
 
 
@@ -20,20 +21,6 @@ class RolloutBufferSample:
     old_log_prob: torch.Tensor
     advantages: torch.Tensor
     returns: torch.Tensor
-
-
-def _flatten_obs(obs):
-    if isinstance(obs, DictArray):
-        return {key: _flatten_obs(value) for key, value in obs.data.items()}
-    if isinstance(obs, dict):
-        return {key: _flatten_obs(value) for key, value in obs.items()}
-    return obs.reshape((-1,) + obs.shape[2:])
-
-
-def _index_obs(obs, indices: torch.Tensor):
-    if isinstance(obs, dict):
-        return {key: _index_obs(value, indices) for key, value in obs.items()}
-    return obs[indices]
 
 
 class RolloutBuffer:
@@ -205,7 +192,7 @@ class RolloutBuffer:
             raise RuntimeError("RolloutBuffer must be full before sampling.")
         if batch_size is None:
             batch_size = self.buffer_size
-        flat_obs = _flatten_obs(self.obs)
+        flat_obs = flatten_leading_dims(self.obs)
         flat_actions = self.actions.reshape((-1,) + self.actions.shape[2:])
         flat_values = self.values.reshape(-1)
         flat_log_probs = self.log_probs.reshape(-1)
@@ -216,7 +203,7 @@ class RolloutBuffer:
         for start in range(0, self.buffer_size, batch_size):
             mb_inds = indices[start : start + batch_size]
             yield RolloutBufferSample(
-                obs=_index_obs(flat_obs, mb_inds),
+                obs=index_obs(flat_obs, mb_inds),
                 actions=flat_actions[mb_inds],
                 old_values=flat_values[mb_inds],
                 old_log_prob=flat_log_probs[mb_inds],

@@ -17,6 +17,7 @@ from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.ppo import PPO
+from rl_garden.algorithms.recurrent_ppo import RecurrentPPO
 from rl_garden.algorithms.residual import ResidualSAC
 from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.wsrl import WSRL
@@ -36,6 +37,7 @@ __all__ = [
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
     "PPO",
+    "RecurrentPPO",
     "ResidualSAC",
     "SAC",
     "WSRL",

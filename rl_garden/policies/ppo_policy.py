@@ -40,6 +40,7 @@ class PPOPolicy(BasePolicy):
         features_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         *,
+        features_dim: Optional[int] = None,
         log_std_init: float = -0.5,
         actor_use_layer_norm: bool = False,
         value_use_layer_norm: bool = False,
@@ -58,7 +59,7 @@ class PPOPolicy(BasePolicy):
         self.action_space = action_space
         self.features_extractor = features_extractor
         actor_arch, value_arch = get_ppo_arch(net_arch)
-        fd = features_extractor.features_dim
+        fd = features_dim if features_dim is not None else features_extractor.features_dim
         self.actor = DiagGaussianActor(
             fd,
             action_space,
