@@ -113,7 +113,7 @@ class RoboTwinTaskAdapter:
         args.setdefault("save_path", "./data")
         args.setdefault("clear_cache_freq", self.cfg.clear_cache_freq)
         args.setdefault("render_every_control_step", self.cfg.render_every_control_step)
-        args.setdefault("need_topp", not self.cfg.disable_topp)
+        args.pop("need_topp", None)  # RoboTwin passes self.need_topp as positional; must not duplicate
         if (
             self.cfg.control_step_cap is not None
             and args.get("control_step_cap") is None

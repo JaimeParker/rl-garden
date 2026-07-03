@@ -26,7 +26,6 @@ class RoboTwinBackend(EnvBackend):
         step_lim = rt.step_lim if rt is not None else 400
         planner = rt.planner_backend if rt is not None else "mplib"
         embodiment = rt.embodiment if rt is not None else ["aloha-agilex"]
-        disable_topp = rt.disable_topp if rt is not None else False
 
         # height first — matches (camera_height, camera_width) convention in both scripts
         image_size = (req.camera_height or 64, req.camera_width or 64)
@@ -38,7 +37,6 @@ class RoboTwinBackend(EnvBackend):
             "embodiment": embodiment,
             "render_freq": 0,
             "render_every_control_step": render_every,
-            "need_topp": not disable_topp,
             "episode_num": 100,
             "use_seed": False,
             "save_freq": 15,

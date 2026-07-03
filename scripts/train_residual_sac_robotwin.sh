@@ -54,25 +54,24 @@ exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" \
     --num-eval-envs 0 \
     --robotwin.robotwin-root /home/RoboTwin \
     --control-mode ee_delta_pose \
-    --camera-width 224 --camera-height 224 \
-    --capture-video \
+    # TODO: downsample the camera images to reduce memory usage and speed up training
+    --camera-width 320 --camera-height 240 \
     --total-timesteps 100000 \
-    --buffer-size 512 \
+    --buffer-size 10000 \
     --buffer-device cpu \
-    --batch-size 16 \
-    --learning-starts 0 \
-    --training-freq 16 \
-    --utd 0.5 \
-    # --step_lim 200 \
+    --batch-size 256 \
+    --learning-starts 512 \
+    --training-freq 256 \
+    --utd 0.25 \
     --robotwin.step-lim 200 \
     --robotwin.control-step-cap 16 \
     --robotwin.disable-topp \
-    --encoder resnet10 \
+    --encoder resnet18 \
     --encoder-features-dim 64 \
     --image-fusion-mode per_key \
     --robotwin.no-include-wrist-cameras \
     --eval-freq 0 \
     --log-freq 16 \
     --exp-name residual_sac_robotwin_place_empty_cup \
-    --wandb-project robotwin \
+    --wandb_project robotwin \
     "${FORWARD_ARGS[@]}"

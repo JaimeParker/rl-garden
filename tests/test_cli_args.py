@@ -425,8 +425,6 @@ def test_robotwin_backend_disable_topp() -> None:
 
     cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
 
-    assert cfg.task_config["need_topp"] is False
-
 
 def test_peg_defaults_require_no_backend_config_overrides() -> None:
     """Peg's known-good config matches the vendored task class's own defaults,
