@@ -33,7 +33,7 @@ class WithoutReplaceSamplerMixin:
     # ------------------------------------------------------------------
 
     def _reset_permutation(self) -> None:
-        upper_t = self.per_env_buffer_size if self.full else self.pos
+        upper_t = self.size
         total = upper_t * self.num_envs
         if total == 0:
             self._perm = None
@@ -82,5 +82,4 @@ class WithoutReplaceSamplerMixin:
     @property
     def epoch_size(self) -> int:
         """Total transitions in one epoch (full pass through the buffer)."""
-        upper_t = self.per_env_buffer_size if self.full else self.pos
-        return upper_t * self.num_envs
+        return self.size * self.num_envs

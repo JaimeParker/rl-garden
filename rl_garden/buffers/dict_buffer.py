@@ -274,10 +274,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         self.rewards[self.pos] = reward
         self.dones[self.pos] = done
 
-        self.pos += 1
-        if self.pos == self.per_env_buffer_size:
-            self.full = True
-            self.pos = 0
+        self._advance()
         self._persist_cursor()
 
     def _index_batch(
@@ -300,7 +297,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         )
 
     def sample(self, batch_size: int) -> ReplayBufferSample:
-        upper = self.per_env_buffer_size if self.full else self.pos
+        upper = self.size
         batch_inds = torch.randint(0, upper, size=(batch_size,))
         env_inds = torch.randint(0, self.num_envs, size=(batch_size,))
         return self._index_batch(batch_inds, env_inds)

@@ -48,3 +48,10 @@ class BaseReplayBuffer(ABC):
     def __len__(self) -> int:
         """Total transitions available across all envs."""
         return self.size * self.num_envs
+
+    def _advance(self) -> None:
+        """Advance the circular write cursor, wrapping when the per-env buffer fills."""
+        self.pos += 1
+        if self.pos == self.per_env_buffer_size:
+            self.full = True
+            self.pos = 0

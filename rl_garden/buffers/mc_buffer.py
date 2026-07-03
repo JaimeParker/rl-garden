@@ -209,7 +209,7 @@ class MCReplayBufferMixin:
 
     def sample(self, batch_size: int) -> MCReplayBufferSample:
         """Sample batch with MC returns computed via cached table."""
-        upper = self.per_env_buffer_size if self.full else self.pos
+        upper = self.size
         batch_inds = torch.randint(0, upper, size=(batch_size,), device=self.storage_device)
         env_inds = torch.randint(0, self.num_envs, size=(batch_size,), device=self.storage_device)
         return self._index_batch(batch_inds, env_inds)
