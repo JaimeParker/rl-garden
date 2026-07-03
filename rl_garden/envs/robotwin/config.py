@@ -45,6 +45,7 @@ class RoboTwinEnvConfig:
     # RoboTwin runtime performance knobs.
     render_every_control_step: bool = False
     control_step_cap: Optional[int] = None
+    disable_topp: bool = False
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
 

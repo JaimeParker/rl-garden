@@ -113,6 +113,7 @@ class RoboTwinTaskAdapter:
         args.setdefault("save_path", "./data")
         args.setdefault("clear_cache_freq", self.cfg.clear_cache_freq)
         args.setdefault("render_every_control_step", self.cfg.render_every_control_step)
+        args.setdefault("need_topp", not self.cfg.disable_topp)
         if (
             self.cfg.control_step_cap is not None
             and args.get("control_step_cap") is None
@@ -139,6 +140,8 @@ class RoboTwinTaskAdapter:
         else:
             camera_cfg["head_camera_type"] = self.cfg.head_camera_type
             camera_cfg["wrist_camera_type"] = self.cfg.wrist_camera_type
+        if "collect_wrist_camera" not in camera_cfg:
+            camera_cfg["collect_wrist_camera"] = self.cfg.include_wrist_cameras
         trial_seed = self.env_seed
         retry_count = 0
         while True:

@@ -74,7 +74,12 @@ class PlainConv(BaseFeaturesExtractor):
             fc_input_dim = 64
         else:
             self.pool = nn.Identity()
-            fc_input_dim = 64 * 4 * 4
+            # Dynamically compute spatial size after conv/pool downsampling
+            # instead of hardcoding 4x4 (which only works for 128x128 input).
+            # first_pool: 4 for 128x128, 2 otherwise
+            h = image_size[0] // first_pool // 2 // 2 // 2
+            w = image_size[1] // first_pool // 2 // 2 // 2
+            fc_input_dim = 64 * h * w
 
         fc = create_mlp(
             input_dim=fc_input_dim,

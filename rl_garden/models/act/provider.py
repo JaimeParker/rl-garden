@@ -149,6 +149,28 @@ def make_act_state_obs_getter(
     return _getter
 
 
+def _remap_legacy_act_state_dict(
+    state_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Remap legacy ACT checkpoint keys to current DETRVAE parameter names."""
+    _renames = {
+        "model.encoder_joint_proj.weight": "model.encoder_state_proj.weight",
+        "model.encoder_joint_proj.bias": "model.encoder_state_proj.bias",
+    }
+    _drop_prefixes = (
+        "model.is_pad_head.",
+    )
+    remapped: dict[str, torch.Tensor] = {}
+    for key, tensor in state_dict.items():
+        if key in _renames:
+            remapped[_renames[key]] = tensor
+        elif any(key.startswith(prefix) for prefix in _drop_prefixes):
+            continue
+        else:
+            remapped[key] = tensor
+    return remapped
+
+
 class ACTPolicyModel(nn.Module):
     """Inference-only ACT model compatible with copied ACT checkpoints."""
 
@@ -264,6 +286,9 @@ class ACTBaseActionProvider(nn.Module):
         if not isinstance(checkpoint, dict):
             raise TypeError(f"ACT checkpoint at {path} is not a dict.")
         state_dict = select_act_state_dict(checkpoint, state_dict_key=state_dict_key)
+        # Remap legacy ACT checkpoint keys: encoder_joint_proj → encoder_state_proj,
+        # drop is_pad_head (not used in current DETRVAE).
+        state_dict = _remap_legacy_act_state_dict(state_dict)
         config, spec = infer_act_config(state_dict)
         state_obs_dim = None
         auto_state_obs_getter = False

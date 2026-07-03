@@ -129,5 +129,5 @@ def make_training_envs(backend_name: str, req: EnvRequest):
     """Create train and optional evaluation environments."""
     backend = _get_backend(backend_name)
     train_env = backend.make_train_env(req)
-    eval_env = backend.make_eval_env(req) if req.create_eval_env else None
+    eval_env = backend.make_eval_env(req) if req.create_eval_env and req.num_eval_envs > 0 else None
     return train_env, eval_env
