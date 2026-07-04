@@ -21,6 +21,8 @@ from rl_garden.algorithms.recurrent_ppo import RecurrentPPO
 from rl_garden.algorithms.recurrent_sac import RecurrentSAC
 from rl_garden.algorithms.residual import ResidualSAC
 from rl_garden.algorithms.sac import SAC
+from rl_garden.algorithms.sequence_ppo import SequencePPO
+from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
@@ -42,6 +44,8 @@ __all__ = [
     "RecurrentSAC",
     "ResidualSAC",
     "SAC",
+    "SequencePPO",
+    "TransformerPPO",
     "WSRL",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",

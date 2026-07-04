@@ -92,6 +92,10 @@ class RecurrentLatentEncoder(nn.Module):
     required so the module composes cleanly with checkpointing and stays a pure
     function of ``(latent, state)``, matching how the rest of this codebase's
     actor/critic heads are already stateless per-call.
+
+    Satisfies ``rl_garden.networks.sequence_encoder.SequenceLatentEncoder``
+    (structurally -- ``Protocol`` needs no explicit subclassing), the same
+    contract ``GTrXLLatentEncoder`` implements.
     """
 
     def __init__(

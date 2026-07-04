@@ -132,6 +132,24 @@ class VisionRecurrentPPOTrainingArgs(RecurrentPPOTrainingArgs, VisionArgs):
 
 
 @dataclass
+class TransformerPPOTrainingArgs(PPOTrainingArgs):
+    embed_dim: int = 256
+    head_dim: int = 64
+    num_heads: int = 4
+    num_transformer_layers: int = 3
+    mlp_num: int = 2
+    memory_len: int = 64
+    dropout_rate: float = 0.0
+    gru_bias: float = 2.0
+
+
+@dataclass
+class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, VisionArgs):
+    camera_width: Optional[int] = 64
+    camera_height: Optional[int] = 64
+
+
+@dataclass
 class DrQv2TrainingArgs:
     env_id: str = "PickCube-v1"
     num_envs: int = 16
