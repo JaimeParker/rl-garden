@@ -112,6 +112,64 @@ def test_index_state_selects_correct_batch_rows():
     assert torch.equal(indexed[:, 1], h[:, 2])
 
 
+@pytest.mark.parametrize("rnn_type", ["lstm", "gru"])
+def test_forward_sequence_with_burn_in_tail_matches_manual_slice(rnn_type):
+    """Functional equivalence: with gradients enabled throughout, the tail output
+    of forward_sequence_with_burn_in must equal slicing a full forward_sequence()
+    call at [burn_in_len:], given the same initial state."""
+    torch.manual_seed(0)
+    enc = RecurrentLatentEncoder(input_dim=4, hidden_size=5, rnn_type=rnn_type, num_layers=2)
+    state = enc.get_initial_state(3, torch.device("cpu"))
+
+    burn_in_len = 2
+    latent = torch.randn(7, 3, 4)
+    episode_starts = torch.zeros(7, 3)
+    episode_starts[4, 1] = 1.0  # mid-sequence reset in the tail portion
+
+    full_out, full_state = enc.forward_sequence(latent, state, episode_starts)
+    tail_out, tail_state = enc.forward_sequence_with_burn_in(
+        latent, state, episode_starts, burn_in_len
+    )
+
+    assert torch.allclose(tail_out, full_out[burn_in_len:])
+    if rnn_type == "lstm":
+        assert torch.allclose(tail_state[0], full_state[0])
+        assert torch.allclose(tail_state[1], full_state[1])
+    else:
+        assert torch.allclose(tail_state, full_state)
+
+
+@pytest.mark.parametrize("rnn_type", ["lstm", "gru"])
+def test_forward_sequence_with_burn_in_isolates_gradient(rnn_type):
+    """Burn-in must carry no gradient; the tail must remain fully differentiable."""
+    enc = RecurrentLatentEncoder(input_dim=3, hidden_size=4, rnn_type=rnn_type)
+    state = enc.get_initial_state(2, torch.device("cpu"))
+
+    burn_in_len = 3
+    latent = torch.randn(6, 2, 3, requires_grad=True)
+    episode_starts = torch.zeros(6, 2)
+
+    tail_out, tail_state = enc.forward_sequence_with_burn_in(
+        latent, state, episode_starts, burn_in_len
+    )
+
+    assert tail_out.requires_grad
+    if rnn_type == "lstm":
+        assert tail_state[0].requires_grad
+        assert tail_state[1].requires_grad
+    else:
+        assert tail_state.requires_grad
+
+    tail_out.sum().backward()
+    assert latent.grad is not None
+    # No gradient should reach the burn-in-only prefix positions.
+    for t in range(burn_in_len):
+        assert bool((latent.grad[t].abs().sum() == 0).item()), f"burn-in timestep {t} has nonzero grad"
+    # Every tail position must receive gradient.
+    for t in range(burn_in_len, 6):
+        assert bool((latent.grad[t].abs().sum() > 0).item()), f"tail timestep {t} has zero grad"
+
+
 def test_forward_dispatches_on_ndim():
     enc = RecurrentLatentEncoder(input_dim=3, hidden_size=4)
     state = enc.get_initial_state(2, torch.device("cpu"))

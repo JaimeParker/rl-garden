@@ -55,6 +55,25 @@ class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
 
 
 @dataclass
+class RecurrentSACTrainingArgs(SACTrainingArgs):
+    rnn_type: Literal["lstm", "gru"] = "lstm"
+    rnn_hidden_size: int = 256
+    rnn_num_layers: int = 1
+    burn_in_len: int = 40
+    learning_len: int = 40
+    forward_len: int = 5
+    prio_exponent: float = 0.9
+    importance_sampling_exponent: float = 0.6
+
+
+@dataclass
+class VisionRecurrentSACTrainingArgs(RecurrentSACTrainingArgs, VisionArgs):
+    buffer_size: int = 200_000
+    batch_size: int = 512
+    utd: float = 0.25
+
+
+@dataclass
 class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     total_timesteps: int = 10_000_000
     num_steps: int = 50

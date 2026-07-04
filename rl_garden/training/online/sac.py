@@ -31,36 +31,17 @@ def _sac_env_request(args, run_name):
     )
 
 
-def build_sac(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.algorithms import SAC
-    from rl_garden.common.cli_args import (
-        image_encoder_factory_from_args,
-        image_keys_from_env,
-        vit_sac_kwargs_from_args,
-    )
+def _sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs) -> dict:
+    """Kwargs shared by every SAC-family algorithm built from ``SACTrainingArgs``
+    (plain SAC and RecurrentSAC alike) -- everything except the recurrent-only
+    ``rnn_*``/``burn_in_len``/etc. fields."""
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
-    is_visual = args.obs_mode != "state"
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
-    image_kwargs: dict = {}
-    if is_visual:
-        factory = image_encoder_factory_from_args(args)
-        image_keys = image_keys_from_env(env, args)
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=args.frame_stack > 1,
-            image_augmentation=args.image_augmentation,
-            random_shift_pad=args.image_random_shift_pad,
-            image_augmentation_seed=args.seed + 1_000_003,
-            **vit_sac_kwargs_from_args(args, image_keys),
-        )
-
-    agent = SAC(
+    return dict(
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -103,6 +84,33 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
     )
+
+
+def build_sac(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms import SAC
+    from rl_garden.common.cli_args import (
+        image_encoder_factory_from_args,
+        image_keys_from_env,
+        vit_sac_kwargs_from_args,
+    )
+
+    is_visual = args.obs_mode != "state"
+    image_kwargs: dict = {}
+    if is_visual:
+        factory = image_encoder_factory_from_args(args)
+        image_keys = image_keys_from_env(env, args)
+        image_kwargs = dict(
+            image_keys=image_keys,
+            image_encoder_factory=factory,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=args.frame_stack > 1,
+            image_augmentation=args.image_augmentation,
+            random_shift_pad=args.image_random_shift_pad,
+            image_augmentation_seed=args.seed + 1_000_003,
+            **vit_sac_kwargs_from_args(args, image_keys),
+        )
+
+    agent = SAC(**_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs))
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     if args.load_actor_checkpoint is not None:

@@ -184,6 +184,35 @@ class RecurrentLatentEncoder(nn.Module):
             outputs.append(output)
         return torch.stack(outputs, dim=0), state
 
+    def forward_sequence_with_burn_in(
+        self,
+        latent: torch.Tensor,
+        state: RecurrentState,
+        episode_starts: torch.Tensor,
+        burn_in_len: int,
+    ) -> tuple[torch.Tensor, RecurrentState]:
+        """Off-policy BPTT call: re-derive ``state`` under CURRENT parameters over a
+        ``burn_in_len``-step prefix (no gradient), then unroll the remaining ``tail``
+        steps normally with gradients enabled.
+
+        ``latent``/``episode_starts``: ``(burn_in_len + tail_len, B, ...)``. Returns
+        ``(tail_output, tail_final_state)`` where ``tail_output`` has shape
+        ``(tail_len, B, hidden_size)``. Gradient isolation falls out of
+        ``torch.no_grad()`` alone -- no extra ``.detach()`` needed at the seam.
+
+        Callers do not need per-sample-variable burn-in lengths: replay buffers that
+        seed ``state`` from a stored checkpoint should align sampled windows so
+        ``burn_in_len`` is a fixed constant (see the buffer's own docs for why).
+        """
+        with torch.no_grad():
+            _, state = self.forward_sequence(
+                latent[:burn_in_len], state, episode_starts[:burn_in_len]
+            )
+        tail_output, tail_final_state = self.forward_sequence(
+            latent[burn_in_len:], state, episode_starts[burn_in_len:]
+        )
+        return tail_output, tail_final_state
+
     def forward(
         self,
         latent: torch.Tensor,

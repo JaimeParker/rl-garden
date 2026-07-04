@@ -163,6 +163,12 @@ class SACCore:
     def _post_actor_update(self, data) -> dict[str, torch.Tensor]:
         return {}
 
+    def _post_critic_update(self, data, critic_info: dict[str, torch.Tensor]) -> None:
+        """Hook run unconditionally right after each critic optimizer step.
+        Default: no-op. Recurrent/priority-replay subclasses use this to push
+        per-sample TD-error priorities back into the replay buffer."""
+        return None
+
     def _actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
         """Run actor diagnostics without perturbing training RNG.
 
@@ -356,6 +362,7 @@ class SACCore:
                 self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
                 self.q_optimizer.step()
                 self._step_critic_scheduler()
+                self._post_critic_update(data, critic_info)
 
                 if compute_info:
                     critic_losses_t.append(critic_loss.detach())
@@ -457,6 +464,7 @@ class SACCore:
                 self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
                 self.q_optimizer.step()
                 self._step_critic_scheduler()
+                self._post_critic_update(mb, critic_info)
 
                 if compute_info:
                     critic_losses_t.append(critic_loss.detach())
