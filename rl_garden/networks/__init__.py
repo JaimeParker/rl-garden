@@ -20,8 +20,10 @@ from rl_garden.networks.flash_sac_layers import (
     UnitLinear,
     UnitRMSNorm,
 )
+from rl_garden.networks.gtrxl import GTrXLLatentEncoder, GTrXLState
 from rl_garden.networks.mlp import KernelInit, MLPResNet, create_mlp
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
+from rl_garden.networks.sequence_encoder import SequenceLatentEncoder, SequenceState
 from rl_garden.networks.spatial_critic import SpatialEmbQEnsemble, SpatialEmbQHead
 from rl_garden.networks.value import ValueNetwork
 
@@ -38,12 +40,16 @@ __all__ = [
     "EnsembleQCritic",
     "FlashSACBlock",
     "FlashSACEmbedder",
+    "GTrXLLatentEncoder",
+    "GTrXLState",
     "KernelInit",
     "MLPResNet",
     "NormalTanhPolicy",
     "RecurrentLatentEncoder",
     "RecurrentState",
     "RNNType",
+    "SequenceLatentEncoder",
+    "SequenceState",
     "SpatialEmbQEnsemble",
     "SpatialEmbQHead",
     "SquashedGaussianActor",
