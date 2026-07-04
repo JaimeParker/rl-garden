@@ -151,6 +151,7 @@ class SACPolicy(BasePolicy):
         critic_hidden_dims: Optional[Sequence[int]] = None,
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
+        features_dim: Optional[int] = None,
     ) -> None:
         del use_cql_alpha_lagrange, cql_alpha_lagrange_init
         super().__init__()
@@ -174,7 +175,7 @@ class SACPolicy(BasePolicy):
         else:
             actor_arch, critic_arch = get_actor_critic_arch(net_arch)
 
-        fd = features_extractor.features_dim
+        fd = features_dim if features_dim is not None else features_extractor.features_dim
         sc = features_extractor.structured_feature_config()
 
         # --- Actor adapter (token compression) ---

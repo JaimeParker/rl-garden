@@ -36,6 +36,10 @@ from rl_garden.buffers.recurrent_rollout_buffer import (
     RecurrentRolloutBuffer,
     RecurrentRolloutBufferSample,
 )
+from rl_garden.buffers.recurrent_replay_buffer import (
+    RecurrentReplayBuffer,
+    RecurrentReplayBufferSample,
+)
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
@@ -49,6 +53,8 @@ __all__ = [
     "MCTensorReplayBuffer",
     "NStepTensorReplayBuffer",
     "RecurrentDictRolloutBuffer",
+    "RecurrentReplayBuffer",
+    "RecurrentReplayBufferSample",
     "RecurrentRolloutBuffer",
     "RecurrentRolloutBufferSample",
     "ResidualDictReplayBuffer",
