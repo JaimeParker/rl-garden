@@ -40,6 +40,10 @@ from rl_garden.buffers.recurrent_replay_buffer import (
     RecurrentReplayBuffer,
     RecurrentReplayBufferSample,
 )
+from rl_garden.buffers.transformer_replay_buffer import (
+    TransformerReplayBuffer,
+    TransformerReplayBufferSample,
+)
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
@@ -62,6 +66,8 @@ __all__ = [
     "RolloutBuffer",
     "RolloutBufferSample",
     "TensorReplayBuffer",
+    "TransformerReplayBuffer",
+    "TransformerReplayBufferSample",
     "count_residual_h5_transitions",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",

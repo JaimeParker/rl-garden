@@ -53,6 +53,26 @@ accepted-but-suboptimal perf characteristic:
     rollout parity. A batched-window `forward_sequence()` would be a
     *different model* from the one that produced the rollout data, not a
     drop-in optimization of this one.
+
+`forward_sequence_with_burn_in()` (used by off-policy replay, e.g. TransformerSAC)
+zero-initializes `state` and burns in for `burn_in_len` steps before the tail
+unroll -- unlike `RecurrentLatentEncoder`'s R2D2 scheme, no stored per-transition
+checkpoint state is needed, because this memory is a bounded sliding window of
+raw activations rather than a compressed summary of unbounded history. This is
+an approximation whose fidelity depends on depth, not an exact reconstruction:
+  - Layer 0's memory holds raw embeddings only, so it is exactly correct once
+    `burn_in_len >= memory_len` (the FIFO window has fully cycled).
+  - Layer *i*'s memory holds layer *i-1*'s past outputs, which were themselves
+    computed from layer *i-1*'s own (possibly not-yet-warmed-up) memory earlier
+    in the burn-in window -- the same depth x segment-length compounding as
+    Transformer-XL (Dai et al. 2019). Layer *i*'s memory is only fully correct
+    once `burn_in_len >= (i+1) * memory_len`; for the last layer that is
+    `burn_in_len >= num_layers * memory_len`.
+  - `burn_in_len` shorter than that (down to the `>= memory_len` floor enforced
+    by `TransformerSAC._build_sequence_encoder`) is a deliberate, tunable
+    approximation -- deeper layers see a truncated effective context, same
+    spirit as R2D2's own finding that partial burn-in recovers most of the
+    benefit of full burn-in.
 """
 from __future__ import annotations
 
@@ -358,9 +378,23 @@ class GTrXLLatentEncoder(nn.Module):
         episode_starts: torch.Tensor,
         burn_in_len: int,
     ) -> tuple[torch.Tensor, GTrXLState]:
-        raise NotImplementedError(
-            "GTrXLLatentEncoder does not support burn-in replay this round -- "
-            "on-policy TransformerPPO never calls this (no replay staleness to "
-            "correct for, same reason RecurrentPPO never implemented burn-in). "
-            "Only relevant if/when a TransformerSAC is built."
+        """Off-policy BPTT call: re-derive ``state`` under CURRENT parameters over a
+        ``burn_in_len``-step prefix (no gradient), then unroll the remaining ``tail``
+        steps normally with gradients enabled. See the module docstring for why this
+        is an approximation whose fidelity depends on depth, not an exact
+        reconstruction, and for why ``state`` is always a fresh zero-initialized
+        state here (never a stored checkpoint, unlike ``RecurrentLatentEncoder``).
+
+        ``latent``/``episode_starts``: ``(burn_in_len + tail_len, B, ...)``. Returns
+        ``(tail_output, tail_final_state)`` where ``tail_output`` has shape
+        ``(tail_len, B, embed_dim)``. Gradient isolation falls out of
+        ``torch.no_grad()`` alone -- no extra ``.detach()`` needed at the seam.
+        """
+        with torch.no_grad():
+            _, state = self.forward_sequence(
+                latent[:burn_in_len], state, episode_starts[:burn_in_len]
+            )
+        tail_output, tail_final_state = self.forward_sequence(
+            latent[burn_in_len:], state, episode_starts[burn_in_len:]
         )
+        return tail_output, tail_final_state
