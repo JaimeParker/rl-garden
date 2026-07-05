@@ -57,14 +57,16 @@ def test_index_state_selects_envs():
     assert memory_valid.shape == (1, 2, 4)
 
 
-def test_burn_in_not_implemented():
+def test_forward_sequence_with_burn_in_output_shape():
     enc = _make_encoder()
     state = enc.get_initial_state(2, torch.device("cpu"))
-    try:
-        enc.forward_sequence_with_burn_in(torch.randn(3, 2, 8), state, torch.zeros(3, 2), burn_in_len=1)
-        assert False, "expected NotImplementedError"
-    except NotImplementedError:
-        pass
+    tail_out, tail_state = enc.forward_sequence_with_burn_in(
+        torch.randn(3, 2, 8), state, torch.zeros(3, 2), burn_in_len=1
+    )
+    assert tail_out.shape == (2, 2, 16)  # (tail_len=3-1, B, embed_dim)
+    memory, memory_valid = tail_state
+    assert memory.shape == (3, 2, 4, 16)
+    assert memory_valid.shape == (1, 2, 4)
 
 
 def test_gradient_isolated_at_segment_boundary_but_flows_within_window():
@@ -161,3 +163,85 @@ def test_rejects_odd_embed_dim():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_burn_in_reconstruction_error_decreases_with_burn_in_len_and_vanishes_at_num_layers_times_memory_len():
+    """GTrXL memory is a bounded sliding window (unlike RNN's compressed
+    state), so zero-init + burn-in exactly reconstructs layer 0's memory once
+    burn_in_len >= memory_len, but deeper layers compound (Transformer-XL's
+    depth x segment-length property, Dai et al. 2019): layer i needs
+    burn_in_len >= (i+1)*memory_len to be exact. This test is discriminating --
+    asserting EXACT equality at burn_in_len == memory_len would fail for the
+    2-layer encoder used here, which is exactly the incorrect claim this test
+    replaces (an earlier draft assumed burn_in_len >= memory_len alone was
+    sufficient for exact reconstruction at any depth)."""
+    torch.manual_seed(7)
+    enc = _make_encoder()  # num_layers=2, memory_len=4
+    enc.eval()
+    B = 2
+    target = 12
+    T = target + 1
+    latents = torch.randn(T, B, 8)
+    episode_starts = torch.zeros(T, B)
+
+    with torch.no_grad():
+        true_state = enc.get_initial_state(B, torch.device("cpu"))
+        true_out = None
+        for t in range(T):
+            true_out, true_state = enc.step(latents[t], true_state, episode_starts[t])
+        true_output_at_target = true_out
+
+    def reconstruction_error(burn_in_len: int) -> float:
+        t0 = target - burn_in_len
+        window_latents = latents[t0 : target + 1]
+        window_starts = episode_starts[t0 : target + 1]
+        state0 = enc.get_initial_state(B, torch.device("cpu"))
+        with torch.no_grad():
+            tail_out, _ = enc.forward_sequence_with_burn_in(
+                window_latents, state0, window_starts, burn_in_len
+            )
+        return (tail_out[0] - true_output_at_target).abs().max().item()
+
+    error_1x = reconstruction_error(4)  # burn_in_len == memory_len: only layer 0 exact
+    error_1_5x = reconstruction_error(6)
+    error_2x = reconstruction_error(8)  # burn_in_len == num_layers * memory_len: both layers exact
+
+    assert error_1x > 1e-4, (
+        "expected a real reconstruction gap at burn_in_len == memory_len for a "
+        "2-layer encoder -- if this is ~0, the depth-compounding property this "
+        "test checks for isn't being exercised"
+    )
+    assert error_1_5x < error_1x
+    assert error_2x < error_1_5x
+    assert error_2x < 1e-5, "expected near-exact reconstruction at burn_in_len == num_layers * memory_len"
+
+
+def test_burn_in_crossing_episode_boundary_ignores_pre_boundary_latents():
+    """A burn-in window that crosses an episode boundary must produce a
+    post-boundary tail output independent of what happened before the
+    boundary -- new logic neither reference implementation provides, exercised
+    specifically through forward_sequence_with_burn_in (the replay-training
+    code path), complementing test_episode_reset_blocks_information_flow
+    (which only covers forward_sequence)."""
+    torch.manual_seed(11)
+    enc = _make_encoder()
+    enc.eval()
+    B = 1
+    burn_in_len = 6
+    tail_len = 1
+    T = burn_in_len + tail_len
+    boundary = 3  # episode reset partway through the burn-in window
+
+    latents_a = torch.randn(T, B, 8)
+    latents_b = latents_a.clone()
+    latents_b[:boundary] = torch.randn(boundary, B, 8)  # differ only BEFORE the reset
+
+    episode_starts = torch.zeros(T, B)
+    episode_starts[boundary, 0] = 1.0
+
+    state0 = enc.get_initial_state(B, torch.device("cpu"))
+    with torch.no_grad():
+        out_a, _ = enc.forward_sequence_with_burn_in(latents_a, state0, episode_starts, burn_in_len)
+        out_b, _ = enc.forward_sequence_with_burn_in(latents_b, state0, episode_starts, burn_in_len)
+
+    assert torch.allclose(out_a, out_b, atol=1e-6)
