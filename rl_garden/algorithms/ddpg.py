@@ -373,6 +373,31 @@ class DDPG(OffPolicyAlgorithm):
     def _current_stddev(self) -> float:
         return schedule(self.stddev_schedule, self._global_step)
 
+    def _target_action_noise(self) -> tuple[float, float]:
+        """(std, clip) for the noise added when sampling the target action.
+
+        Default: reuse the exploration noise schedule (current DDPG/DrQ-v2
+        behavior). TD3 overrides this with a fixed pair decoupled from the
+        exploration schedule (target policy smoothing).
+        """
+        return self._current_stddev(), self.stddev_clip
+
+    def _should_update_actor_and_target(self) -> bool:
+        """Whether to update the actor and polyak-average the target network
+        this gradient step. Default: always (current DDPG behavior). TD3
+        overrides this to delay updates by ``policy_freq`` steps.
+        """
+        return True
+
+    def _actor_q_value(self, q_actor_all: torch.Tensor) -> torch.Tensor:
+        """Reduce twin-Q values to the scalar used for the actor loss.
+
+        Default: min over both critics (current DDPG/DrQ-v2 behavior). TD3
+        overrides this to use the first critic only (canonical TD3 actor
+        loss).
+        """
+        return q_actor_all.min(dim=0).values
+
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]:
@@ -389,9 +414,9 @@ class DDPG(OffPolicyAlgorithm):
             obs_features = self.policy.extract_features(data.obs)
             with torch.no_grad():
                 next_features = self.policy.extract_features(data.next_obs)
-                stddev = self._current_stddev()
-                dist = self.policy.actor(next_features, stddev)
-                next_action = dist.sample(clip=self.stddev_clip)
+                target_std, target_clip = self._target_action_noise()
+                dist = self.policy.actor(next_features, target_std)
+                next_action = dist.sample(clip=target_clip)
                 target_q_all = self.policy.q_values_all(
                     next_features, next_action, target=True
                 )
@@ -414,45 +439,48 @@ class DDPG(OffPolicyAlgorithm):
             if self._lr_schedulers and self._lr_schedulers[0] is not None:
                 self._lr_schedulers[0].step()
 
-            # --- Actor update ---
-            stddev = self._current_stddev()
-            features_detached = obs_features.detach()
-            action = self.policy.actor_action_from_features(
-                features_detached,
-                stddev,
-                noise_clip=self.stddev_clip,
-            )
-            q_actor_all = self.policy.q_values_all(
-                features_detached, action, target=False
-            )
-            actor_loss = -q_actor_all.min(dim=0).values.mean()
-
-            self.actor_optimizer.zero_grad(set_to_none=True)
-            actor_loss.backward()
-            if self.grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    list(self.policy.actor_parameters()),
-                    self.grad_clip_norm,
-                )
-            self.actor_optimizer.step()
-            if len(self._lr_schedulers) >= 2 and self._lr_schedulers[1] is not None:
-                self._lr_schedulers[1].step()
-
-            # --- Target update ---
-            polyak_update(
-                self.policy.critic.parameters(),
-                self.policy.critic_target.parameters(),
-                self.tau,
-            )
-
             if compute_info:
                 critic_losses.append(critic_loss.detach())
-                actor_losses.append(actor_loss.detach())
                 info_accum.setdefault("target_q", []).append(target_q.mean().detach())
                 info_accum.setdefault("predicted_q", []).append(q_all.mean().detach())
-                info_accum.setdefault("stddev", []).append(
-                    torch.tensor(stddev, device=self.device)
+
+            if self._should_update_actor_and_target():
+                # --- Actor update ---
+                stddev = self._current_stddev()
+                features_detached = obs_features.detach()
+                action = self.policy.actor_action_from_features(
+                    features_detached,
+                    stddev,
+                    noise_clip=self.stddev_clip,
                 )
+                q_actor_all = self.policy.q_values_all(
+                    features_detached, action, target=False
+                )
+                actor_loss = -self._actor_q_value(q_actor_all).mean()
+
+                self.actor_optimizer.zero_grad(set_to_none=True)
+                actor_loss.backward()
+                if self.grad_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        list(self.policy.actor_parameters()),
+                        self.grad_clip_norm,
+                    )
+                self.actor_optimizer.step()
+                if len(self._lr_schedulers) >= 2 and self._lr_schedulers[1] is not None:
+                    self._lr_schedulers[1].step()
+
+                # --- Target update ---
+                polyak_update(
+                    self.policy.critic.parameters(),
+                    self.policy.critic_target.parameters(),
+                    self.tau,
+                )
+
+                if compute_info:
+                    actor_losses.append(actor_loss.detach())
+                    info_accum.setdefault("stddev", []).append(
+                        torch.tensor(stddev, device=self.device)
+                    )
 
         if not compute_info:
             return {}
@@ -460,12 +488,10 @@ class DDPG(OffPolicyAlgorithm):
         def _mean(vals: list[torch.Tensor]) -> float:
             return float(torch.stack(vals).mean().item())
 
-        out: dict[str, float] = {
-            "critic_loss": _mean(critic_losses),
-            "actor_loss": _mean(actor_losses),
-            "stddev": _mean(info_accum.get("stddev", [])),
-        }
-        for key in ("target_q", "predicted_q"):
+        out: dict[str, float] = {"critic_loss": _mean(critic_losses)}
+        if actor_losses:
+            out["actor_loss"] = _mean(actor_losses)
+        for key in ("target_q", "predicted_q", "stddev"):
             if key in info_accum:
                 out[key] = _mean(info_accum[key])
         return out

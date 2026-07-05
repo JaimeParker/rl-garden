@@ -23,6 +23,7 @@ from rl_garden.algorithms.residual import ResidualSAC
 from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
+from rl_garden.algorithms.td3 import TD3
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.wsrl import WSRL
@@ -48,6 +49,7 @@ __all__ = [
     "SAC",
     "SequencePPO",
     "SequenceSAC",
+    "TD3",
     "TransformerPPO",
     "TransformerSAC",
     "WSRL",
