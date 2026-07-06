@@ -21,7 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 maniskill = ["mani_skill"]
 robotwin = ["pillow", "pyyaml"]
-minari = ["minari"]
+minari = ["minari", "gymnasium-robotics"]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
 
