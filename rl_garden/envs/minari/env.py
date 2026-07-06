@@ -40,6 +40,8 @@ class _TorchVectorEnvAdapter:
         self.num_envs = vec_env.num_envs
         self.single_observation_space = vec_env.single_observation_space
         self.single_action_space = vec_env.single_action_space
+        self.observation_space = vec_env.observation_space
+        self.action_space = vec_env.action_space
 
     def reset(self, *, seed: Optional[int] = None):
         obs, info = self._vec_env.reset(seed=seed)

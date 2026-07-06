@@ -17,6 +17,11 @@ Usage:
     # Offline→online from a ManiSkill trajectory H5
     python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
         --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
+
+    # Minari offline pretrain -> online continuation on the recovered live env
+    python examples/train_off2on.py wsrl --dataset_source minari \\
+        --offline_dataset_path "D4RL/antmaze/umaze-v1" --env_backend minari \\
+        --num_offline_steps 100000 --num_online_steps 500000
 """
 
 from __future__ import annotations
@@ -26,11 +31,11 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from gymnasium import spaces
 from tqdm import trange
 
 from rl_garden.algorithms import WSRL
 from rl_garden.algorithms.offline import _log_eval_stdout
-from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
@@ -41,6 +46,7 @@ from rl_garden.common.cli_args import (
     )
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
+from rl_garden.training._dataset import load_offline_dataset
 from rl_garden.training.off2on._args import (
     warn_if_wsrl_warmup_uses_uninitialized_policy,
     wsrl_initial_training_phase_from_args,
@@ -161,20 +167,33 @@ def _set_offline_probe(agent: WSRL, logger: Logger, std_log: bool) -> None:
         print(f"[offline] probe_size={probe_size}", flush=True)
 
 
+def _resolve_env_id(args: WSRLOff2OnArgs) -> str:
+    """Default the online env_id to the Minari dataset id, unless overridden.
+
+    Only applies when ``dataset_source == "minari"`` and ``env_id`` is left at
+    its ``EnvRunArgs`` default; an explicit ``--env_id`` always wins.
+    """
+    if args.dataset_source == "minari" and args.env_id == "PickCube-v1":
+        return args.offline_dataset_path
+    return args.env_id
+
+
+def _require_continuous_action_space(env, args: WSRLOff2OnArgs) -> None:
+    if not isinstance(env.single_action_space, spaces.Box):
+        raise ValueError(
+            f"env_backend={args.env_backend!r} env_id={args.env_id!r} has a "
+            f"{type(env.single_action_space).__name__} action space; WSRL only "
+            "supports continuous (Box) actions."
+        )
+
+
 def _switch_to_online_mode(
     agent: WSRL, args: WSRLOff2OnArgs, logger: Logger
 ) -> None:
     if args.num_offline_steps == 0:
         warn_if_wsrl_warmup_uses_uninitialized_policy(args)
         if args.load_checkpoint is not None and args.offline_dataset_path is not None:
-            loaded = load_maniskill_h5_to_replay_buffer(
-                agent.replay_buffer,
-                args.offline_dataset_path,
-                num_traj=args.offline_num_traj,
-                reward_scale=args.reward_scale,
-                reward_bias=args.reward_bias,
-                success_key=args.success_key,
-            )
+            loaded = load_offline_dataset(agent.replay_buffer, args)
             logger.add_summary("wsrl/offline_loaded_transitions", loaded)
             _set_offline_probe(agent, logger, args.std_log)
     agent.switch_to_online_mode(
@@ -189,6 +208,8 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
     import torch
     seed_everything(args.seed)
     enable_fast_math()
+
+    args.env_id = _resolve_env_id(args)
 
     if args.buffer_device == "cuda" and not torch.cuda.is_available():
         warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
@@ -254,6 +275,7 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
         backend_config=backend_config,
     )
     env, eval_env = make_training_envs(args.env_backend, req)
+    _require_continuous_action_space(env, args)
 
     image_kwargs: dict = {}
     if is_visual:
@@ -347,14 +369,7 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
             raise ValueError(
                 "--offline_dataset_path is required when --num_offline_steps > 0."
             )
-        loaded = load_maniskill_h5_to_replay_buffer(
-            agent.replay_buffer,
-            args.offline_dataset_path,
-            num_traj=args.offline_num_traj,
-            reward_scale=args.reward_scale,
-            reward_bias=args.reward_bias,
-            success_key=args.success_key,
-        )
+        loaded = load_offline_dataset(agent.replay_buffer, args)
         offline_start_step = agent._global_step
         logger.add_summary("wsrl/offline_loaded_transitions", loaded)
         logger.add_summary("wsrl/offline_start_step", offline_start_step)

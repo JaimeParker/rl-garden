@@ -14,6 +14,10 @@ from rl_garden.common.training_phase import InitialTrainingPhase
 class WSRLTrainingArgs(EnvRunArgs, CheckpointArgs):
     num_offline_steps: int = 0
     num_online_steps: int = 1_000_000
+    # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
+    # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
+    # instead (e.g. "D4RL/halfcheetah/medium-v2").
+    dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
