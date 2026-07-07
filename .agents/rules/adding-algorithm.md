@@ -261,12 +261,54 @@ The same pattern applies; only the runner and registry differ:
 |-------|--------|----------|
 | online | `run_online(args, *, obs_tag, make_env_request, build_agent, post_learn)` | `rl_garden/training/online/_registry.py` |
 | offline | `run_offline(args, *, build_agent)` | `rl_garden/training/offline/_registry.py` |
-| off2on | phase-specific runner | `rl_garden/training/off2on/_registry.py` |
+| off2on | `run_off2on(args, *, build_agent, algorithm)` in `rl_garden/training/off2on/_runner.py` | `rl_garden/training/off2on/_registry.py` |
 
 Offline run files live in `rl_garden/training/offline/`, follow the same
 four-component structure, and are auto-discovered in the same way. The offline
 runner receives only `(args, build_agent)` — no `make_env_request` — because
 offline training typically uses a dataset rather than live rollouts.
+
+### Adding a new off2on algorithm
+
+Off2on = an offline algorithm that also continues training online. Follow
+`IQL`/`Off2OnIQL` as the default template — most algorithms fit this shape
+with no algorithm-specific overrides:
+
+1. **`<Algo>Core`** (mixin, no base class) — loss/network/optimizer logic,
+   shared between the offline class and the rollout shell via an explicit
+   `_init_<algo>_params(...)` method (not `__init__`).
+2. **`<Algo>(<Algo>Core, OfflineRLAlgorithm)`** — the public, pure-offline
+   class.
+3. **`_<Algo>RolloutTrainingShell(Off2OnReplayMixin, <Algo>Core,
+   OffPolicyAlgorithm)`** (internal, "do not instantiate directly") — wires
+   the core into the rollout loop. `Off2OnReplayMixin`
+   (`rl_garden/algorithms/off2on.py`) already provides every offline→online
+   transition mechanic that isn't algorithm-specific (mixed/empty/append
+   replay, adaptive ratio, checkpoint/probe/logging). Leave its two hooks
+   (`_apply_online_regularizer_override`, `_offline_probe_metrics`) at their
+   no-op defaults unless your algorithm genuinely needs to change something
+   at the online switch — that's the exception, not the rule (Cal-QL is
+   currently the only example; see `calql.py`).
+4. **`Off2On<Algo>(_<Algo>RolloutTrainingShell)`** — the public off2on class:
+   just a constructor and a default preset.
+
+Before extracting `<Algo>Core` out of an existing monolithic offline class,
+add regression tests first (loss computation, checkpoint roundtrip,
+obs-space validation) so the extraction is provably behavior-preserving.
+
+If two algorithms have a real literature-level subtyping relationship (e.g.
+Cal-QL = CQL + calibration), the child's shell can build directly on the
+parent's shell instead of `OffPolicyAlgorithm` — see
+`_CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore,
+_CQLRolloutTrainingShell)` in `calql.py`. This is rare; don't reach for it
+unless your algorithm actually extends another one's math.
+
+Sanity-check the resulting MRO once — cooperative `super()` calls make
+reordering base classes a silent behavior change, not an error:
+
+```bash
+python -c "from rl_garden.algorithms import Off2OnMyAlgo; print([c.__name__ for c in Off2OnMyAlgo.__mro__])"
+```
 
 ---
 

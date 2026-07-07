@@ -184,7 +184,7 @@ class TestWSRLHelperMethods:
         assert not wsrl_agent.use_cql_loss
         assert wsrl_agent._online_start_step == 123
         assert logger.scalars == []
-        assert ("wsrl/online_start_step", 123) in logger.summaries
+        assert ("off2on/online_start_step", 123) in logger.summaries
 
     def test_switch_starts_collect_only_warmup(self, simple_env):
         agent = WSRL(
@@ -302,8 +302,8 @@ class TestWSRLHelperMethods:
         agent.logger = logger
         agent._global_step = 7
         agent.switch_to_online_mode(online_replay_mode="append")
-        assert ("wsrl/online_backup_entropy", agent.backup_entropy) in logger.summaries
-        recompile_logged = any(k == "wsrl/recompile_at_online_step" for k, _ in logger.summaries)
+        assert ("cql/online_backup_entropy", agent.backup_entropy) in logger.summaries
+        recompile_logged = any(k == "cql/recompile_at_online_step" for k, _ in logger.summaries)
         assert recompile_logged == (agent.use_compile and agent._eager_critic_loss is not None)
 
     def test_grad_clip_norm_configured(self, simple_env):
@@ -687,7 +687,12 @@ class TestWSRLModeSwitch:
 
 
 class TestMixedBatchSampling:
-    """Mixed-batch online sampling: switch_to_online_mode("mixed", ratio)."""
+    """Mixed-batch online sampling (shared with Off2OnCalQL, see
+    test_off2on_calql.py for the full ratio-math coverage). WSRL doesn't
+    default to "mixed", but the capability is inherited and still supported
+    if explicitly requested — these two tests are the regression guardrail
+    for that.
+    """
 
     def _fill_buffer(self, buffer, num_steps: int, marker: float = 0.0) -> None:
         """Fill buffer with deterministic values; obs[0] = marker for identification."""
@@ -717,15 +722,6 @@ class TestMixedBatchSampling:
         assert len(wsrl_agent.replay_buffer) == 0
         assert wsrl_agent.offline_data_ratio == 0.5
 
-    def test_mixed_batch_sample_when_online_empty_uses_all_offline(self, wsrl_agent):
-        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=42.0)
-        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
-        # Online buffer empty → all samples from offline (marker=42)
-        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
-        assert sample.obs.shape[0] == wsrl_agent.batch_size
-        # All obs should have marker=42 since online is empty
-        assert torch.all(sample.obs[:, 0] == 42.0)
-
     def test_mixed_batch_combines_online_and_offline(self, wsrl_agent):
         # Offline data with marker=10.0
         self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=10.0)
@@ -739,45 +735,6 @@ class TestMixedBatchSampling:
         assert offline_count + online_count == wsrl_agent.batch_size
         assert offline_count == 2
         assert online_count == 6
-
-    def test_mixed_batch_zero_ratio_uses_only_online(self, wsrl_agent):
-        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=10.0)
-        wsrl_agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.0)
-        self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=99.0)
-        sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
-        # ratio=0 → no offline samples
-        assert torch.all(sample.obs[:, 0] == 99.0)
-
-    def test_mixed_batch_invalid_ratio_raises(self, wsrl_agent):
-        with pytest.raises(ValueError, match="offline_data_ratio"):
-            wsrl_agent.switch_to_online_mode(
-                online_replay_mode="mixed", offline_data_ratio=1.5
-            )
-
-    def test_concat_replay_samples_preserves_mc_returns(self, wsrl_agent):
-        from rl_garden.common.types import MCReplayBufferSample
-
-        a = MCReplayBufferSample(
-            obs=torch.zeros(2, 4),
-            next_obs=torch.zeros(2, 4),
-            actions=torch.zeros(2, 2),
-            rewards=torch.tensor([1.0, 2.0]),
-            dones=torch.zeros(2),
-            mc_returns=torch.tensor([10.0, 20.0]),
-        )
-        b = MCReplayBufferSample(
-            obs=torch.ones(3, 4),
-            next_obs=torch.ones(3, 4),
-            actions=torch.ones(3, 2),
-            rewards=torch.tensor([3.0, 4.0, 5.0]),
-            dones=torch.zeros(3),
-            mc_returns=torch.tensor([30.0, 40.0, 50.0]),
-        )
-        out = WSRL._concat_replay_samples(a, b)
-        assert out.obs.shape == (5, 4)
-        torch.testing.assert_close(
-            out.mc_returns, torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
-        )
 
 
 class TestLossHookComposition:

@@ -13,6 +13,8 @@ from rl_garden.algorithms.offline import (
     infer_specs_from_h5,
     run_offline_pretraining,
 )
+from rl_garden.algorithms.off2on_calql import Off2OnCalQL
+from rl_garden.algorithms.off2on_iql import Off2OnIQL
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
@@ -40,6 +42,8 @@ __all__ = [
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",
     "OfflineSAC",
+    "Off2OnCalQL",
+    "Off2OnIQL",
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
     "PPO",

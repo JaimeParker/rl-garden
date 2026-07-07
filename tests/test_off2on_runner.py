@@ -1,11 +1,11 @@
-"""Tests for off2on/_wsrl_runner.py's Minari wiring helpers."""
+"""Tests for off2on/_runner.py's Minari wiring helpers."""
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from gymnasium import spaces
 
-from rl_garden.training.off2on._wsrl_runner import (
+from rl_garden.training.off2on._runner import (
     _require_continuous_action_space,
     _resolve_env_id,
 )

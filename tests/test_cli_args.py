@@ -18,8 +18,8 @@ from rl_garden.common.cli_args import (
 from rl_garden.training.offline._args import OfflineVisionArgs
 from rl_garden.training.off2on._args import (
     WSRLTrainingArgs,
-    warn_if_wsrl_warmup_uses_uninitialized_policy,
-    wsrl_initial_training_phase_from_args,
+    initial_training_phase_from_args,
+    warn_if_off2on_warmup_uses_uninitialized_policy,
 )
 from rl_garden.training.online._args import (
     DrQv2TrainingArgs,
@@ -158,7 +158,7 @@ def test_sac_critic_only_args_map_to_initial_training_phase() -> None:
 
 
 def test_wsrl_warmup_args_map_to_collect_only_phase() -> None:
-    phase = wsrl_initial_training_phase_from_args(WSRLTrainingArgs(warmup_steps=321))
+    phase = initial_training_phase_from_args(WSRLTrainingArgs(warmup_steps=321))
 
     assert phase is not None
     assert phase.duration_steps == 321
@@ -174,11 +174,11 @@ def test_wsrl_uninitialized_warmup_warning_describes_actual_behavior() -> None:
         UserWarning,
         match="randomly initialized policy.*updates are paused",
     ):
-        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
+        warn_if_off2on_warmup_uses_uninitialized_policy(args)
 
 
 def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
-    from rl_garden.training.off2on._wsrl_runner import _switch_to_online_mode
+    from rl_garden.training.off2on._runner import _switch_to_online_mode
     from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
     args = WSRLOff2OnArgs(

@@ -1,5 +1,13 @@
-"""WSRL offline-to-online training registration."""
+"""IQL offline-to-online training registration.
+
+Builds ``Off2OnIQL`` and reuses the same ``_runner.run_off2on`` orchestration
+as ``wsrl``/``calql``. Confirmed against the reference WSRL/IQL JAX
+implementation: IQL needs no online-switch override, so this preset mirrors
+``Off2OnCalQL``'s (no warmup, mixed replay retained by default) rather than
+WSRL's warmup-then-discard preset.
+"""
 from dataclasses import dataclass
+from typing import Literal
 
 from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
@@ -8,19 +16,26 @@ from rl_garden.common.cli_args import (
 )
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on._args import (
-    VisionWSRLTrainingArgs,
+    VisionIQLOff2OnTrainingArgs,
     initial_training_phase_from_args,
 )
 from rl_garden.training.off2on._registry import registry
 
 
 @dataclass
-class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
-    """WSRL args; visual defaults. For state obs pass --obs_mode state."""
+class IQLOff2OnArgs(VisionIQLOff2OnTrainingArgs, EnvBackendArgs):
+    """IQL off2on args: no warmup, mixed replay, adaptive ratio.
+
+    For state obs pass --obs_mode state.
+    """
+
+    warmup_steps: int = 0
+    online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
+    offline_data_ratio: float | str = "auto"
 
 
-def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.algorithms import WSRL
+def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms import Off2OnIQL
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -34,7 +49,7 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = WSRL(
+    agent = Off2OnIQL(
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -45,12 +60,9 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         tau=args.tau,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        alpha_lr=args.alpha_lr,
-        cql_alpha_lr=args.cql_alpha_lr,
-        policy_frequency=args.policy_frequency,
-        target_network_frequency=args.target_network_frequency,
+        offline_sampling=args.offline_sampling,
+        actor_lr=args.actor_lr,
+        critic_value_lr=args.critic_value_lr,
         weight_decay=args.weight_decay,
         use_adamw=args.use_adamw,
         lr_schedule=args.lr_schedule,
@@ -58,42 +70,25 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         lr_decay_steps=args.lr_decay_steps,
         lr_min_ratio=args.lr_min_ratio,
         grad_clip_norm=args.grad_clip_norm,
-        use_compile=args.use_compile,
-        compile_mode=args.compile_mode,
+        expectile=args.expectile,
+        temperature=args.temperature,
+        adv_clip_max=args.adv_clip_max,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
-        use_cql_loss=args.use_cql_loss,
-        cql_n_actions=args.cql_n_actions,
-        cql_alpha=args.cql_alpha,
-        cql_autotune_alpha=args.cql_autotune_alpha,
-        cql_alpha_lagrange_init=args.cql_alpha_lagrange_init,
-        cql_target_action_gap=args.cql_target_action_gap,
-        cql_importance_sample=args.cql_importance_sample,
-        cql_max_target_backup=args.cql_max_target_backup,
-        cql_temp=args.cql_temp,
-        cql_clip_diff_min=args.cql_clip_diff_min,
-        cql_clip_diff_max=args.cql_clip_diff_max,
-        cql_action_sample_method=args.cql_action_sample_method,
-        backup_entropy=args.backup_entropy,
-        use_calql=args.use_calql,
-        calql_bound_random_actions=args.calql_bound_random_actions,
         actor_use_layer_norm=args.actor_use_layer_norm,
         critic_use_layer_norm=args.critic_use_layer_norm,
+        value_use_layer_norm=args.value_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,
         critic_use_group_norm=args.critic_use_group_norm,
+        value_use_group_norm=args.value_use_group_norm,
         num_groups=args.num_groups,
         actor_dropout_rate=args.actor_dropout_rate,
         critic_dropout_rate=args.critic_dropout_rate,
+        value_dropout_rate=args.value_dropout_rate,
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
-        online_cql_alpha=args.online_cql_alpha,
-        online_use_cql_loss=args.online_use_cql_loss,
         initial_training_phase=initial_training_phase_from_args(args),
-        offline_sampling=args.offline_sampling,
-        sparse_reward_mc=args.sparse_reward_mc,
-        sparse_negative_reward=args.sparse_negative_reward,
-        success_threshold=args.success_threshold,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -111,10 +106,10 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     return agent
 
 
-def run_wsrl(args: WSRLOff2OnArgs) -> None:
+def run_iql(args: IQLOff2OnArgs) -> None:
     from rl_garden.training.off2on._runner import run_off2on
 
-    run_off2on(args, build_agent=build_wsrl, algorithm="wsrl")
+    run_off2on(args, build_agent=build_iql, algorithm="iql")
 
 
-registry.register("wsrl", WSRLOff2OnArgs, run_wsrl)
+registry.register("iql", IQLOff2OnArgs, run_iql)

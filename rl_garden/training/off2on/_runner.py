@@ -1,4 +1,13 @@
-"""WSRL on ManiSkill with offline→online training. Supports state and visual obs.
+"""Shared offline-to-online training orchestration.
+
+Backs the ``wsrl``, ``calql``, and ``iql`` off2on entrypoints via
+``run_off2on(args, build_agent=..., algorithm=...)``: env/dataset setup, the
+offline gradient-step loop, the offline->online mode switch, and the online
+``learn()`` call are algorithm-agnostic. Each entrypoint supplies its own
+``build_<algo>(args, env, eval_env, logger, checkpoint_dir)`` callback that
+constructs its agent class from ``args`` (mirroring the
+``build_<algo>`` convention already used by ``rl_garden/training/online/*.py``),
+including any ``--load_checkpoint`` handling.
 
 Usage:
     # State observations (override visual defaults)
@@ -29,35 +38,27 @@ from __future__ import annotations
 import time
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, Callable
 
 from gymnasium import spaces
 from tqdm import trange
 
-from rl_garden.algorithms import WSRL
 from rl_garden.algorithms.offline import _log_eval_stdout
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.cli_args import (
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    resolve_checkpoint_dir,
-    resolve_eval_record_dir,
-    vit_sac_kwargs_from_args,
-    )
+from rl_garden.common.cli_args import resolve_checkpoint_dir, resolve_eval_record_dir
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
 from rl_garden.training._dataset import load_offline_dataset
 from rl_garden.training.off2on._args import (
-    warn_if_wsrl_warmup_uses_uninitialized_policy,
-    wsrl_initial_training_phase_from_args,
+    Off2OnCommonArgs,
+    warn_if_off2on_warmup_uses_uninitialized_policy,
 )
 
-if TYPE_CHECKING:
-    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+BuildAgent = Callable[[Any, Any, Any, Logger, "str | None"], Any]
 
 
 def _offline_update_loop(
-    agent: WSRL,
+    agent: Any,
     steps: int,
     logger: Logger,
     log_freq: int,
@@ -126,21 +127,19 @@ def _offline_update_loop(
             agent._save_checkpoint(f"checkpoint_{step + 1}.pt")
 
 
-def _evaluate_offline_end(
-    agent: WSRL, logger: Logger, step: int, std_log: bool
-) -> None:
+def _evaluate_offline_end(agent: Any, logger: Logger, step: int, std_log: bool) -> None:
     metrics = agent._evaluate()
     if not metrics:
         return
     agent._log_eval_metrics(metrics, step)
     for key, value in agent.canonical_eval_metrics(metrics).items():
-        logger.add_summary(f"wsrl/offline_final_eval/{key}", value)
+        logger.add_summary(f"off2on/offline_final_eval/{key}", value)
     if std_log:
         _log_eval_stdout(agent, metrics, step)
 
 
 def _save_offline_checkpoint(
-    agent: WSRL,
+    agent: Any,
     checkpoint_dir: str | None,
     *,
     include_replay_buffer: bool,
@@ -156,18 +155,18 @@ def _save_offline_checkpoint(
         print(f"[offline] saved_checkpoint={path}", flush=True)
 
 
-def _set_offline_probe(agent: WSRL, logger: Logger, std_log: bool) -> None:
+def _set_offline_probe(agent: Any, logger: Logger, std_log: bool) -> None:
     probe_size = min(agent.batch_size, len(agent.replay_buffer))
     if probe_size <= 0:
-        logger.add_summary("wsrl/offline_probe_size", 0)
+        logger.add_summary("off2on/offline_probe_size", 0)
         return
     agent.set_offline_probe_batch(agent.replay_buffer.sample(probe_size))
-    logger.add_summary("wsrl/offline_probe_size", probe_size)
+    logger.add_summary("off2on/offline_probe_size", probe_size)
     if std_log:
         print(f"[offline] probe_size={probe_size}", flush=True)
 
 
-def _resolve_env_id(args: WSRLOff2OnArgs) -> str:
+def _resolve_env_id(args: Off2OnCommonArgs) -> str:
     """Default the online env_id to the Minari dataset id, unless overridden.
 
     Only applies when ``dataset_source == "minari"`` and ``env_id`` is left at
@@ -178,23 +177,21 @@ def _resolve_env_id(args: WSRLOff2OnArgs) -> str:
     return args.env_id
 
 
-def _require_continuous_action_space(env, args: WSRLOff2OnArgs) -> None:
+def _require_continuous_action_space(env, args: Off2OnCommonArgs) -> None:
     if not isinstance(env.single_action_space, spaces.Box):
         raise ValueError(
             f"env_backend={args.env_backend!r} env_id={args.env_id!r} has a "
-            f"{type(env.single_action_space).__name__} action space; WSRL only "
-            "supports continuous (Box) actions."
+            f"{type(env.single_action_space).__name__} action space; off2on "
+            "training only supports continuous (Box) actions."
         )
 
 
-def _switch_to_online_mode(
-    agent: WSRL, args: WSRLOff2OnArgs, logger: Logger
-) -> None:
+def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
     if args.num_offline_steps == 0:
-        warn_if_wsrl_warmup_uses_uninitialized_policy(args)
+        warn_if_off2on_warmup_uses_uninitialized_policy(args)
         if args.load_checkpoint is not None and args.offline_dataset_path is not None:
             loaded = load_offline_dataset(agent.replay_buffer, args)
-            logger.add_summary("wsrl/offline_loaded_transitions", loaded)
+            logger.add_summary("off2on/offline_loaded_transitions", loaded)
             _set_offline_probe(agent, logger, args.std_log)
     agent.switch_to_online_mode(
         online_replay_mode=args.online_replay_mode,
@@ -204,8 +201,11 @@ def _switch_to_online_mode(
         print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
 
 
-def run_wsrl(args: WSRLOff2OnArgs) -> None:
+def run_off2on(
+    args: Off2OnCommonArgs, *, build_agent: BuildAgent, algorithm: str
+) -> None:
     import torch
+
     seed_everything(args.seed)
     enable_fast_math()
 
@@ -220,13 +220,13 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
         args.exp_name
-        or f"{args.env_id}__wsrl_{obs_label}__{args.seed}__{int(time.time())}"
+        or f"{args.env_id}__{algorithm}_{obs_label}__{args.seed}__{int(time.time())}"
     )
     checkpoint_dir = resolve_checkpoint_dir(args, run_name)
     resolved_config = persist_resolved_config(
         args,
         training_phase="off2on",
-        algorithm="wsrl",
+        algorithm=algorithm,
         run_name=run_name,
         log_dir=args.log_dir,
     )
@@ -277,91 +277,7 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
     env, eval_env = make_training_envs(args.env_backend, req)
     _require_continuous_action_space(env, args)
 
-    image_kwargs: dict = {}
-    if is_visual:
-        factory = image_encoder_factory_from_args(args)
-        image_keys = image_keys_from_env(env, args)
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode=args.image_fusion_mode,
-            **vit_sac_kwargs_from_args(args, image_keys),
-        )
-
-    agent = WSRL(
-        env=env,
-        eval_env=eval_env,
-        buffer_size=args.buffer_size,
-        buffer_device=args.buffer_device,
-        learning_starts=args.learning_starts,
-        batch_size=args.batch_size,
-        gamma=args.gamma,
-        tau=args.tau,
-        training_freq=args.training_freq,
-        utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        alpha_lr=args.alpha_lr,
-        cql_alpha_lr=args.cql_alpha_lr,
-        policy_frequency=args.policy_frequency,
-        target_network_frequency=args.target_network_frequency,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        use_compile=args.use_compile,
-        compile_mode=args.compile_mode,
-        n_critics=args.n_critics,
-        critic_subsample_size=args.critic_subsample_size,
-        use_cql_loss=args.use_cql_loss,
-        cql_n_actions=args.cql_n_actions,
-        cql_alpha=args.cql_alpha,
-        cql_autotune_alpha=args.cql_autotune_alpha,
-        cql_alpha_lagrange_init=args.cql_alpha_lagrange_init,
-        cql_target_action_gap=args.cql_target_action_gap,
-        cql_importance_sample=args.cql_importance_sample,
-        cql_max_target_backup=args.cql_max_target_backup,
-        cql_temp=args.cql_temp,
-        cql_clip_diff_min=args.cql_clip_diff_min,
-        cql_clip_diff_max=args.cql_clip_diff_max,
-        cql_action_sample_method=args.cql_action_sample_method,
-        backup_entropy=args.backup_entropy,
-        use_calql=args.use_calql,
-        calql_bound_random_actions=args.calql_bound_random_actions,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        actor_use_group_norm=args.actor_use_group_norm,
-        critic_use_group_norm=args.critic_use_group_norm,
-        num_groups=args.num_groups,
-        actor_dropout_rate=args.actor_dropout_rate,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        std_parameterization=args.std_parameterization,
-        online_cql_alpha=args.online_cql_alpha,
-        online_use_cql_loss=args.online_use_cql_loss,
-        initial_training_phase=wsrl_initial_training_phase_from_args(args),
-        offline_sampling=args.offline_sampling,
-        sparse_reward_mc=args.sparse_reward_mc,
-        sparse_negative_reward=args.sparse_negative_reward,
-        success_threshold=args.success_threshold,
-        seed=args.seed,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        eval_freq=args.eval_freq,
-        num_eval_steps=args.num_eval_steps,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_replay_buffer=args.save_replay_buffer,
-        save_final_checkpoint=args.save_final_checkpoint,
-        **image_kwargs,
-    )
-    if args.load_checkpoint is not None:
-        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+    agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
 
     # Offline training phase
     if args.num_offline_steps > 0:
@@ -371,8 +287,8 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
             )
         loaded = load_offline_dataset(agent.replay_buffer, args)
         offline_start_step = agent._global_step
-        logger.add_summary("wsrl/offline_loaded_transitions", loaded)
-        logger.add_summary("wsrl/offline_start_step", offline_start_step)
+        logger.add_summary("off2on/offline_loaded_transitions", loaded)
+        logger.add_summary("off2on/offline_start_step", offline_start_step)
         _offline_update_loop(
             agent,
             args.num_offline_steps,

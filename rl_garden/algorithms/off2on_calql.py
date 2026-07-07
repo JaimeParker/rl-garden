@@ -1,12 +1,11 @@
-"""WSRL warm-start flow built on Cal-QL.
+"""Original Cal-QL paper's own offline-to-online design, built on the shared shell.
 
-WSRL's distinguishing behavior on top of ``_CalQLRolloutTrainingShell`` (which
-owns the generic off2on Cal-QL machinery: mixed/empty/append replay switching,
-online CQL-alpha override, checkpoint/probe/logging plumbing) is a warmup
-phase: freeze updates for a fixed number of steps, then discard the offline
-replay data entirely and continue as SAC (no CQL conservatism retained by
-default). See ``Off2OnCalQL`` for the original Cal-QL paper's own off2on
-preset (no warmup, offline data retained and mixed throughout).
+``Off2OnCalQL`` adds no behavior on top of ``_CalQLRolloutTrainingShell``
+beyond a construction-time preset: no warmup by default (unlike ``WSRL``),
+offline data retained and mixed throughout online fine-tuning by default, and
+the CQL/Cal-QL regularizer retained online by default. See Nakamoto et al.
+2023. ``initial_training_phase`` is still accepted (for interface parity with
+the shared off2on runner) but left unused by the ``calql`` CLI preset.
 """
 from __future__ import annotations
 
@@ -20,10 +19,10 @@ from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.combined import ImageEncoderFactory
 
 
-class WSRL(_CalQLRolloutTrainingShell):
-    """WSRL warm-start: Cal-QL offline pretraining + warmup + online SAC."""
+class Off2OnCalQL(_CalQLRolloutTrainingShell):
+    """Cal-QL offline pretraining + online fine-tuning, no warmup."""
 
-    _compatible_checkpoint_algorithms = ("WSRL", "CalQL", "CQL")
+    _compatible_checkpoint_algorithms = ("Off2OnCalQL", "WSRL", "CalQL", "CQL")
 
     def __init__(
         self,
@@ -103,10 +102,10 @@ class WSRL(_CalQLRolloutTrainingShell):
         image_fusion_mode: Optional[str] = None,
         enable_stacking: Optional[bool] = None,
         detach_encoder_on_actor: bool = True,
-        # WSRL phase control
+        # Off2on phase control
         use_td_loss: bool = True,
-        online_cql_alpha: float = 0.0,
-        online_use_cql_loss: bool = False,
+        online_cql_alpha: float = 5.0,
+        online_use_cql_loss: bool = True,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         # Sparse-reward MC
         sparse_reward_mc: bool = False,
@@ -221,9 +220,3 @@ class WSRL(_CalQLRolloutTrainingShell):
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
         )
-
-    def _load_training_state_dict(self, state: dict[str, Any]) -> None:
-        super()._load_training_state_dict(state)
-        if not state:
-            # Legacy WSRL checkpoints start online warmup only when switched.
-            self._initial_phase_start_step = None

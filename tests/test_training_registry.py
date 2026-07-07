@@ -88,7 +88,7 @@ def test_phase_registries_discover_expected_algorithms():
         "drqv2", "flash_sac", "residual_sac", "td3"
     }
     assert set(offline.entries()) == {"bc", "iql", "cql", "calql", "wsrl"}
-    assert set(off2on.entries()) == {"wsrl"}
+    assert set(off2on.entries()) == {"wsrl", "calql", "iql"}
 
 
 def test_environment_logging_defaults_are_overridden_by_explicit_cli(monkeypatch):

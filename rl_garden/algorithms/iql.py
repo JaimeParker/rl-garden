@@ -1,9 +1,11 @@
-"""Implicit Q-Learning (IQL) for offline datasets.
+"""Implicit Q-Learning (IQL): expectile value regression + AWR actor.
 
-This is a pure offline algorithm: it uses ``OfflineRLAlgorithm`` rather than
-the ManiSkill rollout stack. Box observations use ``FlattenExtractor`` and Dict
-observations use ``CombinedExtractor``, so state, image, and image+state inputs
-share the same policy path.
+``IQLCore`` holds the loss/network/optimizer logic shared by the pure offline
+``IQL`` (built on ``OfflineRLAlgorithm``) and the rollout-capable
+``_IQLRolloutTrainingShell`` (built on ``OffPolicyAlgorithm``, backing
+``Off2OnIQL``). Box observations use ``FlattenExtractor`` and Dict
+observations use ``CombinedExtractor``, so state, image, and image+state
+inputs share the same policy path.
 """
 
 from __future__ import annotations
@@ -15,11 +17,14 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.algorithms.off2on import Off2OnReplayMixin
+from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.combined import (
     CombinedExtractor,
@@ -30,23 +35,17 @@ from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.iql_policy import IQLPolicy
 
 
-class IQL(OfflineRLAlgorithm):
-    """Offline IQL with AWR actor loss and expectile value regression."""
+class IQLCore:
+    """Shared IQL loss/network logic: expectile V-regression + AWR actor."""
 
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {"features_extractor_class", "features_extractor_kwargs"}
     )
 
-    def __init__(
+    def _init_iql_params(
         self,
-        env: OfflineEnvSpec,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
-        batch_size: int = 256,
-        gamma: float = 0.99,
         tau: float = 0.005,
-        offline_sampling: str = "with_replace",
         utd: float = 1.0,
         actor_lr: float = 3e-4,
         critic_value_lr: float = 3e-4,
@@ -66,14 +65,6 @@ class IQL(OfflineRLAlgorithm):
         value_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
-        policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
         value_use_layer_norm: bool = False,
@@ -89,39 +80,7 @@ class IQL(OfflineRLAlgorithm):
         ] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
-        seed: int = 1,
-        device: str | torch.device = "auto",
-        logger: Optional[Logger] = None,
-        std_log: bool = True,
-        log_freq: int = 1_000,
-        eval_freq: int = 0,
-        num_eval_steps: int = 50,
-        eval_env: Optional[Any] = None,
-        checkpoint_dir: Optional[str] = None,
-        checkpoint_freq: int = 0,
-        save_replay_buffer: bool = False,
-        save_final_checkpoint: bool = True,
     ) -> None:
-        super().__init__(
-            env=env,
-            buffer_size=buffer_size,
-            buffer_device=buffer_device,
-            batch_size=batch_size,
-            gamma=gamma,
-            offline_sampling=offline_sampling,
-            seed=seed,
-            device=device,
-            logger=logger,
-            std_log=std_log,
-            log_freq=log_freq,
-            eval_freq=eval_freq,
-            num_eval_steps=num_eval_steps,
-            eval_env=eval_env,
-            checkpoint_dir=checkpoint_dir,
-            checkpoint_freq=checkpoint_freq,
-            save_replay_buffer=save_replay_buffer,
-            save_final_checkpoint=save_final_checkpoint,
-        )
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
         if not (0.0 < expectile < 1.0):
@@ -170,51 +129,6 @@ class IQL(OfflineRLAlgorithm):
         self.kernel_init = kernel_init
         self.backbone_type = backbone_type
         self.std_parameterization = std_parameterization
-
-        obs_space = self.env.single_observation_space
-        image_kwargs_explicit = {
-            "image_encoder_factory": image_encoder_factory,
-            "image_keys": image_keys,
-            "state_key": state_key,
-            "use_proprio": use_proprio,
-            "proprio_latent_dim": proprio_latent_dim,
-            "image_fusion_mode": image_fusion_mode,
-            "enable_stacking": enable_stacking,
-        }
-        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
-        if isinstance(obs_space, spaces.Box):
-            if explicitly_set:
-                raise ValueError(
-                    "IQL with Box observation space does not accept image-related "
-                    f"kwargs (got {explicitly_set}). Use Dict observations instead."
-                )
-            self._is_dict_obs = False
-        elif isinstance(obs_space, spaces.Dict):
-            self._is_dict_obs = True
-            self._image_encoder_factory = (
-                image_encoder_factory or default_image_encoder_factory()
-            )
-            self._image_keys = (
-                image_keys if image_keys is not None else ("rgb", "depth")
-            )
-            self._state_key = state_key if state_key is not None else "state"
-            self._use_proprio = use_proprio if use_proprio is not None else True
-            self._proprio_latent_dim = (
-                proprio_latent_dim if proprio_latent_dim is not None else 64
-            )
-            self._image_fusion_mode = (
-                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-            )
-            self._enable_stacking = (
-                enable_stacking if enable_stacking is not None else False
-            )
-        else:
-            raise TypeError(
-                f"IQL supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
-
-        self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
-        self._setup_model()
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return ("critic_value_optimizer", "actor_optimizer")
@@ -481,9 +395,9 @@ class IQL(OfflineRLAlgorithm):
             for opt in (self.critic_value_optimizer, self.actor_optimizer)
         ]
 
-    def _sample_train_batch(self):
+    def _sample_train_batch(self, batch_size: int):
         if self.offline_sampling == "with_replace":
-            return self.replay_buffer.sample(self.batch_size)
+            return self.replay_buffer.sample(batch_size)
         if self.offline_sampling == "without_replace":
             sample = getattr(self.replay_buffer, "sample_without_replace", None)
             if sample is None:
@@ -491,7 +405,7 @@ class IQL(OfflineRLAlgorithm):
                     "offline_sampling='without_replace' requires a replay buffer "
                     "with sample_without_replace()."
                 )
-            return sample(self.batch_size)
+            return sample(batch_size)
         raise ValueError(f"Unknown offline_sampling: {self.offline_sampling!r}")
 
     def _expectile_loss(self, diff: torch.Tensor) -> torch.Tensor:
@@ -584,7 +498,7 @@ class IQL(OfflineRLAlgorithm):
         self.policy.train()
         for _ in range(gradient_steps):
             self._global_update += 1
-            data = self._sample_train_batch()
+            data = self._sample_train_batch(self.batch_size)
 
             self.critic_value_optimizer.zero_grad(set_to_none=True)
             self.actor_optimizer.zero_grad(set_to_none=True)
@@ -600,3 +514,339 @@ class IQL(OfflineRLAlgorithm):
                 metrics_sum[key] = metrics_sum.get(key, 0.0) + value
 
         return {key: value / gradient_steps for key, value in metrics_sum.items()}
+
+
+class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
+    """Internal rollout/eval shell that wires ``IQLCore`` into ``OffPolicyAlgorithm``.
+
+    Generic offline->online transition mechanics (replay-buffer switching,
+    mixed-batch sampling, checkpoint/probe/logging plumbing) are inherited
+    from ``Off2OnReplayMixin``. IQL needs no algorithm-specific override at
+    the online switch (confirmed against the reference WSRL/IQL JAX
+    implementation: IQL is treated identically to plain SAC at the
+    offline->online switch), so neither ``_apply_online_regularizer_override``
+    nor ``_offline_probe_metrics`` is overridden here.
+
+    .. warning::
+       **Do not instantiate this class directly.** It exists only to back
+       :class:`~rl_garden.algorithms.Off2OnIQL`. For standalone offline IQL
+       pretraining use :class:`IQL`. The shape and arguments of this shell
+       may change without notice.
+    """
+
+    def __init__(
+        self,
+        env: Any,
+        eval_env: Optional[Any] = None,
+        *,
+        buffer_size: int = 1_000_000,
+        buffer_device: str = "cuda",
+        learning_starts: int = 4_000,
+        batch_size: int = 256,
+        gamma: float = 0.99,
+        tau: float = 0.005,
+        training_freq: int = 64,
+        utd: float = 1.0,
+        bootstrap_at_done: str = "always",
+        offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        actor_lr: float = 3e-4,
+        critic_value_lr: float = 3e-4,
+        weight_decay: float = 0.0,
+        use_adamw: bool = False,
+        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
+        lr_warmup_steps: int = 0,
+        lr_decay_steps: int = 0,
+        lr_min_ratio: float = 0.0,
+        grad_clip_norm: Optional[float] = None,
+        expectile: float = 0.7,
+        temperature: float = 3.0,
+        adv_clip_max: float = 100.0,
+        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
+        actor_hidden_dims: Optional[Sequence[int]] = None,
+        critic_hidden_dims: Optional[Sequence[int]] = None,
+        value_hidden_dims: Optional[Sequence[int]] = None,
+        n_critics: int = 2,
+        critic_subsample_size: Optional[int] = None,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        image_keys: Optional[tuple[str, ...]] = None,
+        state_key: Optional[str] = None,
+        use_proprio: Optional[bool] = None,
+        proprio_latent_dim: Optional[int] = None,
+        image_fusion_mode: Optional[str] = None,
+        enable_stacking: Optional[bool] = None,
+        detach_encoder_on_actor: bool = True,
+        policy_kwargs: Optional[dict[str, Any]] = None,
+        actor_use_layer_norm: bool = False,
+        critic_use_layer_norm: bool = False,
+        value_use_layer_norm: bool = False,
+        actor_use_group_norm: bool = False,
+        critic_use_group_norm: bool = False,
+        value_use_group_norm: bool = False,
+        num_groups: int = 32,
+        actor_dropout_rate: Optional[float] = None,
+        critic_dropout_rate: Optional[float] = None,
+        value_dropout_rate: Optional[float] = None,
+        kernel_init: Optional[
+            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        ] = None,
+        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
+        std_parameterization: Literal["exp", "uniform"] = "exp",
+        seed: int = 1,
+        device: str | torch.device = "auto",
+        logger: Optional[Logger] = None,
+        std_log: bool = True,
+        log_freq: int = 1_000,
+        eval_freq: int = 25,
+        num_eval_steps: int = 50,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_freq: int = 0,
+        save_replay_buffer: bool = False,
+        save_final_checkpoint: bool = True,
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
+    ) -> None:
+        self._configure_observation_kwargs(
+            env,
+            image_encoder_factory=image_encoder_factory,
+            image_keys=image_keys,
+            state_key=state_key,
+            use_proprio=use_proprio,
+            proprio_latent_dim=proprio_latent_dim,
+            image_fusion_mode=image_fusion_mode,
+            enable_stacking=enable_stacking,
+            detach_encoder_on_actor=detach_encoder_on_actor,
+        )
+        super().__init__(
+            env=env,
+            eval_env=eval_env,
+            buffer_size=buffer_size,
+            buffer_device=buffer_device,
+            learning_starts=learning_starts,
+            batch_size=batch_size,
+            gamma=gamma,
+            tau=tau,
+            training_freq=training_freq,
+            utd=utd,
+            bootstrap_at_done=bootstrap_at_done,
+            seed=seed,
+            device=device,
+            logger=logger,
+            std_log=std_log,
+            log_freq=log_freq,
+            eval_freq=eval_freq,
+            num_eval_steps=num_eval_steps,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=checkpoint_freq,
+            save_replay_buffer=save_replay_buffer,
+            save_final_checkpoint=save_final_checkpoint,
+            initial_training_phase=initial_training_phase,
+        )
+        self._init_iql_params(
+            tau=tau,
+            utd=utd,
+            actor_lr=actor_lr,
+            critic_value_lr=critic_value_lr,
+            weight_decay=weight_decay,
+            use_adamw=use_adamw,
+            lr_schedule=lr_schedule,
+            lr_warmup_steps=lr_warmup_steps,
+            lr_decay_steps=lr_decay_steps,
+            lr_min_ratio=lr_min_ratio,
+            grad_clip_norm=grad_clip_norm,
+            expectile=expectile,
+            temperature=temperature,
+            adv_clip_max=adv_clip_max,
+            net_arch=net_arch,
+            actor_hidden_dims=actor_hidden_dims,
+            critic_hidden_dims=critic_hidden_dims,
+            value_hidden_dims=value_hidden_dims,
+            n_critics=n_critics,
+            critic_subsample_size=critic_subsample_size,
+            actor_use_layer_norm=actor_use_layer_norm,
+            critic_use_layer_norm=critic_use_layer_norm,
+            value_use_layer_norm=value_use_layer_norm,
+            actor_use_group_norm=actor_use_group_norm,
+            critic_use_group_norm=critic_use_group_norm,
+            value_use_group_norm=value_use_group_norm,
+            num_groups=num_groups,
+            actor_dropout_rate=actor_dropout_rate,
+            critic_dropout_rate=critic_dropout_rate,
+            value_dropout_rate=value_dropout_rate,
+            kernel_init=kernel_init,
+            backbone_type=backbone_type,
+            std_parameterization=std_parameterization,
+        )
+        self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
+        self._setup_model()
+        self._init_off2on_params(offline_sampling=offline_sampling)
+
+
+class IQL(IQLCore, OfflineRLAlgorithm):
+    """Offline IQL with AWR actor loss and expectile value regression."""
+
+    _compatible_checkpoint_algorithms = ("IQL",)
+
+    def __init__(
+        self,
+        env: OfflineEnvSpec,
+        *,
+        buffer_size: int = 1_000_000,
+        buffer_device: str = "cuda",
+        batch_size: int = 256,
+        gamma: float = 0.99,
+        tau: float = 0.005,
+        offline_sampling: str = "with_replace",
+        utd: float = 1.0,
+        actor_lr: float = 3e-4,
+        critic_value_lr: float = 3e-4,
+        weight_decay: float = 0.0,
+        use_adamw: bool = False,
+        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
+        lr_warmup_steps: int = 0,
+        lr_decay_steps: int = 0,
+        lr_min_ratio: float = 0.0,
+        grad_clip_norm: Optional[float] = None,
+        expectile: float = 0.7,
+        temperature: float = 3.0,
+        adv_clip_max: float = 100.0,
+        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
+        actor_hidden_dims: Optional[Sequence[int]] = None,
+        critic_hidden_dims: Optional[Sequence[int]] = None,
+        value_hidden_dims: Optional[Sequence[int]] = None,
+        n_critics: int = 2,
+        critic_subsample_size: Optional[int] = None,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        image_keys: Optional[tuple[str, ...]] = None,
+        state_key: Optional[str] = None,
+        use_proprio: Optional[bool] = None,
+        proprio_latent_dim: Optional[int] = None,
+        image_fusion_mode: Optional[str] = None,
+        enable_stacking: Optional[bool] = None,
+        policy_kwargs: Optional[dict[str, Any]] = None,
+        actor_use_layer_norm: bool = False,
+        critic_use_layer_norm: bool = False,
+        value_use_layer_norm: bool = False,
+        actor_use_group_norm: bool = False,
+        critic_use_group_norm: bool = False,
+        value_use_group_norm: bool = False,
+        num_groups: int = 32,
+        actor_dropout_rate: Optional[float] = None,
+        critic_dropout_rate: Optional[float] = None,
+        value_dropout_rate: Optional[float] = None,
+        kernel_init: Optional[
+            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        ] = None,
+        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
+        std_parameterization: Literal["exp", "uniform"] = "exp",
+        seed: int = 1,
+        device: str | torch.device = "auto",
+        logger: Optional[Logger] = None,
+        std_log: bool = True,
+        log_freq: int = 1_000,
+        eval_freq: int = 0,
+        num_eval_steps: int = 50,
+        eval_env: Optional[Any] = None,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_freq: int = 0,
+        save_replay_buffer: bool = False,
+        save_final_checkpoint: bool = True,
+    ) -> None:
+        super().__init__(
+            env=env,
+            buffer_size=buffer_size,
+            buffer_device=buffer_device,
+            batch_size=batch_size,
+            gamma=gamma,
+            offline_sampling=offline_sampling,
+            seed=seed,
+            device=device,
+            logger=logger,
+            std_log=std_log,
+            log_freq=log_freq,
+            eval_freq=eval_freq,
+            num_eval_steps=num_eval_steps,
+            eval_env=eval_env,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=checkpoint_freq,
+            save_replay_buffer=save_replay_buffer,
+            save_final_checkpoint=save_final_checkpoint,
+        )
+        self._init_iql_params(
+            tau=tau,
+            utd=utd,
+            actor_lr=actor_lr,
+            critic_value_lr=critic_value_lr,
+            weight_decay=weight_decay,
+            use_adamw=use_adamw,
+            lr_schedule=lr_schedule,
+            lr_warmup_steps=lr_warmup_steps,
+            lr_decay_steps=lr_decay_steps,
+            lr_min_ratio=lr_min_ratio,
+            grad_clip_norm=grad_clip_norm,
+            expectile=expectile,
+            temperature=temperature,
+            adv_clip_max=adv_clip_max,
+            net_arch=net_arch,
+            actor_hidden_dims=actor_hidden_dims,
+            critic_hidden_dims=critic_hidden_dims,
+            value_hidden_dims=value_hidden_dims,
+            n_critics=n_critics,
+            critic_subsample_size=critic_subsample_size,
+            actor_use_layer_norm=actor_use_layer_norm,
+            critic_use_layer_norm=critic_use_layer_norm,
+            value_use_layer_norm=value_use_layer_norm,
+            actor_use_group_norm=actor_use_group_norm,
+            critic_use_group_norm=critic_use_group_norm,
+            value_use_group_norm=value_use_group_norm,
+            num_groups=num_groups,
+            actor_dropout_rate=actor_dropout_rate,
+            critic_dropout_rate=critic_dropout_rate,
+            value_dropout_rate=value_dropout_rate,
+            kernel_init=kernel_init,
+            backbone_type=backbone_type,
+            std_parameterization=std_parameterization,
+        )
+
+        obs_space = self.env.single_observation_space
+        image_kwargs_explicit = {
+            "image_encoder_factory": image_encoder_factory,
+            "image_keys": image_keys,
+            "state_key": state_key,
+            "use_proprio": use_proprio,
+            "proprio_latent_dim": proprio_latent_dim,
+            "image_fusion_mode": image_fusion_mode,
+            "enable_stacking": enable_stacking,
+        }
+        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
+        if isinstance(obs_space, spaces.Box):
+            if explicitly_set:
+                raise ValueError(
+                    "IQL with Box observation space does not accept image-related "
+                    f"kwargs (got {explicitly_set}). Use Dict observations instead."
+                )
+            self._is_dict_obs = False
+        elif isinstance(obs_space, spaces.Dict):
+            self._is_dict_obs = True
+            self._image_encoder_factory = (
+                image_encoder_factory or default_image_encoder_factory()
+            )
+            self._image_keys = (
+                image_keys if image_keys is not None else ("rgb", "depth")
+            )
+            self._state_key = state_key if state_key is not None else "state"
+            self._use_proprio = use_proprio if use_proprio is not None else True
+            self._proprio_latent_dim = (
+                proprio_latent_dim if proprio_latent_dim is not None else 64
+            )
+            self._image_fusion_mode = (
+                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
+            )
+            self._enable_stacking = (
+                enable_stacking if enable_stacking is not None else False
+            )
+        else:
+            raise TypeError(
+                f"IQL supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
+
+        self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
+        self._setup_model()
