@@ -4,7 +4,7 @@ from __future__ import annotations
 
 def _ppo_env_request(args, run_name):
     from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
 
     is_visual = args.obs_mode != "state"
     backend_config = args.resolve_backend_config()
@@ -22,6 +22,7 @@ def _ppo_env_request(args, run_name):
         per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
         frame_stack=1,
         num_eval_envs=args.num_eval_envs,
+        create_eval_env=should_create_eval_env(args),
         eval_record_dir=eval_record_dir,
         capture_video=args.capture_video,
         video_fps=args.video_fps,

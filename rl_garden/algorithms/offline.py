@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import time
 from abc import abstractmethod
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -136,28 +135,6 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         )
 
     # --- eval ---
-
-    def _evaluate(self) -> dict[str, float]:
-        if self.eval_env is None:
-            return {}
-        self.policy.eval()
-        obs, _ = self.eval_env.reset()
-        metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
-        for _ in range(self.num_eval_steps):
-            with torch.no_grad():
-                obs, _, _, _, infos = self.eval_env.step(self._eval_action(obs))
-                if "final_info" in infos:
-                    done_mask = infos["_final_info"]
-                    for k, v in infos["final_info"]["episode"].items():
-                        done_values = v[done_mask]
-                        if done_values.numel() == 0:
-                            continue
-                        metrics[k].append(done_values)
-        self.policy.train()
-        out: dict[str, float] = {}
-        for k, vs in metrics.items():
-            out[k] = float(torch.cat(vs).float().mean().item())
-        return out
 
     def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:

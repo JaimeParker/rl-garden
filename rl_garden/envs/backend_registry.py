@@ -120,6 +120,17 @@ def resolve_backend_config(backend_name: str, args: Any) -> Any:
     return _get_backend(backend_name).config_from_args(args)
 
 
+def should_create_eval_env(args: Any) -> bool:
+    """Whether a training run should build a live eval env at all.
+
+    Single source of truth for the "build an eval env only if periodic
+    evaluation was actually requested" decision, shared by the online,
+    offline, and off2on training entrypoints so they don't each re-derive it
+    (and potentially disagree, as online/off2on previously did).
+    """
+    return args.eval_freq > 0
+
+
 def make_evaluation_env(backend_name: str, req: EnvRequest):
     """Create only an evaluation environment for offline training."""
     return _get_backend(backend_name).make_eval_env(req)

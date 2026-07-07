@@ -219,6 +219,21 @@ def test_transformer_ppo_checkpoint_roundtrip(tmp_path):
         assert torch.equal(value, loaded.policy.state_dict()[key]), key
 
 
+def test_transformer_ppo_evaluate_with_eval_env_does_not_crash():
+    """Regression test: periodic eval must use the stateful predict_recurrent
+    path (shared SequencePPO eval hooks), not the stateless policy.predict()
+    which would crash on the pre-encoder-vs-post-encoder feature-dim mismatch."""
+    env = DummyVecEnv(_state_space(), _action_space())
+    eval_env = DummyVecEnv(_state_space(), _action_space())
+    agent = TransformerPPO(
+        env=env, eval_env=eval_env, **_ppo_kwargs(), **_transformer_kwargs()
+    )
+
+    metrics = agent._evaluate()
+
+    assert isinstance(metrics, dict)
+
+
 def test_transformer_ppo_rejects_num_envs_not_divisible_by_minibatches():
     env = DummyVecEnv(_state_space(), _action_space())  # num_envs=2
     kwargs = _ppo_kwargs()

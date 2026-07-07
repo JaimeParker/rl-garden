@@ -10,11 +10,11 @@ class CalQLArgs(CQLArgs, OfflineCalQLArgs):
     """Calibrated Q-learning offline pretraining."""
 
 
-def build_calql(args, env_spec, logger):
+def build_calql(args, env_spec, logger, eval_env=None):
     from rl_garden.algorithms import CalQL
 
     return CalQL(
-        **_cql_kwargs(args, env_spec, logger),
+        **_cql_kwargs(args, env_spec, logger, eval_env),
         use_calql=args.use_calql,
         calql_bound_random_actions=args.calql_bound_random_actions,
         sparse_reward_mc=args.sparse_reward_mc,

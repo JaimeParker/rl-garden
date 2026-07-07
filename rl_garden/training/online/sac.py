@@ -4,7 +4,7 @@ from __future__ import annotations
 
 def _sac_env_request(args, run_name):
     from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
 
     is_visual = args.obs_mode != "state"
     backend_config = args.resolve_backend_config()
@@ -26,7 +26,7 @@ def _sac_env_request(args, run_name):
         capture_video=args.capture_video,
         video_fps=args.video_fps,
         num_eval_steps=args.num_eval_steps,
-        create_eval_env=args.eval_freq > 0,
+        create_eval_env=should_create_eval_env(args),
         backend_config=backend_config,
     )
 

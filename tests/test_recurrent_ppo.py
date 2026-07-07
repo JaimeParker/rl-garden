@@ -291,3 +291,46 @@ def test_recurrent_ppo_checkpoint_roundtrip(tmp_path):
     assert loaded._global_step == agent._global_step
     for key, value in agent.policy.state_dict().items():
         assert torch.equal(value, loaded.policy.state_dict()[key]), key
+
+
+def test_recurrent_ppo_evaluate_with_eval_env_does_not_crash():
+    """Regression test: periodic eval must use the stateful predict_recurrent
+    path, not the stateless policy.predict() (which would feed raw pre-RNN
+    features into actor/value heads built for recurrent_encoder.features_dim
+    and crash with a shape mismatch)."""
+    env = DummyVecEnv(_state_space(), _action_space())
+    eval_env = DummyVecEnv(_state_space(), _action_space())
+    agent = RecurrentPPO(
+        env=env,
+        eval_env=eval_env,
+        **_ppo_kwargs(),
+        rnn_hidden_size=8,
+    )
+
+    metrics = agent._evaluate()
+
+    assert isinstance(metrics, dict)
+
+
+def test_recurrent_ppo_eval_resets_hidden_state_only_at_episode_boundary():
+    """Mirrors test_recurrent_sac_eval_resets_hidden_state_only_at_episode_boundary:
+    _eval_episode_start must reset exactly on a genuine termination/truncation,
+    not on every step and not never."""
+    env = DummyVecEnv(_state_space(), _action_space())
+    eval_env = RecurrentDoneVecEnv(_state_space(), _action_space(), done_at_step=3)
+    agent = RecurrentPPO(env=env, eval_env=eval_env, **_ppo_kwargs(), rnn_hidden_size=8)
+
+    agent.policy.eval()
+    obs, _ = agent.eval_env.reset()
+    agent._eval_start_hook()
+    assert torch.all(agent._eval_episode_start == 1.0)
+
+    for step in range(1, 6):
+        env_action, critic_action = agent._eval_action_and_critic_action(obs)
+        obs, rewards, terminations, truncations, infos = agent.eval_env.step(env_action)
+        agent._eval_step_hook(obs, critic_action, rewards, terminations, truncations, infos)
+        if step == 3:
+            assert bool(terminations[0].item())
+            assert agent._eval_episode_start[0].item() == 1.0
+        else:
+            assert agent._eval_episode_start[0].item() == 0.0

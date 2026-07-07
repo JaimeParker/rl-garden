@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 def _flash_sac_env_request(args, run_name):
-    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
 
     backend_config = args.resolve_backend_config()
     eval_record_dir = f"{args.log_dir}/{run_name}/videos" if args.capture_video else None
@@ -20,6 +20,7 @@ def _flash_sac_env_request(args, run_name):
         per_camera_rgbd=False,
         frame_stack=1,
         num_eval_envs=args.num_eval_envs,
+        create_eval_env=should_create_eval_env(args),
         eval_record_dir=eval_record_dir,
         capture_video=args.capture_video,
         video_fps=args.video_fps,

@@ -47,7 +47,11 @@ from rl_garden.algorithms.offline import _log_eval_stdout
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import resolve_checkpoint_dir, resolve_eval_record_dir
 from rl_garden.common.resolved_config import persist_resolved_config
-from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
+from rl_garden.envs.backend_registry import (
+    EnvRequest,
+    make_training_envs,
+    should_create_eval_env,
+)
 from rl_garden.training._dataset import load_offline_dataset
 from rl_garden.training.off2on._args import (
     Off2OnCommonArgs,
@@ -273,6 +277,7 @@ def run_off2on(
         video_fps=args.video_fps,
         num_eval_steps=args.num_eval_steps,
         backend_config=backend_config,
+        create_eval_env=should_create_eval_env(args),
     )
     env, eval_env = make_training_envs(args.env_backend, req)
     _require_continuous_action_space(env, args)
@@ -319,4 +324,5 @@ def run_off2on(
 
     logger.close()
     env.close()
-    eval_env.close()
+    if eval_env is not None:
+        eval_env.close()

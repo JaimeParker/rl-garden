@@ -6,6 +6,7 @@ thin so GPU-parallel specifics live in ``OffPolicyAlgorithm``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -86,6 +87,67 @@ class BaseAlgorithm(ABC):
             return self.policy.predict(
                 self._obs_to_policy_device(obs), deterministic=True
             )
+
+    def _eval_action_and_critic_action(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns (action actually executed, action the critic evaluated).
+
+        Equal by default; off-policy/residual algorithms that execute a
+        different action than the one their critic scores (e.g. residual RL)
+        override this to report both.
+        """
+        action = self._eval_action(obs)
+        return action, action
+
+    def _eval_start_hook(self) -> None:
+        """Called once before the eval rollout loop starts."""
+
+    def _eval_step_hook(
+        self,
+        obs_before,
+        critic_action: torch.Tensor,
+        rewards: torch.Tensor,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+        infos: dict,
+    ) -> None:
+        """Called after every eval env step."""
+
+    def _eval_finalize_hook(self) -> dict[str, float]:
+        """Extra metrics merged into `_evaluate()`'s return value."""
+        return {}
+
+    # --- evaluation ---
+
+    def _evaluate(self) -> dict[str, float]:
+        if self.eval_env is None:
+            return {}
+        self.policy.eval()
+        obs, _ = self.eval_env.reset()
+        self._eval_start_hook()
+        metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
+        for _ in range(self.num_eval_steps):
+            with torch.no_grad():
+                env_action, critic_action = self._eval_action_and_critic_action(obs)
+                obs_before = obs
+                obs, rewards, terminations, truncations, infos = self.eval_env.step(
+                    env_action
+                )
+                self._eval_step_hook(
+                    obs_before, critic_action, rewards, terminations, truncations, infos
+                )
+                if "final_info" in infos:
+                    done_mask = infos.get("_final_info")
+                    for k, v in infos["final_info"]["episode"].items():
+                        done_values = v[done_mask] if done_mask is not None else v
+                        if done_values.numel() == 0:
+                            continue
+                        metrics[k].append(done_values)
+        self.policy.train()
+        out: dict[str, float] = {}
+        for k, vs in metrics.items():
+            out[k] = float(torch.cat(vs).float().mean().item())
+        out.update(self._eval_finalize_hook())
+        return out
 
     # --- checkpointing ---
 

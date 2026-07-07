@@ -197,23 +197,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         stateless policy.predict_values(obs)."""
         return self.policy.predict_values(obs).view(-1)
 
-    def _evaluate(self) -> dict[str, float]:
-        if self.eval_env is None:
-            return {}
-        self.policy.eval()
-        obs, _ = self.eval_env.reset()
-        metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
-        for _ in range(self.num_eval_steps):
-            with torch.no_grad():
-                obs, _, _, _, infos = self.eval_env.step(self._eval_action(obs))
-                if "final_info" in infos:
-                    for k, v in infos["final_info"]["episode"].items():
-                        metrics[k].append(v)
-        self.policy.train()
-        return {
-            k: float(torch.stack(vs).float().mean().item()) for k, vs in metrics.items()
-        }
-
     def learn(self, total_timesteps: int) -> "OnPolicyAlgorithm":
         obs, _ = self.env.reset(seed=self.seed)
         next_done = torch.zeros(self.num_envs, device=self.device)

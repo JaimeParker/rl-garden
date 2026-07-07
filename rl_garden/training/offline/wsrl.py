@@ -18,23 +18,22 @@ class WSRLOfflineArgs(CalQLArgs, OfflineWSRLArgs):
     """WSRL-compatible offline checkpoint pretraining."""
 
 
-def _wsrl_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
-    kwargs = _cql_kwargs(args, env_spec, logger)
+def _wsrl_kwargs(
+    args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
+) -> dict:
+    kwargs = _cql_kwargs(args, env_spec, logger, eval_env)
     kwargs.update(
-        eval_env=None,
         learning_starts=0,
         training_freq=args.training_freq,
-        eval_freq=0,
-        num_eval_steps=0,
     )
     return kwargs
 
 
-def build_wsrl(args, env_spec, logger):
+def build_wsrl(args, env_spec, logger, eval_env=None):
     from rl_garden.algorithms import WSRL
 
     return WSRL(
-        **_wsrl_kwargs(args, env_spec, logger),
+        **_wsrl_kwargs(args, env_spec, logger, eval_env),
         use_calql=args.use_calql,
         calql_bound_random_actions=args.calql_bound_random_actions,
         sparse_reward_mc=args.sparse_reward_mc,

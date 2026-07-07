@@ -136,6 +136,35 @@ class SequencePPO(PPO):
         with torch.no_grad():
             return self.policy.predict_values_recurrent(obs, hidden, episode_starts)
 
+    # --- eval-time hidden-state carry (mirrors SequenceSAC's identical hooks) ---
+    # BaseAlgorithm's default _eval_action/_eval_action_and_critic_action call the
+    # stateless self.policy.predict(obs), which feeds raw pre-encoder features into
+    # actor/value heads built for recurrent_encoder.features_dim -- a shape
+    # mismatch. These overrides carry hidden state across eval steps instead.
+
+    def _eval_start_hook(self) -> None:
+        self._eval_hidden = self.policy.recurrent_encoder.get_initial_state(
+            self.eval_env.num_envs, self.device
+        )
+        self._eval_episode_start = torch.ones(self.eval_env.num_envs, device=self.device)
+
+    def _eval_action_and_critic_action(self, obs):
+        with torch.no_grad():
+            action, new_hidden = self.policy.predict_recurrent(
+                self._obs_to_policy_device(obs),
+                self._eval_hidden,
+                self._eval_episode_start,
+                deterministic=True,
+            )
+        self._eval_hidden = new_hidden
+        return action, action
+
+    def _eval_step_hook(
+        self, obs_before, critic_action, rewards, terminations, truncations, infos
+    ) -> None:
+        del obs_before, critic_action, rewards, infos
+        self._eval_episode_start = (terminations | truncations).float()
+
     def _iter_minibatches(self) -> Iterator[RecurrentRolloutBufferSample]:
         return self.rollout_buffer.get_sequences(
             self.num_minibatches, initial_hidden=self._rollout_initial_hidden

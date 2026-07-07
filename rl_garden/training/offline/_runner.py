@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import warnings
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import torch
 from gymnasium import spaces
@@ -13,7 +13,11 @@ from rl_garden.algorithms import OfflineEnvSpec, run_offline_pretraining
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import resolve_checkpoint_dir
 from rl_garden.common.resolved_config import persist_resolved_config
-from rl_garden.envs.backend_registry import EnvRequest, make_evaluation_env
+from rl_garden.envs.backend_registry import (
+    EnvRequest,
+    make_evaluation_env,
+    should_create_eval_env,
+)
 from rl_garden.training._dataset import infer_offline_dataset_specs, load_offline_dataset
 
 
@@ -48,7 +52,7 @@ def _eval_env_request(args: Any) -> EnvRequest:
 def run_offline(
     args: Any,
     *,
-    build_agent: Callable[[Any, OfflineEnvSpec, Logger], Any],
+    build_agent: Callable[[Any, OfflineEnvSpec, Logger, Optional[Any]], Any],
 ) -> None:
     from rl_garden.training.offline._registry import registry
 
@@ -106,7 +110,15 @@ def run_offline(
             flush=True,
         )
 
-    agent = build_agent(args, env_spec, logger)
+    # --- optional eval env, built before the agent so it can be injected
+    # through the constructor instead of assigned onto the agent afterward.
+    # None whenever there's no live simulator to evaluate in (e.g. offline
+    # data collected from a real robot) or periodic eval wasn't requested. ---
+    eval_env = None
+    if args.env_id is not None and should_create_eval_env(args):
+        eval_env = make_evaluation_env(args.env_backend, _eval_env_request(args))
+
+    agent = build_agent(args, env_spec, logger, eval_env)
     loaded = load_offline_dataset(agent.replay_buffer, args)
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:
@@ -116,14 +128,6 @@ def run_offline(
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
         if args.std_log:
             print(f"[pretrain] resumed_from={args.load_checkpoint}", flush=True)
-
-    # --- setup optional eval env ---
-    eval_env = None
-    if args.env_id is not None:
-        eval_env = make_evaluation_env(args.env_backend, _eval_env_request(args))
-        agent.eval_env = eval_env
-        agent.eval_freq = args.eval_freq
-        agent.num_eval_steps = args.num_eval_steps
 
     run_offline_pretraining(
         agent,
@@ -135,7 +139,7 @@ def run_offline(
         save_final_checkpoint=args.save_final_checkpoint,
         log_freq=args.log_freq,
         std_log=args.std_log,
-        eval_freq=agent.eval_freq if eval_env is not None else 0,
+        eval_freq=args.eval_freq if eval_env is not None else 0,
         desc=f"{algorithm}-offline",
     )
 

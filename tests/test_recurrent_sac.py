@@ -217,6 +217,22 @@ def test_recurrent_sac_eval_resets_hidden_state_only_at_episode_boundary():
             assert agent._eval_episode_start[0].item() == 0.0
 
 
+def test_recurrent_sac_eval_finalize_hook_noop_when_q_mc_diagnostics_enabled():
+    """Regression test: q_mc_diagnostics is unsupported for sequence SAC
+    variants (SACCore's Q-MC bootstrap assumes flat pre-encoder features).
+    _eval_start_hook deliberately skips SACCore's _q_mc_* setup, so
+    _eval_finalize_hook must no-op instead of touching that uninitialized
+    state -- it must not raise AttributeError."""
+    env = DummyVecEnv(_state_space(), _action_space())
+    eval_env = DummyVecEnv(_state_space(), _action_space())
+    kwargs = {**_recurrent_sac_kwargs(), "eval_freq": 1, "q_mc_diagnostics": True}
+    agent = RecurrentSAC(env=env, eval_env=eval_env, **kwargs)
+
+    metrics = agent._evaluate()
+
+    assert not any(key.startswith("q_mc/") for key in metrics)
+
+
 def test_recurrent_sac_priority_replay_updates_after_train_step():
     env = DummyVecEnv(_state_space(), _action_space())
     agent = RecurrentSAC(env=env, **_recurrent_sac_kwargs())

@@ -26,7 +26,9 @@ class BCArgs(
     """Behavior cloning offline pretraining."""
 
 
-def _bc_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
+def _bc_kwargs(
+    args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
+) -> dict:
     from gymnasium import spaces
 
     from rl_garden.common.cli_args import image_encoder_factory_from_args
@@ -59,6 +61,9 @@ def _bc_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
         logger=logger,
         std_log=args.std_log,
         log_freq=args.log_freq,
+        eval_env=eval_env,
+        eval_freq=args.eval_freq if eval_env is not None else 0,
+        num_eval_steps=args.num_eval_steps,
         checkpoint_dir=None,
         checkpoint_freq=0,
         save_replay_buffer=args.save_replay_buffer,
@@ -77,10 +82,10 @@ def _bc_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger) -> dict:
     return kwargs
 
 
-def build_bc(args, env_spec, logger):
+def build_bc(args, env_spec, logger, eval_env=None):
     from rl_garden.algorithms import BC
 
-    return BC(**_bc_kwargs(args, env_spec, logger))
+    return BC(**_bc_kwargs(args, env_spec, logger, eval_env))
 
 
 def run_bc(args: BCArgs) -> None:

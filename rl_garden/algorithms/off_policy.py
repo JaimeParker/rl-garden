@@ -124,33 +124,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 self._obs_to_policy_device(obs), deterministic=False
             ).detach()
 
-    def _eval_action(self, obs) -> torch.Tensor:
-        with torch.no_grad():
-            return self.policy.predict(
-                self._obs_to_policy_device(obs), deterministic=True
-            )
-
-    def _eval_action_and_critic_action(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
-        action = self._eval_action(obs)
-        return action, action
-
-    def _eval_start_hook(self) -> None:
-        pass
-
-    def _eval_step_hook(
-        self,
-        obs_before,
-        critic_action: torch.Tensor,
-        rewards: torch.Tensor,
-        terminations: torch.Tensor,
-        truncations: torch.Tensor,
-        infos: dict,
-    ) -> None:
-        pass
-
-    def _eval_finalize_hook(self) -> dict[str, float]:
-        return {}
-
     def _on_env_reset(self, obs) -> None:
         del obs
 
@@ -359,35 +332,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             return
         self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
         self._last_checkpoint_step = self._global_step
-
-    # --- evaluation ---
-
-    def _evaluate(self) -> dict[str, float]:
-        if self.eval_env is None:
-            return {}
-        self.policy.eval()
-        obs, _ = self.eval_env.reset()
-        self._eval_start_hook()
-        metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
-        for _ in range(self.num_eval_steps):
-            with torch.no_grad():
-                env_action, critic_action = self._eval_action_and_critic_action(obs)
-                obs_before = obs
-                obs, rewards, terminations, truncations, infos = self.eval_env.step(
-                    env_action
-                )
-                self._eval_step_hook(
-                    obs_before, critic_action, rewards, terminations, truncations, infos
-                )
-                if "final_info" in infos:
-                    for k, v in infos["final_info"]["episode"].items():
-                        metrics[k].append(v)
-        self.policy.train()
-        out: dict[str, float] = {}
-        for k, vs in metrics.items():
-            out[k] = float(torch.stack(vs).float().mean().item())
-        out.update(self._eval_finalize_hook())
-        return out
 
     # --- main loop ---
 

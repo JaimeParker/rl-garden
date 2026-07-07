@@ -149,6 +149,16 @@ def test_cql_does_not_own_calql_or_wsrl_flow_state():
     assert not hasattr(agent, "offline_data_ratio")
 
 
+def test_cql_accepts_and_wires_eval_env_constructor_args():
+    eval_env = DummyVecEnv()
+    kwargs = _offline_kwargs()
+    agent = CQL(env=_offline_env(), eval_env=eval_env, eval_freq=5, num_eval_steps=3, **kwargs)
+
+    assert agent.eval_env is eval_env
+    assert agent.eval_freq == 5
+    assert agent.num_eval_steps == 3
+
+
 def test_cql_train_step_and_checkpoint(tmp_path):
     agent = CQL(env=_offline_env(), checkpoint_dir=str(tmp_path), **_offline_kwargs())
     _fill(agent)

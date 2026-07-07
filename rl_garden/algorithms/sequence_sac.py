@@ -268,6 +268,13 @@ class SequenceSAC(SAC):
             data.priority_indices, critic_info["td_error_priority"]
         )
 
+    def _eval_finalize_hook(self) -> dict[str, float]:
+        # q_mc_diagnostics is unsupported for sequence SAC variants v1 (see
+        # _eval_start_hook above) -- mirrors _compute_actor_diagnostics/
+        # _q_landscape_diagnostics' no-op-for-v1 scope decision instead of
+        # touching SACCore's uninitialized _q_mc_* state.
+        return {}
+
     def _compute_actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
         # The default (SACCore._compute_actor_diagnostics) assumes flat
         # per-transition obs; data.obs here is a (window_len, B, ...) window.
