@@ -30,6 +30,28 @@ def test_make_optimizer_explicit_adamw_with_zero_wd():
     assert isinstance(opt, torch.optim.AdamW)
 
 
+def test_make_optimizer_exclude_bias_from_decay_splits_param_groups():
+    weight = torch.nn.Parameter(torch.zeros(4, 4))
+    bias = torch.nn.Parameter(torch.zeros(4))
+    opt = make_optimizer(
+        [weight, bias], lr=1e-3, weight_decay=0.1, use_adamw=True,
+        exclude_bias_from_decay=True,
+    )
+    assert isinstance(opt, torch.optim.AdamW)
+    groups_by_wd = {g["weight_decay"]: g["params"] for g in opt.param_groups}
+    assert groups_by_wd[0.1] == [weight]
+    assert groups_by_wd[0.0] == [bias]
+
+
+def test_make_optimizer_exclude_bias_from_decay_ignored_for_plain_adam():
+    weight = torch.nn.Parameter(torch.zeros(4, 4))
+    bias = torch.nn.Parameter(torch.zeros(4))
+    opt = make_optimizer([weight, bias], lr=1e-3, exclude_bias_from_decay=True)
+    assert isinstance(opt, torch.optim.Adam)
+    assert not isinstance(opt, torch.optim.AdamW)
+    assert len(opt.param_groups) == 1
+
+
 def test_make_lr_scheduler_constant_returns_none():
     opt = make_optimizer(_dummy_params(), lr=1e-3)
     sched = make_lr_scheduler(opt, schedule_type="constant")

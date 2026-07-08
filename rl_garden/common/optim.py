@@ -30,16 +30,34 @@ def make_optimizer(
     *,
     weight_decay: float = 0.0,
     use_adamw: bool = False,
+    exclude_bias_from_decay: bool = False,
 ) -> torch.optim.Optimizer:
     """Build an Adam/AdamW optimizer.
 
     AdamW is selected automatically when ``weight_decay > 0`` (since plain
     ``Adam`` couples weight decay into gradient via L2 reg, which is usually
     not what callers want).
+
+    ``exclude_bias_from_decay`` (RLPD reference's ``decay_mask_fn``) splits
+    params by ``ndim <= 1`` (biases, LayerNorm weight/bias) into a
+    ``weight_decay=0`` group, leaving everything else at ``weight_decay``.
+    Only meaningful when AdamW is selected; ignored otherwise.
     """
-    if use_adamw or weight_decay > 0:
+    if not (use_adamw or weight_decay > 0):
+        return torch.optim.Adam(params, lr=lr)
+    if not exclude_bias_from_decay:
         return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
-    return torch.optim.Adam(params, lr=lr)
+
+    decay, no_decay = [], []
+    for p in params:
+        (no_decay if p.ndim <= 1 else decay).append(p)
+    return torch.optim.AdamW(
+        [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=lr,
+    )
 
 
 def make_lr_scheduler(

@@ -225,6 +225,24 @@ def test_mlp_resnet_as_trunk():
     assert y.shape == (8, 64)
 
 
+def test_create_mlp_use_pnorm_normalizes_trunk_features():
+    trunk = create_mlp(8, -1, [16, 16], use_pnorm=True)
+    y = trunk(torch.randn(5, 8))
+    torch.testing.assert_close(y.norm(dim=-1), torch.ones(5))
+
+
+def test_create_mlp_use_pnorm_noop_when_net_arch_empty():
+    trunk = create_mlp(8, -1, [], use_pnorm=True)
+    x = torch.randn(5, 8)
+    torch.testing.assert_close(trunk(x), x)
+
+
+def test_mlp_resnet_use_pnorm_normalizes_trunk_features():
+    net = MLPResNet(input_dim=12, output_dim=-1, hidden_dim=64, num_blocks=2, use_pnorm=True)
+    y = net(torch.randn(8, 12))
+    torch.testing.assert_close(y.norm(dim=-1), torch.ones(8))
+
+
 def test_actor_with_mlp_resnet_backbone():
     actor = SquashedGaussianActor(
         features_dim=10,
@@ -263,6 +281,32 @@ def test_critic_with_mlp_resnet_backbone():
     actions = torch.randn(5, 3)
     q_all = critic.forward_all(features, actions)
     assert q_all.shape == (3, 5, 1)
+
+
+def test_actor_use_pnorm_normalizes_trunk_features():
+    actor = SquashedGaussianActor(
+        features_dim=10,
+        action_space=_action_space(),
+        hidden_dims=[16, 16],
+        use_pnorm=True,
+    )
+    features = torch.randn(7, 10)
+    trunk_out = actor.trunk(features)
+    torch.testing.assert_close(trunk_out.norm(dim=-1), torch.ones(7))
+
+
+def test_critic_use_pnorm_normalizes_trunk_features():
+    critic = EnsembleQCritic(
+        features_dim=11,
+        action_space=_action_space(),
+        hidden_dims=[16, 16],
+        n_critics=3,
+        use_pnorm=True,
+    )
+    features = torch.randn(5, 11)
+    actions = torch.randn(5, 3)
+    trunk_out = critic.trunk_features_first(features, actions)
+    torch.testing.assert_close(trunk_out.norm(dim=-1), torch.ones(5))
 
 
 def test_actor_dropout_changes_outputs_in_train_mode():

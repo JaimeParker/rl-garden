@@ -41,12 +41,14 @@ def _build_trunk(
     num_groups: int,
     dropout_rate: Optional[float],
     kernel_init: Optional[KernelInit],
+    use_pnorm: bool = False,
 ) -> tuple[nn.Module, int]:
     """Build a feature trunk and return (module, output_dim).
 
     For ``backbone_type='mlp'``, returns standard create_mlp() with no output head.
     For ``backbone_type='mlp_resnet'``, ``hidden_dims`` must be a list of identical
     widths; ``hidden_dim`` is taken from the first entry and ``num_blocks`` from len.
+    ``use_pnorm`` L2-normalizes the trunk's final hidden features (RLPD/WSRL ablation).
     """
     if backbone_type == "mlp":
         trunk = create_mlp(
@@ -58,6 +60,7 @@ def _build_trunk(
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            use_pnorm=use_pnorm,
         )
         out_dim = hidden_dims[-1] if len(hidden_dims) > 0 else input_dim
         return trunk, out_dim
@@ -80,6 +83,7 @@ def _build_trunk(
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            use_pnorm=use_pnorm,
         )
         return trunk, hidden_dims[0]
 
@@ -101,6 +105,7 @@ class SquashedGaussianActor(nn.Module):
         dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        use_pnorm: bool = False,
         std_parameterization: Literal["exp", "uniform"] = "exp",
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         log_std_min: float = -20.0,
@@ -132,6 +137,7 @@ class SquashedGaussianActor(nn.Module):
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            use_pnorm=use_pnorm,
         )
 
         self.fc_mean = nn.Linear(trunk_dim, act_dim)
@@ -304,6 +310,7 @@ class _QHead(nn.Module):
         num_groups: int,
         dropout_rate: Optional[float],
         kernel_init: Optional[KernelInit],
+        use_pnorm: bool = False,
     ) -> None:
         super().__init__()
         self.trunk, trunk_dim = _build_trunk(
@@ -315,6 +322,7 @@ class _QHead(nn.Module):
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            use_pnorm=use_pnorm,
         )
         self.head = nn.Linear(trunk_dim, 1)
 
@@ -376,6 +384,7 @@ class EnsembleQCritic(nn.Module):
         dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        use_pnorm: bool = False,
         critic_impl: CriticImpl = "vmap",
     ) -> None:
         super().__init__()
@@ -399,6 +408,7 @@ class EnsembleQCritic(nn.Module):
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            use_pnorm=use_pnorm,
         )
 
         if critic_impl == "legacy":

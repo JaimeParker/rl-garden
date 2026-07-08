@@ -45,6 +45,7 @@ from rl_garden.buffers.transformer_replay_buffer import (
     TransformerReplayBufferSample,
 )
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
+from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "MCReplayBufferSample",
     "MCTensorReplayBuffer",
     "NStepTensorReplayBuffer",
+    "PriorDataReplayMixin",
     "RecurrentDictRolloutBuffer",
     "RecurrentReplayBuffer",
     "RecurrentReplayBufferSample",

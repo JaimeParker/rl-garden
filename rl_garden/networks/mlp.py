@@ -4,8 +4,16 @@ from typing import Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 KernelInit = Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+
+
+class _L2Normalize(nn.Module):
+    """L2-normalize features along the last dim (RLPD/WSRL ``use_pnorm`` ablation)."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.normalize(x, dim=-1)
 
 
 def _apply_kernel_init(module: nn.Module, kernel_init: Optional[KernelInit]) -> None:
@@ -62,6 +70,7 @@ def create_mlp(
     kernel_init: Optional[KernelInit] = None,
     with_bias: bool = True,
     squash_output: bool = False,
+    use_pnorm: bool = False,
 ) -> nn.Sequential:
     """Build an MLP from an SB3-style architecture spec.
 
@@ -77,6 +86,8 @@ def create_mlp(
         kernel_init: Optional initialization for nn.Linear weights.
         with_bias: Whether linear layers use bias.
         squash_output: Append Tanh at the end.
+        use_pnorm: L2-normalize the final hidden features before the output
+            layer (RLPD/WSRL ablation; no-op when net_arch is empty).
     """
     layers: list[nn.Module] = []
     c = input_dim
@@ -95,6 +106,8 @@ def create_mlp(
             layers.append(nn.Dropout(p=dropout_rate))
         c = h
 
+    if use_pnorm and net_arch:
+        layers.append(_L2Normalize())
     if output_dim > 0:
         layers.append(nn.Linear(c, output_dim, bias=with_bias))
     if squash_output:
@@ -166,12 +179,14 @@ class MLPResNet(nn.Module):
         num_groups: int = 32,
         dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
+        use_pnorm: bool = False,
     ) -> None:
         super().__init__()
         if num_blocks < 1:
             raise ValueError(f"num_blocks must be >= 1, got {num_blocks}")
 
         self.hidden_dim = hidden_dim
+        self.use_pnorm = use_pnorm
         self.input_proj = nn.Linear(input_dim, hidden_dim)
 
         self.blocks = nn.ModuleList(
@@ -204,4 +219,6 @@ class MLPResNet(nn.Module):
         for block in self.blocks:
             h = block(h)
         h = self.final_act(h)
+        if self.use_pnorm:
+            h = F.normalize(h, dim=-1)
         return self.output_proj(h)
