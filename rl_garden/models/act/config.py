@@ -32,7 +32,7 @@ class ACTConfig:
     nheads: int = 4
     num_queries: int = 30
     pre_norm: bool = False
-    image_size: int = 224
+    image_size: int | tuple[int, int] | None = 224
 
 
 @dataclass(frozen=True)

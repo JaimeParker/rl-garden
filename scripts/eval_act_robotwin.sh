@@ -9,7 +9,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 1
 fi
 
-ROBOTWIN_ROOT=/home/RoboTwin
+ROBOTWIN_ROOT="${RLG_ROBOTWIN_ROOT:-/home/RoboTwin}"
 if [[ -z "$ROBOTWIN_ROOT" ]]; then
     echo "Error: set RLG_ROBOTWIN_ROOT to the RoboTwin checkout path." >&2
     exit 1
@@ -59,7 +59,6 @@ exec env \
     --robotwin.random-head-camera-dis 0 \
     --robotwin.random-table-height 0 \
     --robotwin.step-lim 200 \
-    --robotwin.control-step-cap 16 \
     --control-mode joint_pos \
     --camera-width 320 \
     --camera-height 240 \

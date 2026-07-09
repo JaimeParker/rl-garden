@@ -216,6 +216,7 @@ class ACTBaseActionProvider(nn.Module):
         auto_state_obs_getter: bool = False,
         temporal_agg: bool = True,
         temporal_agg_k: float = 0.01,
+        image_size: int | tuple[int, int] | None = None,
         device: torch.device | str = "cpu",
     ) -> None:
         super().__init__()
@@ -229,6 +230,9 @@ class ACTBaseActionProvider(nn.Module):
         self._norm_stats = self._tensorize_norm_stats(norm_stats)
         self._state_obs_getter = state_obs_getter
         self._auto_state_obs_getter = auto_state_obs_getter
+        self.image_size = self._normalize_image_size(
+            config.image_size if image_size is None else image_size
+        )
         self.register_buffer(
             "_rgb_mean",
             torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(
@@ -288,6 +292,7 @@ class ACTBaseActionProvider(nn.Module):
         state_obs_getter: Optional[StateObsGetter] = None,
         temporal_agg: bool = True,
         temporal_agg_k: float = 0.01,
+        image_size: int | tuple[int, int] | None = None,
         strict: bool = True,
         device: torch.device | str = "cpu",
     ) -> "ACTBaseActionProvider":
@@ -338,6 +343,7 @@ class ACTBaseActionProvider(nn.Module):
             auto_state_obs_getter=auto_state_obs_getter,
             temporal_agg=temporal_agg,
             temporal_agg_k=temporal_agg_k,
+            image_size=image_size,
             device=device,
         )
 
@@ -383,6 +389,28 @@ class ACTBaseActionProvider(nn.Module):
                 "Visual ACT checkpoint requires an 'rgb' observation key or "
                 "per-camera 'rgb_<camera>' observation keys."
             )
+
+    @staticmethod
+    def _normalize_image_size(
+        image_size: int | tuple[int, int] | None,
+    ) -> tuple[int, int] | None:
+        if image_size is None:
+            return None
+        if isinstance(image_size, int):
+            if image_size <= 0:
+                raise ValueError(f"ACT image_size must be positive, got {image_size}.")
+            return (image_size, image_size)
+        if len(image_size) != 2:
+            raise ValueError(
+                "ACT image_size must be int, (height, width), or None; "
+                f"got {image_size!r}."
+            )
+        height, width = (int(image_size[0]), int(image_size[1]))
+        if height <= 0 or width <= 0:
+            raise ValueError(
+                f"ACT image_size dimensions must be positive, got {image_size!r}."
+            )
+        return (height, width)
 
     @staticmethod
     def _is_image_space(
@@ -471,7 +499,7 @@ class ACTBaseActionProvider(nn.Module):
     def _per_camera_keys(obs: dict[str, torch.Tensor], prefix: str) -> tuple[str, ...]:
         keys = tuple(key for key in obs.keys() if key.startswith(prefix))
         if f"{prefix}right_wrist" in keys and f"{prefix}left_wrist" in keys:
-            ordered = [f"{prefix}right_wrist", f"{prefix}left_wrist"]
+            ordered = [f"{prefix}left_wrist", f"{prefix}right_wrist"]
             ordered.extend(sorted(key for key in keys if key not in ordered))
             return tuple(ordered)
         return tuple(sorted(keys))
@@ -532,17 +560,20 @@ class ACTBaseActionProvider(nn.Module):
 
     def _resize_camera_tensor(self, image: torch.Tensor) -> torch.Tensor:
         batch, num_cams, channels, height, width = image.shape
-        if height == self.config.image_size and width == self.config.image_size:
+        if self.image_size is None:
+            return image
+        target_height, target_width = self.image_size
+        if height == target_height and width == target_width:
             return image
         flat = image.reshape(batch * num_cams, channels, height, width)
         flat = F.interpolate(
             flat,
-            size=(self.config.image_size, self.config.image_size),
+            size=(target_height, target_width),
             mode="bilinear",
             align_corners=False,
         )
         return flat.reshape(
-            batch, num_cams, channels, self.config.image_size, self.config.image_size
+            batch, num_cams, channels, target_height, target_width
         )
 
     def _prepare_visual_obs(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

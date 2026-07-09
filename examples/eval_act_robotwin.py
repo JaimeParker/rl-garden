@@ -28,6 +28,8 @@ class EvalACTRoboTwinArgs:
     base_act_stats_path: Optional[str] = None
     base_act_temporal_agg: bool = True
     base_act_temporal_agg_k: float = 0.01
+    base_act_image_width: Optional[int] = None
+    base_act_image_height: Optional[int] = None
     num_eval_envs: int = 1
     num_eval_episodes: int = 10
     seed: int = 1
@@ -72,6 +74,8 @@ def parse_args() -> EvalACTRoboTwinArgs:
         metavar="{true,false}",
     )
     parser.add_argument("--base-act-temporal-agg-k", type=float, default=0.01)
+    parser.add_argument("--base-act-image-width", type=int, default=None)
+    parser.add_argument("--base-act-image-height", type=int, default=None)
     parser.add_argument("--num-eval-envs", type=int, default=1)
     parser.add_argument("--num-eval-episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=1)
@@ -113,6 +117,10 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.set_defaults(include_wrist_cameras=True)
 
     ns = parser.parse_args()
+    if (ns.base_act_image_width is None) != (ns.base_act_image_height is None):
+        parser.error(
+            "--base-act-image-width and --base-act-image-height must be provided together."
+        )
     robotwin = RoboTwinConfig(
         include_wrist_cameras=ns.include_wrist_cameras,
         head_camera_type=ns.head_camera_type,
@@ -145,6 +153,8 @@ def parse_args() -> EvalACTRoboTwinArgs:
         base_act_stats_path=ns.base_act_stats_path,
         base_act_temporal_agg=ns.base_act_temporal_agg,
         base_act_temporal_agg_k=ns.base_act_temporal_agg_k,
+        base_act_image_width=ns.base_act_image_width,
+        base_act_image_height=ns.base_act_image_height,
         num_eval_envs=ns.num_eval_envs,
         num_eval_episodes=ns.num_eval_episodes,
         seed=ns.seed,
@@ -167,6 +177,12 @@ def _device(name: str) -> torch.device:
     if name == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(name)
+
+
+def _base_act_image_size(args: EvalACTRoboTwinArgs) -> tuple[int, int]:
+    if args.base_act_image_width is not None and args.base_act_image_height is not None:
+        return (args.base_act_image_height, args.base_act_image_width)
+    return (args.camera_height, args.camera_width)
 
 
 def _as_bool_tensor(value: Any, num_envs: int, device: torch.device) -> torch.Tensor:
@@ -377,6 +393,7 @@ def evaluate(args: EvalACTRoboTwinArgs) -> dict[str, float]:
         device=device,
         base_act_temporal_agg=args.base_act_temporal_agg,
         base_act_temporal_agg_k=args.base_act_temporal_agg_k,
+        base_act_image_size=_base_act_image_size(args),
     )
     provider.eval()
 
