@@ -48,6 +48,7 @@ def _make_base_action_provider(args, env):
         action_space=env.single_action_space,
         env=env,
         base_ckpt_path=args.base_ckpt_path,
+        base_act_stats_path=args.base_act_stats_path,
         base_act_temporal_agg=args.base_act_temporal_agg,
         base_act_temporal_agg_k=args.base_act_temporal_agg_k,
         base_sac_encoder=args.base_sac_encoder,
@@ -216,6 +217,7 @@ class ResidualSACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     debug: bool = False
     base_policy: Literal["act", "sac", "zero"] = "act"
     base_ckpt_path: Optional[str] = "act-peg-only"
+    base_act_stats_path: Optional[str] = None
     base_act_temporal_agg: bool = True
     base_act_temporal_agg_k: float = 0.01
     base_sac_encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"

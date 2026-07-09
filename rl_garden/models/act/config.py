@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import pickle
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,28 @@ def resolve_act_checkpoint_path(ckpt_path: str | os.PathLike[str] | None) -> Pat
         "Pass --ckpt-path /path/to/file.pt or place <name>.pt in "
         f"{pretrained_dir}."
     )
+
+
+def load_act_norm_stats(
+    checkpoint: dict[str, Any],
+    stats_path: str | os.PathLike[str] | None = None,
+) -> Optional[dict[str, Any]]:
+    """Load ACT normalization stats from explicit pkl or checkpoint metadata."""
+
+    if stats_path is not None:
+        path = Path(stats_path).expanduser()
+        with path.open("rb") as f:
+            stats = pickle.load(f)
+        if not isinstance(stats, dict):
+            raise TypeError(f"ACT dataset stats at {path} must be a dict.")
+        return stats
+
+    norm_stats = checkpoint.get("norm_stats")
+    if norm_stats is not None:
+        if not isinstance(norm_stats, dict):
+            raise TypeError("ACT checkpoint field 'norm_stats' must be a dict.")
+        return norm_stats
+    return None
 
 
 def select_act_state_dict(

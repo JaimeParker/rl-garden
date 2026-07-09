@@ -19,6 +19,11 @@ class RoboTwinBackend(EnvBackend):
         iw = rt.include_wrist_cameras if rt is not None else True
         head_cam = rt.head_camera_type if rt is not None else "D435"
         wrist_cam = rt.wrist_camera_type if rt is not None else "D435"
+        random_background = rt.random_background if rt is not None else True
+        cluttered_table = rt.cluttered_table if rt is not None else True
+        clean_background_rate = rt.clean_background_rate if rt is not None else 0.02
+        random_head_camera_dis = rt.random_head_camera_dis if rt is not None else 0.0
+        random_table_height = rt.random_table_height if rt is not None else 0.03
         random_light = rt.random_light if rt is not None else False
         crazy_light = rt.crazy_random_light_rate if rt is not None else 0.0
         render_every = rt.render_every_control_step if rt is not None else False
@@ -47,11 +52,11 @@ class RoboTwinBackend(EnvBackend):
                 "collect_wrist_camera": iw,
             },
             "domain_randomization": {
-                "random_background": True,
-                "cluttered_table": True,
-                "clean_background_rate": 0.02,
-                "random_head_camera_dis": 0,
-                "random_table_height": 0.03,
+                "random_background": random_background,
+                "cluttered_table": cluttered_table,
+                "clean_background_rate": clean_background_rate,
+                "random_head_camera_dis": random_head_camera_dis,
+                "random_table_height": random_table_height,
                 "random_light": random_light,
                 "crazy_random_light_rate": crazy_light,
             },
@@ -89,6 +94,11 @@ class RoboTwinBackend(EnvBackend):
             profile_interval=rt.profile_interval if rt is not None else 100,
             render_every_control_step=render_every,
             control_step_cap=step_cap,
+            random_background=random_background,
+            cluttered_table=cluttered_table,
+            clean_background_rate=clean_background_rate,
+            random_head_camera_dis=random_head_camera_dis,
+            random_table_height=random_table_height,
             random_light=random_light,
             crazy_random_light_rate=crazy_light,
             head_camera_type=head_cam,

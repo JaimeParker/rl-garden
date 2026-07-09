@@ -124,11 +124,29 @@ class RoboTwinTaskAdapter:
         _prepare_robotwin_task_args(args)
         domain_randomization = args["domain_randomization"]
         if has_domain_randomization:
+            domain_randomization.setdefault("random_background", self.cfg.random_background)
+            domain_randomization.setdefault("cluttered_table", self.cfg.cluttered_table)
+            domain_randomization.setdefault(
+                "clean_background_rate", self.cfg.clean_background_rate
+            )
+            domain_randomization.setdefault(
+                "random_head_camera_dis", self.cfg.random_head_camera_dis
+            )
+            domain_randomization.setdefault(
+                "random_table_height", self.cfg.random_table_height
+            )
             domain_randomization.setdefault("random_light", self.cfg.random_light)
             domain_randomization.setdefault(
                 "crazy_random_light_rate", self.cfg.crazy_random_light_rate
             )
         else:
+            domain_randomization["random_background"] = self.cfg.random_background
+            domain_randomization["cluttered_table"] = self.cfg.cluttered_table
+            domain_randomization["clean_background_rate"] = self.cfg.clean_background_rate
+            domain_randomization["random_head_camera_dis"] = (
+                self.cfg.random_head_camera_dis
+            )
+            domain_randomization["random_table_height"] = self.cfg.random_table_height
             domain_randomization["random_light"] = self.cfg.random_light
             domain_randomization["crazy_random_light_rate"] = (
                 self.cfg.crazy_random_light_rate

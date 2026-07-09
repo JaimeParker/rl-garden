@@ -52,6 +52,11 @@ class RoboTwinConfig:
 
     # camera / rendering
     include_wrist_cameras: bool = True
+    random_background: bool = True
+    cluttered_table: bool = True
+    clean_background_rate: float = 0.02
+    random_head_camera_dis: float = 0.0
+    random_table_height: float = 0.03
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
@@ -69,7 +74,6 @@ class RoboTwinConfig:
     planner_backend: str = "mplib"
     embodiment: list = field(default_factory=lambda: ["aloha-agilex"])
     reward_mode: str = "dense"
-    disable_topp: bool = False
 
     # control scaling
     joint_delta_scale: float = 0.05

@@ -15,6 +15,7 @@ from rl_garden.models.act.config import (
     ACTCheckpointSpec,
     ACTConfig,
     infer_act_config,
+    load_act_norm_stats,
     resolve_act_checkpoint_path,
     select_act_state_dict,
 )
@@ -260,11 +261,19 @@ class ACTBaseActionProvider(nn.Module):
     ) -> Optional[dict[str, torch.Tensor]]:
         if norm_stats is None:
             return None
-        return {
+        tensors = {
             key: torch.as_tensor(value, dtype=torch.float32)
             for key, value in norm_stats.items()
             if isinstance(value, (torch.Tensor, float, int)) or hasattr(value, "__array__")
         }
+        if "state_mean" not in tensors and "qpos_mean" in tensors:
+            tensors["state_mean"] = tensors["qpos_mean"]
+        if "state_std" not in tensors and "qpos_std" in tensors:
+            tensors["state_std"] = tensors["qpos_std"]
+        for key in ("state_std", "action_std"):
+            if key in tensors:
+                tensors[key] = tensors[key].clamp_min(1e-6)
+        return tensors
 
     @classmethod
     def from_checkpoint(
@@ -273,6 +282,7 @@ class ACTBaseActionProvider(nn.Module):
         observation_space: spaces.Space,
         action_space: spaces.Box,
         ckpt_path: str | Path | None = None,
+        stats_path: str | Path | None = None,
         state_dict_key: str = "ema_agent",
         env: Any | None = None,
         state_obs_getter: Optional[StateObsGetter] = None,
@@ -323,7 +333,7 @@ class ACTBaseActionProvider(nn.Module):
             config=config,
             spec=spec,
             checkpoint_path=path,
-            norm_stats=checkpoint.get("norm_stats"),
+            norm_stats=load_act_norm_stats(checkpoint, stats_path),
             state_obs_getter=state_obs_getter,
             auto_state_obs_getter=auto_state_obs_getter,
             temporal_agg=temporal_agg,
@@ -459,7 +469,12 @@ class ACTBaseActionProvider(nn.Module):
 
     @staticmethod
     def _per_camera_keys(obs: dict[str, torch.Tensor], prefix: str) -> tuple[str, ...]:
-        return tuple(sorted(key for key in obs.keys() if key.startswith(prefix)))
+        keys = tuple(key for key in obs.keys() if key.startswith(prefix))
+        if f"{prefix}right_wrist" in keys and f"{prefix}left_wrist" in keys:
+            ordered = [f"{prefix}right_wrist", f"{prefix}left_wrist"]
+            ordered.extend(sorted(key for key in keys if key not in ordered))
+            return tuple(ordered)
+        return tuple(sorted(keys))
 
     def _per_camera_images_to_bnc_hw(
         self,
@@ -493,6 +508,18 @@ class ACTBaseActionProvider(nn.Module):
         prefix: str,
         channels_per_camera: int,
     ) -> torch.Tensor:
+        prefixed_keys = self._per_camera_keys(obs, prefix)
+        if legacy_key in obs and prefixed_keys:
+            images = [obs[legacy_key].to(self.device).permute(0, 3, 1, 2)]
+            for key in prefixed_keys:
+                image = obs[key].to(self.device)
+                if image.ndim != 4 or int(image.shape[-1]) != channels_per_camera:
+                    raise ValueError(
+                        f"ACT per-camera observation {key!r} must have shape "
+                        f"(B,H,W,{channels_per_camera}); got {tuple(image.shape)}."
+                    )
+                images.append(image.permute(0, 3, 1, 2))
+            return torch.stack(images, dim=1).contiguous()
         if legacy_key in obs:
             return self._image_to_bnc_hw(
                 obs[legacy_key].to(self.device), channels_per_camera

@@ -1,5 +1,7 @@
-"""Generate HSV-based labels from compressed HDF5 episodes."""
-"""HSV-based label generation for compressed ManiSkill HDF5 episodes."""
+"""Generate HSV-based labels from compressed HDF5 episodes.
+
+HSV-based label generation for compressed ManiSkill HDF5 episodes.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +30,8 @@ class CompressedHDF5LabelGenerator:
 
     def __init__(
         self,
-        crop_region: Optional[Tuple[int, int, int, int]] = (100, 200, 300, 400),
+        # crop_region: Optional[Tuple[int, int, int, int]] = (100, 200, 300, 400),
+        crop_region: Optional[Tuple[int, int, int, int]] = None,
         resize: Optional[Tuple[int, int]] = (640, 480),
     ) -> None:
         self.crop_region = crop_region
@@ -110,16 +113,16 @@ class CompressedHDF5LabelGenerator:
             pixel_ratio = np.sum(mask > 0) / mask.size
             result = cv2.bitwise_and(frame_bgr, frame_bgr, mask=mask)
 
-            status = "MATCH" if pixel_ratio >= ratio_threshold else "NO MATCH"
-            text_lines = [
-                f"Episode: {sample_ids[current_frame_idx]} ({current_frame_idx + 1}/{len(sample_frames)})",
-                f"Match: {pixel_ratio:.1%}",
-                f"Status: {status}",
-            ]
+            # status = "MATCH" if pixel_ratio >= ratio_threshold else "NO MATCH"
+            # text_lines = [
+            #     f"Episode: {sample_ids[current_frame_idx]} ({current_frame_idx + 1}/{len(sample_frames)})",
+            #     f"Match: {pixel_ratio:.1%}",
+            #     f"Status: {status}",
+            # ]
 
-            for i, text in enumerate(text_lines):
-                color = (0, 255, 0) if pixel_ratio >= ratio_threshold else (0, 0, 255)
-                cv2.putText(result, text, (10, 30 + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            # for i, text in enumerate(text_lines):
+            #     color = (0, 255, 0) if pixel_ratio >= ratio_threshold else (0, 0, 255)
+            #     cv2.putText(result, text, (10, 30 + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             cv2.imshow(window_name, result)
 

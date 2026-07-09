@@ -10,8 +10,11 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 1
 fi
 
+ASSETS_PATH_ARG="${RLG_ROBOTWIN_ASSETS_PATH:-/home/RoboTwin}"
+CUDA_VISIBLE_DEVICES_ARG="${RLG_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
 STD_LOG="${RLG_STD_LOG:-1}"
 LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
+LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
 FORWARD_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -35,6 +38,30 @@ while [[ $# -gt 0 ]]; do
             LOG_TYPE="${1#*=}"
             shift
             ;;
+        --log_keywords|--log-keywords)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a value." >&2
+                exit 1
+            fi
+            LOG_KEYWORDS="$2"
+            shift 2
+            ;;
+        --log_keywords=*|--log-keywords=*)
+            LOG_KEYWORDS="${1#*=}"
+            shift
+            ;;
+        --assets_path|--assets-path)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a value." >&2
+                exit 1
+            fi
+            ASSETS_PATH_ARG="$2"
+            shift 2
+            ;;
+        --assets_path=*|--assets-path=*)
+            ASSETS_PATH_ARG="${1#*=}"
+            shift
+            ;;
         *)
             FORWARD_ARGS+=("$1")
             shift
@@ -42,19 +69,30 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" \
+exec env \
+    HOME="${HOME:-/tmp}" \
+    XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp}" \
+    MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp}" \
+    CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES_ARG" \
+    RLG_STD_LOG="$STD_LOG" \
+    RLG_LOG_TYPE="$LOG_TYPE" \
+    RLG_LOG_KEYWORDS="$LOG_KEYWORDS" \
+    ROBOT_PLATFORM="${ROBOT_PLATFORM:-ALOHA}" \
     PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" residual_sac \
     --env-backend robotwin \
     --env-id place_empty_cup \
     --obs-mode rgb \
     --base-policy act \
-    --base-ckpt-path pretrained_models/place_empty_cup.pt \
+    --base-ckpt-path pretrained_models/place_empty_cup.ckpt \
+    --base-act-stats-path pretrained_models/dataset_stats_place_empty_cup.pkl \
     --num-envs 1 \
     --num-eval-envs 0 \
     --robotwin.robotwin-root /home/RoboTwin \
+    --robotwin.assets-path "$ASSETS_PATH_ARG" \
+    --robotwin.head-camera-type Train_D435_128x96 \
+    --robotwin.embodiment piper piper 0.6 \
     --control-mode ee_delta_pose \
-    # TODO: downsample the camera images to reduce memory usage and speed up training
     --camera-width 320 --camera-height 240 \
     --total-timesteps 100000 \
     --buffer-size 10000 \
@@ -65,7 +103,6 @@ exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" \
     --utd 0.25 \
     --robotwin.step-lim 200 \
     --robotwin.control-step-cap 16 \
-    --robotwin.disable-topp \
     --encoder resnet18 \
     --encoder-features-dim 64 \
     --image-fusion-mode per_key \
