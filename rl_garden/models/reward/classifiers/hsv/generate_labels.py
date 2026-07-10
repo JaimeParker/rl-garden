@@ -1,4 +1,3 @@
-"""Generate HSV-based labels from compressed HDF5 episodes."""
 """HSV-based label generation for compressed ManiSkill HDF5 episodes."""
 
 from __future__ import annotations

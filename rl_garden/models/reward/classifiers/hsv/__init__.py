@@ -1,6 +1,6 @@
 """HSV-based color label generation utilities."""
 
-from rl_garden.reward_models.classifiers.hsv.generator import (
+from rl_garden.models.reward.classifiers.hsv.generate_labels import (
     CompressedHDF5LabelGenerator,
     HSVThresholds,
     load_hsv_thresholds,

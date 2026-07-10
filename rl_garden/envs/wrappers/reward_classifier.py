@@ -29,6 +29,14 @@ class RewardClassifierWrapper(gym.Wrapper):
         self.threshold = threshold
         self.terminate_on_success = terminate_on_success
 
+    def __getattr__(self, name: str):
+        # gymnasium.Wrapper (>=1.0) no longer forwards arbitrary attributes to
+        # ``self.env`` -- but this repo's env-backend contract (num_envs,
+        # single_observation_space, ...) relies on direct attribute access,
+        # not ``get_wrapper_attr()``, so this wrapper must still be
+        # transparent to algorithm code built against the unwrapped env.
+        return getattr(self.env, name)
+
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         with torch.no_grad():

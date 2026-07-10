@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 
 def compute_metrics(preds: np.ndarray, labels: np.ndarray) -> dict[str, float]:
+    from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
     binary_preds = (preds > 0.5).astype(int)
     return {
         "accuracy": float(accuracy_score(labels, binary_preds)),

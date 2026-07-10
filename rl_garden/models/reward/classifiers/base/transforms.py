@@ -4,13 +4,14 @@ from __future__ import annotations
 from typing import Tuple
 
 import torch
-from torchvision import transforms
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def build_transforms(image_size: Tuple[int, int], normalize: bool) -> transforms.Compose:
+def build_transforms(image_size: Tuple[int, int], normalize: bool) -> "transforms.Compose":
+    from torchvision import transforms
+
     resize = transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR)
     ops = [transforms.ToTensor(), resize]
     if normalize:

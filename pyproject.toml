@@ -24,6 +24,13 @@ robotwin = ["pillow", "pyyaml"]
 minari = ["minari", "gymnasium-robotics"]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
+# Real-world RL (rl_garden/real_world/, rl_garden/envs/franka_real/,
+# robot_infra/controller/real/, robot_infra/teleop/): the Franka bridge
+# client, pico/SpaceMouse teleop, and franka_real env. ROS itself (rospy,
+# franka_msgs, serl_franka_controllers, ...), required only on the machine
+# running robot_infra/controller/real/franka_bridge.py, is not pip-installable
+# and must be set up separately -- see franka_bridge.py's module docstring.
+real-world = ["flask", "pyzmq", "requests", "scipy", "pyspacemouse", "pynput"]
 
 [tool.setuptools.packages.find]
 include = ["rl_garden*", "robot_infra*"]

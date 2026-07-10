@@ -64,6 +64,12 @@ class ActorLoop:
                 self._obs_to_policy_device(obs), deterministic=self.deterministic
             )
 
+    def _extra_transition_fields(self, info: dict) -> dict:
+        """Hook for subclasses that need to tag pushed transitions with
+        extra, non-tensor metadata derived from ``info`` (e.g. HIL-SERL's
+        human-intervention flag). No-op by default."""
+        return {}
+
     def run(self, total_steps: Optional[int] = None) -> None:
         self.sync_client.start()
         self.policy.eval()
@@ -86,6 +92,7 @@ class ActorLoop:
                         "action": executed_action,
                         "reward": reward,
                         "done": terminated,
+                        **self._extra_transition_fields(info),
                     }
                 )
 
@@ -153,6 +160,10 @@ class FWBWActorLoop:
             return {k: v.to(self.device) for k, v in obs.items()}
         return obs.to(self.device)
 
+    def _extra_transition_fields(self, info: dict) -> dict:
+        """See :meth:`ActorLoop._extra_transition_fields`. No-op by default."""
+        return {}
+
     def run(self, total_steps: Optional[int] = None) -> None:
         for client in self.sync_clients.values():
             client.start()
@@ -186,6 +197,7 @@ class FWBWActorLoop:
                         "action": executed_action,
                         "reward": reward,
                         "done": terminated,
+                        **self._extra_transition_fields(info),
                     }
                 )
 

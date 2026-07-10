@@ -66,30 +66,45 @@ These are open design questions on the training side (`rl_garden/real_world/`,
 above. Surfaced while researching `3rd_party/RLinf`'s real-world path; not yet
 decided.
 
-- **Buffer layer**: `LearnerLoop`'s `agent.replay_buffer.add()` path assumes
-  either live online transitions or a static offline dataset loaded once at
-  startup (RLPD's `offline_dataset_path`, e.g. Minari). Upcoming HIL-SERL
-  migration needs iterative, growing human-demonstration/correction data
-  (BC/DAgger-style), which does not fit that model. RLinf's real-world
-  DAgger/SFT path instead uses a disk-file dataset pipeline decoupled from its
-  in-memory RL replay buffer (a LeRobot-format writer, a separate offline ETL
-  step, and a lazily-reloaded PyTorch `Dataset` that picks up newly written
-  data). Design this data path -- don't try to force growing demo data through
-  the existing in-memory buffer interface.
-- **Runner/launcher layer**: done for the SERL side, now fully mirroring
-  `rl_garden/training/online/`'s shape (not just its "one package per
-  concern" spirit, but the exact registry mechanism): `rl_garden/real_world/`
-  holds base classes (`ActorLoop`/`LearnerLoop`/sync) plus a `serl/`
-  subpackage of concrete (currently empty) subclasses;
-  `rl_garden/training/real_world/` holds a shared `RealWorldFrankaArgs` base,
-  a `RealWorldAlgorithmRegistry` (`_registry.py`), and one flat file per
-  method (`serl.py`, shaped like `training/online/rlpd.py`) that
-  self-registers at import time; `examples/train_real_world.py` is a generic
-  `registry.run_cli()` launcher, algorithm selected via subcommand. `hil_serl.py`
-  is not built yet -- its algorithm-layer components (BC/DAgger, reward
-  classifier training) don't exist in `rl_garden/algorithms/` yet, so
-  scaffolding an empty sibling file now would be speculative. When it lands,
-  it explicitly composes the env wrappers from Component 3 in its own
-  `_run_actor`/`_run_learner` (no generic flag-driven wrapper composer -- see
-  the design spec).
+- **Buffer layer**: still open, and still not needed. `hil_serl` (landed --
+  see below) targets only HIL-SERL's `train_rlpd.py` capability set (online
+  RLPD + demo mixing + HITL + reward classifier), which uses RLPD's existing
+  static `offline_dataset_path` loading, same as SERL. HG-DAgger's
+  iterative, growing human-correction dataset (which would actually need
+  this redesign) was explicitly scoped out of the `hil_serl` migration.
+  `LearnerLoop._refresh_offline_data()` (added pre-emptively during the SERL
+  v1 base-class work, reserved for exactly this) is still an unused no-op in
+  both `serl` and `hil_serl`. RLinf's real-world DAgger/SFT path (a
+  disk-file dataset pipeline decoupled from the in-memory RL replay buffer:
+  a LeRobot-format writer, a separate offline ETL step, and a
+  lazily-reloaded PyTorch `Dataset`) remains the reference design for
+  whenever HG-DAgger is actually migrated.
+- **Runner/launcher layer**: done for both SERL and HIL-SERL, fully
+  mirroring `rl_garden/training/online/`'s shape (registry mechanism, not
+  just its "one package per concern" spirit): `rl_garden/real_world/` holds
+  base classes (`ActorLoop`/`LearnerLoop`/sync) plus `serl/` and `hil_serl/`
+  subpackages of concrete (currently empty) subclasses;
+  `rl_garden/training/real_world/` holds a shared `RealWorldFrankaArgs`
+  base, a `RealWorldAlgorithmRegistry` (`_registry.py`), and one flat file
+  per method (`serl.py`, `hil_serl.py`, both shaped like
+  `training/online/rlpd.py`) that self-registers at import time;
+  `examples/train_real_world.py` is a generic `registry.run_cli()`
+  launcher, method selected via subcommand. `hil_serl.py` explicitly
+  composes the env wrappers from Component 3
+  (`TeleopInterventionWrapper`/`RewardClassifierWrapper`/
+  `FWBWResetFreeWrapper`) in its own `_build_env` (no generic flag-driven
+  wrapper composer). Its hybrid continuous+discrete gripper action space is
+  a new algorithm, `RLPDHybrid` (`rl_garden/algorithms/rlpd_hybrid.py`),
+  registered as an ordinary online algorithm
+  (`rl_garden/training/online/rlpd_hybrid.py`, usable via `--algo
+  rlpd_hybrid` in simulation too) and reused by `hil_serl.py` the same way
+  `serl.py` reuses plain `RLPD`. Not migrated this round: BC (HIL-SERL's own
+  code confirms it's never combined with the online RLPD loss, so it's a
+  fully independent future addition). The reward-classifier model,
+  inference loader, training script, and data-collection script now live
+  under `rl_garden/models/reward/success/` (moved from
+  `rl_garden/envs/franka_real/classifier.py` and completed -- see
+  `docs/hil_serl_roadmap.md` item 3), alongside a reorganized
+  `rl_garden/models/reward/` that also holds the pre-existing offline
+  HDF5-labeled classifiers (`classifiers/`).
 

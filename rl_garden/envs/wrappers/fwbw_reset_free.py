@@ -32,6 +32,14 @@ class FWBWResetFreeWrapper(gym.Wrapper):
         assert initial_direction in ("forward", "backward")
         self._direction: Direction = initial_direction
 
+    def __getattr__(self, name: str):
+        # gymnasium.Wrapper (>=1.0) no longer forwards arbitrary attributes to
+        # ``self.env`` -- but this repo's env-backend contract (num_envs,
+        # single_observation_space, ...) relies on direct attribute access,
+        # not ``get_wrapper_attr()``, so this wrapper must still be
+        # transparent to algorithm code built against the unwrapped env.
+        return getattr(self.env, name)
+
     @property
     def direction(self) -> Direction:
         return self._direction
