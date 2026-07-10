@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
 
+from rl_garden.common import Logger
 from rl_garden.common.env_args import RoboTwinConfig
 from rl_garden.envs.backend_registry import EnvRequest, make_evaluation_env
 from rl_garden.policies.base_policies import make_base_policy
@@ -44,6 +45,10 @@ class EvalACTRoboTwinArgs:
     diagnostic_output_path: Optional[str] = None
     eval_output_dir: Optional[str] = None
     device: str = "auto"
+    log_type: Literal["wandb", "none"] = "none"
+    exp_name: Optional[str] = None
+    wandb_project: str = "rl-garden"
+    wandb_entity: Optional[str] = None
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
 
 
@@ -90,6 +95,10 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--diagnostic-output-path", default=None)
     parser.add_argument("--eval-output-dir", default=None)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--log-type", choices=["wandb", "none"], default="none")
+    parser.add_argument("--exp-name", default=None)
+    parser.add_argument("--wandb-project", default="rl-garden")
+    parser.add_argument("--wandb-entity", default=None)
 
     parser.add_argument("--robotwin.robotwin-root", dest="robotwin_root", default=None)
     parser.add_argument("--robotwin.assets-path", dest="assets_path", default=None)
@@ -169,6 +178,10 @@ def parse_args() -> EvalACTRoboTwinArgs:
         diagnostic_output_path=ns.diagnostic_output_path,
         eval_output_dir=ns.eval_output_dir,
         device=ns.device,
+        log_type=ns.log_type,
+        exp_name=ns.exp_name,
+        wandb_project=ns.wandb_project,
+        wandb_entity=ns.wandb_entity,
         robotwin=robotwin,
     )
 
@@ -373,7 +386,7 @@ def _scalar(tensor: torch.Tensor) -> float:
     return float(tensor.detach().cpu().item())
 
 
-def evaluate(args: EvalACTRoboTwinArgs) -> dict[str, float]:
+def evaluate(args: EvalACTRoboTwinArgs, logger: Logger) -> dict[str, float]:
     if args.num_eval_envs <= 0:
         raise ValueError(f"num_eval_envs must be positive, got {args.num_eval_envs}.")
     if args.num_eval_episodes <= 0:
@@ -464,6 +477,20 @@ def evaluate(args: EvalACTRoboTwinArgs) -> dict[str, float]:
                 )
             global_step += 1
 
+            logger.add_scalar(
+                "eval/step_reward",
+                float(rewards.float().mean().cpu().item()),
+                global_step,
+            )
+            if "final_info" in infos:
+                final_info = infos["final_info"]
+                done_mask = infos["_final_info"]
+                for key, value in final_info["episode"].items():
+                    logger.add_scalar(
+                        f"eval/{key}",
+                        float(value[done_mask].float().mean().cpu().item()),
+                        global_step,
+                    )
             if done.any():
                 done_ids = torch.where(done)[0]
                 for env_id in done_ids.detach().cpu().tolist():
@@ -504,15 +531,31 @@ def evaluate(args: EvalACTRoboTwinArgs) -> dict[str, float]:
 
 def main() -> None:
     args = parse_args()
-    metrics = evaluate(args)
-    for key, value in metrics.items():
-        print(f"{key}: {value:.6g}", flush=True)
-    if args.capture_video:
-        print(f"video_dir: {_record_dir(args)}", flush=True)
-        if args.diagnostic_video:
-            print(f"diagnostic_video: {_diagnostic_video_path(args)}", flush=True)
-    if args.action_diagnostics:
-        print(f"action_diagnostics: {_diagnostic_output_path(args)}", flush=True)
+    run_name = args.exp_name or f"act_only_{args.env_id}_s{args.seed}_{args.num_eval_episodes}ep"
+    logger = Logger.create(
+        log_type=args.log_type,
+        log_dir="runs",
+        run_name=run_name,
+        config=asdict(args),
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
+        wandb_group=args.env_id,
+    )
+    try:
+        metrics = evaluate(args, logger)
+        for key, value in metrics.items():
+            print(f"{key}: {value:.6g}", flush=True)
+            logger.add_summary(f"eval/{key}", value)
+        if logger.wandb_run is not None:
+            print(f"wandb_url: {logger.wandb_run.url}", flush=True)
+        if args.capture_video:
+            print(f"video_dir: {_record_dir(args)}", flush=True)
+            if args.diagnostic_video:
+                print(f"diagnostic_video: {_diagnostic_video_path(args)}", flush=True)
+        if args.action_diagnostics:
+            print(f"action_diagnostics: {_diagnostic_output_path(args)}", flush=True)
+    finally:
+        logger.close()
 
 
 if __name__ == "__main__":
