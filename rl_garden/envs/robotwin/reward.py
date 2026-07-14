@@ -391,25 +391,52 @@ class Rank(SubTask):
 
 
 class Stack(SubTask):
-    def __init__(self, base, max_reward: float = 4.0, dist_dim: int | Iterable = 3, entities=None, eps=None, a_ds=None, c_ds=None, target_pose=None, z_threshold: float = 0.02) -> None:
+    """RLinf-style vertical-stack shaping with pairwise XY alignment."""
+
+    def __init__(
+        self,
+        base,
+        max_reward: float = 4.0,
+        entities=None,
+        eps=None,
+        a_ds=None,
+        c_ds=None,
+        target_pose=None,
+        z_threshold: float = 0.02,
+    ) -> None:
         super().__init__(base, max_reward, entities=entities)
-        self.dist_dim = dist_dim
         self.entities = entities if entities is not None else []
-        self.eps = eps if eps is not None else [0.05]
-        self.a_ds = a_ds if a_ds is not None else [3.0] * (len(self.entities) - 1)
-        self.c_ds = c_ds if c_ds is not None else [max_reward / (len(self.entities) - 1)] * (len(self.entities) - 1)
-        self.target_pose = target_pose if target_pose is not None else np.array([0.5, 0.2, 0.0])
+        self.eps = eps if eps is not None else [0.05, 0.03]
+        num_pairs = len(self.entities) - 1
+        self.a_ds = a_ds if a_ds is not None else [3.0] * num_pairs
+        self.c_ds = c_ds if c_ds is not None else [max_reward / num_pairs] * num_pairs
+        self.target_pose = (
+            target_pose if target_pose is not None else np.array([0.5, 0.2, 0.0])
+        )
         self.z_threshold = z_threshold
 
     def compute_reward(self) -> float:
-        poses = [np.array(e.get_pose().p) for e in self.entities]
-        z_rewards = []
-        for i in range(len(poses) - 1):
-            dz = poses[i + 1][2] - poses[i][2]
-            z_rewards.append((1 - np.tanh(abs(dz - self.z_threshold) * self.a_ds[i])) * (dz > self.z_threshold) * self.c_ds[i])
-        xy_dists = [np.linalg.norm(np.array(e.get_pose().p)[:2] - self.target_pose[:2]) for e in self.entities]
-        xy_reward = np.exp(-np.mean(np.square(xy_dists) / (self.eps[0] ** 2))) * 0.5
-        return float(sum(z_rewards) + xy_reward)
+        poses = [np.asarray(entity.get_pose().p) for entity in self.entities]
+        pair_rewards = []
+        for i, (lower, upper) in enumerate(zip(poses, poses[1:])):
+            dz = upper[2] - lower[2]
+            z_reward = 1 - np.tanh(abs(dz - self.z_threshold) * self.a_ds[i])
+            xy_dist = np.linalg.norm(upper[:2] - lower[:2])
+            xy_alignment = np.exp(-np.square(xy_dist / self.eps[1]))
+            pair_rewards.append(
+                z_reward * (dz > self.z_threshold) * xy_alignment * self.c_ds[i]
+            )
+
+        target_dists = [
+            np.linalg.norm(pose[:2] - self.target_pose[:2]) for pose in poses
+        ]
+        target_reward = 0.5 * np.exp(
+            -np.mean(np.square(target_dists) / np.square(self.eps[0]))
+        )
+        return float(sum(pair_rewards) + target_reward)
+
+    def is_success(self) -> bool:
+        return bool(self.base.check_success())
 
 
 class SparseExtra(SubTask):
