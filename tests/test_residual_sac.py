@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -20,10 +21,12 @@ class ConstantBaseProvider(BasePolicyProvider):
         action: torch.Tensor,
     ) -> None:
         super().__init__(observation_space, action_space, device="cpu")
-        self.action = action.float()
+        self.action = torch.nn.Parameter(action.float())
         self.reset_calls = 0
+        self.select_calls = 0
 
     def select_action(self, obs):
+        self.select_calls += 1
         if isinstance(obs, dict):
             n = next(iter(obs.values())).shape[0]
             device = next(iter(obs.values())).device
@@ -38,12 +41,17 @@ class ConstantBaseProvider(BasePolicyProvider):
 
 
 class RawActionVecEnv:
-    def __init__(self) -> None:
-        self.num_envs = 2
+    def __init__(
+        self,
+        *,
+        action_space: spaces.Box | None = None,
+        num_envs: int = 2,
+    ) -> None:
+        self.num_envs = num_envs
         self.single_observation_space = spaces.Box(
             low=-1.0, high=1.0, shape=(3,), dtype=np.float32
         )
-        self.single_action_space = spaces.Box(
+        self.single_action_space = action_space or spaces.Box(
             low=np.array([-0.1, -0.1], dtype=np.float32),
             high=np.array([0.1, 0.1], dtype=np.float32),
             dtype=np.float32,
@@ -97,6 +105,112 @@ def _agent(env=None, base_action=None, **kwargs) -> ResidualSAC:
     return ResidualSAC(env=env, base_action_provider=provider, **params)
 
 
+def _raw_joint_base_action() -> torch.Tensor:
+    return torch.tensor(
+        [
+            1.2,
+            -1.4,
+            0.3,
+            -0.4,
+            0.5,
+            -0.6,
+            0.75,
+            -1.1,
+            1.3,
+            -0.2,
+            0.4,
+            -0.5,
+            0.6,
+            0.25,
+        ]
+    )
+
+
+def _raw_joint_agent(base_action=None, **kwargs) -> ResidualSAC:
+    action_space = spaces.Box(
+        low=-np.inf,
+        high=np.inf,
+        shape=(14,),
+        dtype=np.float32,
+    )
+    env = RawActionVecEnv(action_space=action_space, num_envs=1)
+    params = {
+        "residual_action_coordinates": "raw_joint_delta",
+        "residual_action_scale": 0.1,
+        "joint_delta_scale": 0.05,
+        "gripper_delta_scale": 0.2,
+    }
+    params.update(kwargs)
+    return _agent(
+        env=env,
+        base_action=_raw_joint_base_action() if base_action is None else base_action,
+        **params,
+    )
+
+
+def _raw_training_batch(agent: ResidualSAC) -> ResidualReplayBufferSample:
+    base = _raw_joint_base_action().unsqueeze(0)
+    next_base = base.clone()
+    next_base[..., :6] += 0.02
+    final_action = base.clone()
+    final_action[..., 7:13] -= 0.01
+    for _ in range(agent.batch_size):
+        agent.replay_buffer.add(
+            torch.zeros(agent.num_envs, 3),
+            torch.ones(agent.num_envs, 3),
+            final_action,
+            torch.ones(agent.num_envs),
+            torch.zeros(agent.num_envs),
+            base_actions=base,
+            next_base_actions=next_base,
+        )
+    return agent.replay_buffer.sample(agent.batch_size)
+
+
+def _expected_raw_composition(
+    base_actions: torch.Tensor,
+    unit_residual: torch.Tensor,
+    global_scale: float,
+) -> torch.Tensor:
+    scale = torch.tensor(
+        [0.05] * 6 + [0.2] + [0.05] * 6 + [0.2],
+        dtype=base_actions.dtype,
+        device=base_actions.device,
+    ) * global_scale
+    expected = base_actions + unit_residual * scale
+    expected[..., 6] = expected[..., 6].clamp(0.0, 1.0)
+    expected[..., 13] = expected[..., 13].clamp(0.0, 1.0)
+    return expected
+
+
+def _patch_unit_residual_actor(monkeypatch, agent: ResidualSAC, value: float):
+    def actor_action_log_prob(
+        _obs,
+        base_actions,
+        stop_gradient=False,
+        detach_encoder=None,
+    ):
+        del _obs, stop_gradient, detach_encoder
+        unit_residual = torch.full_like(base_actions, value)
+        log_prob = torch.zeros(
+            (base_actions.shape[0], 1),
+            dtype=base_actions.dtype,
+            device=base_actions.device,
+        )
+        features = torch.zeros(
+            (base_actions.shape[0], 1),
+            dtype=base_actions.dtype,
+            device=base_actions.device,
+        )
+        return unit_residual, log_prob, features
+
+    monkeypatch.setattr(
+        agent.policy,
+        "actor_action_log_prob",
+        actor_action_log_prob,
+    )
+
+
 def test_action_scaler_scales_and_unscales_raw_actions():
     action_space = spaces.Box(
         low=np.array([-0.1, -0.2], dtype=np.float32),
@@ -109,6 +223,258 @@ def test_action_scaler_scales_and_unscales_raw_actions():
     normalized = scaler.scale(raw)
     assert torch.allclose(normalized, torch.tensor([[-1.0, 0.0], [0.0, 1.0]]))
     assert torch.allclose(scaler.unscale(normalized), raw)
+
+
+def test_raw_joint_delta_builds_exact_finite_scale_vector():
+    agent = _raw_joint_agent(residual_action_scale=0.1)
+
+    expected = torch.tensor(
+        [0.05] * 6 + [0.2] + [0.05] * 6 + [0.2]
+    ) * 0.1
+
+    assert agent.action_scaler is None
+    torch.testing.assert_close(agent.resolved_residual_scale, expected)
+
+
+def test_raw_joint_action_sanitizes_only_grippers():
+    agent = _raw_joint_agent()
+    action = _raw_joint_base_action()
+    action[6] = 1.011
+    action[13] = -0.01
+
+    sanitized = agent._sanitize_raw_joint_action(action)
+
+    torch.testing.assert_close(sanitized[:6], action[:6])
+    torch.testing.assert_close(sanitized[7:13], action[7:13])
+    assert sanitized[6].item() == 1.0
+    assert sanitized[13].item() == 0.0
+    assert sanitized.data_ptr() != action.data_ptr()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_raw_joint_action_rejects_non_finite_values(value: float):
+    agent = _raw_joint_agent()
+    action = _raw_joint_base_action()
+    action[0] = value
+
+    with pytest.raises(ValueError, match="non-finite"):
+        agent._sanitize_raw_joint_action(action)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("residual_action_scale", float("nan"), "residual_action_scale"),
+        ("residual_action_scale", float("inf"), "residual_action_scale"),
+        ("residual_action_scale", -0.1, "residual_action_scale"),
+        ("joint_delta_scale", float("nan"), "delta scales"),
+        ("joint_delta_scale", -0.05, "delta scales"),
+        ("gripper_delta_scale", float("inf"), "delta scales"),
+        ("gripper_delta_scale", -0.2, "delta scales"),
+    ],
+)
+def test_raw_scales_must_be_finite_and_non_negative(
+    field: str, value: float, message: str
+):
+    with pytest.raises(ValueError, match=message):
+        _raw_joint_agent(**{field: value})
+
+
+def test_raw_joint_delta_requires_14_action_dimensions():
+    with pytest.raises(ValueError, match="14-dimensional"):
+        _agent(residual_action_coordinates="raw_joint_delta")
+
+
+def test_raw_rollout_composes_exact_nonzero_correction(monkeypatch):
+    agent = _raw_joint_agent(residual_action_scale=0.1)
+    obs, _ = agent.env.reset()
+    unit_residual = torch.tensor(
+        [[1.0, -1.0] * 7],
+        dtype=torch.float32,
+    )
+
+    def predict(_obs, *, base_actions, deterministic):
+        del _obs, base_actions, deterministic
+        return unit_residual
+
+    monkeypatch.setattr(agent.policy, "predict", predict)
+
+    replay_action, env_action, context = agent._rollout_action(
+        obs, learning_has_started=True
+    )
+
+    base = _raw_joint_base_action().unsqueeze(0)
+    expected = _expected_raw_composition(
+        base,
+        unit_residual,
+        global_scale=0.1,
+    )
+    torch.testing.assert_close(replay_action, expected)
+    torch.testing.assert_close(env_action, expected)
+    assert context is not None
+    torch.testing.assert_close(context["base_actions"], base)
+
+
+def test_raw_rollout_stores_executed_action_and_sanitized_base_in_replay():
+    base_action = _raw_joint_base_action()
+    base_action[6] = 1.011
+    base_action[13] = -0.01
+    agent = _raw_joint_agent(
+        base_action=base_action,
+        residual_action_scale=0.0,
+        training_freq=1,
+    )
+
+    agent.learn(total_timesteps=1)
+
+    expected = base_action.unsqueeze(0).clone()
+    expected[..., 6] = 1.0
+    expected[..., 13] = 0.0
+    torch.testing.assert_close(agent.env.last_actions, expected)
+    torch.testing.assert_close(agent.replay_buffer.actions[0], expected)
+    torch.testing.assert_close(agent.replay_buffer.base_actions[0], expected)
+    torch.testing.assert_close(agent.replay_buffer.next_base_actions[0], expected)
+
+
+def test_raw_rollout_reuses_cached_next_base_action():
+    agent = _raw_joint_agent(residual_action_scale=0.0)
+    obs, _ = agent.env.reset()
+    agent._on_env_reset(obs)
+
+    _, env_action, context = agent._rollout_action(
+        obs, learning_has_started=False
+    )
+    next_obs, _, _, _, infos = agent.env.step(env_action)
+    replay_kwargs = agent._replay_buffer_add_kwargs(
+        context,
+        obs,
+        next_obs,
+        next_obs,
+        infos,
+        torch.zeros(agent.num_envs, dtype=torch.bool),
+    )
+    calls_after_next_base = agent.base_action_provider.select_calls
+
+    _, _, next_context = agent._rollout_action(
+        next_obs, learning_has_started=False
+    )
+
+    assert agent.base_action_provider.select_calls == calls_after_next_base
+    assert next_context is not None
+    torch.testing.assert_close(
+        next_context["base_actions"], replay_kwargs["next_base_actions"]
+    )
+
+
+def test_raw_critic_uses_stored_final_raw_replay_action(monkeypatch):
+    agent = _raw_joint_agent(learning_starts=0)
+    data = _raw_training_batch(agent)
+    captured = {}
+
+    def critic_forward(_obs, actions, target=False):
+        del _obs
+        captured["actions"] = actions.detach().clone()
+        captured["target"] = target
+        q_value = actions.sum(dim=-1, keepdim=True)
+        return q_value.unsqueeze(0).expand(agent.n_critics, -1, -1)
+
+    def target_q(batch):
+        return torch.zeros(
+            (batch.actions.shape[0], 1),
+            dtype=batch.actions.dtype,
+            device=batch.actions.device,
+        )
+
+    monkeypatch.setattr(agent, "_critic_forward", critic_forward)
+    monkeypatch.setattr(agent, "_target_q", target_q)
+
+    critic_loss, _ = agent._critic_loss(data)
+
+    assert critic_loss.shape == ()
+    assert captured["target"] is False
+    assert captured["actions"].shape[-1] == 14
+    torch.testing.assert_close(captured["actions"], data.actions)
+
+
+def test_raw_actor_loss_critic_action_composes_current_base(monkeypatch):
+    agent = _raw_joint_agent(learning_starts=0, residual_action_scale=0.1)
+    data = _raw_training_batch(agent)
+    _patch_unit_residual_actor(monkeypatch, agent, value=0.5)
+    captured = {}
+
+    def min_q_value(features, actions, subsample_size, target):
+        del features, subsample_size
+        captured["actions"] = actions.detach().clone()
+        captured["target"] = target
+        return actions.sum(dim=-1, keepdim=True)
+
+    monkeypatch.setattr(agent.policy, "min_q_value", min_q_value)
+
+    actor_loss, _ = agent._actor_loss_from_batch(data)
+
+    unit_residual = torch.full_like(data.base_actions, 0.5)
+    expected = _expected_raw_composition(
+        data.base_actions,
+        unit_residual,
+        global_scale=0.1,
+    )
+    assert actor_loss.shape == ()
+    assert captured["target"] is False
+    assert captured["actions"].shape[-1] == 14
+    torch.testing.assert_close(captured["actions"], expected)
+
+
+def test_raw_target_critic_action_composes_next_base(monkeypatch):
+    agent = _raw_joint_agent(learning_starts=0, residual_action_scale=0.1)
+    data = _raw_training_batch(agent)
+    _patch_unit_residual_actor(monkeypatch, agent, value=-0.25)
+    captured = {}
+
+    def min_q_value(features, actions, subsample_size, target):
+        del features, subsample_size
+        captured["actions"] = actions.detach().clone()
+        captured["target"] = target
+        return actions.sum(dim=-1, keepdim=True)
+
+    monkeypatch.setattr(agent.policy, "min_q_value", min_q_value)
+
+    target_q = agent._target_q(data)
+
+    unit_residual = torch.full_like(data.next_base_actions, -0.25)
+    expected = _expected_raw_composition(
+        data.next_base_actions,
+        unit_residual,
+        global_scale=0.1,
+    )
+    assert target_q.shape == (agent.batch_size, 1)
+    assert captured["target"] is True
+    assert captured["actions"].shape[-1] == 14
+    torch.testing.assert_close(captured["actions"], expected)
+
+
+def test_raw_actor_backward_does_not_train_base_policy():
+    agent = _raw_joint_agent(learning_starts=0, residual_action_scale=0.1)
+    data = _raw_training_batch(agent)
+    provider = agent.base_action_provider
+    provider_calls = provider.select_calls
+    agent.actor_optimizer.zero_grad(set_to_none=True)
+
+    actor_loss, _ = agent._actor_loss_from_batch(data)
+    actor_loss.backward()
+
+    actor_grads = [param.grad for param in agent.policy.actor_parameters()]
+    provider_param_ids = {id(param) for param in provider.parameters()}
+    optimizer_param_ids = {
+        id(param)
+        for optimizer in (agent.actor_optimizer, agent.q_optimizer)
+        for group in optimizer.param_groups
+        for param in group["params"]
+    }
+    assert any(grad is not None for grad in actor_grads)
+    assert all(grad is None or torch.isfinite(grad).all() for grad in actor_grads)
+    assert provider.action.grad is None
+    assert provider_param_ids.isdisjoint(optimizer_param_ids)
+    assert provider.select_calls == provider_calls
 
 
 def test_residual_tensor_replay_buffer_samples_base_actions():

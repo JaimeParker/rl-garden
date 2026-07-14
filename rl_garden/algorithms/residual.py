@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
@@ -25,12 +26,16 @@ from rl_garden.policies.base_policies import BasePolicyProvider
 from rl_garden.policies.residual_policy import ResidualSACPolicy
 
 
+ResidualActionCoordinates = Literal["normalized_final", "raw_joint_delta"]
+
+
 class ResidualSAC(SAC):
     """SAC that learns a residual action on top of a base policy.
 
-    Internally, replay and critic actions are normalized to ``[-1, 1]``. The
-    base policy returns env-space actions; ``ActionScaler`` maps them into the
-    normalized coordinates used by residual learning.
+    ``normalized_final`` retains the legacy convention where replay and critic
+    actions are normalized to ``[-1, 1]``. ``raw_joint_delta`` keeps the base,
+    executed, replay, and critic actions in raw 14D joint-position coordinates
+    while the actor continues to predict a unit residual in ``[-1, 1]``.
     """
 
     _compatible_checkpoint_algorithms = ("ResidualSAC",)
@@ -42,16 +47,50 @@ class ResidualSAC(SAC):
         *,
         base_action_provider: BasePolicyProvider,
         residual_action_scale: float = 0.1,
+        residual_action_coordinates: ResidualActionCoordinates = "normalized_final",
+        joint_delta_scale: float = 0.05,
+        gripper_delta_scale: float = 0.2,
         action_scaler: Optional[ActionScaler] = None,
         **kwargs,
     ) -> None:
-        if residual_action_scale < 0:
+        if residual_action_coordinates not in {"normalized_final", "raw_joint_delta"}:
             raise ValueError(
-                f"residual_action_scale must be non-negative, got {residual_action_scale}."
+                "residual_action_coordinates must be 'normalized_final' or "
+                f"'raw_joint_delta', got {residual_action_coordinates!r}."
             )
+        residual_action_scale = float(residual_action_scale)
+        if not math.isfinite(residual_action_scale) or residual_action_scale < 0:
+            raise ValueError(
+                "residual_action_scale must be finite and non-negative, "
+                f"got {residual_action_scale}."
+            )
+        joint_delta_scale = float(joint_delta_scale)
+        gripper_delta_scale = float(gripper_delta_scale)
+        if residual_action_coordinates == "raw_joint_delta":
+            if env.single_action_space.shape != (14,):
+                raise ValueError(
+                    "raw_joint_delta requires a 14-dimensional action space, "
+                    f"got shape={env.single_action_space.shape}."
+                )
+            if (
+                not math.isfinite(joint_delta_scale)
+                or joint_delta_scale < 0
+                or not math.isfinite(gripper_delta_scale)
+                or gripper_delta_scale < 0
+            ):
+                raise ValueError(
+                    "raw joint and gripper delta scales must be finite and "
+                    "non-negative, got "
+                    f"joint_delta_scale={joint_delta_scale}, "
+                    f"gripper_delta_scale={gripper_delta_scale}."
+                )
         self.base_action_provider = base_action_provider
-        self.residual_action_scale = float(residual_action_scale)
+        self.residual_action_scale = residual_action_scale
+        self.residual_action_coordinates = residual_action_coordinates
+        self.joint_delta_scale = joint_delta_scale
+        self.gripper_delta_scale = gripper_delta_scale
         self.action_scaler = action_scaler
+        self.resolved_residual_scale: Optional[torch.Tensor] = None
         self._cached_base_actions: Optional[torch.Tensor] = None
         self.offline_replay_buffer = None
         self.offline_data_ratio = 0.0
@@ -68,10 +107,24 @@ class ResidualSAC(SAC):
         meta.update(
             {
                 "residual_action_scale": self.residual_action_scale,
-                "action_scaler_low": self.action_scaler.low.detach().cpu().tolist(),
-                "action_scaler_high": self.action_scaler.high.detach().cpu().tolist(),
+                "residual_action_coordinates": self.residual_action_coordinates,
+                "joint_delta_scale": self.joint_delta_scale,
+                "gripper_delta_scale": self.gripper_delta_scale,
             }
         )
+        if self.residual_action_coordinates == "normalized_final":
+            assert self.action_scaler is not None
+            meta.update(
+                {
+                    "action_scaler_low": self.action_scaler.low.detach().cpu().tolist(),
+                    "action_scaler_high": self.action_scaler.high.detach().cpu().tolist(),
+                }
+            )
+        else:
+            assert self.resolved_residual_scale is not None
+            meta["resolved_residual_scale"] = (
+                self.resolved_residual_scale.detach().cpu().tolist()
+            )
         return meta
 
     def _build_replay_buffer(self):
@@ -82,10 +135,15 @@ class ResidualSAC(SAC):
     ):
         num_envs = self.num_envs if num_envs is None else int(num_envs)
         obs_space = self.env.single_observation_space
+        action_space = (
+            self.env.single_action_space
+            if self.residual_action_coordinates == "raw_joint_delta"
+            else self._residual_action_space
+        )
         if isinstance(obs_space, spaces.Dict):
             return ResidualDictReplayBuffer(
                 observation_space=obs_space,
-                action_space=self._residual_action_space,
+                action_space=action_space,
                 num_envs=num_envs,
                 buffer_size=buffer_size,
                 storage_device=self.buffer_device,
@@ -93,7 +151,7 @@ class ResidualSAC(SAC):
             )
         return ResidualTensorReplayBuffer(
             observation_space=obs_space,
-            action_space=self._residual_action_space,
+            action_space=action_space,
             num_envs=num_envs,
             buffer_size=buffer_size,
             storage_device=self.buffer_device,
@@ -196,30 +254,104 @@ class ResidualSAC(SAC):
         )
 
     def _setup_model(self) -> None:
-        if self.action_scaler is None:
-            self.action_scaler = ActionScaler.from_action_space(
-                self.env.single_action_space, device=self.device
-            )
+        if self.residual_action_coordinates == "raw_joint_delta":
+            if self.action_scaler is not None:
+                raise ValueError(
+                    "raw_joint_delta does not accept an ActionScaler because raw "
+                    "joint actions must not be normalized."
+                )
+            self.resolved_residual_scale = self._build_raw_residual_scale()
         else:
-            self.action_scaler = self.action_scaler.to(self.device)
+            if self.action_scaler is None:
+                self.action_scaler = ActionScaler.from_action_space(
+                    self.env.single_action_space, device=self.device
+                )
+            else:
+                self.action_scaler = self.action_scaler.to(self.device)
         self.base_action_provider.to(self.device)
         super()._setup_model()
+
+    def _build_raw_residual_scale(self) -> torch.Tensor:
+        scale = torch.tensor(
+            [self.joint_delta_scale] * 6
+            + [self.gripper_delta_scale]
+            + [self.joint_delta_scale] * 6
+            + [self.gripper_delta_scale],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        scale = scale * self.residual_action_scale
+        if not torch.isfinite(scale).all().item():
+            raise ValueError("Resolved raw residual scale contains non-finite values.")
+        return scale
+
+    @staticmethod
+    def _sanitize_raw_joint_action(action: torch.Tensor) -> torch.Tensor:
+        if action.ndim == 0 or action.shape[-1] != 14:
+            raise ValueError(
+                "Raw joint action must have 14 values in its last dimension, "
+                f"got shape={tuple(action.shape)}."
+            )
+        if not torch.isfinite(action).all().item():
+            raise ValueError("Raw joint action contains non-finite values.")
+        return torch.cat(
+            (
+                action[..., :6],
+                action[..., 6:7].clamp(0.0, 1.0),
+                action[..., 7:13],
+                action[..., 13:14].clamp(0.0, 1.0),
+            ),
+            dim=-1,
+        )
+
+    def _compose_raw_action(
+        self,
+        base_raw: torch.Tensor,
+        unit_residual: torch.Tensor,
+    ) -> torch.Tensor:
+        base_raw = self._sanitize_raw_joint_action(base_raw)
+        if unit_residual.shape != base_raw.shape:
+            raise ValueError(
+                "Unit residual shape must match the raw base action, "
+                f"got residual={tuple(unit_residual.shape)} and "
+                f"base={tuple(base_raw.shape)}."
+            )
+        if not torch.isfinite(unit_residual).all().item():
+            raise ValueError("Unit residual action contains non-finite values.")
+        assert self.resolved_residual_scale is not None
+        raw_delta = unit_residual * self.resolved_residual_scale
+        if not torch.isfinite(raw_delta).all().item():
+            raise ValueError("Raw residual delta contains non-finite values.")
+        return self._sanitize_raw_joint_action(base_raw + raw_delta)
 
     def _call_base_action_provider(self, obs) -> torch.Tensor:
         output = self.base_action_provider.select_action(obs)
         return torch.as_tensor(output.actions, dtype=torch.float32, device=self.device)
 
-    def _base_naction(self, obs) -> torch.Tensor:
+    def _base_action(self, obs) -> torch.Tensor:
         with torch.no_grad():
             policy_obs = self._obs_to_policy_device(obs)
             base_action = self._call_base_action_provider(policy_obs)
+            if self.residual_action_coordinates == "raw_joint_delta":
+                return self._sanitize_raw_joint_action(base_action).detach()
+            assert self.action_scaler is not None
             return self.action_scaler.scale(base_action).clamp(-1.0, 1.0).detach()
 
     def _combine_base_residual(
         self, base_actions: torch.Tensor, unit_residual_actions: torch.Tensor
     ) -> torch.Tensor:
+        if self.residual_action_coordinates == "raw_joint_delta":
+            return self._compose_raw_action(base_actions, unit_residual_actions)
         residual_actions = unit_residual_actions * self.residual_action_scale
         return torch.clamp(base_actions + residual_actions, -1.0, 1.0)
+
+    def _scaled_residual_action(
+        self, unit_residual_actions: torch.Tensor
+    ) -> torch.Tensor:
+        if self.residual_action_coordinates == "raw_joint_delta":
+            assert self.resolved_residual_scale is not None
+            return unit_residual_actions * self.resolved_residual_scale
+        return unit_residual_actions * self.residual_action_scale
 
     def _residual_actor_action_log_prob(
         self,
@@ -233,8 +365,8 @@ class ResidualSAC(SAC):
             base_actions=base_actions,
             stop_gradient=stop_gradient,
         )
-        final_naction = self._combine_base_residual(base_actions, unit_residual)
-        return final_naction, log_prob, features
+        final_action = self._combine_base_residual(base_actions, unit_residual)
+        return final_action, log_prob, features
 
     def _target_action_log_prob(
         self, data
@@ -266,7 +398,7 @@ class ResidualSAC(SAC):
         self, obs, learning_has_started: bool
     ) -> tuple[torch.Tensor, torch.Tensor, Optional[dict[str, Any]]]:
         if self._cached_base_actions is None:
-            base_actions = self._base_naction(obs)
+            base_actions = self._base_action(obs)
         else:
             base_actions = self._cached_base_actions
             self._cached_base_actions = None
@@ -281,9 +413,13 @@ class ResidualSAC(SAC):
                     deterministic=False,
                 ).detach()
 
-        final_naction = self._combine_base_residual(base_actions, unit_residual)
-        env_action = self.action_scaler.unscale(final_naction)
-        return final_naction, env_action, {"base_actions": base_actions}
+        final_action = self._combine_base_residual(base_actions, unit_residual)
+        if self.residual_action_coordinates == "raw_joint_delta":
+            env_action = final_action
+        else:
+            assert self.action_scaler is not None
+            env_action = self.action_scaler.unscale(final_action)
+        return final_action, env_action, {"base_actions": base_actions}
 
     def _replay_buffer_add_kwargs(
         self,
@@ -296,7 +432,7 @@ class ResidualSAC(SAC):
     ) -> dict[str, Any]:
         del obs, next_obs, infos, need_final_obs
         assert action_context is not None
-        next_base_actions = self._base_naction(real_next_obs)
+        next_base_actions = self._base_action(real_next_obs)
         self._cached_base_actions = next_base_actions.detach()
         return {
             "base_actions": action_context["base_actions"],
@@ -323,21 +459,25 @@ class ResidualSAC(SAC):
         return_info: bool = False,
     ):
         with torch.no_grad():
-            base_actions = self._base_naction(obs)
+            base_actions = self._base_action(obs)
             unit_residual = self.policy.predict(
                 self._obs_to_policy_device(obs),
                 base_actions=base_actions,
                 deterministic=deterministic,
             ).detach()
-            final_naction = self._combine_base_residual(base_actions, unit_residual)
-            env_action = self.action_scaler.unscale(final_naction)
+            final_action = self._combine_base_residual(base_actions, unit_residual)
+            if self.residual_action_coordinates == "raw_joint_delta":
+                env_action = final_action
+            else:
+                assert self.action_scaler is not None
+                env_action = self.action_scaler.unscale(final_action)
         if not return_info:
             return env_action
         return env_action, {
             "base_actions": base_actions,
             "unit_residual_actions": unit_residual,
-            "residual_actions": unit_residual * self.residual_action_scale,
-            "final_actions": final_naction,
+            "residual_actions": self._scaled_residual_action(unit_residual),
+            "final_actions": final_action,
         }
 
     def _policy_action(self, obs) -> torch.Tensor:

@@ -85,6 +85,7 @@ def test_residual_sac_defaults_match_existing_cli() -> None:
     assert args.env_id == "PickCube-v1"
     assert args.obs_mode == "rgb"
     assert args.residual_action_scale == 0.1
+    assert args.residual_action_coordinates == "normalized_final"
     assert args.debug is False
     assert args.base_policy == "act"
     assert args.base_ckpt_path == "act-peg-only"
@@ -98,6 +99,71 @@ def test_residual_sac_defaults_match_existing_cli() -> None:
     assert args.offline_num_traj is None
     assert args.offline_buffer_size is None
     assert args.offline_data_ratio == 0.5
+
+
+def test_residual_sac_parses_raw_joint_delta_coordinates() -> None:
+    from rl_garden.training.online import registry
+
+    args = registry.parse_args(
+        ["residual_sac", "--residual-action-coordinates", "raw_joint_delta"]
+    )
+
+    assert args.residual_action_coordinates == "raw_joint_delta"
+
+
+def test_residual_sac_rejects_unknown_action_coordinates() -> None:
+    from rl_garden.training.online import registry
+
+    with pytest.raises(SystemExit):
+        registry.parse_args(
+            ["residual_sac", "--residual-action-coordinates", "unknown"]
+        )
+
+
+def test_raw_joint_delta_accepts_robotwin_joint_pos() -> None:
+    from rl_garden.training.online.residual_sac import (
+        ResidualSACArgs,
+        _residual_sac_env_request,
+    )
+
+    args = ResidualSACArgs(
+        env_backend="robotwin",
+        control_mode="joint_pos",
+        residual_action_coordinates="raw_joint_delta",
+    )
+
+    request = _residual_sac_env_request(args, "raw_joint_delta_test")
+
+    assert request.control_mode == "joint_pos"
+
+
+@pytest.mark.parametrize(
+    ("env_backend", "control_mode"),
+    [
+        ("robotwin", "delta_joint_pos"),
+        ("robotwin", "ee_delta_pose"),
+        ("maniskill", "joint_pos"),
+    ],
+)
+def test_raw_joint_delta_rejects_incompatible_env_coordinates(
+    env_backend: str, control_mode: str
+) -> None:
+    from rl_garden.training.online.residual_sac import (
+        ResidualSACArgs,
+        _residual_sac_env_request,
+    )
+
+    args = ResidualSACArgs(
+        env_backend=env_backend,
+        control_mode=control_mode,
+        residual_action_coordinates="raw_joint_delta",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="requires --env-backend robotwin and --control-mode joint_pos",
+    ):
+        _residual_sac_env_request(args, "raw_joint_delta_test")
 
 
 def test_online_specialized_args_keep_existing_defaults() -> None:

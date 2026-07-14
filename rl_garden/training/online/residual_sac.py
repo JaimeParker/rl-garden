@@ -10,10 +10,22 @@ def _effective_base_policy(args) -> Literal["act", "sac", "zero"]:
     return args.base_policy
 
 
+def _validate_residual_action_config(args) -> None:
+    if args.residual_action_coordinates != "raw_joint_delta":
+        return
+    if args.env_backend != "robotwin" or args.control_mode != "joint_pos":
+        raise ValueError(
+            "raw_joint_delta requires --env-backend robotwin and "
+            "--control-mode joint_pos, got "
+            f"env_backend={args.env_backend!r}, control_mode={args.control_mode!r}."
+        )
+
+
 def _residual_sac_env_request(args, run_name):
     from rl_garden.common.cli_args import resolve_eval_record_dir
     from rl_garden.envs.backend_registry import EnvRequest
 
+    _validate_residual_action_config(args)
     is_visual = args.obs_mode != "state"
     backend_config = args.resolve_backend_config()
     eval_record_dir = resolve_eval_record_dir(args, run_name)
@@ -86,6 +98,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
     )
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
+    _validate_residual_action_config(args)
     if args.load_actor_checkpoint is not None:
         raise ValueError(
             "ResidualSAC does not support --load_actor_checkpoint; "
@@ -119,6 +132,9 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         eval_env=eval_env,
         base_action_provider=base_action_provider,
         residual_action_scale=args.residual_action_scale,
+        residual_action_coordinates=args.residual_action_coordinates,
+        joint_delta_scale=args.robotwin.joint_delta_scale,
+        gripper_delta_scale=args.robotwin.gripper_delta_scale,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
@@ -214,6 +230,9 @@ class ResidualSACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """
 
     residual_action_scale: float = 0.1
+    residual_action_coordinates: Literal[
+        "normalized_final", "raw_joint_delta"
+    ] = "normalized_final"
     debug: bool = False
     base_policy: Literal["act", "sac", "zero"] = "act"
     base_ckpt_path: Optional[str] = "act-peg-only"

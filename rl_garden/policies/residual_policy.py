@@ -1,7 +1,8 @@
 """Residual SAC policy.
 
-The critic evaluates normalized final actions. The actor predicts a unit
-residual action from features concatenated with the normalized base action.
+The actor predicts a unit residual action from features concatenated with the
+base action. The algorithm owns the coordinate convention used for base and
+final critic actions.
 """
 from __future__ import annotations
 
