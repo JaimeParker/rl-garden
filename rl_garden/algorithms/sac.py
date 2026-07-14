@@ -79,6 +79,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        backup_entropy: bool = True,
         critic_impl: Literal["vmap", "legacy"] = "vmap",
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -181,6 +182,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
+        self.backup_entropy = backup_entropy
         self.critic_impl = critic_impl
         self.actor_use_layer_norm = actor_use_layer_norm
         self.critic_use_layer_norm = critic_use_layer_norm
@@ -272,6 +274,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
+            "backup_entropy": self.backup_entropy,
             "critic_impl": self.critic_impl,
             "actor_use_layer_norm": self.actor_use_layer_norm,
             "critic_use_layer_norm": self.critic_use_layer_norm,

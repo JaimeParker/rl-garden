@@ -36,7 +36,7 @@ class SACCore:
         return False
 
     def _backup_entropy_enabled(self) -> bool:
-        return True
+        return self.backup_entropy
 
     def _target_critic_subsample_size(self) -> Optional[int]:
         return getattr(self, "critic_subsample_size", None)

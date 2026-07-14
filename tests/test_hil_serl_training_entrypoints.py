@@ -12,6 +12,24 @@ from gymnasium.vector.utils import batch_space
 from rl_garden.training.real_world.hil_serl import HilSerlArgs, _build_env
 
 
+def test_hil_serl_args_override_real_robot_recipe_defaults_locally():
+    """HilSerlArgs overrides backup_entropy/image_augmentation/pooling_method
+    to match HIL-SERL's own real-robot recipe -- scoped here only, per
+    docs/hil_serl_roadmap.md's "Behavioral Divergences" section."""
+    hil_serl_args = HilSerlArgs()
+    assert hil_serl_args.backup_entropy is False
+    assert hil_serl_args.image_augmentation == "random_shift"
+    assert hil_serl_args.pooling_method == "spatial_learned_embeddings"
+    assert hil_serl_args.convert_obs_rotation is False
+
+    from rl_garden.training.online.rlpd_hybrid import RLPDHybridArgs
+
+    sim_args = RLPDHybridArgs()
+    assert sim_args.backup_entropy is True
+    assert sim_args.image_augmentation == "none"
+    assert sim_args.pooling_method == "spatial_softmax"
+
+
 class _FakeEnv(gym.Env):
     num_envs = 1
 
@@ -25,6 +43,17 @@ class _FakeEnv(gym.Env):
 class _FakeTeleop:
     def __init__(self, *args, **kwargs):
         pass
+
+    def reset(self):
+        pass
+
+    def poll(self):
+        return _NoInterventionSample()
+
+
+class _NoInterventionSample:
+    intervened = False
+    episode_end = False
 
 
 def _base_args(**overrides) -> HilSerlArgs:
@@ -214,6 +243,7 @@ def test_run_learner_builds_full_agent_and_starts_learner_loop(monkeypatch, tmp_
         demo_buffer_size=64,
         demo_data_ratio=0.3,
         buffer_period=50,
+        demo_dataset_paths=["/tmp/demos/*.pkl"],
     )
     _run_learner(args)
 
@@ -222,6 +252,7 @@ def test_run_learner_builds_full_agent_and_starts_learner_loop(monkeypatch, tmp_
     assert captured["port"] == 6500
     assert captured["demo_buffer_initialized"] is True
     assert captured["kwargs"]["buffer_period"] == 50
+    assert captured["kwargs"]["demo_dataset_paths"] == ["/tmp/demos/*.pkl"]
     assert "checkpoint_dir" in captured["kwargs"]
 
 
@@ -258,3 +289,94 @@ def test_run_learner_fwbw_backward_binds_to_backward_port(monkeypatch, tmp_path)
     _run_learner(args)
 
     assert captured["port"] == 6501
+
+
+class _FakeEvalEnv(_FakeEnv):
+    """Every episode is exactly one step and always succeeds (terminated=True),
+    so eval_n_trajs episodes -> eval_n_trajs env.step calls, all successes."""
+
+    def reset(self, seed=None):
+        del seed
+        return torch.zeros(1, 4), {}
+
+    def step(self, action):
+        return (
+            torch.zeros(1, 4),
+            torch.ones(1),
+            torch.ones(1, dtype=torch.bool),
+            torch.zeros(1, dtype=torch.bool),
+            {},
+        )
+
+
+class _FakeEvalPolicy:
+    def __init__(self):
+        self.predict_calls: list[bool] = []
+
+    def eval(self):
+        pass
+
+    def predict(self, obs, deterministic=False):
+        self.predict_calls.append(deterministic)
+        return torch.zeros(1, 3)
+
+
+class _FakeEvalAgent:
+    def __init__(self):
+        self.policy = _FakeEvalPolicy()
+
+    def _obs_to_policy_device(self, obs):
+        return obs
+
+
+def test_run_eval_requires_load_checkpoint(monkeypatch):
+    from rl_garden.training.real_world.hil_serl import _run_eval
+
+    args = _base_args(role="eval", load_checkpoint=None)
+    try:
+        _run_eval(args)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_run_eval_rejects_fwbw(monkeypatch):
+    from rl_garden.training.real_world.hil_serl import _run_eval
+
+    args = _base_args(role="eval", fwbw=True, load_checkpoint="/tmp/ckpt.pt")
+    try:
+        _run_eval(args)
+        assert False, "expected NotImplementedError"
+    except NotImplementedError:
+        pass
+
+
+def test_run_eval_runs_deterministic_episodes_and_reports_success_rate(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.backend_registry.make_training_envs",
+        lambda backend, req: (_FakeEvalEnv(), None),
+    )
+    monkeypatch.setattr(
+        "rl_garden.envs.wrappers.teleop_intervention.EETwistTeleOpWrapper", _FakeTeleop
+    )
+
+    captured = {}
+    fake_agent = _FakeEvalAgent()
+
+    def _fake_build_rlpd_hybrid(args, env, offline_data, logger=None, checkpoint_dir=None):
+        captured["load_checkpoint"] = args.load_checkpoint
+        captured["checkpoint_dir"] = checkpoint_dir
+        return fake_agent
+
+    monkeypatch.setattr(
+        "rl_garden.training.online.rlpd_hybrid.build_rlpd_hybrid", _fake_build_rlpd_hybrid
+    )
+
+    from rl_garden.training.real_world.hil_serl import _run_eval
+
+    args = _base_args(role="eval", load_checkpoint="/tmp/ckpt.pt", eval_n_trajs=3)
+    _run_eval(args)
+
+    assert captured["load_checkpoint"] == "/tmp/ckpt.pt"
+    assert captured["checkpoint_dir"] is None
+    assert fake_agent.policy.predict_calls == [True, True, True]

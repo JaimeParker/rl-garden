@@ -46,6 +46,7 @@ def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
         discrete_lr=args.discrete_lr,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
+        backup_entropy=args.backup_entropy,
         critic_use_layer_norm=args.critic_use_layer_norm,
         actor_dropout_rate=args.actor_dropout_rate,
         critic_dropout_rate=args.critic_dropout_rate,
@@ -153,6 +154,7 @@ class RLPDHybridArgs(VisionSACTrainingArgs, EnvBackendArgs):
     n_critics: int = 10
     critic_subsample_size: Optional[int] = 2
     critic_use_layer_norm: bool = True
+    backup_entropy: bool = True
     utd: float = 4.0
 
     actor_dropout_rate: Optional[float] = None

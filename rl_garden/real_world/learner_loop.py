@@ -5,13 +5,32 @@ and isn't a fit for a real robot stepped by a separate actor process).
 
 Algorithm-agnostic by construction: only touches the public surface any
 ``OffPolicyAlgorithm`` subclass (``SAC``, ``RLPD``, ``TD3``, ...) already
-exposes -- ``replay_buffer.add(...)``, ``train(gradient_steps)``, and
-``policy.state_dict()`` -- so no base-class change was needed to build this.
+exposes -- ``replay_buffer.add(...)``, ``train(gradient_steps)``,
+``policy.state_dict()``, and the checkpoint-related attributes/methods
+(``checkpoint_dir``, ``checkpoint_freq``, ``save_replay_buffer``,
+``save_final_checkpoint``, ``global_update``, ``save(...)``) -- so no
+base-class change beyond the read-only ``global_update`` property was needed
+to build this.
+
+Also periodically saves the full agent state (weights + optimizer), since
+``OffPolicyAlgorithm.learn()``'s own periodic-checkpoint machinery
+(``_maybe_save_periodic_checkpoint``/``_save_checkpoint``,
+``rl_garden/algorithms/off_policy.py``) is only ever called from within
+``learn()``'s own rollout loop, which real-world training never runs.
+Without this, a learner crash loses all trained weights/optimizer state --
+only the replay/demo buffers survive (see ``HilSerlLearnerLoop``'s pkl
+snapshots). Cadence mirrors HIL-SERL's own ``learner()``
+(``3rd_party/hil-serl/examples/train_rlpd.py:314-355``): keyed on gradient
+update count, not received-transition count. Resuming weights on startup
+reuses the existing ``--load_checkpoint`` flag
+(``build_rlpd``/``build_rlpd_hybrid`` already call ``agent.load(...)`` before
+handing the agent to this loop) -- no new resume logic needed here.
 """
 from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -48,6 +67,7 @@ class LearnerLoop:
 
         self._lock = threading.Lock()
         self._received = 0
+        self._last_checkpoint_update = 0
         self._server = LearnerSyncServer(host, port, on_transition=self._on_transition)
 
     @property
@@ -86,7 +106,22 @@ class LearnerLoop:
     def _train_step(self, compute_info: bool = False) -> dict[str, float]:
         gradient_steps = max(1, int(self.train_freq * self.agent.utd))
         with self._lock:
-            return self.agent.train(gradient_steps, compute_info=compute_info)
+            info = self.agent.train(gradient_steps, compute_info=compute_info)
+        self._maybe_save_periodic_checkpoint()
+        return info
+
+    def _maybe_save_periodic_checkpoint(self) -> None:
+        agent = self.agent
+        if agent.checkpoint_dir is None or agent.checkpoint_freq <= 0:
+            return
+        update = agent.global_update
+        if update // agent.checkpoint_freq <= self._last_checkpoint_update // agent.checkpoint_freq:
+            return
+        agent.save(
+            Path(agent.checkpoint_dir) / f"checkpoint_{update}.pt",
+            include_replay_buffer=agent.save_replay_buffer,
+        )
+        self._last_checkpoint_update = update
 
     def run(self, total_transitions: Optional[int] = None) -> None:
         """Runs until ``total_transitions`` have been received (or forever,
@@ -108,6 +143,12 @@ class LearnerLoop:
                     self._server.publish_params(self.agent.policy.state_dict())
         finally:
             self._server.stop()
+            agent = self.agent
+            if agent.checkpoint_dir is not None and agent.save_final_checkpoint:
+                agent.save(
+                    Path(agent.checkpoint_dir) / "final.pt",
+                    include_replay_buffer=agent.save_replay_buffer,
+                )
 
     def stop(self) -> None:
         self._stop = True

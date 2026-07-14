@@ -27,6 +27,14 @@ class DemoInterventionMixin(PriorDataReplayMixin):
     def init_demo_buffer(self, buffer_size: int, demo_data_ratio: float = 0.5) -> None:
         if not (0.0 <= demo_data_ratio <= 1.0):
             raise ValueError(f"demo_data_ratio must be in [0, 1], got {demo_data_ratio}.")
+        if self.offline_replay_buffer is not None:
+            raise RuntimeError(
+                "offline_replay_buffer is already populated (e.g. via "
+                "load_offline_replay_buffer/--offline_dataset_path) -- "
+                "init_demo_buffer() would silently discard it. RLPD's static "
+                "offline dataset and HIL-SERL's demo buffer share this one "
+                "slot and can't both be used on the same instance."
+            )
         self.offline_replay_buffer = self._build_prior_data_buffer(int(buffer_size))
         self.offline_data_ratio = float(demo_data_ratio)
 

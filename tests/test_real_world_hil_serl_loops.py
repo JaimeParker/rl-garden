@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import os
+import pickle
 
 import torch
 from gymnasium import spaces
@@ -106,6 +107,11 @@ def test_hil_serl_actor_loop_tags_intervened_from_info():
 
 
 def test_hil_serl_learner_loop_routes_by_intervened_flag(tmp_path):
+    """Matches HIL-SERL's own actor loop (train_rlpd.py:178-193): every
+    transition -- intervened or not -- goes into the online replay buffer;
+    intervened transitions are *additionally* copied into the demo buffer.
+    The demo buffer is a duplicated subset of the online buffer, not a
+    disjoint partition of it."""
     agent = _agent()
     agent.init_demo_buffer(buffer_size=16, demo_data_ratio=0.5)
     loop = HilSerlLearnerLoop(agent, "127.0.0.1", 0, checkpoint_dir=str(tmp_path), buffer_period=1000)
@@ -114,7 +120,7 @@ def test_hil_serl_learner_loop_routes_by_intervened_flag(tmp_path):
     loop._on_transition(_transition(intervened=True))
     loop._on_transition(_transition(intervened=True))
 
-    assert len(agent.replay_buffer) == 1
+    assert len(agent.replay_buffer) == 3
     assert len(agent.offline_replay_buffer) == 2
     assert loop.received_transitions == 3
 
@@ -136,6 +142,78 @@ def test_hil_serl_learner_loop_snapshots_and_reloads_on_restart(tmp_path):
         reloaded_agent, "127.0.0.1", 0, checkpoint_dir=str(tmp_path), buffer_period=2
     )
 
-    assert len(reloaded_agent.replay_buffer) == 1
+    # "buffer" snapshot holds both transitions (unconditional); "demo_buffer"
+    # holds the one intervened transition, duplicated -- not a remainder.
+    assert len(reloaded_agent.replay_buffer) == 2
     assert len(reloaded_agent.offline_replay_buffer) == 1
+    # Received-count is off the "buffer" reload only, so the intervened
+    # transition isn't counted twice.
     assert reloaded_loop.received_transitions == 2
+
+
+def test_hil_serl_learner_loop_preloads_demo_dataset_paths(tmp_path):
+    demo_dir = tmp_path / "demos"
+    demo_dir.mkdir()
+    demo_transitions = [_transition() for _ in range(3)]
+    for t in demo_transitions:
+        t.pop("intervened")
+    with open(demo_dir / "session1.pkl", "wb") as f:
+        pickle.dump(demo_transitions, f)
+
+    agent = _agent()
+    agent.init_demo_buffer(buffer_size=16, demo_data_ratio=0.5)
+    loop = HilSerlLearnerLoop(
+        agent,
+        "127.0.0.1",
+        0,
+        checkpoint_dir=str(tmp_path / "ckpt"),
+        buffer_period=1000,
+        demo_dataset_paths=[str(demo_dir / "*.pkl")],
+    )
+
+    assert len(agent.offline_replay_buffer) == 3
+    # Preloaded demo transitions don't count toward received_transitions --
+    # that gates learning_starts, and HIL-SERL's own analogous gate never
+    # counts --demo_path preload either, only genuine online transitions.
+    assert loop.received_transitions == 0
+
+    # Growing via live intervention keeps adding to the same buffer/slot.
+    loop._on_transition(_transition(intervened=True))
+    assert len(agent.offline_replay_buffer) == 4
+    assert loop.received_transitions == 1
+
+
+def test_hil_serl_learner_loop_reloads_demo_dataset_paths_on_every_restart(tmp_path):
+    demo_dir = tmp_path / "demos"
+    demo_dir.mkdir()
+    demo_transitions = [_transition() for _ in range(2)]
+    for t in demo_transitions:
+        t.pop("intervened")
+    with open(demo_dir / "session1.pkl", "wb") as f:
+        pickle.dump(demo_transitions, f)
+
+    checkpoint_dir = str(tmp_path / "ckpt")
+    agent = _agent()
+    agent.init_demo_buffer(buffer_size=16, demo_data_ratio=0.5)
+    HilSerlLearnerLoop(
+        agent,
+        "127.0.0.1",
+        0,
+        checkpoint_dir=checkpoint_dir,
+        buffer_period=1000,
+        demo_dataset_paths=[str(demo_dir / "*.pkl")],
+    )
+    assert len(agent.offline_replay_buffer) == 2
+
+    # Restart: mirrors HIL-SERL's own always-reload-demo_path behavior.
+    reloaded_agent = _agent()
+    reloaded_agent.init_demo_buffer(buffer_size=16, demo_data_ratio=0.5)
+    HilSerlLearnerLoop(
+        reloaded_agent,
+        "127.0.0.1",
+        0,
+        checkpoint_dir=checkpoint_dir,
+        buffer_period=1000,
+        demo_dataset_paths=[str(demo_dir / "*.pkl")],
+    )
+    assert len(reloaded_agent.offline_replay_buffer) == 2

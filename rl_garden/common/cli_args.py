@@ -55,6 +55,10 @@ class VisionArgs:
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
+    # Matches rl_garden.encoders.resnet.PoolingMethod's values -- not
+    # imported directly to keep this module's top-level imports light (see
+    # _resnet_factory's own lazy import of the encoder module below).
+    pooling_method: Literal["spatial_learned_embeddings", "spatial_softmax", "avg"] = "spatial_softmax"
     plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
     plain_conv_last_act: bool = True
     plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
@@ -178,6 +182,7 @@ def _resnet_factory(args: VisionArgs):
         pretrained_weights=args.pretrained_weights,
         freeze_resnet_encoder=args.freeze_resnet_encoder,
         freeze_resnet_backbone=args.freeze_resnet_backbone,
+        pooling_method=args.pooling_method,
     )
 
 

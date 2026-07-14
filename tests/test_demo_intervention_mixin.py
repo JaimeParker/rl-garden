@@ -61,3 +61,18 @@ def test_rejects_invalid_ratio():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_rejects_overwriting_an_already_populated_offline_replay_buffer():
+    algo = _FakeAlgo()
+    # Simulates load_offline_replay_buffer(--offline_dataset_path) already
+    # having populated this slot -- init_demo_buffer must not silently
+    # discard it (regression: it used to overwrite with an empty buffer).
+    algo.offline_replay_buffer = algo._build_prior_data_buffer(8)
+    algo.offline_data_ratio = 0.3
+
+    try:
+        algo.init_demo_buffer(buffer_size=8, demo_data_ratio=0.5)
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass

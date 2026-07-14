@@ -83,6 +83,21 @@ class FrankaRealEnv(gym.Env):
 
         self._safety_low = np.array(cfg.safety_box_low, dtype=np.float64)
         self._safety_high = np.array(cfg.safety_box_high, dtype=np.float64)
+        if (cfg.safety_box_rpy_low is None) != (cfg.safety_box_rpy_high is None):
+            raise ValueError(
+                "safety_box_rpy_low and safety_box_rpy_high must be set together "
+                "(or both left as None to disable orientation clipping)."
+            )
+        self._safety_rpy_low = (
+            np.array(cfg.safety_box_rpy_low, dtype=np.float64)
+            if cfg.safety_box_rpy_low is not None
+            else None
+        )
+        self._safety_rpy_high = (
+            np.array(cfg.safety_box_rpy_high, dtype=np.float64)
+            if cfg.safety_box_rpy_high is not None
+            else None
+        )
         self._t = 0
         self._last_pose: Optional[np.ndarray] = None  # xyz(3) + quat_xyzw(4)
 
@@ -114,6 +129,23 @@ class FrankaRealEnv(gym.Env):
         self._last_pose = np.asarray(state["pose"], dtype=np.float64)
         return self._obs_from_state(state), {}
 
+    def _clip_orientation(self, rot: Rotation) -> Rotation:
+        """Clip ``rot`` to ``self._safety_rpy_low/high`` (xyz Euler radians).
+
+        Mirrors HIL-SERL's ``clip_safety_box()``: the first Euler angle is
+        clipped by absolute value (sign preserved) rather than directly,
+        since it wraps discontinuously across +-pi -- a direct clip there
+        would snap a small negative angle near -pi to the upper bound
+        instead of leaving it near its (equivalent) magnitude.
+        """
+        euler = rot.as_euler("xyz")
+        sign = np.sign(euler[0])
+        euler[0] = sign * np.clip(
+            np.abs(euler[0]), self._safety_rpy_low[0], self._safety_rpy_high[0]
+        )
+        euler[1:] = np.clip(euler[1:], self._safety_rpy_low[1:], self._safety_rpy_high[1:])
+        return Rotation.from_euler("xyz", euler)
+
     def step(self, action: torch.Tensor):
         if self._last_pose is None:
             raise RuntimeError("FrankaRealEnv.step() called before reset().")
@@ -136,6 +168,8 @@ class FrankaRealEnv(gym.Env):
         )
         current_rot = Rotation.from_quat(self._last_pose[3:7])
         target_rot = Rotation.from_rotvec(delta_rotvec) * current_rot
+        if self._safety_rpy_low is not None:
+            target_rot = self._clip_orientation(target_rot)
         target_pose = np.concatenate([target_pos, target_rot.as_quat()])
 
         self.bridge.send_gripper(gripper_action > self.cfg.gripper_threshold)

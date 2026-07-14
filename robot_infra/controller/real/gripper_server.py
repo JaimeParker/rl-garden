@@ -45,9 +45,10 @@ class FrankaGripperServer(GripperServer):
         )
 
     def _on_joint_state(self, msg) -> None:
-        # Two-finger width in meters, summed across both fingers -- matches
-        # SERL's own convention for `gripper_pos`.
-        self.gripper_pos = float(sum(msg.position))
+        # Two-finger width in meters, summed across both fingers, normalized
+        # by the fully-open width (0.08m) to ~[0, 1] -- matches SERL's own
+        # convention for `gripper_pos`.
+        self.gripper_pos = float(sum(msg.position)) / 0.08
 
     def open(self) -> None:
         msg = self._MoveActionGoal()

@@ -154,3 +154,58 @@ def test_observation_and_action_spaces_are_batch_of_one():
     assert env.num_envs == 1
     assert env.action_space.shape == (1, 7)
     assert env.observation_space["state"].shape == (1, 20)
+
+
+def test_step_does_not_clip_orientation_when_rpy_bounds_unset():
+    env, bridge = _make_env(safety_box_low=(-10, -10, -10), safety_box_high=(10, 10, 10))
+    env.reset()
+    action = torch.zeros(1, 7)
+    action[0, 3] = 1.0  # large rotation about x, scaled by rot_scale=0.1
+    env.step(action)
+
+    sent_quat = bridge.sent_poses[0][3:7]
+    expected = Rotation.from_rotvec([0.1, 0.0, 0.0]) * Rotation.from_quat([0.0, 0.0, 0.0, 1.0])
+    np.testing.assert_allclose(sent_quat, expected.as_quat(), atol=1e-6)
+
+
+def test_safety_box_rpy_bounds_must_be_set_together():
+    with pytest.raises(ValueError, match="safety_box_rpy"):
+        _make_env(safety_box_rpy_low=(-0.1, -0.1, -0.1))
+    with pytest.raises(ValueError, match="safety_box_rpy"):
+        _make_env(safety_box_rpy_high=(0.1, 0.1, 0.1))
+
+
+def test_step_clips_target_orientation_to_safety_box_rpy():
+    env, bridge = _make_env(
+        safety_box_low=(-10, -10, -10),
+        safety_box_high=(10, 10, 10),
+        safety_box_rpy_low=(-0.2, -0.2, -0.2),
+        safety_box_rpy_high=(0.2, 0.2, 0.2),
+    )
+    env.reset()
+    action = torch.zeros(1, 7)
+    action[0, 5] = 1.0  # rotation about z scaled by rot_scale=0.1 -> within bounds
+    env.step(action)
+    sent_quat = bridge.sent_poses[0][3:7]
+    euler = Rotation.from_quat(sent_quat).as_euler("xyz")
+    np.testing.assert_allclose(euler, [0.0, 0.0, 0.1], atol=1e-6)
+
+    # A rotation well past the 0.2 rad bound gets clipped, sign preserved --
+    # exercises the same "clip by magnitude" formula HIL-SERL's
+    # clip_safety_box() uses for the discontinuous first Euler angle. Fresh
+    # env/bridge so this delta composes with an identity current orientation
+    # (Euler decomposition of a compound rotation on top of an already
+    # z-rotated pose wouldn't isolate cleanly to one axis).
+    env2, bridge2 = _make_env(
+        safety_box_low=(-10, -10, -10),
+        safety_box_high=(10, 10, 10),
+        safety_box_rpy_low=(-0.2, -0.2, -0.2),
+        safety_box_rpy_high=(0.2, 0.2, 0.2),
+    )
+    env2.reset()
+    action = torch.zeros(1, 7)
+    action[0, 3] = 10.0  # would rotate ~1.0 rad about x, well past the bound
+    env2.step(action)
+    sent_quat = bridge2.sent_poses[0][3:7]
+    euler = Rotation.from_quat(sent_quat).as_euler("xyz")
+    assert euler[0] == pytest.approx(0.2, abs=1e-6)

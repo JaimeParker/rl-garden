@@ -199,6 +199,34 @@ def test_sac_redq_target_uses_subsampled_critics():
     assert torch.isfinite(target_q).all()
 
 
+def test_backup_entropy_flag_controls_entropy_term_in_target_q():
+    agent = _agent()
+    _fill(agent)
+    data = agent.replay_buffer.sample(agent.batch_size)
+
+    next_action = torch.zeros(agent.batch_size, *agent.env.single_action_space.shape)
+    next_log_prob = torch.full((agent.batch_size, 1), 2.0)
+    next_features = agent.policy.extract_features(data.next_obs, stop_gradient=True)
+    agent._target_action_log_prob = lambda data: (next_action, next_log_prob, next_features)
+
+    alpha = agent._current_alpha().detach()
+    discounts = agent._target_discounts(data)
+
+    agent.backup_entropy = True
+    target_with_entropy = agent._target_q(data)
+    agent.backup_entropy = False
+    target_without_entropy = agent._target_q(data)
+
+    expected_diff = -discounts * alpha * next_log_prob
+    torch.testing.assert_close(target_with_entropy - target_without_entropy, expected_diff)
+
+
+def test_backup_entropy_defaults_to_true():
+    agent = _agent()
+    assert agent.backup_entropy is True
+    assert agent._backup_entropy_enabled() is True
+
+
 def test_sac_core_high_utd_update_runs():
     agent = _agent(n_critics=4, critic_subsample_size=2, utd=2.0, batch_size=8)
     _fill(agent)

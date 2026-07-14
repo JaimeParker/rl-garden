@@ -191,6 +191,17 @@ class BaseAlgorithm(ABC):
     def _load_training_state_dict(self, state: dict[str, Any]) -> None:
         del state
 
+    @property
+    def global_update(self) -> int:
+        """Read-only view of ``_global_update``, restored by ``load_state_dict``.
+
+        Exposed for callers outside the algorithm hierarchy (e.g. real-world
+        ``LearnerLoop``) that need a training-progress counter which stays
+        monotonic across a checkpoint resume, without reaching into the
+        underscore-prefixed internal field.
+        """
+        return self._global_update
+
     def state_dict(self) -> dict[str, Any]:
         return {
             "policy": self.policy.state_dict(),

@@ -126,6 +126,14 @@ def _assert_state_dict_equal(left: dict[str, torch.Tensor], right: dict[str, tor
         assert torch.equal(left[key], right[key]), key
 
 
+def test_global_update_property_mirrors_internal_counter():
+    agent = SAC(env=_state_env(), **_sac_kwargs())
+    _add_state_transitions(agent)
+    agent.train(3)
+    assert agent.global_update == agent._global_update
+    assert agent.global_update > 0
+
+
 def test_sac_checkpoint_roundtrip_with_replay_buffer(tmp_path):
     agent = SAC(env=_state_env(), **_sac_kwargs())
     _add_state_transitions(agent)
