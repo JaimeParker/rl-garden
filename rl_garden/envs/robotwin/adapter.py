@@ -203,6 +203,7 @@ class RoboTwinTaskAdapter:
                 enabled=True, log_interval=self.cfg.profile_interval
             )
         self._install_helpers()
+        self._install_task_compatibility()
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
         self.elapsed_steps = 0
@@ -216,6 +217,7 @@ class RoboTwinTaskAdapter:
         if self.task is None:
             self.reset()
         assert self.task is not None
+        self._install_task_compatibility()
         action = self._to_robotwin_action(action)
         self._begin_reward_trace()
         self.task.take_action(action, action_type=self._robotwin_action_type())
@@ -385,6 +387,11 @@ class RoboTwinTaskAdapter:
         if not hasattr(self.task, "is_in_hand"):
             self.task.is_in_hand = types.MethodType(_is_in_hand, self.task)
 
+    def _install_task_compatibility(self) -> None:
+        assert self.task is not None
+        if self.task_name == "open_laptop":
+            _install_open_laptop_state(self.task)
+
     def _start_eval_video_if_needed(self, rgb: Any) -> None:
         assert self.task is not None
         video_dir = getattr(self.task, "eval_video_path", None)
@@ -467,6 +474,21 @@ def _extract_robotwin_obs(
         "state": np.asarray(state, dtype=np.float32),
         "instruction": instruction,
     }
+
+
+def _install_open_laptop_state(task: Any) -> None:
+    if hasattr(task, "arm_tag"):
+        return
+    try:
+        from envs.utils import ArmTag, get_face_prod
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "RoboTwin open_laptop compatibility requires envs.utils from RoboTwin. "
+            "Install RoboTwin or set robotwin_root."
+        ) from exc
+
+    face_prod = get_face_prod(task.laptop.get_pose().q, [1, 0, 0], [1, 0, 0])
+    task.arm_tag = ArmTag("left" if face_prod > 0 else "right")
 
 
 def _is_in_hand(task, actor):

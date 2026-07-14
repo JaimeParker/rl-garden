@@ -230,6 +230,10 @@ If a task is not in the registry and `reward_mode="dense"`, reset will fail
 with a clear missing-factory error. Use `reward_mode="sparse"` to train with
 `check_success()` only, or add a factory for the task.
 
+`open_laptop` is currently supported only through sparse rewards. Run it with
+`--env-id open_laptop --robotwin.reward-mode sparse`; dense reward construction
+is intentionally not registered for this task yet.
+
 ## Reset, Seeds, And Auto-Reset
 
 `RoboTwinEnv` supports two seed paths:

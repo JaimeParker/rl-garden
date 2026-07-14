@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import sys
+import types
+
 import numpy as np
+import pytest
 import torch
 
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
@@ -62,15 +66,22 @@ class _Robot:
     def get_right_gripper_val(self):
         return 0.75
 
+    def get_left_ee_pose(self):
+        return [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
+    def get_right_ee_pose(self):
+        return [0.5, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
 
 class _Pose:
-    def __init__(self, p):
+    def __init__(self, p, q=None):
         self.p = np.array(p, dtype=np.float32)
+        self.q = np.array(q if q is not None else [1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
 
 class _Actor:
-    def __init__(self, p):
-        self._pose = _Pose(p)
+    def __init__(self, p, q=None):
+        self._pose = _Pose(p, q=q)
 
     def get_pose(self):
         return self._pose
@@ -81,6 +92,46 @@ class _StackBowlsTask:
         self.bowl1 = _Actor([0.0, -0.1, 0.76])
         self.bowl2 = _Actor([0.0, -0.1, 0.79])
         self.bowl3 = _Actor([0.0, -0.1, 0.82])
+
+
+class _OpenLaptopTask:
+    def __init__(self):
+        self.robot = _Robot()
+        self.laptop = _Actor([0.0, 0.0, 0.0], q=[0.7, 0.0, 0.0, 0.7])
+        self.closed = False
+        self.took_action = False
+
+    def setup_demo(self, **kwargs):
+        self.step_lim = kwargs["step_lim"]
+        self.take_action_cnt = 0
+        self.run_steps = 0
+        self.reward_step = 0
+        self.eval_success = False
+        self.eval_video_path = kwargs.get("eval_video_save_dir")
+
+    def get_obs(self):
+        return {
+            "observation": {
+                "head_camera": {"rgb": np.zeros((8, 8, 3), dtype=np.uint8)},
+                "left_camera": {"rgb": np.zeros((8, 8, 3), dtype=np.uint8)},
+                "right_camera": {"rgb": np.zeros((8, 8, 3), dtype=np.uint8)},
+            },
+            "joint_action": {"vector": np.zeros(14, dtype=np.float32)},
+        }
+
+    def take_action(self, action, action_type="qpos"):
+        assert hasattr(self, "arm_tag")
+        assert action_type == "qpos"
+        assert action.shape == (14,)
+        self.took_action = True
+
+    def check_success(self):
+        assert self.arm_tag == "left"
+        return False
+
+    def close_env(self, clear_cache=True):
+        del clear_cache
+        self.closed = True
 
 
 class _VideoTask:
@@ -289,6 +340,61 @@ def test_reward_registry_covers_rlinf_robotwin_env_configs():
         "place_shoe",
         "stack_bowls_three",
     )
+
+
+def test_open_laptop_is_not_registered_for_dense_reward():
+    with pytest.raises(KeyError, match="open_laptop"):
+        build_task_reward("open_laptop", object())
+
+
+def test_open_laptop_sparse_adapter_initializes_arm_tag(monkeypatch):
+    task = _OpenLaptopTask()
+
+    utils = types.ModuleType("envs.utils")
+
+    class ArmTag(str):
+        pass
+
+    def get_face_prod(q, local_axis, world_axis):
+        np.testing.assert_allclose(q, [0.7, 0.0, 0.0, 0.7])
+        assert local_axis == [1, 0, 0]
+        assert world_axis == [1, 0, 0]
+        return 0.5
+
+    utils.ArmTag = ArmTag
+    utils.get_face_prod = get_face_prod
+    envs = types.ModuleType("envs")
+    envs.utils = utils
+    monkeypatch.setitem(sys.modules, "envs", envs)
+    monkeypatch.setitem(sys.modules, "envs.utils", utils)
+    monkeypatch.setattr(robotwin_adapter, "make_task", lambda *args, **kwargs: task)
+
+    cfg = RoboTwinEnvConfig(
+        task_name="open_laptop",
+        reward_mode="sparse",
+        control_mode="joint_pos",
+        device="cpu",
+        image_size=(8, 8),
+        task_config={
+            "step_lim": 2,
+            "left_robot_file": "/tmp/left",
+            "right_robot_file": "/tmp/right",
+            "left_embodiment_config": {},
+            "right_embodiment_config": {},
+        },
+    )
+    adapter = RoboTwinTaskAdapter(0, cfg, cfg.task_config, env_seed=123)
+
+    obs = adapter.reset()
+    assert obs["rgb"].shape == (8, 8, 3)
+    assert task.arm_tag == "left"
+
+    result = adapter.step(np.zeros(14, dtype=np.float32))
+
+    assert task.took_action is True
+    assert result.reward == 0.0
+    assert result.terminated is False
+    adapter.close()
 
 
 def test_stack_bowls_three_dense_reward_factory_builds():
