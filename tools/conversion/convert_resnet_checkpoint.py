@@ -2,7 +2,7 @@
 """Convert torchvision-style ResNet checkpoints to rl-garden ResNetEncoder keys.
 
 Example:
-    python scripts/convert_resnet_checkpoint.py \
+    python tools/conversion/convert_resnet_checkpoint.py \
         --input pretrained_models/resnet10_pretrained.pt \
         --output pretrained_models/resnet10_pretrained_converted.pt \
         --arch resnet10

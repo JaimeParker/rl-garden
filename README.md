@@ -248,7 +248,7 @@ critic; actor updates detach encoder features while critic updates train it.
 Torchvision-style ResNet checkpoints must be converted to rl-garden parameter names:
 
 ```bash
-python scripts/convert_resnet_checkpoint.py \
+python tools/conversion/convert_resnet_checkpoint.py \
   --input pretrained_models/resnet10_pretrained.pt \
   --output pretrained_models/resnet10_pretrained_converted.pt \
   --arch resnet10

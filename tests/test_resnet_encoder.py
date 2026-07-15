@@ -390,7 +390,7 @@ def test_convert_torchvision_checkpoint_script_outputs_loadable_weights(tmp_path
     torch.save(torchvision_like, src_path)
 
     repo_root = Path(__file__).resolve().parents[1]
-    script = repo_root / "scripts" / "convert_resnet_checkpoint.py"
+    script = repo_root / "tools" / "conversion" / "convert_resnet_checkpoint.py"
     proc = subprocess.run(
         [
             sys.executable,
