@@ -15,7 +15,7 @@ from rl_garden.common.cli_args import (
     image_keys_from_obs_mode,
     vit_sac_kwargs_from_args,
 )
-from rl_garden.training.offline._args import OfflineVisionArgs
+from rl_garden.training.offline._args import OfflineVisionArgs, TDMPC2MultitaskTrainingArgs
 from rl_garden.training.off2on._args import (
     WSRLTrainingArgs,
     initial_training_phase_from_args,
@@ -25,8 +25,56 @@ from rl_garden.training.online._args import (
     DrQv2TrainingArgs,
     FlashSACTrainingArgs,
     SACTrainingArgs,
+    TDMPC2TrainingArgs,
+    VisionTDMPC2TrainingArgs,
     sac_initial_training_phase_from_args,
 )
+
+
+def test_tdmpc2_defaults_require_single_env() -> None:
+    args = TDMPC2TrainingArgs()
+
+    assert args.num_envs == 1
+    assert args.num_eval_envs == 1
+    assert args.episode_length == 100
+    assert args.buffer_size == 1_000_000
+    assert args.horizon == 3
+    assert args.num_samples == 512
+    assert args.num_elites == 64
+    assert args.num_pi_trajs == 24
+    assert args.iterations == 6
+    assert args.latent_dim == 512
+    assert args.num_q == 5
+    assert args.num_bins == 101
+    assert args.vmin == -10.0
+    assert args.vmax == 10.0
+    assert args.episodic is False
+    assert args.discount_denom == 5.0
+    assert args.use_planner is True
+    assert args.seed_steps is None
+
+
+def test_vision_tdmpc2_defaults_shrink_buffer() -> None:
+    args = VisionTDMPC2TrainingArgs()
+
+    assert args.num_envs == 1
+    assert args.buffer_size == 200_000
+    assert args.obs_mode == "rgb"
+
+
+def test_tdmpc2_multitask_defaults_require_no_env() -> None:
+    args = TDMPC2MultitaskTrainingArgs()
+
+    assert args.dataset_dir == ""
+    assert args.mmap_dir == ""
+    assert args.num_offline_steps == 10_000_000
+    assert args.horizon == 3
+    assert args.task_dim == 96
+    assert args.latent_dim == 512
+    assert args.num_q == 5
+    assert args.num_bins == 101
+    assert not hasattr(args, "env_id")
+    assert not hasattr(args, "num_envs")
 
 
 def test_state_sac_defaults_match_existing_cli() -> None:

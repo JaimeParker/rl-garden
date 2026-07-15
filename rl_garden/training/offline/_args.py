@@ -103,6 +103,53 @@ class OfflineCommonArgs(
 
 
 @dataclass
+class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
+    """TD-MPC2 multitask offline pretraining.
+
+    Deliberately does NOT inherit ``EnvRunArgs``/``EnvBackendArgs``/
+    ``OfflineDatasetArgs``: there is no single ``env_id``/live env (training
+    never touches one, see ``rl_garden.algorithms.tdmpc2.multitask.agent``)
+    and no single homogeneous dataset (``dataset_dir`` points at the
+    per-task, differently-shaped output of
+    ``tools/conversion/convert_tdmpc2_multitask_dataset.py``, not one
+    ``offline_dataset_path`` file).
+    """
+
+    dataset_dir: str = ""
+    mmap_dir: str = ""
+    device: str = "auto"
+    num_offline_steps: int = 10_000_000
+    buffer_size: int = 1_000_000
+    batch_size: int = 256
+    horizon: int = 3
+    task_dim: int = 96
+    latent_dim: int = 512
+    enc_dim: int = 256
+    num_enc_layers: int = 2
+    mlp_dim: int = 512
+    simnorm_dim: int = 8
+    num_q: int = 5
+    num_bins: int = 101
+    vmin: float = -10.0
+    vmax: float = 10.0
+    dropout: float = 0.01
+    log_std_min: float = -10.0
+    log_std_max: float = 2.0
+    entropy_coef: float = 1e-4
+    lr: float = 3e-4
+    enc_lr_scale: float = 0.3
+    grad_clip_norm: float = 20.0
+    tau: float = 0.01
+    rho: float = 0.5
+    consistency_coef: float = 20.0
+    reward_coef: float = 0.1
+    value_coef: float = 0.1
+    discount_denom: float = 5.0
+    discount_min: float = 0.95
+    discount_max: float = 0.995
+
+
+@dataclass
 class OfflineDeviceArgs:
     device: str = "auto"
 

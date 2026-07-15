@@ -85,9 +85,9 @@ def test_phase_registries_discover_expected_algorithms():
 
     assert set(online.entries()) == {
         "sac", "ppo", "recurrent_ppo", "recurrent_sac", "transformer_ppo", "transformer_sac",
-        "drqv2", "flash_sac", "residual_sac", "td3", "rlpd", "rlpd_hybrid"
+        "drqv2", "flash_sac", "residual_sac", "td3", "rlpd", "rlpd_hybrid", "tdmpc2"
     }
-    assert set(offline.entries()) == {"bc", "iql", "cql", "calql", "wsrl"}
+    assert set(offline.entries()) == {"bc", "iql", "cql", "calql", "wsrl", "tdmpc2_multitask"}
     assert set(off2on.entries()) == {"wsrl", "calql", "iql"}
 
 

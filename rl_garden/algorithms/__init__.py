@@ -28,6 +28,8 @@ from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
 from rl_garden.algorithms.td3 import TD3
+from rl_garden.algorithms.tdmpc2 import TDMPC2
+from rl_garden.algorithms.tdmpc2.multitask import TDMPC2Multitask
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.wsrl import WSRL
@@ -58,6 +60,8 @@ __all__ = [
     "SequencePPO",
     "SequenceSAC",
     "TD3",
+    "TDMPC2",
+    "TDMPC2Multitask",
     "TransformerPPO",
     "TransformerSAC",
     "WSRL",

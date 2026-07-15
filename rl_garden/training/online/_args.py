@@ -98,6 +98,67 @@ class VisionTransformerSACTrainingArgs(TransformerSACTrainingArgs, VisionArgs):
 
 
 @dataclass
+class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
+    """State-obs defaults, values matching
+    ``3rd_party/tdmpc2/tdmpc2/config.yaml`` where an upstream default exists.
+
+    ``num_envs``/``num_eval_envs`` are fixed to 1: TDMPC2's CEM planner already
+    rolls out ``num_samples`` trajectories per env step, and vectorized
+    rollout is not supported in this port (see ``rl_garden.algorithms.tdmpc2.
+    agent`` module docstring). ``episode_length`` has no single upstream
+    default (it's task-specific in the original Hydra configs); 100 matches
+    this repo's own ManiSkill custom tasks (e.g. ``PegInsertionSideNew-v1``).
+    """
+
+    num_envs: int = 1
+    num_eval_envs: int = 1
+    total_timesteps: int = 10_000_000
+    episode_length: int = 100
+    buffer_size: int = 1_000_000
+    buffer_device: str = "cuda"
+    batch_size: int = 256
+    seed_steps: Optional[int] = None
+    use_planner: bool = True
+    horizon: int = 3
+    num_samples: int = 512
+    num_elites: int = 64
+    num_pi_trajs: int = 24
+    iterations: int = 6
+    min_std: float = 0.05
+    max_std: float = 2.0
+    temperature: float = 0.5
+    latent_dim: int = 512
+    mlp_dim: int = 512
+    simnorm_dim: int = 8
+    num_q: int = 5
+    num_bins: int = 101
+    vmin: float = -10.0
+    vmax: float = 10.0
+    dropout: float = 0.01
+    episodic: bool = False
+    log_std_min: float = -10.0
+    log_std_max: float = 2.0
+    entropy_coef: float = 1e-4
+    lr: float = 3e-4
+    enc_lr_scale: float = 0.3
+    grad_clip_norm: float = 20.0
+    tau: float = 0.01
+    rho: float = 0.5
+    consistency_coef: float = 20.0
+    reward_coef: float = 0.1
+    value_coef: float = 0.1
+    termination_coef: float = 1.0
+    discount_denom: float = 5.0
+    discount_min: float = 0.95
+    discount_max: float = 0.995
+
+
+@dataclass
+class VisionTDMPC2TrainingArgs(TDMPC2TrainingArgs, VisionArgs):
+    buffer_size: int = 200_000
+
+
+@dataclass
 class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     total_timesteps: int = 10_000_000
     num_steps: int = 50
