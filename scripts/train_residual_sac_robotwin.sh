@@ -102,6 +102,7 @@ exec env \
     --learning-starts 512 \
     --training-freq 256 \
     --utd 0.25 \
+    --bootstrap-at-done truncated \
     --robotwin.step-lim 200 \
     --robotwin.control-step-cap 16 \
     --encoder resnet18 \

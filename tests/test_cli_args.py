@@ -39,6 +39,7 @@ def test_state_sac_defaults_match_existing_cli() -> None:
     assert args.batch_size == 1024
     assert args.utd == 0.5
     assert args.gamma == 0.8
+    assert args.bootstrap_at_done == "always"
 
 
 def test_rgbd_sac_defaults_match_existing_cli() -> None:
@@ -86,6 +87,7 @@ def test_residual_sac_defaults_match_existing_cli() -> None:
     assert args.obs_mode == "rgb"
     assert args.residual_action_scale == 0.1
     assert args.residual_action_coordinates == "normalized_final"
+    assert args.bootstrap_at_done == "always"
     assert args.debug is False
     assert args.base_policy == "act"
     assert args.base_ckpt_path == "act-peg-only"
@@ -109,6 +111,16 @@ def test_residual_sac_parses_raw_joint_delta_coordinates() -> None:
     )
 
     assert args.residual_action_coordinates == "raw_joint_delta"
+
+
+def test_residual_sac_parses_bootstrap_at_done() -> None:
+    from rl_garden.training.online import registry
+
+    args = registry.parse_args(
+        ["residual_sac", "--bootstrap-at-done", "truncated"]
+    )
+
+    assert args.bootstrap_at_done == "truncated"
 
 
 def test_residual_sac_rejects_unknown_action_coordinates() -> None:

@@ -21,6 +21,7 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     gamma: float = 0.8
     nstep: int = 1
     tau: float = 0.01
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
     policy_lr: float = 3e-4
     q_lr: float = 3e-4
     critic_impl: Literal["vmap", "legacy"] = "vmap"

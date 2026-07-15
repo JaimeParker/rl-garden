@@ -126,6 +126,37 @@ def _raw_joint_base_action() -> torch.Tensor:
     )
 
 
+def test_build_residual_sac_forwards_bootstrap_at_done(monkeypatch) -> None:
+    import rl_garden.algorithms as algorithms
+    from rl_garden.training.online.residual_sac import (
+        ResidualSACArgs,
+        build_residual_sac,
+    )
+
+    captured = {}
+
+    class StubResidualSAC:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(algorithms, "ResidualSAC", StubResidualSAC)
+    args = ResidualSACArgs(
+        obs_mode="state",
+        base_policy="zero",
+        bootstrap_at_done="truncated",
+    )
+
+    build_residual_sac(
+        args,
+        RawActionVecEnv(),
+        eval_env=None,
+        logger=None,
+        checkpoint_dir=None,
+    )
+
+    assert captured["bootstrap_at_done"] == "truncated"
+
+
 def _raw_joint_agent(base_action=None, **kwargs) -> ResidualSAC:
     action_space = spaces.Box(
         low=-np.inf,
