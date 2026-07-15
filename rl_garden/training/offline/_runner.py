@@ -123,6 +123,8 @@ def run_offline(
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:
         print(f"[pretrain] loaded_transitions={loaded}", flush=True)
+    if hasattr(agent, "fit_obs_normalizer"):
+        agent.fit_obs_normalizer()
 
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)

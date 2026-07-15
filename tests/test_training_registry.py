@@ -87,8 +87,10 @@ def test_phase_registries_discover_expected_algorithms():
         "sac", "ppo", "recurrent_ppo", "recurrent_sac", "transformer_ppo", "transformer_sac",
         "drqv2", "flash_sac", "residual_sac", "td3", "rlpd", "rlpd_hybrid", "tdmpc2"
     }
-    assert set(offline.entries()) == {"bc", "iql", "cql", "calql", "wsrl", "tdmpc2_multitask"}
-    assert set(off2on.entries()) == {"wsrl", "calql", "iql"}
+    assert set(offline.entries()) == {
+        "bc", "iql", "cql", "calql", "wsrl", "tdmpc2_multitask", "td3_bc", "awac",
+    }
+    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac"}
 
 
 def test_environment_logging_defaults_are_overridden_by_explicit_cli(monkeypatch):

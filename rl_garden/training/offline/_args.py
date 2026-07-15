@@ -246,3 +246,45 @@ class OfflineBCArgs:
 @dataclass
 class OfflineWSRLArgs:
     training_freq: int = 64
+
+
+@dataclass
+class OfflineDeterministicActorCriticArgs:
+    """Network toggles shared by TD3-BC and AWAC (2 fixed critics, no ensemble
+    subsampling -- unlike ``OfflineActorArgs``/``OfflineCriticArgs``, which are
+    tuned for CQL/IQL's larger critic ensembles)."""
+
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = False
+    actor_use_group_norm: bool = False
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    critic_dropout_rate: Optional[float] = None
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
+    n_critics: int = 2
+
+
+@dataclass
+class OfflineTD3BCArgs(OfflineDeterministicActorCriticArgs):
+    """TD3-BC hyperparameters. Defaults match CORL's ``TrainConfig``."""
+
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    policy_noise: float = 0.2
+    noise_clip: float = 0.5
+    policy_freq: int = 2
+    alpha: float = 2.5
+
+
+@dataclass
+class OfflineAWACArgs(OfflineDeterministicActorCriticArgs):
+    """AWAC hyperparameters. Defaults match CORL's ``TrainConfig``."""
+
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    awac_lambda: float = 1.0
+    exp_adv_max: float = 100.0

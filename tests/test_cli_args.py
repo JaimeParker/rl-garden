@@ -16,11 +16,14 @@ from rl_garden.common.cli_args import (
     vit_sac_kwargs_from_args,
 )
 from rl_garden.training.offline._args import OfflineVisionArgs, TDMPC2MultitaskTrainingArgs
+from rl_garden.training.offline.awac import AWACArgs
+from rl_garden.training.offline.td3_bc import TD3BCArgs
 from rl_garden.training.off2on._args import (
     WSRLTrainingArgs,
     initial_training_phase_from_args,
     warn_if_off2on_warmup_uses_uninitialized_policy,
 )
+from rl_garden.training.off2on.awac import AWACOff2OnArgs
 from rl_garden.training.online._args import (
     DrQv2TrainingArgs,
     FlashSACTrainingArgs,
@@ -60,6 +63,44 @@ def test_vision_tdmpc2_defaults_shrink_buffer() -> None:
     assert args.num_envs == 1
     assert args.buffer_size == 200_000
     assert args.obs_mode == "rgb"
+
+
+def test_td3_bc_defaults_match_corl_trainconfig() -> None:
+    args = TD3BCArgs()
+
+    assert args.tau == 0.005
+    assert args.actor_lr == 3e-4
+    assert args.critic_lr == 3e-4
+    assert args.policy_noise == 0.2
+    assert args.noise_clip == 0.5
+    assert args.policy_freq == 2
+    assert args.alpha == 2.5
+    assert args.n_critics == 2
+    assert args.actor_use_layer_norm is False
+    assert args.critic_use_layer_norm is False
+
+
+def test_awac_defaults_match_corl_trainconfig() -> None:
+    args = AWACArgs()
+
+    assert args.tau == 5e-3
+    assert args.actor_lr == 3e-4
+    assert args.critic_lr == 3e-4
+    assert args.awac_lambda == 1.0
+    assert args.exp_adv_max == 100.0
+    assert args.n_critics == 2
+
+
+def test_awac_off2on_defaults_require_state_obs_box_scope() -> None:
+    args = AWACOff2OnArgs()
+
+    assert args.warmup_steps == 0
+    assert args.online_replay_mode == "mixed"
+    assert args.offline_data_ratio == "auto"
+    assert args.awac_lambda == 1.0
+    assert args.exp_adv_max == 100.0
+    assert args.actor_lr == 3e-4
+    assert args.critic_lr == 3e-4
 
 
 def test_tdmpc2_multitask_defaults_require_no_env() -> None:

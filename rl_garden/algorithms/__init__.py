@@ -1,3 +1,4 @@
+from rl_garden.algorithms.awac import AWAC
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.bc import BC
 from rl_garden.algorithms.flash_sac import FlashSAC
@@ -13,6 +14,7 @@ from rl_garden.algorithms.offline import (
     infer_specs_from_h5,
     run_offline_pretraining,
 )
+from rl_garden.algorithms.off2on_awac import Off2OnAWAC
 from rl_garden.algorithms.off2on_calql import Off2OnCalQL
 from rl_garden.algorithms.off2on_iql import Off2OnIQL
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
@@ -28,6 +30,7 @@ from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
 from rl_garden.algorithms.td3 import TD3
+from rl_garden.algorithms.td3_bc import TD3BC
 from rl_garden.algorithms.tdmpc2 import TDMPC2
 from rl_garden.algorithms.tdmpc2.multitask import TDMPC2Multitask
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
@@ -35,6 +38,7 @@ from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
+    "AWAC",
     "BaseAlgorithm",
     "BC",
     "CalQL",
@@ -46,6 +50,7 @@ __all__ = [
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",
     "OfflineSAC",
+    "Off2OnAWAC",
     "Off2OnCalQL",
     "Off2OnIQL",
     "OffPolicyAlgorithm",
@@ -60,6 +65,7 @@ __all__ = [
     "SequencePPO",
     "SequenceSAC",
     "TD3",
+    "TD3BC",
     "TDMPC2",
     "TDMPC2Multitask",
     "TransformerPPO",

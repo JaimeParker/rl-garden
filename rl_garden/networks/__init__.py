@@ -1,9 +1,11 @@
 from rl_garden.networks.actor_critic import (
     BackboneType,
     CriticImpl,
+    DeterministicTanhActor,
     DiagGaussianActor,
     EnsembleQCritic,
     SquashedGaussianActor,
+    UnsquashedGaussianActor,
     get_actor_critic_arch,
 )
 from rl_garden.networks.flash_sac_layers import (
@@ -30,6 +32,7 @@ from rl_garden.networks.value import ValueNetwork
 __all__ = [
     "BackboneType",
     "CriticImpl",
+    "DeterministicTanhActor",
     "DiagGaussianActor",
     "EnsembleCategoricalValue",
     "EnsembleFlashSACBlock",
@@ -53,6 +56,7 @@ __all__ = [
     "SpatialEmbQEnsemble",
     "SpatialEmbQHead",
     "SquashedGaussianActor",
+    "UnsquashedGaussianActor",
     "UnitBatchNorm",
     "UnitLinear",
     "UnitRMSNorm",

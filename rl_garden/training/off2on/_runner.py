@@ -196,6 +196,8 @@ def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -
         if args.load_checkpoint is not None and args.offline_dataset_path is not None:
             loaded = load_offline_dataset(agent.replay_buffer, args)
             logger.add_summary("off2on/offline_loaded_transitions", loaded)
+            if hasattr(agent, "fit_obs_normalizer"):
+                agent.fit_obs_normalizer()
             _set_offline_probe(agent, logger, args.std_log)
     agent.switch_to_online_mode(
         online_replay_mode=args.online_replay_mode,
@@ -294,6 +296,8 @@ def run_off2on(
         offline_start_step = agent._global_step
         logger.add_summary("off2on/offline_loaded_transitions", loaded)
         logger.add_summary("off2on/offline_start_step", offline_start_step)
+        if hasattr(agent, "fit_obs_normalizer"):
+            agent.fit_obs_normalizer()
         _offline_update_loop(
             agent,
             args.num_offline_steps,

@@ -224,6 +224,153 @@ class SquashedGaussianActor(nn.Module):
         return torch.tanh(mean) * self.action_scale + self.action_bias
 
 
+class DeterministicTanhActor(nn.Module):
+    """Deterministic tanh-squashed actor for TD3-BC.
+
+    Unlike ``DDPGActor`` (DrQ-v2's fixed-compression pixel trunk + external
+    std schedule), this uses the same flexible ``net_arch``/LayerNorm trunk
+    family as ``SquashedGaussianActor`` (IQL/BC/CQL), matching CORL's plain
+    MLP architecture for offline state inputs. There is no built-in target
+    copy: TD3-BC's target actor is a separate instance managed by the policy.
+    """
+
+    def __init__(
+        self,
+        features_dim: int,
+        action_space: spaces.Box,
+        hidden_dims: Sequence[int],
+        *,
+        use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
+    ) -> None:
+        super().__init__()
+        act_dim = int(np.prod(action_space.shape))
+        self.trunk, trunk_dim = _build_trunk(
+            features_dim,
+            hidden_dims,
+            backbone_type=backbone_type,
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        self.fc_action = nn.Linear(trunk_dim, act_dim)
+
+        high = torch.as_tensor(action_space.high, dtype=torch.float32)
+        low = torch.as_tensor(action_space.low, dtype=torch.float32)
+        self.register_buffer("action_scale", (high - low) / 2.0)
+        self.register_buffer("action_bias", (high + low) / 2.0)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        x = self.trunk(features)
+        mu = torch.tanh(self.fc_action(x))
+        return mu * self.action_scale + self.action_bias
+
+    def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
+        return self(features)
+
+
+class UnsquashedGaussianActor(nn.Module):
+    """Unsquashed Gaussian actor for AWAC, faithful to CORL's ``awac.py::Actor``.
+
+    Unlike ``SquashedGaussianActor`` (tanh squash + Jacobian log-prob
+    correction, used by IQL), this samples a plain ``Normal``, hard-clamps to
+    the action bounds, and evaluates log-prob directly on the (possibly
+    clamped) action with **no** change-of-variables correction. This is not
+    distributionally self-consistent, but it reproduces CORL's actual
+    numerical behavior, which AWAC's advantage-weighted regression loss was
+    tuned against.
+    """
+
+    def __init__(
+        self,
+        features_dim: int,
+        action_space: spaces.Box,
+        hidden_dims: Sequence[int],
+        *,
+        use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
+        std_parameterization: Literal["exp", "uniform"] = "exp",
+        log_std_min: float = -20.0,
+        log_std_max: float = 2.0,
+    ) -> None:
+        super().__init__()
+        if std_parameterization not in ("exp", "uniform"):
+            raise ValueError(
+                "std_parameterization must be 'exp' or 'uniform', "
+                f"got {std_parameterization!r}"
+            )
+        self.std_parameterization = std_parameterization
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+
+        act_dim = int(np.prod(action_space.shape))
+        self.trunk, trunk_dim = _build_trunk(
+            features_dim,
+            hidden_dims,
+            backbone_type=backbone_type,
+            use_layer_norm=use_layer_norm,
+            use_group_norm=use_group_norm,
+            num_groups=num_groups,
+            dropout_rate=dropout_rate,
+            kernel_init=kernel_init,
+        )
+        self.fc_mean = nn.Linear(trunk_dim, act_dim)
+        if std_parameterization == "exp":
+            self.fc_logstd = nn.Linear(trunk_dim, act_dim)
+            self.log_stds = None
+        else:
+            self.fc_logstd = None
+            self.log_stds = nn.Parameter(torch.zeros(act_dim))
+
+        high = torch.as_tensor(action_space.high, dtype=torch.float32)
+        low = torch.as_tensor(action_space.low, dtype=torch.float32)
+        self.register_buffer("action_high", high)
+        self.register_buffer("action_low", low)
+
+    def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = self.trunk(features)
+        mean = self.fc_mean(x)
+        if self.std_parameterization == "exp":
+            assert self.fc_logstd is not None
+            raw_log_std = self.fc_logstd(x)
+        else:
+            assert self.log_stds is not None
+            raw_log_std = self.log_stds.expand_as(mean)
+        log_std = torch.clamp(raw_log_std, self.log_std_min, self.log_std_max)
+        return mean, log_std
+
+    def action_log_prob(
+        self, features: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mean, log_std = self(features)
+        normal = torch.distributions.Normal(mean, log_std.exp())
+        action = normal.rsample()
+        action = action.clamp(self.action_low, self.action_high)
+        log_prob = normal.log_prob(action).sum(-1, keepdim=True)
+        return action, log_prob
+
+    def evaluate_action_log_prob(
+        self, features: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        mean, log_std = self(features)
+        normal = torch.distributions.Normal(mean, log_std.exp())
+        return normal.log_prob(actions).sum(-1, keepdim=True)
+
+    def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
+        mean, _ = self(features)
+        return mean.clamp(self.action_low, self.action_high)
+
+
 class DiagGaussianActor(nn.Module):
     """Unsquashed diagonal Gaussian actor used by PPO-style algorithms.
 

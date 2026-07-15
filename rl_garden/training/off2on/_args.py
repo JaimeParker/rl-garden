@@ -131,6 +131,25 @@ class VisionIQLOff2OnTrainingArgs(IQLOff2OnTrainingArgs, VisionArgs):
     utd: float = 0.25
 
 
+@dataclass
+class AWACOff2OnHyperparamArgs:
+    """AWAC-only off2on hyperparameters (not shared with IQL/CQL off2on)."""
+
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    awac_lambda: float = 1.0
+    exp_adv_max: float = 100.0
+
+
+@dataclass
+class AWACOff2OnTrainingArgs(Off2OnCommonArgs, AWACOff2OnHyperparamArgs):
+    """AWAC off2on args: ``Off2OnCommonArgs`` + AWAC-specific hyperparameters.
+
+    AWAC is Box-observation only (no vision variant); pass ``--obs_mode state``
+    (the ``EnvRunArgs`` default is ``rgb``).
+    """
+
+
 def initial_training_phase_from_args(
     args: Off2OnCommonArgs,
 ) -> Optional[InitialTrainingPhase]:
