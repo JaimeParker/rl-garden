@@ -194,7 +194,8 @@ The default and baseline mode remains `delta_joint_pos`; use
 
 ## Rewards
 
-Dense reward primitives are adapted from RoboTwin `RLinf_support`:
+The dense reward layer combines primitives adapted from RoboTwin
+`RLinf_support` with local extensions:
 
 - `Reward`
 - `SerialTask`
@@ -203,6 +204,7 @@ Dense reward primitives are adapted from RoboTwin `RLinf_support`:
 - `Contact`
 - `Place`
 - `Endpose`
+- `OpenArticulation`
 - `Rank`
 - `Stack`
 - `SparseExtra`
@@ -219,6 +221,7 @@ click_bell
 handover_block
 lift_pot
 move_can_pot
+open_laptop
 pick_dual_bottles
 place_container_plate
 place_empty_cup
@@ -226,13 +229,14 @@ place_shoe
 stack_bowls_three
 ```
 
+`open_laptop` shapes the selected TCP approaching the laptop rotation point
+(25%) and progress from the reset joint position to RoboTwin's 40% opening
+success threshold (75%). It uses `task.arm_tag` so the dense reward and
+`check_success()` evaluate the same arm.
+
 If a task is not in the registry and `reward_mode="dense"`, reset will fail
 with a clear missing-factory error. Use `reward_mode="sparse"` to train with
 `check_success()` only, or add a factory for the task.
-
-`open_laptop` is currently supported only through sparse rewards. Run it with
-`--env-id open_laptop --robotwin.reward-mode sparse`; dense reward construction
-is intentionally not registered for this task yet.
 
 ## Reset, Seeds, And Auto-Reset
 

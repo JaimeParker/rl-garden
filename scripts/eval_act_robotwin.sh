@@ -15,7 +15,7 @@ if [[ -z "$ROBOTWIN_ROOT" ]]; then
     exit 1
 fi
 ASSETS_PATH_ARG="${RLG_ROBOTWIN_ASSETS_PATH:-$ROBOTWIN_ROOT}"
-CUDA_VISIBLE_DEVICES_ARG="${RLG_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
+CUDA_VISIBLE_DEVICES_ARG="${RLG_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-1}}"
 FORWARD_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,9 +46,9 @@ exec env \
     ROBOT_PLATFORM="${ROBOT_PLATFORM:-ALOHA}" \
     PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$PYTHON_BIN" -u "$REPO_DIR/examples/eval_act_robotwin.py" \
-    --env-id place_empty_cup \
-    --base-ckpt-path pretrained_models/place_empty_cup.ckpt \
-    --base-act-stats-path pretrained_models/dataset_stats_place_empty_cup.pkl \
+    --env-id stack_bowls_three \
+    --base-ckpt-path pretrained_models/stack_bowls_three.ckpt \
+    --base-act-stats-path pretrained_models/dataset_stats_stack_bowls_three.pkl \
     --num-eval-envs 1 \
     --num-eval-episodes 10 \
     --robotwin.robotwin-root "$ROBOTWIN_ROOT" \
@@ -60,9 +60,16 @@ exec env \
     --robotwin.random-table-height 0 \
     --robotwin.step-lim 200 \
     --control-mode joint_pos \
-    --camera-width 320 \
-    --camera-height 240 \
     --capture-video true \
     --action-diagnostics true \
-    --diagnostic-steps 20 \
+    --diagnostic-steps 500 \
+    --camera-width 640 \
+    --camera-height 480 \
+    --robotwin.head-camera-type D435 \
+    --robotwin.wrist-camera-type D435 \
+    --base-act-temporal-agg true \
+    --log-type wandb \
+    --wandb-project robotwin-place_empty_cup \
+    --wandb-entity dalian0744-intel \
+    --exp-name act_only_ \
     "${FORWARD_ARGS[@]}"

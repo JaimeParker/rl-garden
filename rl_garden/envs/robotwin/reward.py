@@ -363,6 +363,73 @@ class Endpose(SubTask):
         return bool(self.base.check_success())
 
 
+class OpenArticulation(SubTask):
+    """Shape reaching an articulation handle and opening its target joint."""
+
+    def __init__(
+        self,
+        base,
+        max_reward: float = 4.0,
+        entity=None,
+        joint_idx: int = 0,
+        contact_point_idx: int = 1,
+        target_fraction: float = 0.4,
+        arm_tag: Optional[str | int] = None,
+        a_d: float = 5.0,
+        c_d: float = 1.0,
+        c_qpos: float = 3.0,
+    ) -> None:
+        super().__init__(base, max_reward, entity=entity)
+        if abs(c_d + c_qpos - max_reward) >= 1e-5:
+            raise ValueError("c_d + c_qpos must equal max_reward")
+        if not 0.0 <= target_fraction <= 1.0:
+            raise ValueError("target_fraction must be in [0, 1]")
+
+        self.entity = entity
+        self.joint_idx = joint_idx
+        self.contact_point_idx = contact_point_idx
+        self.arm_tag = _arm_index(arm_tag)
+        self.a_d = a_d
+        self.c_d = c_d
+        self.c_qpos = c_qpos
+
+        limits = np.asarray(entity.get_qlimits(), dtype=np.float64)[joint_idx]
+        lower, upper = float(limits[0]), float(limits[1])
+        if upper <= lower:
+            raise ValueError("articulation joint upper limit must exceed lower limit")
+        self.initial_qpos = float(np.asarray(entity.get_qpos())[joint_idx])
+        self.target_qpos = lower + (upper - lower) * target_fraction
+
+    def compute_reward(self) -> float:
+        contact_pose = np.asarray(
+            self.entity.get_contact_point(self.contact_point_idx), dtype=np.float64
+        )
+        tcp_poses = [
+            np.asarray(self.base.robot.get_left_tcp_pose(), dtype=np.float64),
+            np.asarray(self.base.robot.get_right_tcp_pose(), dtype=np.float64),
+        ]
+        dists = [np.linalg.norm(tcp[:3] - contact_pose[:3]) for tcp in tcp_poses]
+        arm_idx = int(np.argmin(dists)) if self.arm_tag is None else self.arm_tag
+        reach_reward = 1.0 - np.tanh(dists[arm_idx] * self.a_d)
+
+        qpos = float(np.asarray(self.entity.get_qpos())[self.joint_idx])
+        if self.initial_qpos >= self.target_qpos:
+            progress = float(qpos >= self.target_qpos)
+        else:
+            progress = float(
+                np.clip(
+                    (qpos - self.initial_qpos)
+                    / (self.target_qpos - self.initial_qpos),
+                    0.0,
+                    1.0,
+                )
+            )
+        return float(reach_reward * self.c_d + progress * self.c_qpos)
+
+    def is_success(self) -> bool:
+        return bool(self.base.check_success())
+
+
 class Rank(SubTask):
     def __init__(self, base, max_reward: float = 4.0, dist_dim: int | Iterable = 2, entities=None, eps=None, a_ds=None, c_ds=None) -> None:
         super().__init__(base, max_reward, entities=entities)

@@ -4,7 +4,6 @@ import sys
 import types
 
 import numpy as np
-import pytest
 import torch
 
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
@@ -132,6 +131,57 @@ class _OpenLaptopTask:
     def close_env(self, clear_cache=True):
         del clear_cache
         self.closed = True
+
+
+class _LaptopActor:
+    def __init__(self):
+        self.qpos = np.array([0.2], dtype=np.float32)
+        self.contact_point = np.array(
+            [0.2, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32
+        )
+
+    def get_qlimits(self):
+        return np.array([[0.0, 1.0]], dtype=np.float32)
+
+    def get_qpos(self):
+        return self.qpos
+
+    def get_contact_point(self, idx):
+        assert idx == 1
+        return self.contact_point
+
+
+class _OpenLaptopRobot:
+    def __init__(self):
+        self.left_tcp_pose = np.array(
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32
+        )
+        self.right_tcp_pose = np.array(
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32
+        )
+
+    def get_left_tcp_pose(self):
+        return self.left_tcp_pose
+
+    def get_right_tcp_pose(self):
+        return self.right_tcp_pose
+
+
+class _OpenLaptopRewardTask:
+    def __init__(self):
+        self.robot = _OpenLaptopRobot()
+        self.laptop = _LaptopActor()
+        self.arm_tag = "left"
+
+    def check_success(self):
+        lower, upper = self.laptop.get_qlimits()[0]
+        target_qpos = lower + (upper - lower) * 0.4
+        tcp = self.robot.get_left_tcp_pose()[:3]
+        handle = self.laptop.get_contact_point(1)[:3]
+        return bool(
+            self.laptop.get_qpos()[0] >= target_qpos
+            and np.linalg.norm(tcp - handle) < 0.1
+        )
 
 
 class _VideoTask:
@@ -326,7 +376,7 @@ def test_ee_delta_pose_action_space_and_conversion():
     np.testing.assert_allclose(raw[15], 0.65)
 
 
-def test_reward_registry_covers_rlinf_robotwin_env_configs():
+def test_reward_registry_covers_supported_robotwin_env_configs():
     assert supported_reward_tasks() == (
         "adjust_bottle",
         "beat_block_hammer",
@@ -334,17 +384,13 @@ def test_reward_registry_covers_rlinf_robotwin_env_configs():
         "handover_block",
         "lift_pot",
         "move_can_pot",
+        "open_laptop",
         "pick_dual_bottles",
         "place_container_plate",
         "place_empty_cup",
         "place_shoe",
         "stack_bowls_three",
     )
-
-
-def test_open_laptop_is_not_registered_for_dense_reward():
-    with pytest.raises(KeyError, match="open_laptop"):
-        build_task_reward("open_laptop", object())
 
 
 def test_open_laptop_sparse_adapter_initializes_arm_tag(monkeypatch):
@@ -395,6 +441,28 @@ def test_open_laptop_sparse_adapter_initializes_arm_tag(monkeypatch):
     assert result.reward == 0.0
     assert result.terminated is False
     adapter.close()
+
+
+def test_open_laptop_dense_reward_tracks_reach_and_joint_progress():
+    task = _OpenLaptopRewardTask()
+    reward = build_task_reward("open_laptop", task)
+
+    initial_reward = reward.compute_reward()
+
+    task.robot.left_tcp_pose[0] = 0.2
+    reached_reward = reward.compute_reward()
+
+    task.laptop.qpos[0] = 0.3
+    reward.update()
+    middle_reward = reward.compute_reward()
+
+    task.laptop.qpos[0] = 0.4
+    reward.update()
+    success_reward = reward.compute_reward()
+
+    assert 0.0 < initial_reward < reached_reward < middle_reward < success_reward
+    np.testing.assert_allclose(success_reward, 1.0)
+    assert task.reward is reward
 
 
 def test_stack_bowls_three_dense_reward_factory_builds():
