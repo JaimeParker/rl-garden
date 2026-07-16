@@ -119,6 +119,18 @@ class MujocoWarpConfig:
 
 
 @dataclass
+class IsaacLabConfig:
+    """IsaacLab-specific env settings. CLI prefix: ``--isaaclab.<field>``"""
+
+    headless: bool = True
+    sim_device: str = "cuda:0"
+    # JSON-encoded dict forwarded verbatim to IsaacLabEnvConfig.env_kwargs
+    # (e.g. task-specific cfg overrides). Escape hatch, same convention as
+    # ManiSkillConfig.env_kwargs_json.
+    env_kwargs_json: str = "{}"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -133,6 +145,7 @@ class EnvBackendArgs:
     d4rl_legacy: D4RLLegacyConfig = field(default_factory=D4RLLegacyConfig)
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
+    isaaclab: IsaacLabConfig = field(default_factory=IsaacLabConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config
