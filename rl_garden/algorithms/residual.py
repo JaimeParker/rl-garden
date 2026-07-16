@@ -20,6 +20,7 @@ from rl_garden.buffers.residual_h5 import (
     load_residual_h5_to_replay_buffer,
 )
 from rl_garden.common.action_scaler import ActionScaler
+from rl_garden.common.observation_view import ObservationView
 from rl_garden.common.types import ResidualReplayBufferSample
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.policies.base_policies import BasePolicyProvider
@@ -51,6 +52,7 @@ class ResidualSAC(SAC):
         joint_delta_scale: float = 0.05,
         gripper_delta_scale: float = 0.2,
         action_scaler: Optional[ActionScaler] = None,
+        observation_view: Optional[ObservationView] = None,
         **kwargs,
     ) -> None:
         if residual_action_coordinates not in {"normalized_final", "raw_joint_delta"}:
@@ -90,6 +92,10 @@ class ResidualSAC(SAC):
         self.joint_delta_scale = joint_delta_scale
         self.gripper_delta_scale = gripper_delta_scale
         self.action_scaler = action_scaler
+        self.observation_view = observation_view or ObservationView(
+            env.single_observation_space
+        )
+        self.agent_observation_space = self.observation_view.observation_space
         self.resolved_residual_scale: Optional[torch.Tensor] = None
         self._cached_base_actions: Optional[torch.Tensor] = None
         self.offline_replay_buffer = None
@@ -134,7 +140,7 @@ class ResidualSAC(SAC):
         self, buffer_size: int, *, num_envs: Optional[int] = None
     ):
         num_envs = self.num_envs if num_envs is None else int(num_envs)
-        obs_space = self.env.single_observation_space
+        obs_space = self.agent_observation_space
         action_space = (
             self.env.single_action_space
             if self.residual_action_coordinates == "raw_joint_delta"
@@ -148,6 +154,7 @@ class ResidualSAC(SAC):
                 buffer_size=buffer_size,
                 storage_device=self.buffer_device,
                 sample_device=self.device,
+                observation_transform=self.observation_view.transform,
             )
         return ResidualTensorReplayBuffer(
             observation_space=obs_space,
@@ -156,6 +163,7 @@ class ResidualSAC(SAC):
             buffer_size=buffer_size,
             storage_device=self.buffer_device,
             sample_device=self.device,
+            observation_transform=self.observation_view.transform,
         )
 
     def load_offline_replay_buffer(
@@ -239,9 +247,28 @@ class ResidualSAC(SAC):
     def _policy_action_space(self) -> spaces.Box:
         return self._residual_action_space
 
+    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+        resolved = self._resolve_policy_kwargs()
+        features_extractor_class = resolved["features_extractor_class"]
+        if not isinstance(features_extractor_class, type) or not issubclass(
+            features_extractor_class, BaseFeaturesExtractor
+        ):
+            raise TypeError(
+                "policy_kwargs['features_extractor_class'] must be a "
+                "BaseFeaturesExtractor subclass."
+            )
+        return features_extractor_class(
+            observation_space=self.agent_observation_space,
+            **resolved["features_extractor_kwargs"],
+        )
+
+    def _residual_policy_obs(self, obs):
+        prepared = self.observation_view.transform(obs)
+        return self._obs_to_policy_device(prepared)
+
     def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> ResidualSACPolicy:
         return ResidualSACPolicy(
-            observation_space=self.env.single_observation_space,
+            observation_space=self.agent_observation_space,
             action_space=self._residual_action_space,
             features_extractor=features_extractor,
             net_arch=self.net_arch,
@@ -270,6 +297,22 @@ class ResidualSAC(SAC):
                 self.action_scaler = self.action_scaler.to(self.device)
         self.base_action_provider.to(self.device)
         super()._setup_model()
+        image_keys = tuple(
+            key
+            for key in getattr(self, "_image_keys", ())
+            if isinstance(self.agent_observation_space, spaces.Dict)
+            and key in self.agent_observation_space.spaces
+        )
+        if image_keys:
+            image_shapes = {
+                key: tuple(self.replay_buffer.obs[key].shape)
+                for key in image_keys
+            }
+            print(
+                "[residual-image-shapes] "
+                f"buffer_storage={image_shapes}",
+                flush=True,
+            )
 
     def _build_raw_residual_scale(self) -> torch.Tensor:
         scale = torch.tensor(
@@ -286,7 +329,7 @@ class ResidualSAC(SAC):
         return scale
 
     @staticmethod
-    def _sanitize_raw_joint_action(action: torch.Tensor) -> torch.Tensor:
+    def _validate_raw_joint_action(action: torch.Tensor) -> torch.Tensor:
         if action.ndim == 0 or action.shape[-1] != 14:
             raise ValueError(
                 "Raw joint action must have 14 values in its last dimension, "
@@ -294,6 +337,11 @@ class ResidualSAC(SAC):
             )
         if not torch.isfinite(action).all().item():
             raise ValueError("Raw joint action contains non-finite values.")
+        return action
+
+    @classmethod
+    def _sanitize_raw_joint_action(cls, action: torch.Tensor) -> torch.Tensor:
+        action = cls._validate_raw_joint_action(action)
         return torch.cat(
             (
                 action[..., :6],
@@ -333,6 +381,8 @@ class ResidualSAC(SAC):
             policy_obs = self._obs_to_policy_device(obs)
             base_action = self._call_base_action_provider(policy_obs)
             if self.residual_action_coordinates == "raw_joint_delta":
+                if self.residual_action_scale == 0.0:
+                    return self._validate_raw_joint_action(base_action).detach()
                 return self._sanitize_raw_joint_action(base_action).detach()
             assert self.action_scaler is not None
             return self.action_scaler.scale(base_action).clamp(-1.0, 1.0).detach()
@@ -340,6 +390,8 @@ class ResidualSAC(SAC):
     def _combine_base_residual(
         self, base_actions: torch.Tensor, unit_residual_actions: torch.Tensor
     ) -> torch.Tensor:
+        if self.residual_action_scale == 0.0:
+            return base_actions
         if self.residual_action_coordinates == "raw_joint_delta":
             return self._compose_raw_action(base_actions, unit_residual_actions)
         residual_actions = unit_residual_actions * self.residual_action_scale
@@ -360,6 +412,17 @@ class ResidualSAC(SAC):
         *,
         stop_gradient: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.residual_action_scale == 0.0:
+            features = self.policy.extract_features(
+                obs,
+                stop_gradient=stop_gradient,
+            )
+            log_prob = torch.zeros(
+                (base_actions.shape[0], 1),
+                dtype=base_actions.dtype,
+                device=base_actions.device,
+            )
+            return base_actions, log_prob, features
         unit_residual, log_prob, features = self.policy.actor_action_log_prob(
             obs,
             base_actions=base_actions,
@@ -402,13 +465,15 @@ class ResidualSAC(SAC):
         else:
             base_actions = self._cached_base_actions
             self._cached_base_actions = None
+        if self.residual_action_scale == 0.0:
+            return base_actions, base_actions, {"base_actions": base_actions}
         if not learning_has_started:
             shape = (self.num_envs,) + self.env.single_action_space.shape
             unit_residual = 2 * torch.rand(shape, dtype=torch.float32, device=self.device) - 1
         else:
             with torch.no_grad():
                 unit_residual = self.policy.predict(
-                    self._obs_to_policy_device(obs),
+                    self._residual_policy_obs(obs),
                     base_actions=base_actions,
                     deterministic=False,
                 ).detach()
@@ -460,8 +525,19 @@ class ResidualSAC(SAC):
     ):
         with torch.no_grad():
             base_actions = self._base_action(obs)
+            if self.residual_action_scale == 0.0:
+                unit_residual = torch.zeros_like(base_actions)
+                env_action = base_actions
+                if not return_info:
+                    return env_action
+                return env_action, {
+                    "base_actions": base_actions,
+                    "unit_residual_actions": unit_residual,
+                    "residual_actions": unit_residual,
+                    "final_actions": base_actions,
+                }
             unit_residual = self.policy.predict(
-                self._obs_to_policy_device(obs),
+                self._residual_policy_obs(obs),
                 base_actions=base_actions,
                 deterministic=deterministic,
             ).detach()

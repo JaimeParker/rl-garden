@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
+from rl_garden.common.observation_view import ObservationView
 from rl_garden.common.utils import get_device
 from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
 from rl_garden.envs.robotwin.executor import ThreadedRoboTwinExecutor
@@ -45,15 +46,40 @@ class RoboTwinEnv(gym.Env):
             dtype=np.float32,
         )
         h, w = cfg.image_size
-        obs_spaces: dict[str, spaces.Space] = {
-            "rgb": spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8),
-            "state": spaces.Box(low=-np.inf, high=np.inf, shape=(14,), dtype=np.float32),
-        }
+        self.image_keys = ["rgb"]
         if cfg.include_wrist_cameras:
-            obs_spaces["rgb_left_wrist"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
-            obs_spaces["rgb_right_wrist"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
+            self.image_keys.extend(("rgb_left_wrist", "rgb_right_wrist"))
+        obs_spaces: dict[str, spaces.Space] = {
+            key: spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
+            for key in self.image_keys
+        }
+        obs_spaces["state"] = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(14,), dtype=np.float32
+        )
+        agent_spaces: dict[str, spaces.Space] = dict(obs_spaces)
+        agent_key_map: list[tuple[str, str]] = []
+        if cfg.agent_image_size is not None:
+            agent_height, agent_width = cfg.agent_image_size
+            for key in self.image_keys:
+                agent_spaces[key] = spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(agent_height, agent_width, 3),
+                    dtype=np.uint8,
+                )
+            for key in self.image_keys:
+                source_key = f"agent_{key}"
+                obs_spaces[source_key] = agent_spaces[key]
+                agent_key_map.append((key, source_key))
+            agent_key_map.extend(
+                (key, key) for key in agent_spaces if key not in self.image_keys
+            )
         self.single_observation_space = spaces.Dict(obs_spaces)
         self.observation_space = self.single_observation_space
+        self.agent_observation_view = ObservationView(
+            spaces.Dict(agent_spaces),
+            tuple(agent_key_map),
+        )
 
         if cfg.assets_path is not None:
             os.environ["ASSETS_PATH"] = cfg.assets_path
@@ -153,16 +179,29 @@ class RoboTwinEnv(gym.Env):
         out: dict[str, torch.Tensor] = {}
         h, w = self.cfg.image_size
         zero_img = np.zeros((h, w, 3), dtype=np.uint8)
-        for key in self.single_observation_space.spaces:
-            if key == "state":
-                states = [np.asarray(obs["state"], dtype=np.float32) for obs in raw_obs]
-                out[key] = torch.as_tensor(np.stack(states), dtype=torch.float32, device=self.device)
-            else:
-                imgs = []
-                for obs in raw_obs:
-                    img = obs.get(key)
-                    imgs.append(zero_img if img is None else _resize_image(img, self.cfg.image_size))
-                out[key] = torch.as_tensor(np.stack(imgs), dtype=torch.uint8, device=self.device)
+        for key in self.image_keys:
+            imgs = []
+            for obs in raw_obs:
+                img = obs.get(key)
+                imgs.append(
+                    zero_img
+                    if img is None
+                    else _resize_image(img, self.cfg.image_size)
+                )
+            out[key] = torch.as_tensor(
+                np.stack(imgs), dtype=torch.uint8, device=self.device
+            )
+            if self.cfg.agent_image_size is not None:
+                agent_imgs = [
+                    _resize_image(image, self.cfg.agent_image_size) for image in imgs
+                ]
+                out[f"agent_{key}"] = torch.as_tensor(
+                    np.stack(agent_imgs), dtype=torch.uint8, device=self.device
+                )
+        states = [np.asarray(obs["state"], dtype=np.float32) for obs in raw_obs]
+        out["state"] = torch.as_tensor(
+            np.stack(states), dtype=torch.float32, device=self.device
+        )
         return out
 
     def _handle_auto_reset(self, dones: torch.Tensor, obs, infos):

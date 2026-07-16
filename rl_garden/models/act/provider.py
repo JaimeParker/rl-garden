@@ -248,6 +248,7 @@ class ACTBaseActionProvider(nn.Module):
         self._step = 0
         self._history: list[tuple[int, torch.Tensor]] = []
         self._cached_action_seq: Optional[torch.Tensor] = None
+        self._input_shape_logged = False
         self.to(self.device)
 
     def bind_env(self, env: Any) -> None:
@@ -620,6 +621,17 @@ class ACTBaseActionProvider(nn.Module):
 
     def _query_policy(self, obs) -> torch.Tensor:
         prepared_obs = self._prepare_obs(obs)
+        if (
+            not self._input_shape_logged
+            and isinstance(prepared_obs, dict)
+            and "rgb" in prepared_obs
+        ):
+            print(
+                "[act-image-shape] "
+                f"policy_input={tuple(prepared_obs['rgb'].shape)}",
+                flush=True,
+            )
+            self._input_shape_logged = True
         action_seq = self.policy(prepared_obs)
         if action_seq.ndim != 3:
             raise RuntimeError(

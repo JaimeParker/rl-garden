@@ -61,6 +61,7 @@ class RoboTwinConfig:
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"
+    agent_image_size: Optional[int] = None
     render_every_control_step: bool = False
     control_step_cap: Optional[int] = None
     profile_timing: bool = False

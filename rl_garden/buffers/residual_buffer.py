@@ -1,6 +1,8 @@
 """Replay buffers with residual-RL base action fields."""
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 import torch
 from gymnasium import spaces
 
@@ -25,7 +27,9 @@ class ResidualReplayBufferMixin:
         buffer_size: int,
         storage_device: torch.device | str = "cuda",
         sample_device: torch.device | str = "cuda",
+        observation_transform: Optional[Callable[[Obs], Obs]] = None,
     ) -> None:
+        self.observation_transform = observation_transform
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
@@ -49,6 +53,9 @@ class ResidualReplayBufferMixin:
         base_actions: torch.Tensor,
         next_base_actions: torch.Tensor,
     ) -> None:
+        if self.observation_transform is not None:
+            obs = self.observation_transform(obs)
+            next_obs = self.observation_transform(next_obs)
         if self.storage_device.type == "cpu":
             base_actions = base_actions.cpu()
             next_base_actions = next_base_actions.cpu()

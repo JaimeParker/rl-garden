@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# ResidualSAC on RoboTwin via the unified train_online.py entrypoint.
+# Critic-only ResidualSAC ablation: ACT rollout, zero residual, and zero entropy.
+# ACT uses 640x480 camera images; the environment exposes 128x128 agent images.
 # Usage:  bash scripts/train_residual_sac_robotwin.sh
 set -euo pipefail
 
@@ -11,7 +12,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 ASSETS_PATH_ARG="${RLG_ROBOTWIN_ASSETS_PATH:-/home/RoboTwin}"
-CUDA_VISIBLE_DEVICES_ARG="${RLG_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
+CUDA_VISIBLE_DEVICES_ARG="${RLG_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-1}}"
 STD_LOG="${RLG_STD_LOG:-1}"
 LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
 LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
@@ -83,34 +84,53 @@ exec env \
     --env-backend robotwin \
     --env-id place_empty_cup \
     --obs-mode rgb \
+    --per-camera-rgbd \
+    --control-mode joint_pos \
     --base-policy act \
     --base-ckpt-path pretrained_models/place_empty_cup.ckpt \
     --base-act-stats-path pretrained_models/dataset_stats_place_empty_cup.pkl \
     --num-envs 1 \
     --num-eval-envs 0 \
+    --critic-only-steps 1000000 \
+    --no-critic-only-freeze-encoder \
+    --ent-coef 0 \
+    --residual-action-coordinates raw_joint_delta \
+    --residual-action-scale 0 \
     --robotwin.robotwin-root /home/RoboTwin \
     --robotwin.assets-path "$ASSETS_PATH_ARG" \
-    --robotwin.head-camera-type Train_D435_128x96 \
-    --robotwin.embodiment piper piper 0.6 \
-    --control-mode joint_pos \
-    --residual-action-coordinates raw_joint_delta \
-    --camera-width 320 --camera-height 240 \
-    --total-timesteps 100000 \
-    --buffer-size 10000 \
-    --buffer-device cpu \
-    --batch-size 256 \
-    --learning-starts 512 \
-    --training-freq 256 \
-    --utd 0.25 \
-    --bootstrap-at-done truncated \
+    --robotwin.head-camera-type D435 \
+    --robotwin.wrist-camera-type D435 \
+    --robotwin.no-random-background \
+    --robotwin.no-cluttered-table \
+    --robotwin.clean-background-rate 1.0 \
+    --robotwin.random-head-camera-dis 0 \
+    --robotwin.random-table-height 0 \
     --robotwin.step-lim 200 \
-    --robotwin.control-step-cap 16 \
+    --camera-width 640 \
+    --camera-height 480 \
+    --total-timesteps 100000 \
+    --learning-starts 32 \
+    --training-freq 1 \
+    --utd 1.0 \
+    --buffer-size 1000 \
+    --buffer-device cpu \
+    --robotwin.agent-image-size 128 \
+    --batch-size 32 \
+    --gamma 0.99 \
+    --bootstrap-at-done truncated \
+    --q-lr 0.0001 \
     --encoder resnet18 \
     --encoder-features-dim 64 \
     --image-fusion-mode per_key \
-    --robotwin.no-include-wrist-cameras \
     --eval-freq 0 \
+    --num-eval-steps 200 \
+    --eval-output-dir "$REPO_DIR/runs/residual_sac_robotwin_eval_videos" \
+    --video-fps 30 \
     --log-freq 16 \
-    --exp-name residual_sac_robotwin_place_empty_cup \
-    --wandb_project robotwin \
+    --checkpoint-freq 10000 \
+    --capture-video \
+    --log-type "$LOG_TYPE" \
+    --wandb-project robotwin-place_empty_cup \
+    --wandb-group critic_only_zero_residual_ent0 \
+    --exp-name raw_joint_delta_critic_only_zero_residual_ent0 \
     "${FORWARD_ARGS[@]}"

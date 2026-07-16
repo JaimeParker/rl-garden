@@ -54,6 +54,13 @@ def _make_base_action_provider(args, env):
     from rl_garden.policies.base_policies import make_base_policy
 
     base_policy = _effective_base_policy(args)
+    base_act_image_size = None
+    if base_policy == "act" and args.obs_mode != "state":
+        if args.camera_height is None or args.camera_width is None:
+            raise ValueError(
+                "Visual ACT requires both camera_height and camera_width."
+            )
+        base_act_image_size = (args.camera_height, args.camera_width)
     provider = make_base_policy(
         base_policy=base_policy,
         observation_space=env.single_observation_space,
@@ -63,6 +70,7 @@ def _make_base_action_provider(args, env):
         base_act_stats_path=args.base_act_stats_path,
         base_act_temporal_agg=args.base_act_temporal_agg,
         base_act_temporal_agg_k=args.base_act_temporal_agg_k,
+        base_act_image_size=base_act_image_size,
         base_sac_encoder=args.base_sac_encoder,
         base_sac_encoder_features_dim=args.base_sac_encoder_features_dim,
         base_sac_image_fusion_mode=args.base_sac_image_fusion_mode,
@@ -96,6 +104,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
+    from rl_garden.common.observation_view import resolve_agent_observation_view
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
     _validate_residual_action_config(args)
@@ -135,6 +144,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         residual_action_coordinates=args.residual_action_coordinates,
         joint_delta_scale=args.robotwin.joint_delta_scale,
         gripper_delta_scale=args.robotwin.gripper_delta_scale,
+        observation_view=resolve_agent_observation_view(env),
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
