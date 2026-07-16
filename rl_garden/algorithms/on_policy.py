@@ -287,6 +287,13 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             update_t = time.perf_counter()
             losses = self.train()
+            # Duck-typed hook some env backends need after a heavy training
+            # burst, before the next rollout's first step() (e.g. IsaacLab's
+            # Kit renderer hangs on the next render call otherwise). No-op
+            # for backends that don't define it.
+            post_update_hook = getattr(self.env, "post_update_sync", None)
+            if post_update_hook is not None:
+                post_update_hook()
             update_time = time.perf_counter() - update_t
             cumulative["update_time"] += update_time
 

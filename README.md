@@ -342,6 +342,8 @@ rather than changing the framework's preferred device path.
 ## Documentation
 
 - [Checkpoint Save & Load](docs/CHECKPOINT.md)
+- [IsaacLab Custom Tasks](docs/ISAACLAB_CUSTOM_TASKS.md)
+- [IsaacLab Camera Training Stall (known issue)](docs/ISAACLAB_CAMERA_TRAINING_STALL.md)
 - [Offline Training Acceleration](docs/OFFLINE_ACCELERATION.md)
 - [Residual SAC](docs/RESIDUAL_SAC.md)
 - [RNG and Numerical Determinism](docs/RNG_AND_NUMERICAL_DETERMINISM.md)

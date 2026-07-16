@@ -90,6 +90,18 @@ class MinariConfig:
 
 
 @dataclass
+class IsaacLabConfig:
+    """IsaacLab-specific env settings. CLI prefix: ``--isaaclab.<field>``"""
+
+    headless: bool = True
+    sim_device: str = "cuda:0"
+    # JSON-encoded dict forwarded verbatim to IsaacLabEnvConfig.env_kwargs
+    # (e.g. task-specific cfg overrides). Escape hatch, same convention as
+    # ManiSkillConfig.env_kwargs_json.
+    env_kwargs_json: str = "{}"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -101,6 +113,7 @@ class EnvBackendArgs:
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
     minari: MinariConfig = field(default_factory=MinariConfig)
+    isaaclab: IsaacLabConfig = field(default_factory=IsaacLabConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

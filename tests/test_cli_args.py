@@ -380,6 +380,92 @@ def test_maniskill_backend_env_kwargs_json_empty_string_is_no_op() -> None:
     assert cfg.env_kwargs == {}
 
 
+def _make_isaaclab_req(il, *, obs_mode: str = "state"):
+    from rl_garden.envs.backend_registry import EnvRequest
+
+    return EnvRequest(
+        env_id="Isaac-Cartpole-v0",
+        num_envs=4,
+        num_eval_envs=4,
+        obs_mode=obs_mode,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        camera_width=None,
+        camera_height=None,
+        backend_config=il,
+    )
+
+
+def test_isaaclab_config_defaults() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+
+    il = IsaacLabConfig()
+
+    assert il.headless is True
+    assert il.sim_device == "cuda:0"
+    assert il.env_kwargs_json == "{}"
+
+
+def test_isaaclab_backend_make_cfg_forwards_env_kwargs_json() -> None:
+    import json
+
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    il = IsaacLabConfig(
+        headless=False,
+        sim_device="cuda:1",
+        env_kwargs_json=json.dumps({"episode_length_s": 10.0}),
+    )
+    req = _make_isaaclab_req(il)
+
+    cfg = IsaacLabBackend._make_cfg(req)
+
+    assert cfg.env_id == "Isaac-Cartpole-v0"
+    assert cfg.num_envs == 4
+    assert cfg.headless is False
+    assert cfg.sim_device == "cuda:1"
+    assert cfg.env_kwargs == {"episode_length_s": 10.0}
+    assert cfg.obs_mode == "state"
+    assert cfg.frame_stack == 1
+
+
+def test_isaaclab_backend_make_cfg_forwards_obs_mode_and_frame_stack() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    req = EnvRequest(
+        env_id="RlGarden-Cartpole-Direct-v0",
+        num_envs=4,
+        num_eval_envs=4,
+        obs_mode="rgb",
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        camera_width=100,
+        camera_height=100,
+        frame_stack=3,
+        backend_config=IsaacLabConfig(),
+    )
+
+    cfg = IsaacLabBackend._make_cfg(req)
+
+    assert cfg.obs_mode == "rgb"
+    assert cfg.frame_stack == 3
+
+
+def test_isaaclab_backend_make_eval_env_not_supported_in_v1() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    req = _make_isaaclab_req(IsaacLabConfig())
+
+    with pytest.raises(NotImplementedError, match="eval_freq 0"):
+        IsaacLabBackend.make_eval_env(req)
+
+
 def test_robotwin_config_defaults() -> None:
     from rl_garden.common.env_args import RoboTwinConfig
 
