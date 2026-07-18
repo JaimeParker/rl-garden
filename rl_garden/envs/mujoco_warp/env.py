@@ -30,7 +30,7 @@ def register_mujoco_warp_task(name: str, cls: type[CustomMujocoWarpEnv]) -> None
     _TASKS[name] = cls
 
 
-def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.Env:
+def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.vector.VectorEnv:
     import rl_garden.envs.mujoco_warp.tasks  # noqa: F401  (triggers task registration)
 
     if cfg.env_id not in _TASKS:
@@ -38,7 +38,7 @@ def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.Env:
             f"Unknown mujoco_warp task {cfg.env_id!r}. Available: {sorted(_TASKS)}."
         )
     task_cls = _TASKS[cfg.env_id]
-    env: gym.Env = task_cls(
+    env: gym.vector.VectorEnv = task_cls(
         nworld=cfg.num_envs,
         device=cfg.device,
         camera_width=cfg.camera_width,
@@ -49,8 +49,8 @@ def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.Env:
     )
 
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
+        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
 
-        env = RewardScaleBiasWrapper(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
+        env = RewardScaleBiasVectorWrapper(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     return env

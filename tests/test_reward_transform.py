@@ -82,6 +82,37 @@ def test_reward_scale_bias_wrapper_works_with_tensor_reward():
     torch.testing.assert_close(r, torch.tensor([1.5, 2.0]))
 
 
+def test_reward_scale_bias_vector_wrapper_applies_transform():
+    from gymnasium.vector import AutoresetMode, SyncVectorEnv
+
+    from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
+
+    def make():
+        return _DummyEnv([0.0, 1.0, 0.5])
+
+    vec = SyncVectorEnv([make, make], autoreset_mode=AutoresetMode.SAME_STEP)
+    env = RewardScaleBiasVectorWrapper(vec, scale=2.0, bias=-0.5)
+    env.reset()
+    _, r0, *_ = env.step(np.zeros((2, 1), dtype=np.float32))
+    _, r1, *_ = env.step(np.zeros((2, 1), dtype=np.float32))
+    np.testing.assert_allclose(r0, [2.0 * 0.0 - 0.5, 2.0 * 0.0 - 0.5])
+    np.testing.assert_allclose(r1, [2.0 * 1.0 - 0.5, 2.0 * 1.0 - 0.5])
+
+
+def test_reward_scale_bias_vector_wrapper_is_a_vector_env():
+    from gymnasium.vector import AutoresetMode, SyncVectorEnv, VectorEnv
+
+    from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
+
+    vec = SyncVectorEnv(
+        [lambda: _DummyEnv([1.0]), lambda: _DummyEnv([1.0])],
+        autoreset_mode=AutoresetMode.SAME_STEP,
+    )
+    env = RewardScaleBiasVectorWrapper(vec)
+    assert isinstance(env, VectorEnv)
+    assert env.num_envs == 2
+
+
 def test_maniskill_env_config_accepts_reward_transform_fields():
     from rl_garden.envs import ManiSkillEnvConfig
 

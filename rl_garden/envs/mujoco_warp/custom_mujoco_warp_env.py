@@ -11,11 +11,14 @@ separate adapter layer and no ``gymnasium.vector`` wrapping.
 Termination contract: mirrors ``ManiSkillVectorEnv.step()``
 (``mani_skill/vector/wrappers/gymnasium.py``), not the CPU MuJoCo backend's
 Gymnasium-autoreset bridging -- there is no Gymnasium vector env underneath
-to bridge from. On the step where an env terminates/truncates, this class
-clones the true terminal observation into ``infos["final_observation"]``,
-resets that env's state in place, and returns the *post-reset* observation
-from ``step()`` -- written directly in rl-garden's own convention from the
-start, no key-name translation needed.
+to bridge from. This class subclasses ``gymnasium.vector.VectorEnv``
+directly (matching ``ManiSkillVectorEnv``'s own precedent), not ``gym.Env``
+-- it already produces ``(nworld, ...)``-shaped torch tensors natively, so
+there is nothing for an adapter to translate. On the step where an env
+terminates/truncates, this class clones the true terminal observation into
+``infos["final_observation"]``, resets that env's state in place, and
+returns the *post-reset* observation from ``step()`` -- written directly in
+rl-garden's own convention from the start, no key-name translation needed.
 
 **Required initialization order (verified empirically, not obvious from the
 API surface):** ``mjw.make_data()`` only allocates GPU buffers -- it does
@@ -65,6 +68,7 @@ import mujoco_warp as mjw
 import numpy as np
 import torch
 import warp as wp
+from gymnasium.vector import AutoresetMode, VectorEnv
 
 
 def _unpack_rgb(packed: torch.Tensor) -> torch.Tensor:
@@ -81,11 +85,11 @@ def _clone_obs(obs: Any) -> Any:
     return obs.clone()
 
 
-class CustomMujocoWarpEnv(gym.Env):
+class CustomMujocoWarpEnv(VectorEnv):
     """Base class for hand-authored mujoco_warp GPU tasks. See module
     docstring for the full contract."""
 
-    metadata = {"render_modes": []}
+    metadata = {"autoreset_mode": AutoresetMode.SAME_STEP, "render_modes": []}
 
     def __init__(
         self,
@@ -162,6 +166,8 @@ class CustomMujocoWarpEnv(gym.Env):
         infos: dict[str, Any] = {}
         if done_mask.any():
             infos["final_observation"] = _clone_obs(obs)
+            infos["_final_observation"] = done_mask
+            infos["_final_info"] = done_mask
             env_ids = torch.nonzero(done_mask, as_tuple=True)[0]
             self._reset_idx(env_ids)
             obs = self._get_obs()

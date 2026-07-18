@@ -26,3 +26,25 @@ class RewardScaleBiasWrapper(gym.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, info
+
+
+class RewardScaleBiasVectorWrapper(gym.vector.VectorWrapper):
+    """Multiply reward by ``scale`` and add ``bias`` on each step, for vector envs.
+
+    ``RewardScaleBiasWrapper`` above subclasses ``gym.Wrapper``, whose
+    ``__init__`` asserts its wrapped env is a ``gymnasium.Env`` --
+    ``gymnasium.vector.VectorEnv`` does not subclass ``gymnasium.Env``, so
+    vector envs need this separate ``VectorWrapper``-based twin with
+    identical arithmetic (``rl_garden.envs.vector_env.TorchVectorEnvAdapter``
+    and ``rl_garden.envs.mujoco_warp.CustomMujocoWarpEnv`` are both
+    ``VectorEnv``s).
+    """
+
+    def __init__(self, env: gym.vector.VectorEnv, scale: float = 1.0, bias: float = 0.0) -> None:
+        super().__init__(env)
+        self.reward_scale = float(scale)
+        self.reward_bias = float(bias)
+
+    def step(self, actions):
+        obs, reward, terminated, truncated, info = self.env.step(actions)
+        return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, info
