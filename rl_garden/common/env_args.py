@@ -90,6 +90,28 @@ class MinariConfig:
 
 
 @dataclass
+class MujocoConfig:
+    """MuJoCo-specific env settings. CLI prefix: ``--mujoco.<field>``"""
+
+    device: str = "cpu"
+    # JSON-encoded dict forwarded verbatim to gym.make() for the task (e.g.
+    # forward_reward_weight, ctrl_cost_weight, reset_noise_scale).
+    env_kwargs_json: str = "{}"
+    # "sync" (single process) or "async" (one OS process per env — required
+    # for custom tasks with camera observations).
+    vectorization: str = "sync"
+
+
+@dataclass
+class MujocoWarpConfig:
+    """mujoco_warp GPU-specific env settings. CLI prefix: ``--mujoco_warp.<field>``"""
+
+    device: str = "cuda:0"
+    # JSON-encoded dict forwarded verbatim to the task class constructor.
+    env_kwargs_json: str = "{}"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -101,6 +123,8 @@ class EnvBackendArgs:
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
     minari: MinariConfig = field(default_factory=MinariConfig)
+    mujoco: MujocoConfig = field(default_factory=MujocoConfig)
+    mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

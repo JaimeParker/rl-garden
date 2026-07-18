@@ -380,6 +380,190 @@ def test_maniskill_backend_env_kwargs_json_empty_string_is_no_op() -> None:
     assert cfg.env_kwargs == {}
 
 
+def _make_mujoco_req(mj, *, num_envs: int = 2, num_eval_envs: int = 3):
+    from rl_garden.envs.backend_registry import EnvRequest
+
+    return EnvRequest(
+        env_id="HalfCheetah-v4",
+        num_envs=num_envs,
+        num_eval_envs=num_eval_envs,
+        obs_mode="state",
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        camera_width=None,
+        camera_height=None,
+        backend_config=mj,
+    )
+
+
+def test_mujoco_config_defaults() -> None:
+    from rl_garden.common.env_args import MujocoConfig
+
+    mj = MujocoConfig()
+
+    assert mj.device == "cpu"
+    assert mj.env_kwargs_json == "{}"
+    assert mj.vectorization == "sync"
+
+
+def test_mujoco_config_has_no_task_specific_named_fields() -> None:
+    from rl_garden.common.env_args import MujocoConfig
+
+    field_names = set(MujocoConfig.__dataclass_fields__.keys())
+
+    assert field_names == {"device", "env_kwargs_json", "vectorization"}
+
+
+def test_mujoco_backend_forwards_vectorization() -> None:
+    from rl_garden.common.env_args import MujocoConfig
+    from rl_garden.envs.backends.mujoco import MujocoBackend
+
+    req = _make_mujoco_req(MujocoConfig(vectorization="async"))
+
+    cfg = MujocoBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.vectorization == "async"
+
+
+def test_mujoco_backend_forwards_env_kwargs_json() -> None:
+    import json
+
+    from rl_garden.common.env_args import MujocoConfig
+    from rl_garden.envs.backends.mujoco import MujocoBackend
+
+    mj = MujocoConfig(
+        device="cuda:0",
+        env_kwargs_json=json.dumps({"forward_reward_weight": 2.0, "reset_noise_scale": 0.05}),
+    )
+    req = _make_mujoco_req(mj)
+
+    cfg = MujocoBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.device == "cuda:0"
+    assert cfg.env_kwargs == {"forward_reward_weight": 2.0, "reset_noise_scale": 0.05}
+    assert cfg.num_envs == 2
+
+
+def test_mujoco_backend_env_kwargs_json_empty_string_is_no_op() -> None:
+    from rl_garden.common.env_args import MujocoConfig
+    from rl_garden.envs.backends.mujoco import MujocoBackend
+
+    mj = MujocoConfig(env_kwargs_json="")
+    req = _make_mujoco_req(mj)
+
+    cfg = MujocoBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.env_kwargs == {}
+
+
+def test_mujoco_backend_make_cfg_is_eval_swaps_num_envs() -> None:
+    from rl_garden.common.env_args import MujocoConfig
+    from rl_garden.envs.backends.mujoco import MujocoBackend
+
+    req = _make_mujoco_req(MujocoConfig(), num_envs=2, num_eval_envs=3)
+
+    train_cfg = MujocoBackend._make_cfg(req, is_eval=False)
+    eval_cfg = MujocoBackend._make_cfg(req, is_eval=True)
+
+    assert train_cfg.num_envs == 2
+    assert eval_cfg.num_envs == 3
+
+
+def _make_mujoco_warp_req(mjw, *, num_envs: int = 2, num_eval_envs: int = 3, obs_mode: str = "state"):
+    from rl_garden.envs.backend_registry import EnvRequest
+
+    return EnvRequest(
+        env_id="RlGarden-InvertedPendulum-Warp-v0",
+        num_envs=num_envs,
+        num_eval_envs=num_eval_envs,
+        obs_mode=obs_mode,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        camera_width=64,
+        camera_height=64,
+        backend_config=mjw,
+    )
+
+
+def test_mujoco_warp_config_defaults() -> None:
+    from rl_garden.common.env_args import MujocoWarpConfig
+
+    mjw = MujocoWarpConfig()
+
+    assert mjw.device == "cuda:0"
+    assert mjw.env_kwargs_json == "{}"
+
+
+def test_mujoco_warp_config_has_no_task_specific_named_fields() -> None:
+    from rl_garden.common.env_args import MujocoWarpConfig
+
+    field_names = set(MujocoWarpConfig.__dataclass_fields__.keys())
+
+    assert field_names == {"device", "env_kwargs_json"}
+
+
+def test_mujoco_warp_backend_forwards_env_kwargs_json() -> None:
+    import json
+
+    from rl_garden.common.env_args import MujocoWarpConfig
+    from rl_garden.envs.backends.mujoco_warp import MujocoWarpBackend
+
+    mjw = MujocoWarpConfig(
+        device="cuda:1", env_kwargs_json=json.dumps({"frame_skip": 4})
+    )
+    req = _make_mujoco_warp_req(mjw)
+
+    cfg = MujocoWarpBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.device == "cuda:1"
+    assert cfg.env_kwargs == {"frame_skip": 4}
+    assert cfg.num_envs == 2
+
+
+def test_mujoco_warp_backend_env_kwargs_json_empty_string_is_no_op() -> None:
+    from rl_garden.common.env_args import MujocoWarpConfig
+    from rl_garden.envs.backends.mujoco_warp import MujocoWarpBackend
+
+    mjw = MujocoWarpConfig(env_kwargs_json="")
+    req = _make_mujoco_warp_req(mjw)
+
+    cfg = MujocoWarpBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.env_kwargs == {}
+
+
+def test_mujoco_warp_backend_make_cfg_is_eval_swaps_num_envs() -> None:
+    from rl_garden.common.env_args import MujocoWarpConfig
+    from rl_garden.envs.backends.mujoco_warp import MujocoWarpBackend
+
+    req = _make_mujoco_warp_req(MujocoWarpConfig(), num_envs=2, num_eval_envs=3)
+
+    train_cfg = MujocoWarpBackend._make_cfg(req, is_eval=False)
+    eval_cfg = MujocoWarpBackend._make_cfg(req, is_eval=True)
+
+    assert train_cfg.num_envs == 2
+    assert eval_cfg.num_envs == 3
+
+
+def test_mujoco_warp_backend_render_flags_follow_obs_mode() -> None:
+    from rl_garden.common.env_args import MujocoWarpConfig
+    from rl_garden.envs.backends.mujoco_warp import MujocoWarpBackend
+
+    state_req = _make_mujoco_warp_req(MujocoWarpConfig(), obs_mode="state")
+    rgb_req = _make_mujoco_warp_req(MujocoWarpConfig(), obs_mode="rgb")
+    rgbd_req = _make_mujoco_warp_req(MujocoWarpConfig(), obs_mode="rgbd")
+
+    state_cfg = MujocoWarpBackend._make_cfg(state_req, is_eval=False)
+    rgb_cfg = MujocoWarpBackend._make_cfg(rgb_req, is_eval=False)
+    rgbd_cfg = MujocoWarpBackend._make_cfg(rgbd_req, is_eval=False)
+
+    assert state_cfg.render_rgb is False and state_cfg.render_depth is False
+    assert rgb_cfg.render_rgb is True and rgb_cfg.render_depth is False
+    assert rgbd_cfg.render_rgb is True and rgbd_cfg.render_depth is True
+
+
 def test_robotwin_config_defaults() -> None:
     from rl_garden.common.env_args import RoboTwinConfig
 
