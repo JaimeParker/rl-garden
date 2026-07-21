@@ -22,6 +22,7 @@ import torch
 import warp as wp
 from gymnasium import spaces
 from gymnasium.envs.mujoco import mujoco_env as _gym_mujoco_env
+from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.mujoco_warp.custom_mujoco_warp_env import CustomMujocoWarpEnv
 from rl_garden.envs.mujoco_warp.env import register_mujoco_warp_task
@@ -124,6 +125,7 @@ class InvertedPendulumCameraWarpEnv(InvertedPendulumWarpEnv):
                 low=0, high=float("inf"), shape=(self._camera_height, self._camera_width)
             )
         self.single_observation_space = spaces.Dict(obs_spaces)
+        self.observation_space = batch_space(self.single_observation_space, self.num_envs)
 
     def _get_obs(self) -> dict:
         return {"state": self._flat_state(), **self._render_cameras()}

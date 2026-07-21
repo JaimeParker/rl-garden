@@ -111,6 +111,10 @@ def test_reward_scale_bias_vector_wrapper_is_a_vector_env():
     env = RewardScaleBiasVectorWrapper(vec)
     assert isinstance(env, VectorEnv)
     assert env.num_envs == 2
+    assert env.single_observation_space.shape == (2,)
+    assert env.observation_space.shape == (2, 2)
+    assert env.single_action_space.shape == (1,)
+    assert env.action_space.shape == (2, 1)
 
 
 def test_maniskill_env_config_accepts_reward_transform_fields():

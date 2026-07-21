@@ -14,8 +14,6 @@ backend).
 """
 from __future__ import annotations
 
-from typing import Any
-
 import gymnasium as gym
 
 from rl_garden.envs.mujoco_warp.config import MujocoWarpEnvConfig

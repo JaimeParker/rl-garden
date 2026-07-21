@@ -36,6 +36,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium.vector import AutoresetMode, VectorEnv, VectorWrapper
+from gymnasium.vector.utils import batch_space
 
 
 def _translate_box(space: gym.spaces.Box) -> gym.spaces.Box:
@@ -67,6 +68,7 @@ class TorchVectorEnvAdapter(VectorWrapper):
         super().__init__(vec_env)
         self.device = torch.device(device)
         self.single_observation_space = _translate_space(vec_env.single_observation_space)
+        self.observation_space = batch_space(self.single_observation_space, vec_env.num_envs)
         self.single_action_space = vec_env.single_action_space
         # off_policy.py's random-exploration phase reads the batched
         # action_space.shape directly (not single_action_space).
@@ -78,8 +80,8 @@ class TorchVectorEnvAdapter(VectorWrapper):
         obs, info = self.env.reset(seed=seed, options=options)
         return self._convert_tree(obs), info
 
-    def step(self, actions: torch.Tensor):
-        actions_np = actions.detach().cpu().numpy()
+    def step(self, actions):
+        actions_np = actions.detach().cpu().numpy() if isinstance(actions, torch.Tensor) else actions
         obs, reward, terminated, truncated, infos = self.env.step(actions_np)
         infos = self._translate_infos(infos, obs)
         return (

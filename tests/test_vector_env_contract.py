@@ -92,6 +92,9 @@ def test_reset_and_step_return_torch_tensors_on_configured_device():
     assert obs.dtype == torch.float32  # translated from the env's float64
     assert obs.shape == (2, 1)
     assert obs.device.type == "cpu"
+    assert env.single_observation_space.dtype == np.float32
+    assert env.observation_space.dtype == np.float32
+    assert env.observation_space.shape == (2, 1)
 
     actions = torch.zeros(2, 1)
     next_obs, rewards, terminated, truncated, infos = env.step(actions)
@@ -99,6 +102,21 @@ def test_reset_and_step_return_torch_tensors_on_configured_device():
     assert isinstance(rewards, torch.Tensor) and rewards.dtype == torch.float32
     assert isinstance(terminated, torch.Tensor) and terminated.dtype == torch.bool
     assert isinstance(truncated, torch.Tensor) and truncated.dtype == torch.bool
+
+
+def test_step_accepts_numpy_actions_from_action_space_sample():
+    env = _make_adapter([5, 5])
+    env.reset()
+    actions = env.action_space.sample()
+
+    next_obs, rewards, terminated, truncated, infos = env.step(actions)
+
+    assert isinstance(next_obs, torch.Tensor)
+    assert next_obs.shape == (2, 1)
+    assert isinstance(rewards, torch.Tensor) and rewards.shape == (2,)
+    assert isinstance(terminated, torch.Tensor) and terminated.dtype == torch.bool
+    assert isinstance(truncated, torch.Tensor) and truncated.dtype == torch.bool
+    assert isinstance(infos, dict)
 
 
 def test_partial_termination_final_observation_matches_maniskill_convention():
@@ -137,6 +155,10 @@ def test_dict_observation_space_is_translated_and_stacked():
 
     assert env.single_observation_space["state"].dtype == np.float32
     assert env.single_observation_space["aux"].dtype == np.float32
+    assert env.observation_space["state"].dtype == np.float32
+    assert env.observation_space["aux"].dtype == np.float32
+    assert env.observation_space["state"].shape == (2, 1)
+    assert env.observation_space["aux"].shape == (2, 1)
 
     env.reset()
     actions = torch.zeros(2, 1)

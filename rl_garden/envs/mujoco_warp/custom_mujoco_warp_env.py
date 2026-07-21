@@ -69,6 +69,7 @@ import numpy as np
 import torch
 import warp as wp
 from gymnasium.vector import AutoresetMode, VectorEnv
+from gymnasium.vector.utils import batch_space
 
 
 def _unpack_rgb(packed: torch.Tensor) -> torch.Tensor:
@@ -118,6 +119,7 @@ class CustomMujocoWarpEnv(VectorEnv):
         self.num_envs = nworld
         self.device = torch.device(device)
         self.single_observation_space = observation_space
+        self.observation_space = batch_space(self.single_observation_space, nworld)
         self.single_action_space = self._make_action_space()
         # off_policy.py's random-exploration phase reads the batched
         # action_space.shape directly (not single_action_space).
