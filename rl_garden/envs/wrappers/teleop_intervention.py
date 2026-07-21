@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional, Union
 
 import gymnasium as gym
+import numpy as np
 import torch
 
 from robot_infra.teleop.utils.telo_op_control_twist import EETwistTeleOpWrapper
@@ -32,9 +33,11 @@ class TeleopInterventionWrapper(gym.Wrapper):
         env: gym.Env,
         teleop: Optional[TeleopSource] = None,
         device: Literal["pico", "spacemouse"] = "pico",
+        record_gripper: bool = True,
         **teleop_kwargs: Any,
     ) -> None:
         super().__init__(env)
+        self.record_gripper = bool(record_gripper)
         if teleop is not None:
             self.teleop = teleop
         elif device == "pico":
@@ -58,6 +61,24 @@ class TeleopInterventionWrapper(gym.Wrapper):
         self.teleop.reset()
         return self.env.reset(**kwargs)
 
+    def _expected_action_dim(self) -> Optional[int]:
+        space = getattr(self.env, "single_action_space", None)
+        if space is None:
+            return None
+        return int(np.prod(space.shape))
+
+    def _intervention_action(self, sample_action, device: torch.device) -> torch.Tensor:
+        action_np = np.asarray(sample_action, dtype=np.float32)
+        action_np = action_np[:7] if self.record_gripper else action_np[:6]
+        expected_dim = self._expected_action_dim()
+        if expected_dim is not None and action_np.size != expected_dim:
+            raise ValueError(
+                "Teleop intervention action dimension mismatch: "
+                f"record_gripper={self.record_gripper} produced {action_np.size} dims, "
+                f"but env.single_action_space expects {expected_dim}."
+            )
+        return torch.as_tensor(action_np, device=device, dtype=torch.float32).reshape(1, -1)
+
     def step(self, action: torch.Tensor):
         sample = self.teleop.poll()
         if not sample.intervened:
@@ -67,7 +88,7 @@ class TeleopInterventionWrapper(gym.Wrapper):
             return obs, reward, terminated, truncated, info
 
         device = action.device if isinstance(action, torch.Tensor) else torch.device("cpu")
-        human_action = torch.as_tensor(sample.action, device=device, dtype=torch.float32).unsqueeze(0)
+        human_action = self._intervention_action(sample.action, device)
         obs, reward, terminated, truncated, info = self.env.step(human_action)
         info = dict(info)
         info["intervene_action"] = human_action

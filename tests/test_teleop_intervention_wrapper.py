@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
+from gymnasium import spaces
 
 from rl_garden.envs.wrappers.teleop_intervention import TeleopInterventionWrapper
 from robot_infra.teleop.utils.telo_op_control_twist import TeleOpSample
@@ -12,9 +14,11 @@ from robot_infra.teleop.utils.telo_op_control_twist import TeleOpSample
 class _FakeEnv(gym.Env):
     num_envs = 1
 
-    def __init__(self):
+    def __init__(self, action_dim: int | None = None):
         self.reset_calls = 0
         self.step_actions = []
+        if action_dim is not None:
+            self.single_action_space = spaces.Box(-1.0, 1.0, (action_dim,), dtype=np.float32)
 
     def reset(self, **kwargs):
         self.reset_calls += 1
@@ -72,6 +76,27 @@ def test_intervention_overrides_action_and_flags_info():
     torch.testing.assert_close(env.step_actions[0], torch.full((1, 7), 5.0))
     torch.testing.assert_close(info["intervene_action"], torch.full((1, 7), 5.0))
     assert info["human_episode_end"] is True
+
+
+def test_intervention_drops_gripper_when_record_gripper_false():
+    env = _FakeEnv(action_dim=6)
+    teleop = _FakeTeleop([_sample(intervened=True, action_value=5.0)])
+    wrapped = TeleopInterventionWrapper(env, teleop=teleop, record_gripper=False)
+
+    policy_action = torch.full((1, 6), 1.0)
+    _, _, _, _, info = wrapped.step(policy_action)
+
+    torch.testing.assert_close(env.step_actions[0], torch.full((1, 6), 5.0))
+    torch.testing.assert_close(info["intervene_action"], torch.full((1, 6), 5.0))
+
+
+def test_intervention_keeps_gripper_by_default_and_validates_shape():
+    env = _FakeEnv(action_dim=6)
+    teleop = _FakeTeleop([_sample(intervened=True, action_value=5.0)])
+    wrapped = TeleopInterventionWrapper(env, teleop=teleop)
+
+    with pytest.raises(ValueError, match="dimension mismatch"):
+        wrapped.step(torch.full((1, 6), 1.0))
 
 
 def test_reset_resets_teleop_device_too():
