@@ -4,11 +4,13 @@ import sys
 import types
 
 import numpy as np
+import pytest
 import torch
 
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
+from rl_garden.envs.robotwin.env import _resize_image
 from rl_garden.envs.robotwin.rewards import build_task_reward, supported_reward_tasks
 
 
@@ -229,6 +231,47 @@ class _VideoTask:
 class _FakeFFmpeg:
     def __init__(self):
         self.stdin = object()
+
+
+def test_robotwin_resize_uses_official_opencv_linear(monkeypatch):
+    interpolation = object()
+    expected = np.full((4, 6, 3), 17, dtype=np.uint8)
+    calls = []
+    fake_cv2 = types.ModuleType("cv2")
+    fake_cv2.INTER_LINEAR = interpolation
+
+    def resize(image, size, *, interpolation):
+        calls.append((image.copy(), size, interpolation))
+        return expected.copy()
+
+    fake_cv2.resize = resize
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    source = np.arange(2 * 3 * 3, dtype=np.uint8).reshape(2, 3, 3)
+
+    actual = _resize_image(source, (4, 6), backend="opencv")
+
+    np.testing.assert_array_equal(actual, expected)
+    assert len(calls) == 1
+    resized_source, target_size, actual_interpolation = calls[0]
+    np.testing.assert_array_equal(resized_source, source)
+    assert target_size == (6, 4)
+    assert actual_interpolation is interpolation
+
+
+def test_robotwin_resize_defaults_to_pillow():
+    from PIL import Image
+
+    source = np.arange(2 * 3 * 3, dtype=np.uint8).reshape(2, 3, 3)
+    expected = np.asarray(Image.fromarray(source).resize((6, 4)))
+
+    actual = _resize_image(source, (4, 6))
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_robotwin_env_config_rejects_unknown_resize_backend():
+    with pytest.raises(ValueError, match="image_resize_backend"):
+        RoboTwinEnvConfig(image_resize_backend="unknown")  # type: ignore[arg-type]
 
 
 def test_robotwin_env_reset_step_and_auto_reset_contract():

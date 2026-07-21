@@ -13,7 +13,7 @@ Inherit :class:`EnvBackendArgs` alongside any algorithm Args class to add
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 
 from rl_garden.common.cli_args import LoggingArgs
 
@@ -62,6 +62,7 @@ class RoboTwinConfig:
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"
     agent_image_size: Optional[int] = None
+    image_resize_backend: Literal["pillow", "opencv"] = "pillow"
     render_every_control_step: bool = False
     control_step_cap: Optional[int] = None
     profile_timing: bool = False

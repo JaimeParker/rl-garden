@@ -416,6 +416,7 @@ def test_robotwin_backend_make_cfg_64px() -> None:
 
     assert cfg.num_envs == 3
     assert cfg.image_size == (64, 64)
+    assert cfg.image_resize_backend == "pillow"
     assert cfg.include_wrist_cameras is True
     assert cfg.render_every_control_step is False
     assert cfg.control_step_cap is None
@@ -475,6 +476,7 @@ def test_robotwin_backend_forwards_all_options() -> None:
         random_light=True,
         crazy_random_light_rate=0.1,
         head_camera_type="Train_D435_128x96",
+        image_resize_backend="opencv",
     )
     req = _make_rt_req(rt, num_envs=2, reward_scale=2.0, reward_bias=-1.0)
 
@@ -487,6 +489,7 @@ def test_robotwin_backend_forwards_all_options() -> None:
     assert cfg.random_light is True
     assert cfg.crazy_random_light_rate == 0.1
     assert cfg.head_camera_type == "Train_D435_128x96"
+    assert cfg.image_resize_backend == "opencv"
     assert cfg.task_config["render_every_control_step"] is True
     assert cfg.task_config["control_step_cap"] == 16
     assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"

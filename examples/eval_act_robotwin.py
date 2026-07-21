@@ -109,6 +109,12 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--robotwin.reward-mode", dest="reward_mode", choices=["dense", "sparse"], default="dense")
     parser.add_argument("--robotwin.head-camera-type", dest="head_camera_type", default="D435")
     parser.add_argument("--robotwin.wrist-camera-type", dest="wrist_camera_type", default="D435")
+    parser.add_argument(
+        "--robotwin.image-resize-backend",
+        dest="image_resize_backend",
+        choices=["pillow", "opencv"],
+        default="pillow",
+    )
     parser.add_argument("--robotwin.control-step-cap", dest="control_step_cap", type=int, default=None)
     parser.add_argument("--robotwin.random-background", dest="random_background", type=_str_to_bool, default=True)
     parser.add_argument("--robotwin.cluttered-table", dest="cluttered_table", type=_str_to_bool, default=True)
@@ -134,6 +140,7 @@ def parse_args() -> EvalACTRoboTwinArgs:
         include_wrist_cameras=ns.include_wrist_cameras,
         head_camera_type=ns.head_camera_type,
         wrist_camera_type=ns.wrist_camera_type,
+        image_resize_backend=ns.image_resize_backend,
         control_step_cap=ns.control_step_cap,
         random_background=ns.random_background,
         cluttered_table=ns.cluttered_table,

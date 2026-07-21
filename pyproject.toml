@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 maniskill = ["mani_skill"]
-robotwin = ["pillow", "pyyaml"]
+robotwin = ["opencv-python>=4.7", "pillow", "pyyaml"]
 minari = ["minari"]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]

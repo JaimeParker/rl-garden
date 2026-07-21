@@ -13,7 +13,7 @@ from gymnasium import spaces
 
 from rl_garden.common.observation_view import ObservationView
 from rl_garden.common.utils import get_device
-from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
+from rl_garden.envs.robotwin.config import ImageResizeBackend, RoboTwinEnvConfig
 from rl_garden.envs.robotwin.executor import ThreadedRoboTwinExecutor
 
 
@@ -186,14 +186,23 @@ class RoboTwinEnv(gym.Env):
                 imgs.append(
                     zero_img
                     if img is None
-                    else _resize_image(img, self.cfg.image_size)
+                    else _resize_image(
+                        img,
+                        self.cfg.image_size,
+                        backend=self.cfg.image_resize_backend,
+                    )
                 )
             out[key] = torch.as_tensor(
                 np.stack(imgs), dtype=torch.uint8, device=self.device
             )
             if self.cfg.agent_image_size is not None:
                 agent_imgs = [
-                    _resize_image(image, self.cfg.agent_image_size) for image in imgs
+                    _resize_image(
+                        image,
+                        self.cfg.agent_image_size,
+                        backend=self.cfg.image_resize_backend,
+                    )
+                    for image in imgs
                 ]
                 out[f"agent_{key}"] = torch.as_tensor(
                     np.stack(agent_imgs), dtype=torch.uint8, device=self.device
@@ -307,14 +316,36 @@ def make_robotwin_env(cfg: RoboTwinEnvConfig) -> RoboTwinEnv:
     return RoboTwinEnv(cfg)
 
 
-def _resize_image(image: Any, size: tuple[int, int]) -> np.ndarray:
+def _resize_image(
+    image: Any,
+    size: tuple[int, int],
+    *,
+    backend: ImageResizeBackend = "pillow",
+) -> np.ndarray:
     image = np.asarray(image)
     h, w = size
     if image.shape[:2] == (h, w):
         return image.astype(np.uint8, copy=False)
-    from PIL import Image
+    image = image.astype(np.uint8)
+    if backend == "pillow":
+        from PIL import Image
 
-    return np.asarray(Image.fromarray(image.astype(np.uint8)).resize((w, h)))
+        return np.asarray(Image.fromarray(image).resize((w, h)))
+    if backend == "opencv":
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError(
+                "RoboTwin OpenCV image resizing requires OpenCV. Install the "
+                "'rl_garden[robotwin]' optional dependencies."
+            ) from exc
+
+        return cv2.resize(
+            image,
+            (w, h),
+            interpolation=cv2.INTER_LINEAR,
+        )
+    raise ValueError(f"Unsupported RoboTwin image resize backend: {backend!r}.")
 
 
 def _list_of_dict_to_dict(items: list[dict[str, Any]]) -> dict[str, Any]:

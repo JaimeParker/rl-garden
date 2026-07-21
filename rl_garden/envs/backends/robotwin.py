@@ -32,6 +32,7 @@ class RoboTwinBackend(EnvBackend):
         planner = rt.planner_backend if rt is not None else "mplib"
         embodiment = rt.embodiment if rt is not None else ["aloha-agilex"]
         agent_image_size = rt.agent_image_size if rt is not None else None
+        image_resize_backend = rt.image_resize_backend if rt is not None else "pillow"
 
         # height first — matches (camera_height, camera_width) convention in both scripts
         image_size = (req.camera_height or 64, req.camera_width or 64)
@@ -108,6 +109,7 @@ class RoboTwinBackend(EnvBackend):
             agent_image_size=(agent_image_size, agent_image_size)
             if agent_image_size is not None
             else None,
+            image_resize_backend=image_resize_backend,
             include_wrist_cameras=iw,
             auto_reset=True,
             ignore_terminations=False,

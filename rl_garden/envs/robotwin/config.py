@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose"]
 RewardMode = Literal["dense", "sparse"]
+ImageResizeBackend = Literal["pillow", "opencv"]
 
 
 @dataclass
@@ -57,6 +58,7 @@ class RoboTwinEnvConfig:
     include_wrist_cameras: bool = True
     image_size: tuple[int, int] = (224, 224)
     agent_image_size: Optional[tuple[int, int]] = None
+    image_resize_backend: ImageResizeBackend = "pillow"
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"
     control_mode: ControlMode = "delta_joint_pos"
@@ -81,6 +83,11 @@ class RoboTwinEnvConfig:
     def __post_init__(self) -> None:
         if self.control_mode == "ee_delta_pose" and self.action_dim != 14:
             raise ValueError("ee_delta_pose control mode requires action_dim=14.")
+        if self.image_resize_backend not in {"pillow", "opencv"}:
+            raise ValueError(
+                "image_resize_backend must be 'pillow' or 'opencv', "
+                f"got {self.image_resize_backend!r}."
+            )
         if self.agent_image_size is not None:
             height, width = self.agent_image_size
             if height <= 0 or width <= 0:
