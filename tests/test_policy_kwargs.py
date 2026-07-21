@@ -419,3 +419,77 @@ def test_discover_image_keys_orders_rgb_before_depth():
     )
     keys = discover_image_keys(obs_space)
     assert keys == ("rgb_base_camera", "rgb_hand_camera", "depth_base_camera")
+
+
+def test_sac_critic_extra_obs_keys_builds_separate_critic_encoder():
+    from gymnasium import spaces as sp
+
+    obs_space = sp.Dict(
+        {
+            "rgb": sp.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "state": sp.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+            "privileged": sp.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        }
+    )
+    env = DummyVecEnv(obs_space, sp.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32))
+    agent = SAC(
+        env=env,
+        **_agent_kwargs(),
+        image_keys=("rgb",),
+        critic_extra_obs_keys=("privileged",),
+    )
+    assert agent.policy.has_separate_critic_encoder is True
+    assert "privileged" not in agent.policy.features_extractor._observation_space.spaces
+    assert "privileged" in agent.policy.critic_features_extractor._observation_space.spaces
+
+
+def test_sac_critic_image_encoder_factory_builds_distinct_architecture():
+    # default_image_encoder_factory() (what actor would fall back to with no
+    # explicit factory) produces PlainConv, which has no .marker attribute --
+    # give the actor its own explicit RecordingImageExtractor factory too so
+    # both sides are directly comparable.
+    def actor_factory(img_space):
+        return RecordingImageExtractor(img_space, features_dim=23, marker="actor-default")
+
+    def critic_factory(img_space):
+        return RecordingImageExtractor(img_space, features_dim=41, marker="critic-only")
+
+    agent = SAC(
+        env=_rgbd_env(),
+        **_agent_kwargs(),
+        image_keys=("rgb",),
+        image_encoder_factory=actor_factory,
+        critic_image_encoder_factory=critic_factory,
+    )
+    assert agent.policy.has_separate_critic_encoder is True
+    assert agent.policy.critic_features_extractor.image_encoder.marker == "critic-only"
+    # Actor's own encoder is untouched (still its own explicit factory).
+    assert agent.policy.features_extractor.image_encoder.marker == "actor-default"
+
+
+def test_sac_state_obs_rejects_critic_kwargs():
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        SAC(env=_state_env(), **_agent_kwargs(), critic_extra_obs_keys=("x",))
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        SAC(env=_state_env(), **_agent_kwargs(), critic_image_encoder_factory=lambda s: None)
+
+
+def test_sac_dict_obs_allows_actor_encoder_updates_with_separate_critic_encoder():
+    # Without a separate critic encoder this combination raises (existing
+    # test_sac_dict_obs_rejects_actor_encoder_updates). With one, the
+    # invariant it protects no longer applies.
+    agent = SAC(
+        env=_rgbd_env(),
+        **_agent_kwargs(),
+        image_keys=("rgb",),
+        critic_image_encoder_factory=lambda img_space: RecordingImageExtractor(
+            img_space, features_dim=19, marker="critic"
+        ),
+        detach_encoder_on_actor=False,
+    )
+    assert agent._actor_stop_gradient() is False
+
+
+def test_sac_dict_obs_still_forces_stop_gradient_without_separate_critic_encoder():
+    agent = SAC(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+    assert agent._actor_stop_gradient() is True

@@ -10,6 +10,7 @@ from rl_garden.encoders.combined import (
     discover_image_keys,
 )
 from rl_garden.encoders.drqv2_conv import DrQv2Encoder, drq_v2_encoder_factory
+from rl_garden.encoders.dual_encoder import build_secondary_extractor
 from rl_garden.encoders.film import FiLM
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.encoders.plain_conv import PlainConv
@@ -43,6 +44,7 @@ __all__ = [
     "SpatialSoftmax",
     "ViTTokenAndPropExtractor",
     "ViTImageEncoder",
+    "build_secondary_extractor",
     "cnn3d_encoder_factory",
     "default_image_encoder_factory",
     "discover_image_keys",

@@ -38,8 +38,6 @@ ImageEncoderFactory = Callable[[spaces.Box], BaseFeaturesExtractor]
 ImageFusionMode = Literal["stack_channels", "per_key"]
 ImageAugmentationMode = Literal["none", "random_shift"]
 
-_AUG_STACK_KEY = "_rl_garden_aug_stack_image"
-_AUG_IMAGES_KEY = "_rl_garden_aug_images"
 _AUG_SEED_SALT = 1_000_003
 
 
@@ -175,6 +173,9 @@ class CombinedExtractor(BaseFeaturesExtractor):
         assert features_dim > 0, "CombinedExtractor produced 0-dim output."
         super().__init__(observation_space, features_dim)
 
+        self._aug_stack_key = f"_rl_garden_aug_stack_image_{id(self)}"
+        self._aug_images_key = f"_rl_garden_aug_images_{id(self)}"
+
         self.image_keys: tuple[str, ...] = tuple(present_image_keys)
         self._needs_norm: frozenset[str] = frozenset(
             k for k in self.image_keys
@@ -245,13 +246,13 @@ class CombinedExtractor(BaseFeaturesExtractor):
         return self._to_nchw(x)
 
     def _stack_images(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        cached = obs.get(_AUG_STACK_KEY)
+        cached = obs.get(self._aug_stack_key)
         if cached is not None:
             return cached
         return self._stack_images_uncached(obs)
 
     def _image_for_key(self, obs: dict[str, torch.Tensor], key: str) -> torch.Tensor:
-        cached = obs.get(_AUG_IMAGES_KEY)
+        cached = obs.get(self._aug_images_key)
         if cached is not None and key in cached:
             return cached[key]
         return self._to_nchw(self._prepare_image(key, obs[key]))
@@ -287,10 +288,10 @@ class CombinedExtractor(BaseFeaturesExtractor):
 
     def _prepare_augmented_images(self, obs: dict) -> None:
         if self.fusion_mode == "stack_channels":
-            obs[_AUG_STACK_KEY] = self._augment_image(self._stack_images_uncached(obs))
+            obs[self._aug_stack_key] = self._augment_image(self._stack_images_uncached(obs))
             return
 
-        obs[_AUG_IMAGES_KEY] = {
+        obs[self._aug_images_key] = {
             key: self._augment_image(self._to_nchw(self._prepare_image(key, obs[key])))
             for key in self.image_keys
         }

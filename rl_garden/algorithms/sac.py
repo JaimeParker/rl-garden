@@ -97,6 +97,8 @@ class SAC(SACCore, OffPolicyAlgorithm):
         image_augmentation: Optional[str] = None,
         random_shift_pad: Optional[int] = None,
         image_augmentation_seed: Optional[int] = None,
+        critic_image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        critic_extra_obs_keys: Optional[tuple[str, ...]] = None,
         detach_encoder_on_actor: bool = True,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
@@ -203,6 +205,8 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "image_augmentation": image_augmentation,
             "random_shift_pad": random_shift_pad,
             "image_augmentation_seed": image_augmentation_seed,
+            "critic_image_encoder_factory": critic_image_encoder_factory,
+            "critic_extra_obs_keys": critic_extra_obs_keys,
         }
         explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
 
@@ -214,13 +218,26 @@ class SAC(SACCore, OffPolicyAlgorithm):
                     f"or remove these kwargs."
                 )
             self._is_dict_obs = False
+            self._critic_image_encoder_factory = None
+            self._critic_extra_obs_keys = ()
+            self._has_separate_critic_encoder = False
         elif isinstance(obs_space, spaces.Dict):
-            if not detach_encoder_on_actor:
+            self._is_dict_obs = True
+            self._critic_image_encoder_factory = critic_image_encoder_factory
+            self._critic_extra_obs_keys = (
+                critic_extra_obs_keys if critic_extra_obs_keys is not None else ()
+            )
+            has_separate_critic_encoder = bool(
+                self._critic_extra_obs_keys or self._critic_image_encoder_factory is not None
+            )
+            if not detach_encoder_on_actor and not has_separate_critic_encoder:
                 raise ValueError(
                     "SAC always uses stop_gradient=True on the actor image path for "
-                    "Dict observations so image encoders are trained only by critic loss."
+                    "Dict observations so image encoders are trained only by critic loss, "
+                    "unless a separate critic_image_encoder_factory/critic_extra_obs_keys "
+                    "is configured."
                 )
-            self._is_dict_obs = True
+            self._has_separate_critic_encoder = has_separate_critic_encoder
             self._image_encoder_factory = (
                 image_encoder_factory or default_image_encoder_factory()
             )
@@ -478,6 +495,14 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 )
         return resolved
 
+    def _actor_observation_space(self) -> spaces.Space:
+        full = self.env.single_observation_space
+        if not self._critic_extra_obs_keys or not isinstance(full, spaces.Dict):
+            return full
+        from rl_garden.envs.wrappers.obs_space_utils import drop_dict_keys
+
+        return drop_dict_keys(full, self._critic_extra_obs_keys)
+
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
         resolved = self._resolve_policy_kwargs()
         features_extractor_class = resolved["features_extractor_class"]
@@ -489,7 +514,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 "BaseFeaturesExtractor subclass."
             )
         return features_extractor_class(
-            observation_space=self.env.single_observation_space,
+            observation_space=self._actor_observation_space(),
             **resolved["features_extractor_kwargs"],
         )
 
@@ -553,6 +578,23 @@ class SAC(SACCore, OffPolicyAlgorithm):
         return self.env.single_action_space
 
     def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> SACPolicy:
+        # Deliberately keeps this method's single-argument signature intact:
+        # SequenceSAC/RLPD/RLPDHybrid/Residual all override _build_policy
+        # with the same one-argument shape (building their own non-SACPolicy
+        # policy classes), so the critic-extractor construction has to live
+        # here rather than being threaded in as a second parameter from
+        # _setup_model() -- that would silently break every override.
+        critic_features_extractor = None
+        if self._is_dict_obs and self._has_separate_critic_encoder:
+            from rl_garden.encoders.dual_encoder import build_secondary_extractor
+
+            critic_features_extractor = build_secondary_extractor(
+                full_observation_space=self.env.single_observation_space,
+                features_extractor_class=type(features_extractor),
+                primary_kwargs=self._default_features_extractor_kwargs(),
+                extra_obs_keys=self._critic_extra_obs_keys,
+                override_image_encoder_factory=self._critic_image_encoder_factory,
+            )
         return SACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
@@ -567,10 +609,11 @@ class SAC(SACCore, OffPolicyAlgorithm):
             log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
+            critic_features_extractor=critic_features_extractor,
         )
 
     def _actor_stop_gradient(self) -> bool:
-        return self._is_dict_obs
+        return self._is_dict_obs and not self._has_separate_critic_encoder
 
     @staticmethod
     def _resolve_net_arch(

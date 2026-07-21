@@ -51,6 +51,7 @@ class PPOPolicy(BasePolicy):
         value_dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        value_features_extractor: Optional[BaseFeaturesExtractor] = None,
     ) -> None:
         super().__init__()
         if not isinstance(action_space, spaces.Box):
@@ -58,8 +59,14 @@ class PPOPolicy(BasePolicy):
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_extractor = features_extractor
+        self.value_features_extractor = value_features_extractor
         actor_arch, value_arch = get_ppo_arch(net_arch)
         fd = features_dim if features_dim is not None else features_extractor.features_dim
+        value_fd = (
+            value_features_extractor.features_dim
+            if value_features_extractor is not None
+            else fd
+        )
         self.actor = DiagGaussianActor(
             fd,
             action_space,
@@ -73,7 +80,7 @@ class PPOPolicy(BasePolicy):
             backbone_type=backbone_type,
         )
         self.value_net = ValueNetwork(
-            fd,
+            value_fd,
             value_arch,
             use_layer_norm=value_use_layer_norm,
             use_group_norm=value_use_group_norm,
@@ -86,6 +93,16 @@ class PPOPolicy(BasePolicy):
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
         return self._extract_features(obs, stop_gradient=stop_gradient)
 
+    def _value_encoder(self) -> BaseFeaturesExtractor:
+        return (
+            self.value_features_extractor
+            if self.value_features_extractor is not None
+            else self.features_extractor
+        )
+
+    def value_extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
+        return self._value_encoder().extract(obs, stop_gradient=stop_gradient)
+
     def forward(
         self,
         obs: Obs,
@@ -94,7 +111,7 @@ class PPOPolicy(BasePolicy):
         stop_gradient_actor: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
-        value_features = self.extract_features(obs, stop_gradient=False)
+        value_features = self.value_extract_features(obs, stop_gradient=False)
         actions, log_prob, entropy = self.actor.action_log_prob(
             actor_features, deterministic=deterministic
         )
@@ -109,7 +126,7 @@ class PPOPolicy(BasePolicy):
         return self.actor.clamp_action(action)
 
     def predict_values(self, obs: Obs) -> torch.Tensor:
-        return self.value_net(self.extract_features(obs, stop_gradient=False))
+        return self.value_net(self.value_extract_features(obs, stop_gradient=False))
 
     def evaluate_actions(
         self,
@@ -119,7 +136,7 @@ class PPOPolicy(BasePolicy):
         stop_gradient_actor: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
-        value_features = self.extract_features(obs, stop_gradient=False)
+        value_features = self.value_extract_features(obs, stop_gradient=False)
         log_prob, entropy = self.actor.evaluate_action_log_prob(actor_features, actions)
         values = self.value_net(value_features)
         return values, log_prob, entropy

@@ -67,6 +67,8 @@ class PPO(OnPolicyAlgorithm):
         proprio_latent_dim: Optional[int] = None,
         image_fusion_mode: Optional[str] = None,
         enable_stacking: Optional[bool] = None,
+        value_image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        value_extra_obs_keys: Optional[tuple[str, ...]] = None,
         detach_encoder_on_actor: Optional[bool] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
@@ -172,6 +174,8 @@ class PPO(OnPolicyAlgorithm):
             "proprio_latent_dim": proprio_latent_dim,
             "image_fusion_mode": image_fusion_mode,
             "enable_stacking": enable_stacking,
+            "value_image_encoder_factory": value_image_encoder_factory,
+            "value_extra_obs_keys": value_extra_obs_keys,
         }
         explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
         if isinstance(obs_space, spaces.Box):
@@ -184,10 +188,16 @@ class PPO(OnPolicyAlgorithm):
             self.detach_encoder_on_actor = (
                 False if detach_encoder_on_actor is None else detach_encoder_on_actor
             )
+            self._value_image_encoder_factory = None
+            self._value_extra_obs_keys = ()
         elif isinstance(obs_space, spaces.Dict):
             self._is_dict_obs = True
             self.detach_encoder_on_actor = (
                 True if detach_encoder_on_actor is None else detach_encoder_on_actor
+            )
+            self._value_image_encoder_factory = value_image_encoder_factory
+            self._value_extra_obs_keys = (
+                value_extra_obs_keys if value_extra_obs_keys is not None else ()
             )
             self._image_encoder_factory = (
                 image_encoder_factory or default_image_encoder_factory()
@@ -375,6 +385,14 @@ class PPO(OnPolicyAlgorithm):
                 )
         return resolved
 
+    def _actor_observation_space(self) -> spaces.Space:
+        full = self.env.single_observation_space
+        if not self._value_extra_obs_keys or not isinstance(full, spaces.Dict):
+            return full
+        from rl_garden.envs.wrappers.obs_space_utils import drop_dict_keys
+
+        return drop_dict_keys(full, self._value_extra_obs_keys)
+
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
         resolved = self._resolve_policy_kwargs()
         features_extractor_class = resolved["features_extractor_class"]
@@ -386,16 +404,30 @@ class PPO(OnPolicyAlgorithm):
                 "BaseFeaturesExtractor subclass."
             )
         return features_extractor_class(
-            observation_space=self.env.single_observation_space,
+            observation_space=self._actor_observation_space(),
             **resolved["features_extractor_kwargs"],
         )
 
     def _setup_model(self) -> None:
         features_extractor = self._build_features_extractor()
+        value_features_extractor = None
+        if self._is_dict_obs and (
+            self._value_extra_obs_keys or self._value_image_encoder_factory is not None
+        ):
+            from rl_garden.encoders.dual_encoder import build_secondary_extractor
+
+            value_features_extractor = build_secondary_extractor(
+                full_observation_space=self.env.single_observation_space,
+                features_extractor_class=type(features_extractor),
+                primary_kwargs=self._default_features_extractor_kwargs(),
+                extra_obs_keys=self._value_extra_obs_keys,
+                override_image_encoder_factory=self._value_image_encoder_factory,
+            )
         self.policy = PPOPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             features_extractor=features_extractor,
+            value_features_extractor=value_features_extractor,
             net_arch=self.net_arch,
             log_std_init=self.log_std_init,
             actor_use_layer_norm=self.actor_use_layer_norm,

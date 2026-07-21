@@ -45,6 +45,8 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     critic_only_freeze_encoder: bool = True
     critic_only_random_action_prob: float = 0.0
     load_actor_checkpoint: Optional[str] = None
+    critic_encoder: Optional[str] = None
+    critic_extra_obs_keys: tuple[str, ...] = ()
 
 
 @dataclass
@@ -195,6 +197,8 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     log_std_init: float = -0.5
+    value_encoder: Optional[str] = None
+    value_extra_obs_keys: tuple[str, ...] = ()
 
 
 @dataclass

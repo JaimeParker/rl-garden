@@ -87,6 +87,8 @@ def _sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs
 
 
 def build_sac(args, env, eval_env, logger, checkpoint_dir):
+    import dataclasses
+
     from rl_garden.algorithms import SAC
     from rl_garden.common.cli_args import (
         image_encoder_factory_from_args,
@@ -95,6 +97,11 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
     )
 
     is_visual = args.obs_mode != "state"
+    if not is_visual and (args.critic_encoder is not None or args.critic_extra_obs_keys):
+        raise ValueError(
+            "--critic_encoder/--critic_extra_obs_keys require --obs_mode rgb "
+            "(or another visual mode), not 'state'."
+        )
     image_kwargs: dict = {}
     if is_visual:
         factory = image_encoder_factory_from_args(args)
@@ -109,6 +116,13 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
             image_augmentation_seed=args.seed + 1_000_003,
             **vit_sac_kwargs_from_args(args, image_keys),
         )
+        if args.critic_encoder is not None:
+            critic_vision_args = dataclasses.replace(args, encoder=args.critic_encoder)
+            image_kwargs["critic_image_encoder_factory"] = image_encoder_factory_from_args(
+                critic_vision_args
+            )
+        if args.critic_extra_obs_keys:
+            image_kwargs["critic_extra_obs_keys"] = tuple(args.critic_extra_obs_keys)
 
     agent = SAC(**_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs))
     if args.load_checkpoint is not None:

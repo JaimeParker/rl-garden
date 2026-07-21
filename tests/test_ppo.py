@@ -179,3 +179,31 @@ def test_ppo_checkpoint_roundtrip(tmp_path):
     assert loaded._global_update == agent._global_update
     for key, value in agent.policy.state_dict().items():
         assert torch.equal(value, loaded.policy.state_dict()[key]), key
+
+
+def test_ppo_value_extra_obs_keys_builds_separate_value_encoder():
+    obs_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+            "privileged": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        }
+    )
+    env = DummyVecEnv(obs_space, _action_space())
+    agent = PPO(
+        env=env,
+        **_ppo_kwargs(),
+        image_keys=("rgb",),
+        value_extra_obs_keys=("privileged",),
+    )
+    assert agent.policy.value_features_extractor is not None
+    assert "privileged" not in agent.policy.features_extractor._observation_space.spaces
+    assert "privileged" in agent.policy.value_features_extractor._observation_space.spaces
+
+
+def test_ppo_state_obs_rejects_value_kwargs():
+    import pytest
+
+    env = DummyVecEnv(_state_space(), _action_space())
+    with pytest.raises(ValueError, match="image-related kwargs"):
+        PPO(env=env, **_ppo_kwargs(), value_extra_obs_keys=("x",))

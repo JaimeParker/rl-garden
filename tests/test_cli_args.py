@@ -918,3 +918,68 @@ def test_log_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.wandb_project == "custom-project"
     assert args.wandb_entity == "custom-entity"
     assert args.wandb_group == "custom-group"
+
+
+def test_sac_training_args_has_critic_encoder_fields():
+    from rl_garden.training.online._args import SACTrainingArgs
+
+    args = SACTrainingArgs()
+    assert args.critic_encoder is None
+    assert args.critic_extra_obs_keys == ()
+
+
+def test_ppo_training_args_has_value_encoder_fields():
+    from rl_garden.training.online._args import PPOTrainingArgs
+
+    args = PPOTrainingArgs()
+    assert args.value_encoder is None
+    assert args.value_extra_obs_keys == ()
+
+
+def test_build_sac_resolves_critic_encoder_into_a_distinct_factory():
+    import numpy as np
+    from gymnasium import spaces
+    from rl_garden.training.online._args import VisionSACTrainingArgs
+    from rl_garden.training.online.sac import build_sac
+
+    class _DummyEnv:
+        def __init__(self):
+            self.num_envs = 1
+            self.single_observation_space = spaces.Dict(
+                {
+                    "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+                    "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+                }
+            )
+            self.single_action_space = spaces.Box(
+                low=-1.0, high=1.0, shape=(2,), dtype=np.float32
+            )
+
+    args = VisionSACTrainingArgs(
+        buffer_device="cpu",
+        buffer_size=8,
+        batch_size=2,
+        eval_freq=0,
+        obs_mode="rgb",
+        encoder="plain_conv",
+        critic_encoder="resnet10",
+    )
+    agent = build_sac(args, _DummyEnv(), None, logger=None, checkpoint_dir=None)
+    assert agent.policy.has_separate_critic_encoder is True
+
+
+def test_build_sac_rejects_critic_encoder_for_state_obs():
+    import pytest
+    from rl_garden.training.online._args import VisionSACTrainingArgs
+    from rl_garden.training.online.sac import build_sac
+
+    args = VisionSACTrainingArgs(
+        buffer_device="cpu",
+        buffer_size=8,
+        batch_size=2,
+        eval_freq=0,
+        obs_mode="state",
+        critic_encoder="resnet10",
+    )
+    with pytest.raises(ValueError, match="--critic_encoder"):
+        build_sac(args, None, None, logger=None, checkpoint_dir=None)

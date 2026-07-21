@@ -44,7 +44,7 @@ class SACCore:
     def _eval_q_values(self, obs, actions) -> torch.Tensor:
         if hasattr(actions, "device") and actions.device != self.device:
             actions = actions.to(self.device)
-        features = self.policy.extract_features(obs, stop_gradient=True)
+        features = self.policy.critic_extract_features(obs, stop_gradient=True)
         return self.policy.min_q_value(
             features,
             actions,
@@ -239,7 +239,7 @@ class SACCore:
 
     def _critic_forward(self, obs, actions, target: bool = False):
         stop_gradient = not self._training_update_mask().update_encoder
-        features = self.policy.extract_features(obs, stop_gradient=stop_gradient)
+        features = self.policy.critic_extract_features(obs, stop_gradient=stop_gradient)
         if stop_gradient:
             # CombinedExtractor's stop-gradient mode intentionally detaches
             # image branches only. A frozen training phase must detach the
@@ -251,6 +251,10 @@ class SACCore:
         alpha = self._current_alpha().detach()
         with torch.no_grad():
             next_action, next_log_prob, next_features = self._target_action_log_prob(data)
+            if self.policy.has_separate_critic_encoder:
+                next_features = self.policy.critic_extract_features(
+                    data.next_obs, stop_gradient=True
+                )
             min_q_next = self.policy.min_q_value(
                 next_features,
                 next_action,
@@ -289,6 +293,13 @@ class SACCore:
         action, log_prob, features = self._actor_action_log_prob(
             obs, stop_gradient=self._actor_stop_gradient()
         )
+        if self.policy.has_separate_critic_encoder:
+            # features above came from the actor's own encoder -- wrong
+            # shape/representation for the critic's Q-network once the
+            # critic has a separate encoder (same class of bug as
+            # _target_q). stop_gradient=True: the actor loss must not
+            # train the critic's encoder (that stays critic-loss-only).
+            features = self.policy.critic_extract_features(obs, stop_gradient=True)
         min_q = self.policy.min_q_value(features, action, subsample_size=None, target=False)
         return (alpha * log_prob - min_q).mean(), log_prob.detach()
 
@@ -353,7 +364,7 @@ class SACCore:
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
-            self.policy.features_extractor.prepare_batch(data.obs, data.next_obs)
+            self.policy.prepare_batch(data.obs, data.next_obs)
 
             if update_mask.update_critic:
                 critic_loss, critic_info = self._critic_loss(data)
@@ -456,7 +467,7 @@ class SACCore:
             for j in range(utd_ratio):
                 self._global_update += 1
                 mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
-                self.policy.features_extractor.prepare_batch(mb.obs, mb.next_obs)
+                self.policy.prepare_batch(mb.obs, mb.next_obs)
 
                 critic_loss, critic_info = self._critic_loss(mb)
                 self.q_optimizer.zero_grad()
@@ -477,7 +488,7 @@ class SACCore:
             self._global_update += 1
 
         with torch.no_grad():
-            self.policy.features_extractor.prepare_batch(full_batch.obs)
+            self.policy.prepare_batch(full_batch.obs)
 
         actor_loss: Optional[torch.Tensor] = None
         log_prob_detached: Optional[torch.Tensor] = None

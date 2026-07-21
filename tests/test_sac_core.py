@@ -645,3 +645,95 @@ def test_q_landscape_diagnostics_preserves_cuda_rng_state():
 
     assert "q_uniform_var" in diagnostics
     torch.testing.assert_close(actual, expected)
+
+
+def test_critic_forward_uses_critic_encoder_when_configured():
+    from rl_garden.encoders import FlattenExtractor
+
+    class _RecordingFlatten(FlattenExtractor):
+        def __init__(self, observation_space, features_dim):
+            super().__init__(observation_space)
+            self.calls = 0
+
+        def extract(self, obs, stop_gradient=False):
+            self.calls += 1
+            return super().extract(obs, stop_gradient=stop_gradient)
+
+    env = DummyVecEnv()
+    critic_ext = _RecordingFlatten(env.single_observation_space, features_dim=4)
+    agent = _agent()
+    agent.policy.critic_features_extractor = critic_ext
+    _fill(agent, steps=8)
+    agent.train(gradient_steps=1, compute_info=True)
+    assert critic_ext.calls > 0
+
+
+def test_target_q_reuses_actor_features_when_no_separate_critic_encoder():
+    agent = _agent()
+    assert agent.policy.has_separate_critic_encoder is False
+    calls = {"n": 0}
+    orig = agent.policy.critic_extract_features
+
+    def _spy(*args, **kwargs):
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    agent.policy.critic_extract_features = _spy
+    _fill(agent, steps=8)
+    agent.train(gradient_steps=1, compute_info=True)
+    # _critic_forward calls critic_extract_features once per gradient step;
+    # _target_q must NOT call it again when there is no separate critic
+    # encoder (it must reuse the actor-derived next_features instead).
+    assert calls["n"] == 1
+
+
+def test_target_q_uses_critic_encoder_when_configured():
+    from rl_garden.encoders import FlattenExtractor
+
+    env = DummyVecEnv()
+    critic_ext = FlattenExtractor(env.single_observation_space)
+    agent = _agent()
+    agent.policy.critic_features_extractor = critic_ext
+    calls = {"n": 0}
+    orig = agent.policy.critic_extract_features
+
+    def _spy(*args, **kwargs):
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    agent.policy.critic_extract_features = _spy
+    _fill(agent, steps=8)
+    agent.train(gradient_steps=1, compute_info=True)
+    # One call each from _critic_forward (current obs), _target_q (next_obs),
+    # and _actor_loss (current obs, re-scored through the critic's own
+    # encoder), now that a separate critic encoder exists.
+    assert calls["n"] == 3
+
+
+def test_prepare_batch_called_on_both_encoders_when_separate():
+    from rl_garden.encoders import FlattenExtractor
+
+    env = DummyVecEnv()
+    critic_ext = FlattenExtractor(env.single_observation_space)
+    agent = _agent()
+    agent.policy.critic_features_extractor = critic_ext
+
+    actor_calls = {"n": 0}
+    critic_calls = {"n": 0}
+    orig_actor_prepare = agent.policy.features_extractor.prepare_batch
+    orig_critic_prepare = critic_ext.prepare_batch
+
+    def _actor_spy(*a, **k):
+        actor_calls["n"] += 1
+        return orig_actor_prepare(*a, **k)
+
+    def _critic_spy(*a, **k):
+        critic_calls["n"] += 1
+        return orig_critic_prepare(*a, **k)
+
+    agent.policy.features_extractor.prepare_batch = _actor_spy
+    critic_ext.prepare_batch = _critic_spy
+    _fill(agent, steps=8)
+    agent.train(gradient_steps=1, compute_info=True)
+    assert actor_calls["n"] >= 1
+    assert critic_calls["n"] >= 1

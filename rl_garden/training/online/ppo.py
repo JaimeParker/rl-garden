@@ -32,18 +32,33 @@ def _ppo_env_request(args, run_name):
 
 
 def _ppo_image_kwargs(args, env) -> dict:
+    import dataclasses
+
     from rl_garden.common.cli_args import (
         image_encoder_factory_from_args,
         image_keys_from_env,
     )
 
     if args.obs_mode == "state":
+        if args.value_encoder is not None or args.value_extra_obs_keys:
+            raise ValueError(
+                "--value_encoder/--value_extra_obs_keys require --obs_mode rgb "
+                "(or another visual mode), not 'state'."
+            )
         return {}
-    return dict(
+    kwargs = dict(
         image_keys=image_keys_from_env(env, args),
         image_encoder_factory=image_encoder_factory_from_args(args),
         image_fusion_mode=args.image_fusion_mode,
     )
+    if args.value_encoder is not None:
+        value_vision_args = dataclasses.replace(args, encoder=args.value_encoder)
+        kwargs["value_image_encoder_factory"] = image_encoder_factory_from_args(
+            value_vision_args
+        )
+    if args.value_extra_obs_keys:
+        kwargs["value_extra_obs_keys"] = tuple(args.value_extra_obs_keys)
+    return kwargs
 
 
 def _ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict) -> dict:
