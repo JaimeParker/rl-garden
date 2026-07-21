@@ -432,9 +432,10 @@ def evaluate(args: EvalACTRoboTwinArgs, logger: Logger) -> dict[str, float]:
 
     try:
         obs, _ = env.reset(seed=args.seed)
-        frame = _obs_diagnostic_frame(obs)
-        if frame is not None:
-            diagnostic_frames.append(frame)
+        if diagnostic_path is not None:
+            frame = _obs_diagnostic_frame(obs)
+            if frame is not None:
+                diagnostic_frames.append(frame)
         provider.reset()
         episode_returns = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
         episode_lengths = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
@@ -447,9 +448,10 @@ def evaluate(args: EvalACTRoboTwinArgs, logger: Logger) -> dict[str, float]:
             action_abs_maxes.append(float(actions.abs().max().detach().cpu().item()))
             obs, rewards, terms, truncs, infos = env.step(actions)
             state_after = obs.get("state") if isinstance(obs, dict) else None
-            frame = _obs_diagnostic_frame(obs)
-            if frame is not None:
-                diagnostic_frames.append(frame)
+            if diagnostic_path is not None:
+                frame = _obs_diagnostic_frame(obs)
+                if frame is not None:
+                    diagnostic_frames.append(frame)
 
             rewards = rewards.reshape(env.num_envs)
             reward_values.extend(float(x) for x in rewards.detach().cpu().tolist())
