@@ -22,10 +22,10 @@ from rl_garden.policies.base_policies import make_base_policy
 
 @dataclass
 class EvalACTRoboTwinArgs:
-    env_id: str = "place_empty_cup"
+    env_id: str = "open_laptop"
     obs_mode: Literal["rgb"] = "rgb"
-    control_mode: Literal["delta_joint_pos", "ee_delta_pose", "joint_pos"] = "ee_delta_pose"
-    base_ckpt_path: str = "pretrained_models/place_empty_cup.ckpt"
+    control_mode: Literal["delta_joint_pos", "delta_ee", "joint_pos"] = "delta_ee"
+    base_ckpt_path: str = "runs/open_laptop_act/checkpoints/final.pt"
     base_act_stats_path: Optional[str] = None
     base_act_temporal_agg: bool = True
     base_act_temporal_agg_k: float = 0.01
@@ -63,14 +63,14 @@ def _str_to_bool(value: str) -> bool:
 
 def parse_args() -> EvalACTRoboTwinArgs:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env-id", default="place_empty_cup")
+    parser.add_argument("--env-id", default="open_laptop")
     parser.add_argument("--obs-mode", default="rgb", choices=["rgb"])
     parser.add_argument(
         "--control-mode",
-        default="ee_delta_pose",
-        choices=["delta_joint_pos", "ee_delta_pose", "joint_pos"],
+        default="delta_ee",
+        choices=["delta_joint_pos", "delta_ee", "joint_pos"],
     )
-    parser.add_argument("--base-ckpt-path", default="pretrained_models/place_empty_cup.ckpt")
+    parser.add_argument("--base-ckpt-path", default="runs/open_laptop_act/checkpoints/final.pt")
     parser.add_argument("--base-act-stats-path", default=None)
     parser.add_argument(
         "--base-act-temporal-agg",
@@ -103,10 +103,10 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--robotwin.robotwin-root", dest="robotwin_root", default=None)
     parser.add_argument("--robotwin.assets-path", dest="assets_path", default=None)
     parser.add_argument("--robotwin.seeds-path", dest="seeds_path", default=None)
-    parser.add_argument("--robotwin.step-lim", dest="step_lim", type=int, default=200)
+    parser.add_argument("--robotwin.step-lim", dest="step_lim", type=int, default=700)
     parser.add_argument("--robotwin.planner-backend", dest="planner_backend", default="mplib")
     parser.add_argument("--robotwin.embodiment", dest="embodiment", nargs="+", default=["aloha-agilex"])
-    parser.add_argument("--robotwin.reward-mode", dest="reward_mode", choices=["dense", "sparse"], default="dense")
+    parser.add_argument("--robotwin.reward-mode", dest="reward_mode", choices=["dense", "sparse"], default="sparse")
     parser.add_argument("--robotwin.head-camera-type", dest="head_camera_type", default="D435")
     parser.add_argument("--robotwin.wrist-camera-type", dest="wrist_camera_type", default="D435")
     parser.add_argument("--robotwin.control-step-cap", dest="control_step_cap", type=int, default=None)

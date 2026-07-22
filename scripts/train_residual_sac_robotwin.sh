@@ -92,7 +92,7 @@ exec env \
     --robotwin.assets-path "$ASSETS_PATH_ARG" \
     --robotwin.head-camera-type Train_D435_128x96 \
     --robotwin.embodiment piper piper 0.6 \
-    --control-mode ee_delta_pose \
+    --control-mode delta_ee \
     --camera-width 320 --camera-height 240 \
     --total-timesteps 100000 \
     --buffer-size 10000 \

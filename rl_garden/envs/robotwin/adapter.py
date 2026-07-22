@@ -263,7 +263,7 @@ class RoboTwinTaskAdapter:
             )
         if self.cfg.control_mode == "joint_pos":
             return action
-        if self.cfg.control_mode == "ee_delta_pose":
+        if self.cfg.control_mode == "delta_ee":
             return self._to_robotwin_delta_ee_action(action)
         if self.cfg.control_mode != "delta_joint_pos":
             raise ValueError(
@@ -301,7 +301,7 @@ class RoboTwinTaskAdapter:
     def _to_robotwin_delta_ee_action(self, action: np.ndarray) -> np.ndarray:
         if action.shape[0] != 14:
             raise ValueError(
-                "ee_delta_pose expects 14 dims: "
+                "delta_ee expects 14 dims: "
                 "left xyz+rotvec+gripper and right xyz+rotvec+gripper."
             )
         assert self.task is not None
@@ -326,8 +326,8 @@ class RoboTwinTaskAdapter:
         return out
 
     def _robotwin_action_type(self) -> str:
-        if self.cfg.control_mode == "ee_delta_pose":
-            return "ee"
+        if self.cfg.control_mode == "delta_ee":
+            return "delta_ee"
         return "qpos"
 
     def _compute_reward(self, success: bool) -> float:

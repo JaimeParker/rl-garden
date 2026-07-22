@@ -290,9 +290,9 @@ def test_delta_joint_pos_action_conversion():
     assert raw[13] == 0.75
 
 
-def test_ee_delta_pose_action_space_and_conversion():
+def test_delta_ee_action_space_and_conversion():
     cfg = RoboTwinEnvConfig(
-        control_mode="ee_delta_pose",
+        control_mode="delta_ee",
         device="cpu",
         image_size=(8, 8),
         ee_delta_pos_scale=0.01,
@@ -314,7 +314,7 @@ def test_ee_delta_pose_action_space_and_conversion():
     action[7] = -1.0
     action[13] = -1.0
     raw = adapter._to_robotwin_action(action)
-    assert adapter._robotwin_action_type() == "ee"
+    assert adapter._robotwin_action_type() == "delta_ee"
     assert raw.shape == (16,)
     np.testing.assert_allclose(raw[0:3], [0.01, 0.0, 0.0])
     np.testing.assert_allclose(
@@ -324,6 +324,39 @@ def test_ee_delta_pose_action_space_and_conversion():
     np.testing.assert_allclose(raw[8:11], [-0.01, 0.0, 0.0])
     np.testing.assert_allclose(raw[11:15], [1.0, 0.0, 0.0, 0.0])
     np.testing.assert_allclose(raw[15], 0.65)
+
+
+def test_delta_ee_step_passes_robotwin_delta_ee_action_type():
+    class Task:
+        def __init__(self):
+            self.robot = _Robot()
+            self.step_lim = 2
+            self.action_type = None
+            self.action_shape = None
+
+        def take_action(self, action, action_type="qpos"):
+            self.action_type = action_type
+            self.action_shape = action.shape
+
+        def check_success(self):
+            return False
+
+        def get_obs(self):
+            return {
+                "observation": {
+                    "head_camera": {"rgb": np.zeros((8, 8, 3), dtype=np.uint8)}
+                },
+                "joint_action": {"vector": np.zeros(14, dtype=np.float32)},
+            }
+
+    cfg = RoboTwinEnvConfig(control_mode="delta_ee", reward_mode="sparse", device="cpu")
+    adapter = RoboTwinTaskAdapter(0, cfg, {}, env_seed=0)
+    adapter.task = Task()
+
+    adapter.step(np.zeros(14, dtype=np.float32))
+
+    assert adapter.task.action_type == "delta_ee"
+    assert adapter.task.action_shape == (16,)
 
 
 def test_reward_registry_covers_rlinf_robotwin_env_configs():

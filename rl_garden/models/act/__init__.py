@@ -5,14 +5,16 @@ The original ACT implementation is copied under this package from
 the base-action-provider contract used by ``ResidualSAC``.
 """
 
-from rl_garden.models.act.provider import (
-    ACTBaseActionProvider,
-    BaseActionProvider,
-    resolve_act_checkpoint_path,
-)
-
 __all__ = [
     "ACTBaseActionProvider",
     "BaseActionProvider",
     "resolve_act_checkpoint_path",
 ]
+
+
+def __getattr__(name):
+    if name in __all__:
+        from rl_garden.models.act import provider
+
+        return getattr(provider, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

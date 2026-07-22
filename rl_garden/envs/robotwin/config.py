@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 
-ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose"]
+ControlMode = Literal["delta_joint_pos", "joint_pos", "delta_ee"]
 RewardMode = Literal["dense", "sparse"]
 
 
@@ -53,7 +53,8 @@ class RoboTwinEnvConfig:
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
 
-    # Observation/action behavior.
+    # Observation/action behavior. RoboTwin-native end-effector delta control is
+    # named "delta_ee" to match RoboTwin's take_action(action_type=...).
     include_wrist_cameras: bool = True
     image_size: tuple[int, int] = (224, 224)
     head_camera_type: str = "D435"
@@ -78,5 +79,5 @@ class RoboTwinEnvConfig:
     clear_cache_freq: int = 8
 
     def __post_init__(self) -> None:
-        if self.control_mode == "ee_delta_pose" and self.action_dim != 14:
-            raise ValueError("ee_delta_pose control mode requires action_dim=14.")
+        if self.control_mode == "delta_ee" and self.action_dim != 14:
+            raise ValueError("delta_ee control mode requires action_dim=14.")

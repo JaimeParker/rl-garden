@@ -173,7 +173,7 @@ qpos+gripper target into RoboTwin.
 
 `control_mode="joint_pos"` is also present for direct qpos-style actions.
 
-`control_mode="ee_delta_pose"` exposes a bounded 14D Cartesian delta action:
+`control_mode="delta_ee"` exposes RoboTwin's native bounded 14D Cartesian delta action:
 
 ```text
 left dxyz:            3 dims
@@ -187,10 +187,10 @@ right gripper delta:  1 dim
 The adapter scales translation by `ee_delta_pos_scale` (default `0.03`),
 rotation-vector deltas by `ee_delta_rot_scale` (default `0.15`), converts
 rotvecs to RoboTwin's `[w, x, y, z]` quaternion delta format, clamps grippers
-to `[0, 1]`, and calls RoboTwin with `action_type="ee"`.
+to `[0, 1]`, and calls RoboTwin with `action_type="delta_ee"`.
 
 The default and baseline mode remains `delta_joint_pos`; use
-`ee_delta_pose` for RL with RoboTwin's native end-effector planner.
+`delta_ee` for RL with RoboTwin's native end-effector planner.
 
 ## Rewards
 
