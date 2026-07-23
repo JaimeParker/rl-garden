@@ -38,6 +38,10 @@ class SubEnv:
         with self.lock:
             return self.adapter.get_obs()
 
+    def qpos_target_to_ee_pose(self, action: np.ndarray) -> np.ndarray:
+        with self.lock:
+            return self.adapter.qpos_target_to_ee_pose(action)
+
     def close(self, clear_cache: bool = True) -> None:
         with self.lock:
             self.adapter.close(clear_cache=clear_cache)
@@ -83,6 +87,19 @@ class ThreadedRoboTwinExecutor:
 
     def get_obs(self) -> list[dict[str, Any]]:
         return [env.get_obs() for env in self.envs]
+
+    def qpos_targets_to_ee_pose(self, actions: np.ndarray) -> np.ndarray:
+        actions = np.asarray(actions, dtype=np.float32)
+        if actions.shape != (self.num_envs, 14):
+            raise ValueError(
+                "Expected ACT qpos targets with shape "
+                f"({self.num_envs}, 14), got {actions.shape}."
+            )
+        futures = [
+            self.pool.submit(self.envs[index].qpos_target_to_ee_pose, actions[index])
+            for index in range(self.num_envs)
+        ]
+        return np.stack([future.result(timeout=180) for future in futures])
 
     def close(self, clear_cache: bool = True) -> None:
         for env in self.envs:

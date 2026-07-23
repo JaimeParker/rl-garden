@@ -140,6 +140,26 @@ class RoboTwinEnv(gym.Env):
     def close(self) -> None:
         self.executor.close()
 
+    def qpos_targets_to_ee_pose(self, actions):
+        """Convert batched ACT qpos targets without changing simulator state."""
+
+        input_is_tensor = isinstance(actions, torch.Tensor)
+        input_device = actions.device if input_is_tensor else None
+        if input_is_tensor:
+            actions_np = actions.detach().cpu().numpy()
+        else:
+            actions_np = np.asarray(actions, dtype=np.float32)
+        if actions_np.ndim == 1:
+            actions_np = actions_np[None, :]
+        transformed = self.executor.qpos_targets_to_ee_pose(actions_np)
+        if input_is_tensor:
+            return torch.as_tensor(
+                transformed,
+                dtype=torch.float32,
+                device=input_device,
+            )
+        return transformed
+
     def chunk_step(self, actions):
         actions_np = self._actions_to_numpy(actions)
         if actions_np.ndim != 3:

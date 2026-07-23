@@ -7,7 +7,10 @@ from typing import Any, Literal
 import torch
 from gymnasium import spaces
 
-from rl_garden.policies.base_policies.act import ACTBasePolicy
+from rl_garden.policies.base_policies.act import (
+    ACTBasePolicy,
+    RoboTwinACTEEPoseBasePolicy,
+)
 from rl_garden.policies.base_policies.base import BasePolicyProvider
 from rl_garden.policies.base_policies.sac import (
     SACBaseEncoder,
@@ -39,6 +42,29 @@ def make_base_policy(
     if base_policy == "zero":
         return ZeroBasePolicy(observation_space, action_space, device=device)
     if base_policy == "act":
+        control_mode = getattr(getattr(env, "cfg", None), "control_mode", None)
+        if control_mode == "ee_pose":
+            if env is None or not hasattr(env, "qpos_targets_to_ee_pose"):
+                raise ValueError(
+                    "RoboTwin ee_pose ACT evaluation requires an environment "
+                    "with qpos_targets_to_ee_pose()."
+                )
+            if tuple(action_space.shape) != (14,):
+                raise ValueError(
+                    "RoboTwin ee_pose ACT evaluation requires a 14D action "
+                    f"space, got {action_space.shape}."
+                )
+            return RoboTwinACTEEPoseBasePolicy.from_checkpoint(
+                env=env,
+                observation_space=observation_space,
+                action_space=action_space,
+                ckpt_path=base_ckpt_path,
+                stats_path=base_act_stats_path,
+                temporal_agg=base_act_temporal_agg,
+                temporal_agg_k=base_act_temporal_agg_k,
+                image_size=base_act_image_size,
+                device=device,
+            )
         return ACTBasePolicy.from_checkpoint(
             observation_space=observation_space,
             action_space=action_space,

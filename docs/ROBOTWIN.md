@@ -189,6 +189,40 @@ rotation-vector deltas by `ee_delta_rot_scale` (default `0.15`), converts
 rotvecs to RoboTwin's `[w, x, y, z]` quaternion delta format, clamps grippers
 to `[0, 1]`, and calls RoboTwin with `action_type="ee"`.
 
+`control_mode="ee_pose"` is a separate, unbounded 14D absolute action mode
+inside rl-garden:
+
+```text
+left xyz + rotation vector + gripper:   7 dims
+right xyz + rotation vector + gripper:  7 dims
+```
+
+The adapter is the sole representation boundary. Immediately before
+`take_action(..., action_type="ee")`, it validates the 14D internal action,
+converts each absolute rotation vector to a normalized `[w, x, y, z]`
+quaternion, and emits RoboTwin's 16D absolute wire format. It does not
+reinterpret or rescale the existing bounded 14D `ee_delta_pose` mode.
+
+`RoboTwinACTEEPoseBasePolicy` is the local ACT-only bridge used to validate this
+mode. The official ACT checkpoint still predicts 14D qpos. The bridge calls
+`RoboTwinEnv.qpos_targets_to_ee_pose()` and produces the unbounded 14D internal
+absolute EE action before stepping the environment.
+The FK path does not call articulation setters or step the simulator:
+
+```text
+ACT [left q6, left grip, right q6, right grip]
+  -> copy the articulation's current full active-joint qpos
+  -> replace the named six joints for both arms
+  -> SAPIEN Pinocchio forward kinematics
+  -> child-link pose composed with joint pose_in_child
+  -> articulation root/world pose
+  -> R_link @ global_trans_matrix @ delta_matrix
+  -> translate by (gripper_bias - 0.12) on the rotated x-axis
+  -> internal [left xyz+rotvec+grip, right xyz+rotvec+grip]
+  -> adapter-only boundary conversion
+  -> RoboTwin [left xyz+wxyz+grip, right xyz+wxyz+grip]
+```
+
 The default and baseline mode remains `delta_joint_pos`; use
 `ee_delta_pose` for RL with RoboTwin's native end-effector planner.
 

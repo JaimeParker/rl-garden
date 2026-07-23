@@ -419,6 +419,75 @@ def test_ee_delta_pose_action_space_and_conversion():
     np.testing.assert_allclose(raw[15], 0.65)
 
 
+def test_absolute_ee_pose_action_space_and_conversion():
+    cfg = RoboTwinEnvConfig(
+        control_mode="ee_pose",
+        device="cpu",
+        image_size=(8, 8),
+    )
+    env = RoboTwinEnv(cfg, executor=FakeExecutor(num_envs=1))
+    assert env.single_action_space.shape == (14,)
+    assert np.all(np.isneginf(env.single_action_space.low))
+    assert np.all(np.isposinf(env.single_action_space.high))
+    env.close()
+
+    adapter = RoboTwinTaskAdapter(0, cfg, {}, env_seed=0)
+    adapter.task = type("Task", (), {"robot": _Robot()})()
+    action = np.array(
+        [
+            0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 0.4,
+            0.5, 0.6, 0.7, 0.0, 0.0, -np.pi, 0.8,
+        ],
+        dtype=np.float32,
+    )
+
+    raw = adapter._to_robotwin_action(action)
+
+    assert adapter._robotwin_action_type() == "ee"
+    np.testing.assert_allclose(raw[:3], action[:3])
+    np.testing.assert_allclose(raw[3:7], [1.0, 0.0, 0.0, 0.0])
+    assert raw[7] == action[6]
+    np.testing.assert_allclose(raw[8:11], action[7:10])
+    np.testing.assert_allclose(raw[11:15], [0.0, 0.0, 0.0, -1.0], atol=1e-6)
+    assert raw[15] == action[13]
+
+
+def test_absolute_ee_pose_rejects_invalid_actions():
+    cfg = RoboTwinEnvConfig(control_mode="ee_pose", action_dim=14, device="cpu")
+    adapter = RoboTwinTaskAdapter(0, cfg, {}, env_seed=0)
+    adapter.task = type("Task", (), {"robot": _Robot()})()
+    action = np.zeros(14, dtype=np.float32)
+
+    nonfinite = action.copy()
+    nonfinite[0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        adapter._to_robotwin_action(nonfinite)
+
+
+def test_absolute_ee_pose_requires_14_actions():
+    with pytest.raises(ValueError, match="ee_pose control mode requires action_dim=14"):
+        RoboTwinEnvConfig(control_mode="ee_pose", action_dim=16)
+
+
+def test_public_qpos_to_ee_pose_transform_preserves_batch_and_tensor_device():
+    class TransformExecutor(FakeExecutor):
+        def qpos_targets_to_ee_pose(self, actions):
+            assert actions.shape == (2, 14)
+            return (actions + 100.0).astype(np.float32)
+
+    cfg = RoboTwinEnvConfig(num_envs=2, device="cpu", image_size=(8, 8))
+    env = RoboTwinEnv(cfg, executor=TransformExecutor(num_envs=2))
+    actions = torch.arange(28, dtype=torch.float32).reshape(2, 14)
+
+    transformed = env.qpos_targets_to_ee_pose(actions)
+
+    assert transformed.shape == (2, 14)
+    assert transformed.device == actions.device
+    assert transformed.dtype == torch.float32
+    torch.testing.assert_close(transformed, actions + 100.0)
+    env.close()
+
+
 def test_reward_registry_covers_supported_robotwin_env_configs():
     assert supported_reward_tasks() == (
         "adjust_bottle",

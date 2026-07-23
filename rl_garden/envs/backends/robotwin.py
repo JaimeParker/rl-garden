@@ -72,6 +72,9 @@ class RoboTwinBackend(EnvBackend):
         if is_eval and req.capture_video and req.eval_record_dir:
             task_cfg["eval_video_save_dir"] = req.eval_record_dir
 
+        control_mode = req.control_mode or "delta_joint_pos"
+        action_dim = 14
+
         return RoboTwinEnvConfig(
             task_name=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
@@ -87,7 +90,8 @@ class RoboTwinBackend(EnvBackend):
             reward_mode=rt.reward_mode if rt is not None else "dense",  # type: ignore[arg-type]
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
-            control_mode=req.control_mode or "delta_joint_pos",  # type: ignore[arg-type]
+            control_mode=control_mode,  # type: ignore[arg-type]
+            action_dim=action_dim,
             joint_delta_scale=rt.joint_delta_scale if rt is not None else 0.05,
             gripper_delta_scale=rt.gripper_delta_scale if rt is not None else 0.2,
             ee_delta_pos_scale=rt.ee_delta_pos_scale if rt is not None else 0.03,

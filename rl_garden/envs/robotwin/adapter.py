@@ -16,6 +16,10 @@ from typing import Any, Iterator, Optional
 import numpy as np
 
 from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
+from rl_garden.envs.robotwin.kinematics import (
+    RoboTwinJointTargetFK,
+    rotvec_to_quaternion_wxyz,
+)
 from rl_garden.envs.robotwin.rewards import build_task_reward
 
 
@@ -90,6 +94,7 @@ class RoboTwinTaskAdapter:
         self.elapsed_steps = 0
         self.last_dense_reward = 0.0
         self._eval_video_index = 0
+        self._joint_target_fk: Optional[RoboTwinJointTargetFK] = None
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
@@ -101,6 +106,7 @@ class RoboTwinTaskAdapter:
             )
         )
         self.task = make_task(self.task_name, self.cfg.robotwin_root)
+        self._joint_target_fk = None
         args = dict(self.task_args)
         args.setdefault(
             "step_lim", self.cfg.step_lim or self.cfg.max_episode_steps or 400
@@ -249,11 +255,21 @@ class RoboTwinTaskAdapter:
             raise RuntimeError("RoboTwin task has not been reset.")
         return _extract_robotwin_obs(self.task.get_obs(), self._instruction())
 
+    def qpos_target_to_ee_pose(self, action: np.ndarray) -> np.ndarray:
+        """State-free conversion from ACT qpos target to absolute EE pose."""
+
+        if self.task is None:
+            raise RuntimeError("RoboTwin task has not been reset.")
+        if self._joint_target_fk is None:
+            self._joint_target_fk = RoboTwinJointTargetFK(self.task.robot)
+        return self._joint_target_fk.transform(action)
+
     def close(self, clear_cache: bool = True) -> None:
         if self.task is not None:
             self._stop_eval_video_if_needed()
             self.task.close_env(clear_cache=clear_cache)
             self.task = None
+            self._joint_target_fk = None
 
     def _to_robotwin_action(self, action: np.ndarray) -> np.ndarray:
         action = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -263,6 +279,8 @@ class RoboTwinTaskAdapter:
             )
         if self.cfg.control_mode == "joint_pos":
             return action
+        if self.cfg.control_mode == "ee_pose":
+            return self._to_robotwin_ee_pose_action(action)
         if self.cfg.control_mode == "ee_delta_pose":
             return self._to_robotwin_delta_ee_action(action)
         if self.cfg.control_mode != "delta_joint_pos":
@@ -298,6 +316,26 @@ class RoboTwinTaskAdapter:
         )
         return out
 
+    @staticmethod
+    def _to_robotwin_ee_pose_action(action: np.ndarray) -> np.ndarray:
+        """Convert rl-garden's absolute EE action to RoboTwin's wire format."""
+
+        if action.shape[0] != 14:
+            raise ValueError(
+                "ee_pose expects 14 dims: left xyz+rotvec+gripper and "
+                "right xyz+rotvec+gripper."
+            )
+        if not np.isfinite(action).all():
+            raise ValueError("ee_pose action values must be finite.")
+        out = np.empty(16, dtype=np.float32)
+        out[0:3] = action[0:3]
+        out[3:7] = rotvec_to_quaternion_wxyz(action[3:6])
+        out[7] = action[6]
+        out[8:11] = action[7:10]
+        out[11:15] = rotvec_to_quaternion_wxyz(action[10:13])
+        out[15] = action[13]
+        return out
+
     def _to_robotwin_delta_ee_action(self, action: np.ndarray) -> np.ndarray:
         if action.shape[0] != 14:
             raise ValueError(
@@ -326,7 +364,7 @@ class RoboTwinTaskAdapter:
         return out
 
     def _robotwin_action_type(self) -> str:
-        if self.cfg.control_mode == "ee_delta_pose":
+        if self.cfg.control_mode in {"ee_delta_pose", "ee_pose"}:
             return "ee"
         return "qpos"
 

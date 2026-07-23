@@ -19,12 +19,14 @@ from rl_garden.common.env_args import RoboTwinConfig
 from rl_garden.envs.backend_registry import EnvRequest, make_evaluation_env
 from rl_garden.policies.base_policies import make_base_policy
 
+RoboTwinControlMode = Literal["joint_pos", "ee_pose"]
+
 
 @dataclass
 class EvalACTRoboTwinArgs:
     env_id: str = "place_empty_cup"
     obs_mode: Literal["rgb"] = "rgb"
-    control_mode: Literal["delta_joint_pos", "ee_delta_pose", "joint_pos"] = "ee_delta_pose"
+    control_mode: RoboTwinControlMode = "joint_pos"
     base_ckpt_path: str = "pretrained_models/place_empty_cup.ckpt"
     base_act_stats_path: Optional[str] = None
     base_act_temporal_agg: bool = True
@@ -66,9 +68,22 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--env-id", default="place_empty_cup")
     parser.add_argument("--obs-mode", default="rgb", choices=["rgb"])
     parser.add_argument(
+        "--robotwin-control-mode",
+        dest="robotwin_control_mode",
+        default=None,
+        choices=["joint_pos", "ee_pose"],
+        help=(
+            "RoboTwin action interface for ACT evaluation: joint_pos sends the "
+            "14D ACT qpos target directly (default, legacy behavior); ee_pose "
+            "converts it through FK to a 14D absolute xyz+rotvec+gripper pose."
+        ),
+    )
+    parser.add_argument(
         "--control-mode",
-        default="ee_delta_pose",
-        choices=["delta_joint_pos", "ee_delta_pose", "joint_pos"],
+        dest="legacy_control_mode",
+        default=None,
+        choices=["joint_pos", "ee_pose"],
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--base-ckpt-path", default="pretrained_models/place_empty_cup.ckpt")
     parser.add_argument("--base-act-stats-path", default=None)
@@ -113,7 +128,7 @@ def parse_args() -> EvalACTRoboTwinArgs:
         "--robotwin.image-resize-backend",
         dest="image_resize_backend",
         choices=["pillow", "opencv"],
-        default="pillow",
+        default="opencv",
     )
     parser.add_argument("--robotwin.control-step-cap", dest="control_step_cap", type=int, default=None)
     parser.add_argument("--robotwin.random-background", dest="random_background", type=_str_to_bool, default=True)
@@ -136,6 +151,18 @@ def parse_args() -> EvalACTRoboTwinArgs:
         parser.error(
             "--base-act-image-width and --base-act-image-height must be provided together."
         )
+    if (
+        ns.robotwin_control_mode is not None
+        and ns.legacy_control_mode is not None
+        and ns.robotwin_control_mode != ns.legacy_control_mode
+    ):
+        parser.error(
+            "--robotwin-control-mode and legacy --control-mode must match when both "
+            "are provided."
+        )
+    robotwin_control_mode = (
+        ns.robotwin_control_mode or ns.legacy_control_mode or "joint_pos"
+    )
     robotwin = RoboTwinConfig(
         include_wrist_cameras=ns.include_wrist_cameras,
         head_camera_type=ns.head_camera_type,
@@ -164,7 +191,7 @@ def parse_args() -> EvalACTRoboTwinArgs:
     return EvalACTRoboTwinArgs(
         env_id=ns.env_id,
         obs_mode=ns.obs_mode,
-        control_mode=ns.control_mode,
+        control_mode=robotwin_control_mode,
         base_ckpt_path=ns.base_ckpt_path,
         base_act_stats_path=ns.base_act_stats_path,
         base_act_temporal_agg=ns.base_act_temporal_agg,
@@ -294,9 +321,20 @@ def _tensor_first_row(value: Optional[torch.Tensor]) -> Optional[list[float]]:
 
 def _split_action_summary(action: torch.Tensor, control_mode: str) -> dict[str, float]:
     action = action.detach().float().cpu().reshape(-1)
-    if action.numel() != 14:
+    if control_mode == "ee_pose":
+        if action.numel() != 14:
+            return {}
+        parts = {
+            "left_xyz": action[:3],
+            "left_rotvec": action[3:6],
+            "left_gripper": action[6:7],
+            "right_xyz": action[7:10],
+            "right_rotvec": action[10:13],
+            "right_gripper": action[13:14],
+        }
+    elif action.numel() != 14:
         return {}
-    if control_mode in {"joint_pos", "delta_joint_pos"}:
+    elif control_mode in {"joint_pos", "delta_joint_pos"}:
         parts = {
             "left_arm": action[:6],
             "left_gripper": action[6:7],
@@ -550,13 +588,13 @@ def main() -> None:
         wandb_entity=args.wandb_entity,
         wandb_group=args.env_id,
     )
+    if logger.wandb_run is not None:
+        print(f"wandb_url: {logger.wandb_run.url}", flush=True)
     try:
         metrics = evaluate(args, logger)
         for key, value in metrics.items():
             print(f"{key}: {value:.6g}", flush=True)
             logger.add_summary(f"eval/{key}", value)
-        if logger.wandb_run is not None:
-            print(f"wandb_url: {logger.wandb_run.url}", flush=True)
         if args.capture_video:
             print(f"video_dir: {_record_dir(args)}", flush=True)
             if args.diagnostic_video:

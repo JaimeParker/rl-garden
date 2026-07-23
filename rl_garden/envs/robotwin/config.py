@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 
-ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose"]
+ControlMode = Literal["delta_joint_pos", "joint_pos", "ee_delta_pose", "ee_pose"]
 RewardMode = Literal["dense", "sparse"]
 ImageResizeBackend = Literal["pillow", "opencv"]
 
@@ -83,6 +83,8 @@ class RoboTwinEnvConfig:
     def __post_init__(self) -> None:
         if self.control_mode == "ee_delta_pose" and self.action_dim != 14:
             raise ValueError("ee_delta_pose control mode requires action_dim=14.")
+        if self.control_mode == "ee_pose" and self.action_dim != 14:
+            raise ValueError("ee_pose control mode requires action_dim=14.")
         if self.image_resize_backend not in {"pillow", "opencv"}:
             raise ValueError(
                 "image_resize_backend must be 'pillow' or 'opencv', "
