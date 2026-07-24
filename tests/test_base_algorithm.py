@@ -91,3 +91,71 @@ def test_evaluate_returns_empty_when_no_subenv_finished():
 
 def test_evaluate_returns_empty_dict_when_eval_env_is_none():
     assert _algo(None)._evaluate() == {}
+
+
+class _RawGymKeyEvalEnv(_DummyEnv):
+    """final_info shaped like gymnasium.wrappers.RecordEpisodeStatistics
+    (used by the mujoco/minari env backends): raw "r"/"l"/"t" keys plus
+    "_r"/"_l"/"_t" mask siblings injected by VectorEnv._add_info."""
+
+    def reset(self, seed: int | None = None):
+        del seed
+        return torch.zeros(2, 4), {}
+
+    def step(self, actions):
+        del actions
+        obs = torch.zeros(2, 4)
+        rewards = torch.zeros(2)
+        terminations = torch.tensor([True, True])
+        truncations = torch.zeros(2, dtype=torch.bool)
+        infos = {
+            "final_info": {
+                "episode": {
+                    "r": torch.tensor([10.0, 20.0]),
+                    "l": torch.tensor([5.0, 6.0]),
+                    "t": torch.tensor([0.01, 0.02]),
+                    "_r": torch.tensor([True, True]),
+                    "_l": torch.tensor([True, True]),
+                    "_t": torch.tensor([True, True]),
+                }
+            },
+            "_final_info": torch.tensor([True, True]),
+        }
+        return obs, rewards, terminations, truncations, infos
+
+
+def test_evaluate_aliases_raw_gym_episode_keys_and_drops_wall_clock_time():
+    metrics = _algo(_RawGymKeyEvalEnv())._evaluate()
+
+    assert metrics["return"] == pytest.approx(15.0)
+    assert metrics["episode_len"] == pytest.approx(5.5)
+    assert "t" not in metrics
+    assert "episode_time" not in metrics
+    assert "_r" not in metrics
+    assert "_l" not in metrics
+    assert "_t" not in metrics
+
+
+class _SuccessKeyEvalEnv(_DummyEnv):
+    def reset(self, seed: int | None = None):
+        del seed
+        return torch.zeros(2, 4), {}
+
+    def step(self, actions):
+        del actions
+        obs = torch.zeros(2, 4)
+        rewards = torch.zeros(2)
+        terminations = torch.tensor([True, True])
+        truncations = torch.zeros(2, dtype=torch.bool)
+        infos = {
+            "final_info": {"episode": {"success": torch.tensor([1.0, 0.0])}},
+            "_final_info": torch.tensor([True, True]),
+        }
+        return obs, rewards, terminations, truncations, infos
+
+
+def test_evaluate_aliases_success_to_success_at_end():
+    metrics = _algo(_SuccessKeyEvalEnv())._evaluate()
+
+    assert metrics["success_at_end"] == pytest.approx(0.5)
+    assert "success" not in metrics

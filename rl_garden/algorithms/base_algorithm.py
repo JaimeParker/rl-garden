@@ -21,6 +21,7 @@ from rl_garden.common.checkpoint import (
     save_replay_buffer_file,
     validate_checkpoint_metadata,
 )
+from rl_garden.common.eval_metrics import append_masked_episode_metrics
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import STANDARD_UPDATE_MASK, TrainingUpdateMask
 from rl_garden.common.utils import get_device, seed_everything
@@ -136,12 +137,11 @@ class BaseAlgorithm(ABC):
                     obs_before, critic_action, rewards, terminations, truncations, infos
                 )
                 if "final_info" in infos:
-                    done_mask = infos.get("_final_info")
-                    for k, v in infos["final_info"]["episode"].items():
-                        done_values = v[done_mask] if done_mask is not None else v
-                        if done_values.numel() == 0:
-                            continue
-                        metrics[k].append(done_values)
+                    append_masked_episode_metrics(
+                        metrics,
+                        infos["final_info"]["episode"],
+                        infos.get("_final_info"),
+                    )
         self.policy.train()
         out: dict[str, float] = {}
         for k, vs in metrics.items():
