@@ -151,6 +151,31 @@ def test_append_metric_values_masks_final_info():
     assert metrics == {"return": [2.0]}
 
 
+def test_append_metric_values_aliases_raw_gym_keys_and_drops_wall_clock_time():
+    metrics = {}
+    mask = torch.tensor([True])
+
+    appended = eval_checkpoint._append_metric_values(
+        metrics,
+        {
+            "r": torch.tensor([5.0]),
+            "l": torch.tensor([12.0]),
+            "t": torch.tensor([0.031]),
+            "success": torch.tensor([1.0]),
+            "_r": torch.tensor([True]),
+        },
+        mask,
+        remaining=1,
+    )
+
+    assert appended == 1
+    assert metrics == {
+        "return": [5.0],
+        "episode_len": [12.0],
+        "success_at_end": [1.0],
+    }
+
+
 def test_evaluate_agent_collects_completed_episode_metrics():
     agent = _Agent()
     env = _VectorEvalEnv()
