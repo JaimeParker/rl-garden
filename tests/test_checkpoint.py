@@ -436,3 +436,48 @@ def test_legacy_offline_cql_algorithm_class_alias_resolves_to_cql():
         action_space=action_space,
         strict=True,
     )
+
+
+def test_observation_metadata_float64_matches_runtime_float32():
+    from gymnasium import spaces as gym_spaces
+
+    from rl_garden.common.checkpoint import (
+        FORMAT_VERSION,
+        space_metadata,
+        validate_checkpoint_metadata,
+    )
+
+    checkpoint_obs = gym_spaces.Dict(
+        {
+            "observation": gym_spaces.Box(
+                low=-1.0, high=1.0, shape=(3,), dtype=np.float64
+            ),
+            "rgb": gym_spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
+        }
+    )
+    runtime_obs = gym_spaces.Dict(
+        {
+            "observation": gym_spaces.Box(
+                low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+            ),
+            "rgb": gym_spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
+        }
+    )
+    action_space = gym_spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    checkpoint = {
+        "format_version": FORMAT_VERSION,
+        "metadata": {
+            "algorithm_class": "CalQL",
+            "observation_space": space_metadata(checkpoint_obs),
+            "action_space": space_metadata(action_space),
+        },
+    }
+
+    validate_checkpoint_metadata(
+        checkpoint,
+        algorithm_class="CalQL",
+        compatible_algorithms=("CalQL",),
+        observation_space=runtime_obs,
+        action_space=action_space,
+        strict=True,
+    )

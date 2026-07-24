@@ -17,6 +17,7 @@ from rl_garden.buffers._dataset_common import (
     _to_tensor,
 )
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 
 def _require_minari():
@@ -34,7 +35,10 @@ def infer_specs_from_minari(dataset_id: str) -> tuple[spaces.Space, spaces.Space
     """Return the observation/action spaces stored on a Minari dataset."""
     minari = _require_minari()
     dataset = minari.load_dataset(dataset_id, download=True)
-    return dataset.observation_space, dataset.action_space
+    return (
+        canonicalize_floating_observation_space(dataset.observation_space),
+        dataset.action_space,
+    )
 
 
 def load_minari_dataset_to_replay_buffer(
