@@ -10,6 +10,7 @@ from gymnasium import spaces
 from rl_garden.buffers import (
     MCTensorReplayBuffer,
     TensorReplayBuffer,
+    infer_specs_from_minari,
     load_minari_dataset_to_replay_buffer,
 )
 
@@ -60,6 +61,28 @@ def _make_box_dataset(episodes) -> _FakeMinariDataset:
         observation_space=spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),
         action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
     )
+
+
+def test_infer_specs_canonicalizes_floating_observation_spaces(monkeypatch):
+    dataset = _FakeMinariDataset(
+        [],
+        observation_space=spaces.Dict(
+            {
+                "observation": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(27,), dtype=np.float64
+                ),
+                "rgb": spaces.Box(low=0, high=255, shape=(8, 8, 3), dtype=np.uint8),
+            }
+        ),
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float64),
+    )
+    _install_fake_minari(monkeypatch, dataset)
+
+    obs_space, action_space = infer_specs_from_minari("fake/dataset-v0")
+
+    assert obs_space["observation"].dtype == np.float32
+    assert obs_space["rgb"].dtype == np.uint8
+    assert action_space.dtype == np.float64
 
 
 def test_done_is_terminations_only_not_truncations(monkeypatch):

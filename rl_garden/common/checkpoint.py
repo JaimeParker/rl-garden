@@ -14,6 +14,7 @@ from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 FORMAT_VERSION = 1
 
@@ -50,6 +51,26 @@ def space_metadata(space: spaces.Space) -> dict[str, Any]:
     return {"type": type(space).__name__}
 
 
+def _observation_space_metadata(space: spaces.Space) -> dict[str, Any]:
+    return space_metadata(canonicalize_floating_observation_space(space))
+
+
+def _canonical_observation_metadata(metadata: Any) -> Any:
+    if not isinstance(metadata, dict):
+        return metadata
+    if metadata.get("type") == "Box" and str(metadata.get("dtype")).startswith("float"):
+        return {**metadata, "dtype": "float32"}
+    if metadata.get("type") == "Dict" and isinstance(metadata.get("spaces"), dict):
+        return {
+            **metadata,
+            "spaces": {
+                key: _canonical_observation_metadata(value)
+                for key, value in metadata["spaces"].items()
+            },
+        }
+    return metadata
+
+
 def validate_checkpoint_metadata(
     checkpoint: dict[str, Any],
     *,
@@ -74,9 +95,9 @@ def validate_checkpoint_metadata(
             f"current agent is {algorithm_class!r}"
         )
 
-    current_obs = space_metadata(observation_space)
+    current_obs = _observation_space_metadata(observation_space)
     current_action = space_metadata(action_space)
-    if metadata.get("observation_space") != current_obs:
+    if _canonical_observation_metadata(metadata.get("observation_space")) != current_obs:
         errors.append("observation_space metadata does not match current env")
     if metadata.get("action_space") != current_action:
         errors.append("action_space metadata does not match current env")
@@ -102,7 +123,7 @@ def checkpoint_dict(
             "algorithm_class": algorithm_class,
             "global_step": int(global_step),
             "global_update": int(global_update),
-            "observation_space": space_metadata(observation_space),
+            "observation_space": _observation_space_metadata(observation_space),
             "action_space": space_metadata(action_space),
             "hyperparameters": hyperparameters,
             "replay_buffer_path": replay_buffer_path,
