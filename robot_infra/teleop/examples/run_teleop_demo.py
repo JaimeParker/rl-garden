@@ -30,13 +30,15 @@ class Args:
     rot_scale: Optional[float] = None
     twist_limit: Optional[float] = None
     intervention_threshold: float = 1e-4
+    init_timeout_s: float = 120.0
+    spacemouse_index: int = 0
+    spacemouse_scale: float = 1.0
 
 
 def main():
     args = tyro.cli(Args)
     import torch
     from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
-    from robot_infra.teleop.utils.telo_op_control_twist import EETwistTeleOpWrapper
 
     env_cfg = ManiSkillEnvConfig(
         env_id=args.env_id,
@@ -62,21 +64,7 @@ def main():
             print("normalize_action=False: using raw ee_twist actions.")
         else:
             print("normalize_action=True: scaling ee_twist actions to [-1, 1].")
-        teleop_kwargs = dict(
-            zmq_url=args.zmq_url,
-            hand=args.hand,
-            device=args.device,
-            intervention_threshold=args.intervention_threshold,
-        )
-        if args.pos_scale is not None:
-            teleop_kwargs["pos_scale"] = args.pos_scale
-        if args.rot_scale is not None:
-            teleop_kwargs["rot_scale"] = args.rot_scale
-        if args.twist_limit is not None:
-            teleop_kwargs["twist_limit"] = args.twist_limit
-        teleop = EETwistTeleOpWrapper(
-            **teleop_kwargs,
-        )
+        teleop = make_demo_teleop(args)
         obs, info = env.reset()
         step = 0
         while args.max_steps <= 0 or step < args.max_steps:
@@ -110,6 +98,31 @@ def obs_device(obs):
     if isinstance(obs, dict):
         return next(iter(obs.values())).device
     return obs.device
+
+
+def make_demo_teleop(args):
+    if args.device == "spacemouse":
+        from robot_infra.teleop.spacemouse import SpaceMouseTeleOpWrapper
+
+        return SpaceMouseTeleOpWrapper(
+            intervention_threshold=args.intervention_threshold,
+            spacemouse_index=args.spacemouse_index,
+            spacemouse_scale=args.spacemouse_scale,
+        )
+
+    from robot_infra.teleop.source import make_teleop_source
+
+    return make_teleop_source(
+        zmq_url=args.zmq_url,
+        hand=args.hand,
+        device=args.device,
+        pos_scale=args.pos_scale,
+        rot_scale=args.rot_scale,
+        twist_limit=args.twist_limit,
+        intervention_threshold=args.intervention_threshold,
+        init_timeout_s=args.init_timeout_s,
+        spacemouse_index=args.spacemouse_index,
+    )
 
 
 def fit_action(action, shape):

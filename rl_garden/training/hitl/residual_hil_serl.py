@@ -90,6 +90,7 @@ def _build_env(args, env_request, *, enable_teleop: bool, enable_classifier: boo
             env,
             device=args.teleop_device,
             record_gripper=args.teleop_record_gripper,
+            teleop_init_timeout_s=args.teleop_init_timeout_s,
         )
 
     return env

@@ -13,7 +13,7 @@ REPO_ROOT = os.path.abspath(
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from robot_infra.teleop.utils.telo_op_control_twist import EETwistTeleOpWrapper
+from robot_infra.teleop.source import make_teleop_source
 
 
 @dataclass
@@ -26,33 +26,35 @@ class Args:
     rot_scale: Optional[float] = None
     twist_limit: Optional[float] = None
     intervention_threshold: float = 1e-4
+    init_timeout_s: float = 120.0
+    spacemouse_index: int = 0
 
 
 def main():
     args = tyro.cli(Args)
     np.set_printoptions(precision=4, suppress=True)
 
-    teleop_kwargs = dict(
+    teleop = make_teleop_source(
         zmq_url=args.zmq_url,
         hand=args.hand,
         device=args.device,
+        pos_scale=args.pos_scale,
+        rot_scale=args.rot_scale,
+        twist_limit=args.twist_limit,
         intervention_threshold=args.intervention_threshold,
+        init_timeout_s=args.init_timeout_s,
+        spacemouse_index=args.spacemouse_index,
     )
-    if args.pos_scale is not None:
-        teleop_kwargs["pos_scale"] = args.pos_scale
-    if args.rot_scale is not None:
-        teleop_kwargs["rot_scale"] = args.rot_scale
-    if args.twist_limit is not None:
-        teleop_kwargs["twist_limit"] = args.twist_limit
-
-    teleop = EETwistTeleOpWrapper(**teleop_kwargs)
-    print(f"Listening on {args.zmq_url}, device={args.device}, hand={args.hand}")
+    if args.device == "pico":
+        print(f"Listening on {args.zmq_url}, device=pico, hand={args.hand}")
+    else:
+        print(f"Listening to SpaceMouse, index={args.spacemouse_index}")
     try:
         while True:
             sample = teleop.poll()
             print(
                 "received:",
-                teleop.last_received,
+                getattr(teleop, "last_received", True),
                 "twist:",
                 sample.twist,
                 "gripper:",

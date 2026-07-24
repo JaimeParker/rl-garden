@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import time
 
 import numpy as np
 
@@ -167,6 +168,7 @@ class EETwistTeleOpWrapper:
         rot_scale: float = TRACKING_COMPENSATION,
         twist_limit: float = DEFAULT_TWIST_LIMIT,
         intervention_threshold: float = 1e-4,
+        init_timeout_s: float = 120.0,
     ):
         if device not in ("pico", "spacemouse"):
             raise ValueError("device must be 'pico' or 'spacemouse'.")
@@ -182,11 +184,14 @@ class EETwistTeleOpWrapper:
         self.hand = hand
         self.mapper = HandPoseToEETwist(hand, pos_scale, rot_scale, twist_limit)
         self.intervention_threshold = float(intervention_threshold)
+        self._pending_data: np.ndarray | None = None
         self.reset()
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.SUB)
         self.socket.connect(zmq_url)
         self.socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        if init_timeout_s > 0:
+            self._wait_for_initial_sample(zmq_url, init_timeout_s)
 
     def reset(self, *, episode_end_pressed: bool = False) -> None:
         self.mapper.reset()
@@ -223,13 +228,34 @@ class EETwistTeleOpWrapper:
         return button_state
 
     def _recv_latest(self) -> np.ndarray | None:
-        latest = None
+        latest = self._pending_data
+        self._pending_data = None
         while True:
             try:
                 latest = self.socket.recv_json(flags=self.zmq.NOBLOCK)
             except self.zmq.Again:
                 break
         return None if latest is None else np.asarray(latest, dtype=np.float32)
+
+    def _wait_for_initial_sample(self, zmq_url: str, timeout_s: float) -> None:
+        print(
+            f"[teleop] waiting for pico input on {zmq_url} "
+            f"(timeout={timeout_s:.1f}s)",
+            flush=True,
+        )
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            data = self._recv_latest()
+            if data is not None:
+                self._parse_device(data)
+                self._pending_data = data
+                print("[teleop] pico input connected", flush=True)
+                return
+            time.sleep(0.02)
+        raise TimeoutError(
+            "Timed out waiting for pico teleop input. "
+            f"No sample was received on {zmq_url} within {timeout_s:.1f}s."
+        )
 
     def _parse_pico(self, data: np.ndarray) -> DeviceSample:
         if data.size == 13:

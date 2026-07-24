@@ -34,6 +34,7 @@ class TeleopInterventionWrapper(gym.Wrapper):
         teleop: Optional[TeleopSource] = None,
         device: Literal["pico", "spacemouse"] = "pico",
         record_gripper: bool = True,
+        teleop_init_timeout_s: float = 120.0,
         **teleop_kwargs: Any,
     ) -> None:
         super().__init__(env)
@@ -41,10 +42,24 @@ class TeleopInterventionWrapper(gym.Wrapper):
         if teleop is not None:
             self.teleop = teleop
         elif device == "pico":
-            self.teleop = EETwistTeleOpWrapper(device="pico", **teleop_kwargs)
+            print(
+                f"[teleop] initializing device=pico "
+                f"record_gripper={self.record_gripper}",
+                flush=True,
+            )
+            self.teleop = EETwistTeleOpWrapper(
+                device="pico",
+                init_timeout_s=teleop_init_timeout_s,
+                **teleop_kwargs,
+            )
         elif device == "spacemouse":
             from robot_infra.teleop.spacemouse import SpaceMouseTeleOpWrapper
 
+            print(
+                f"[teleop] initializing device=spacemouse "
+                f"record_gripper={self.record_gripper}",
+                flush=True,
+            )
             self.teleop = SpaceMouseTeleOpWrapper(**teleop_kwargs)
         else:
             raise ValueError(f"device must be 'pico' or 'spacemouse', got {device!r}.")

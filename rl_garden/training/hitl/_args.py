@@ -20,6 +20,7 @@ class HITLArgs:
 
     teleop_device: Literal["pico", "spacemouse"] = "pico"
     teleop_record_gripper: bool = True
+    teleop_init_timeout_s: float = 120.0
 
     demo_buffer_size: int = 100_000
     demo_data_ratio: float = 0.5

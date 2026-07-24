@@ -140,6 +140,12 @@ The wrapper validates the processed human action against
 - `--teleop_record_gripper false` for ManiSkill fixed-gripper / no-gripper
   `pd_ee_twist` controllers.
 
+On actor startup the teleoperation source is checked before training begins.
+For Pico, the actor waits for the first ZMQ input sample for
+`--teleop_init_timeout_s` seconds (default: `120.0`) and raises if none arrives.
+For SpaceMouse, initialization raises if the HID device cannot be opened. Set
+`--teleop_init_timeout_s 0` to skip the Pico startup wait.
+
 ## ManiSkill Usage
 
 ManiSkill uses its own environment reward and termination. The HITL path does
@@ -174,8 +180,27 @@ python examples/train_hitl.py residual_hil_serl \
   --log_type none
 ```
 
+Example actor with SpaceMouse:
+
+```bash
+python examples/train_hitl.py residual_hil_serl \
+  --role actor \
+  --env_backend maniskill \
+  --env_id PegInsertionSidePegOnly-v1 \
+  --control_mode pd_ee_twist \
+  --render_mode human \
+  --base_policy zero \
+  --sync_host 127.0.0.1 \
+  --sync_port 6000 \
+  --teleop_device spacemouse \
+  --teleop_record_gripper false \
+  --log_type none
+```
+
 Set `--teleop_record_gripper true` if the selected ManiSkill robot/controller
-exposes a 7D action space with gripper control.
+exposes a 7D action space with gripper control. SpaceMouse does not use
+`--teleop_init_timeout_s`; if the HID device cannot be opened, actor startup
+fails immediately with a SpaceMouse connection error.
 
 ## Real-World Usage
 
@@ -209,6 +234,12 @@ python examples/train_hitl.py residual_hil_serl \
   --sync_port 6000 \
   --franka_real.bridge_url http://localhost:5000 \
   --teleop_record_gripper true
+```
+
+Use SpaceMouse on the real-robot actor by adding:
+
+```bash
+--teleop_device spacemouse
 ```
 
 Actor and learner must use matching environment/action-space configuration and

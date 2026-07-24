@@ -3,21 +3,21 @@
 This document describes the current end-effector twist teleoperation interface
 under `robot_infra/teleop`.
 
-## EETwist TeleOp Interface
+## TeleOp Interface
 
-The main interface is `EETwistTeleOpWrapper` in
-`robot_infra/teleop/utils/telo_op_control_twist.py`.
+The shared runtime interface is `poll() -> TeleOpSample`. Use
+`make_teleop_source()` in `robot_infra/teleop/source.py` when a script needs to
+support multiple devices.
 
-Currently supported device:
+Currently supported devices:
 
 - `pico`
-
-Reserved but not implemented:
-
 - `spacemouse`
 
-The wrapper receives device data from a ZeroMQ `SUB` socket. The Pico server is
-expected to publish JSON arrays to:
+`pico` uses `EETwistTeleOpWrapper` in
+`robot_infra/teleop/utils/telo_op_control_twist.py`. It receives device data
+from a ZeroMQ `SUB` socket. The Pico server is expected to publish JSON arrays
+to:
 
 ```python
 tcp://*:7777
@@ -62,16 +62,43 @@ intervened
 When no new device data arrives, `twist=0`, `gripper` keeps the previous value,
 and `intervened=False`.
 
+### SpaceMouse
+
+SpaceMouse uses `SpaceMouseTeleOpWrapper` in
+`robot_infra/teleop/spacemouse/spacemouse_teleop_wrapper.py`, adapted from
+`3rd_party/hil-serl`. It reads the local HID device through `pyspacemouse`.
+
+Install the optional dependency on the actor machine:
+
+```bash
+pip install pyspacemouse
+```
+
+The SpaceMouse raw 6-axis reading is already an EE twist:
+
+```text
+[-y, x, z, -roll, -pitch, -yaw]
+```
+
+Button convention:
+
+- button `0`: close gripper (`-1.0`)
+- button `1`: open gripper (`1.0`)
+
+If multiple SpaceMouse devices report data, `--spacemouse-index` selects which
+6D slice to use. The default is `0`.
+
 ### Adding New Devices
 
 To add a new teleoperation device:
 
-1. Add the device name to `EETwistTeleOpWrapper.__init__`.
-2. Implement a parser like `_parse_pico()`.
-3. Dispatch it in `_parse_device()`.
-4. Convert the device-specific data into `DeviceSample`.
+1. Implement a source class with `poll()`, `reset()`, and `close()`.
+2. Return `TeleOpSample` from `poll()`.
+3. Add the device branch to `make_teleop_source()`.
+4. Keep device-specific dependencies as lazy imports.
 
-The rest of the twist computation should stay shared.
+Only devices that publish absolute hand pose should use `HandPoseToEETwist`.
+Rate-control devices such as SpaceMouse should produce twist directly.
 
 ## Basic Usage
 
@@ -90,6 +117,24 @@ Print incoming teleop state without connecting to an environment:
 python robot_infra/teleop/examples/run_twist_input_inspector.py \
   --device pico \
   --zmq-url tcp://192.168.6.2:7777
+```
+
+Print incoming SpaceMouse state without connecting to an environment:
+
+```bash
+python robot_infra/teleop/examples/run_twist_input_inspector.py \
+  --device spacemouse
+```
+
+Visual SpaceMouse teleoperation in ManiSkill:
+
+```bash
+python robot_infra/teleop/examples/run_teleop_demo.py \
+  --env-id PegInsertionSidePegOnly-v1 \
+  --control-mode pd_ee_twist \
+  --sim-backend cpu \
+  --render-backend gpu \
+  --device spacemouse
 ```
 
 `run_teleop_demo.py` creates the ManiSkill environment, polls teleop actions, applies

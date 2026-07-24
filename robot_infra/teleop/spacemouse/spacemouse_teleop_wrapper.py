@@ -21,18 +21,42 @@ DEFAULT_INTERVENTION_THRESHOLD = 1e-3
 
 
 class SpaceMouseTeleOpWrapper:
-    def __init__(self, intervention_threshold: float = DEFAULT_INTERVENTION_THRESHOLD) -> None:
+    def __init__(
+        self,
+        intervention_threshold: float = DEFAULT_INTERVENTION_THRESHOLD,
+        spacemouse_index: int = 0,
+        spacemouse_scale: float = 1.0,
+    ) -> None:
+        if spacemouse_index < 0:
+            raise ValueError("spacemouse_index must be non-negative.")
         self.expert = SpaceMouseExpert()
         self.intervention_threshold = float(intervention_threshold)
+        self.spacemouse_index = int(spacemouse_index)
+        self.spacemouse_scale = float(spacemouse_scale)
         self.last_gripper = 1.0
 
     def reset(self, *, episode_end_pressed: bool = False) -> None:
         del episode_end_pressed
         self.last_gripper = 1.0
 
+    def _select_device(self, action, buttons):
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action.size % 6 != 0:
+            raise ValueError(f"SpaceMouse action must be 6D per device, got {action.size}.")
+        num_devices = action.size // 6
+        if self.spacemouse_index >= num_devices:
+            raise ValueError(
+                f"spacemouse_index={self.spacemouse_index} but only "
+                f"{num_devices} SpaceMouse device(s) are reporting."
+            )
+        start = self.spacemouse_index * 6
+        button_start = self.spacemouse_index * 2
+        return action[start:start + 6], list(buttons)[button_start:button_start + 2]
+
     def poll(self) -> TeleOpSample:
-        twist, buttons = self.expert.get_action()
-        twist = np.asarray(twist, dtype=np.float32)
+        action, buttons = self.expert.get_action()
+        twist, buttons = self._select_device(action, buttons)
+        twist = twist * self.spacemouse_scale
 
         gripper_intervened = False
         if len(buttons) >= 1 and buttons[0]:

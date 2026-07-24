@@ -22,8 +22,10 @@ class _FakeEnv(gym.Env):
 
 
 class _FakeTeleop:
+    init_kwargs = None
+
     def __init__(self, *args, **kwargs):
-        pass
+        type(self).init_kwargs = dict(kwargs)
 
     def reset(self):
         pass
@@ -69,7 +71,7 @@ def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
     )
 
     env = _build_env(
-        _args(teleop_record_gripper=False),
+        _args(teleop_record_gripper=False, teleop_init_timeout_s=12.5),
         env_request=None,
         enable_teleop=True,
         enable_classifier=True,
@@ -80,6 +82,7 @@ def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
 
     assert isinstance(env, TeleopInterventionWrapper)
     assert env.record_gripper is False
+    assert _FakeTeleop.init_kwargs["init_timeout_s"] == 12.5
     assert not isinstance(env.env, RewardClassifierWrapper)
 
 

@@ -9,8 +9,9 @@ no reason to carry a stale copy of someone else's package). Install it with
 """
 from __future__ import annotations
 
-import multiprocessing
-from typing import Tuple
+import threading
+import time
+from typing import Any, Tuple
 
 import numpy as np
 
@@ -23,47 +24,80 @@ class SpaceMouseExpert:
     def __init__(self) -> None:
         import pyspacemouse
 
-        pyspacemouse.open()
+        try:
+            device = pyspacemouse.open()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Failed to open SpaceMouse teleop device. If pyspacemouse can "
+                "list the device but cannot open it on Linux, check hidraw "
+                "permissions or udev rules for the 3Dconnexion device."
+            ) from exc
+        if device is None:
+            raise RuntimeError(
+                "Failed to open SpaceMouse teleop device. "
+                "Check that a supported SpaceMouse is connected and accessible."
+            )
+        print("[teleop] spacemouse input connected", flush=True)
 
-        self.manager = multiprocessing.Manager()
-        self.latest_data = self.manager.dict()
+        self._pyspacemouse = pyspacemouse
+        self._device = device
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self.latest_data = {}
         self.latest_data["action"] = [0.0] * 6
         self.latest_data["buttons"] = [0, 0, 0, 0]
 
-        self.process = multiprocessing.Process(target=self._read_spacemouse)
-        self.process.daemon = True
-        self.process.start()
+        self.thread = threading.Thread(target=self._read_spacemouse, daemon=True)
+        self.thread.start()
+
+    @staticmethod
+    def _state_to_action_buttons(state: Any) -> Tuple[list[float], list]:
+        return [
+            state.y, state.x, -state.z,
+            state.roll, -state.pitch, state.yaw,
+        ], list(state.buttons)
 
     def _read_spacemouse(self) -> None:
-        import pyspacemouse
-
-        while True:
-            state = pyspacemouse.read_all()
+        while not self._stop_event.is_set():
+            if hasattr(self._device, "read"):
+                single_state = self._device.read()
+                state = [] if single_state is None else [single_state]
+            elif hasattr(self._pyspacemouse, "read_all"):
+                state = self._pyspacemouse.read_all()
+            else:
+                raise RuntimeError(
+                    "Installed pyspacemouse exposes neither device.read() nor "
+                    "pyspacemouse.read_all()."
+                )
             action = [0.0] * 6
             buttons = [0, 0, 0, 0]
 
             if len(state) == 2:
-                action = [
-                    -state[0].y, state[0].x, state[0].z,
-                    -state[0].roll, -state[0].pitch, -state[0].yaw,
-                    -state[1].y, state[1].x, state[1].z,
-                    -state[1].roll, -state[1].pitch, -state[1].yaw,
-                ]
-                buttons = state[0].buttons + state[1].buttons
+                action_0, buttons_0 = self._state_to_action_buttons(state[0])
+                action_1, buttons_1 = self._state_to_action_buttons(state[1])
+                action = action_0 + action_1
+                buttons = buttons_0 + buttons_1
             elif len(state) == 1:
-                action = [
-                    -state[0].y, state[0].x, state[0].z,
-                    -state[0].roll, -state[0].pitch, -state[0].yaw,
-                ]
-                buttons = state[0].buttons
+                action, buttons = self._state_to_action_buttons(state[0])
 
-            self.latest_data["action"] = action
-            self.latest_data["buttons"] = buttons
+            with self._lock:
+                self.latest_data["action"] = action
+                self.latest_data["buttons"] = buttons
+            time.sleep(0.001)
 
     def get_action(self) -> Tuple[np.ndarray, list]:
-        action = self.latest_data["action"]
-        buttons = self.latest_data["buttons"]
+        with self._lock:
+            action = self.latest_data["action"]
+            buttons = self.latest_data["buttons"]
         return np.array(action), buttons
 
     def close(self) -> None:
-        self.process.terminate()
+        self._stop_event.set()
+        self.thread.join(timeout=1.0)
+        close = getattr(self._device, "close", None)
+        if callable(close):
+            close()
+            return
+        close = getattr(self._pyspacemouse, "close", None)
+        if callable(close):
+            close()
