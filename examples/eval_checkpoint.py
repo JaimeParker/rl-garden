@@ -38,6 +38,7 @@ from rl_garden.common.env_args import (
     MujocoWarpConfig,
     RoboTwinConfig,
 )
+from rl_garden.common.eval_metrics import EVAL_METRIC_ALIASES, EVAL_METRIC_DROP
 from rl_garden.common.resolved_config import resolved_config_json
 from rl_garden.envs.backend_registry import (
     EnvRequest,
@@ -372,7 +373,10 @@ def _append_metric_values(
     remaining: int,
 ) -> int:
     appended = 0
-    for key, value in episode.items():
+    for raw_key, value in episode.items():
+        if raw_key.startswith("_") or raw_key in EVAL_METRIC_DROP or isinstance(value, Mapping):
+            continue
+        key = EVAL_METRIC_ALIASES.get(raw_key, raw_key)
         values = _to_cpu_1d(value)
         if values.numel() == mask.numel():
             values = values[mask]
