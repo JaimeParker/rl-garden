@@ -32,31 +32,12 @@ from __future__ import annotations
 
 from typing import Any
 
-import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium.vector import AutoresetMode, VectorEnv, VectorWrapper
 from gymnasium.vector.utils import batch_space
 
-
-def _translate_box(space: gym.spaces.Box) -> gym.spaces.Box:
-    if not np.issubdtype(space.dtype, np.floating):
-        # uint8 image spaces etc. pass through unchanged (raw pixel values).
-        return space
-    return gym.spaces.Box(
-        low=space.low.astype(np.float32),
-        high=space.high.astype(np.float32),
-        shape=space.shape,
-        dtype=np.float32,
-    )
-
-
-def _translate_space(space: gym.Space) -> gym.Space:
-    if isinstance(space, gym.spaces.Dict):
-        return gym.spaces.Dict({key: _translate_space(sub) for key, sub in space.spaces.items()})
-    if isinstance(space, gym.spaces.Box):
-        return _translate_box(space)
-    return space
+from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 
 class TorchVectorEnvAdapter(VectorWrapper):
@@ -67,7 +48,9 @@ class TorchVectorEnvAdapter(VectorWrapper):
     def __init__(self, vec_env: VectorEnv, device: str) -> None:
         super().__init__(vec_env)
         self.device = torch.device(device)
-        self.single_observation_space = _translate_space(vec_env.single_observation_space)
+        self.single_observation_space = canonicalize_floating_observation_space(
+            vec_env.single_observation_space
+        )
         self.observation_space = batch_space(self.single_observation_space, vec_env.num_envs)
         self.single_action_space = vec_env.single_action_space
         # off_policy.py's random-exploration phase reads the batched
