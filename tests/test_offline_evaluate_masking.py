@@ -84,7 +84,7 @@ def test_evaluate_excludes_non_final_garbage_values_from_partial_termination():
     # Correct: mean of the two real completions (10.0, 20.0) == 15.0.
     # A regression to the unmasked bug would instead average in the 999.0
     # garbage entries and produce a wildly different number.
-    assert out["r"] == 15.0
+    assert out["return"] == 15.0
 
 
 def test_evaluate_lockstep_all_envs_done_together_matches_unmasked_result():
@@ -103,4 +103,4 @@ def test_evaluate_lockstep_all_envs_done_together_matches_unmasked_result():
 
     out = algo._evaluate()
 
-    assert out["r"] == 6.0  # mean(4.0, 8.0), identical to pre-fix torch.stack().mean()
+    assert out["return"] == 6.0  # mean(4.0, 8.0), identical to pre-fix torch.stack().mean()
