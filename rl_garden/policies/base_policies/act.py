@@ -4,10 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+import numpy as np
 import torch
 from gymnasium import spaces
 
 from rl_garden.common.types import Obs
+from rl_garden.envs.robotwin.kinematics import (
+    absolute_ee_pose_to_normalized_delta,
+)
 from rl_garden.policies.base_policies.base import BasePolicyOutput, BasePolicyProvider
 
 if TYPE_CHECKING:
@@ -165,6 +169,18 @@ class RoboTwinACTEEPoseBasePolicy(BasePolicyProvider):
             device=device,
         )
 
+    @property
+    def checkpoint_path(self):
+        return self.act_policy.checkpoint_path
+
+    @property
+    def spec(self):
+        return self.act_policy.spec
+
+    @property
+    def config(self):
+        return self.act_policy.config
+
     def reset(self, env_ids: Optional[torch.Tensor] = None) -> None:
         self.act_policy.reset(env_ids=env_ids)
 
@@ -183,5 +199,49 @@ class RoboTwinACTEEPoseBasePolicy(BasePolicyProvider):
         ee_actions = self.env.qpos_targets_to_ee_pose(qpos_output.actions)
         return BasePolicyOutput(
             actions=self._format_actions(ee_actions),
+            info={"qpos_actions": qpos_output.actions.detach()},
+        )
+
+
+class RoboTwinACTEEDeltaPoseBasePolicy(RoboTwinACTEEPoseBasePolicy):
+    """Convert ACT qpos targets to normalized world-frame EE deltas."""
+
+    @torch.no_grad()
+    def select_action(self, obs: Obs) -> BasePolicyOutput:
+        if not isinstance(obs, dict) or "state" not in obs:
+            raise ValueError(
+                "RoboTwin ACT EE-delta base policy requires obs['state'] qpos."
+            )
+        qpos_output = self.act_policy.select_action(obs)
+        current_qpos = obs["state"].detach().cpu().numpy()
+        target_qpos = qpos_output.actions.detach().cpu().numpy()
+        current_ee = np.asarray(
+            self.env.qpos_targets_to_ee_pose(current_qpos),
+            dtype=np.float32,
+        )
+        target_ee = np.asarray(
+            self.env.qpos_targets_to_ee_pose(target_qpos),
+            dtype=np.float32,
+        )
+        if current_ee.shape != target_ee.shape or current_ee.ndim != 2:
+            raise ValueError(
+                "RoboTwin ACT EE-delta FK outputs must have matching batched "
+                f"shapes, got current={current_ee.shape}, target={target_ee.shape}."
+            )
+        cfg = self.env.cfg
+        normalized_delta = np.stack(
+            [
+                absolute_ee_pose_to_normalized_delta(
+                    current,
+                    target,
+                    ee_delta_pos_scale=cfg.ee_delta_pos_scale,
+                    ee_delta_rot_scale=cfg.ee_delta_rot_scale,
+                    gripper_delta_scale=cfg.gripper_delta_scale,
+                )
+                for current, target in zip(current_ee, target_ee)
+            ]
+        )
+        return BasePolicyOutput(
+            actions=self._format_actions(normalized_delta),
             info={"qpos_actions": qpos_output.actions.detach()},
         )

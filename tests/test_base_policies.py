@@ -9,6 +9,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import SAC
 from rl_garden.policies.base_policies import (
+    RoboTwinACTEEDeltaPoseBasePolicy,
     RoboTwinACTEEPoseBasePolicy,
     SACBasePolicy,
     ZeroBasePolicy,
@@ -174,6 +175,45 @@ def test_act_factory_uses_robotwin_ee_pose_bridge_by_control_semantics(monkeypat
     assert captured["stats_path"] == "/checkpoints/dataset_stats.pkl"
 
 
+def test_act_factory_uses_robotwin_ee_delta_bridge_by_control_semantics(
+    monkeypatch,
+) -> None:
+    captured = {}
+    sentinel = object()
+
+    def fake_from_checkpoint(**kwargs):
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(
+        "rl_garden.policies.base_policies.factory."
+        "RoboTwinACTEEDeltaPoseBasePolicy.from_checkpoint",
+        fake_from_checkpoint,
+    )
+    env = _rgb_env()
+    env.cfg = SimpleNamespace(control_mode="ee_delta_pose")  # type: ignore[attr-defined]
+    env.single_action_space = spaces.Box(
+        low=-1.0,
+        high=1.0,
+        shape=(14,),
+        dtype=np.float32,
+    )
+    env.qpos_targets_to_ee_pose = lambda actions: actions  # type: ignore[attr-defined]
+
+    result = make_base_policy(
+        base_policy="act",
+        observation_space=env.single_observation_space,
+        action_space=env.single_action_space,
+        env=env,
+        base_ckpt_path="/checkpoints/policy_last.ckpt",
+        base_act_stats_path="/checkpoints/dataset_stats.pkl",
+    )
+
+    assert result is sentinel
+    assert captured["env"] is env
+    assert captured["stats_path"] == "/checkpoints/dataset_stats.pkl"
+
+
 def test_robotwin_act_ee_pose_base_policy_converts_local_qpos_output() -> None:
     class FakeACT(torch.nn.Module):
         def __init__(self):
@@ -222,3 +262,107 @@ def test_robotwin_act_ee_pose_base_policy_converts_local_qpos_output() -> None:
     assert output.info["qpos_actions"].shape == (2, 14)
     policy.reset()
     assert act_policy.reset_calls == 1
+
+
+def test_robotwin_act_ee_delta_base_policy_converts_current_and_target_qpos() -> None:
+    class FakeACT(torch.nn.Module):
+        checkpoint_path = "/checkpoints/policy_last.ckpt"
+        spec = object()
+        config = object()
+
+        def __init__(self, target):
+            super().__init__()
+            self.target = target
+            self.reset_env_ids = None
+            self.bound_env = None
+            self.to_calls = []
+
+        def select_action(self, obs):
+            assert "state" in obs
+            return BasePolicyOutput(actions=self.target.clone())
+
+        def reset(self, env_ids=None):
+            self.reset_env_ids = env_ids
+
+        def bind_env(self, env):
+            self.bound_env = env
+
+        def to(self, device):
+            self.to_calls.append(torch.device(device))
+            return self
+
+    class FakeDeltaEnv:
+        def __init__(self, pos_scale):
+            self.cfg = SimpleNamespace(
+                ee_delta_pos_scale=pos_scale,
+                ee_delta_rot_scale=0.5,
+                gripper_delta_scale=0.2,
+            )
+            self.calls = []
+
+        def qpos_targets_to_ee_pose(self, actions):
+            assert isinstance(actions, np.ndarray)
+            self.calls.append(actions.copy())
+            return actions.copy()
+
+    current = torch.zeros(2, 14, dtype=torch.float64)
+    current[:, [6, 13]] = torch.tensor(
+        [[0.4, 0.6], [0.5, 0.5]],
+        dtype=current.dtype,
+    )
+    target = current.float().clone()
+    target[0, [0, 1, 2, 6, 7, 8, 9, 13]] += torch.tensor(
+        [0.02, -0.03, 0.04, 0.1, -0.01, 0.02, -0.04, -0.1]
+    )
+    target[1, [0, 6, 7, 13]] += torch.tensor([-0.05, -0.1, 0.05, 0.1])
+    observation_space = spaces.Dict(
+        {
+            "state": spaces.Box(
+                -np.inf,
+                np.inf,
+                shape=(14,),
+                dtype=np.float32,
+            )
+        }
+    )
+    action_space = spaces.Box(-1.0, 1.0, shape=(14,), dtype=np.float32)
+    act_policy = FakeACT(target)
+    env = FakeDeltaEnv(pos_scale=0.1)
+    policy = RoboTwinACTEEDeltaPoseBasePolicy(
+        act_policy,  # type: ignore[arg-type]
+        env=env,
+        observation_space=observation_space,
+        action_space=action_space,
+        device="cpu",
+    )
+
+    output = policy.select_action({"state": current})
+
+    assert len(env.calls) == 2
+    np.testing.assert_allclose(env.calls[0], current.numpy())
+    np.testing.assert_allclose(env.calls[1], target.numpy())
+    assert output.actions.shape == (2, 14)
+    assert output.actions.dtype == torch.float32
+    assert output.actions.device.type == "cpu"
+    assert torch.isfinite(output.actions).all()
+    assert torch.all(output.actions >= -1.0)
+    assert torch.all(output.actions <= 1.0)
+    torch.testing.assert_close(
+        output.actions[0, [0, 1, 2, 6, 7, 8, 9, 13]],
+        torch.tensor([0.2, -0.3, 0.4, 0.5, -0.1, 0.2, -0.4, -0.5]),
+    )
+    assert policy.checkpoint_path == FakeACT.checkpoint_path
+    assert policy.spec is FakeACT.spec
+    assert policy.config is FakeACT.config
+
+    env_ids = torch.tensor([1])
+    policy.reset(env_ids)
+    assert act_policy.reset_env_ids is env_ids
+    replacement_env = FakeDeltaEnv(pos_scale=0.2)
+    policy.bind_env(replacement_env)
+    assert policy.env is replacement_env
+    assert act_policy.bound_env is replacement_env
+    policy.to("cpu")
+    assert act_policy.to_calls[-1] == torch.device("cpu")
+    policy.select_action({"state": current})
+    assert len(replacement_env.calls) == 2

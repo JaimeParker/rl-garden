@@ -383,6 +383,27 @@ def test_delta_joint_pos_action_conversion():
     assert raw[13] == 0.75
 
 
+def test_ee_delta_pose_zero_action_preserves_live_absolute_pose():
+    class RotatedRobot(_Robot):
+        def get_left_ee_pose(self):
+            return [0.1, 0.2, 0.3, np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0]
+
+        def get_right_ee_pose(self):
+            return [-0.1, -0.2, -0.3, np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)]
+
+    cfg = RoboTwinEnvConfig(control_mode="ee_delta_pose", device="cpu")
+    adapter = RoboTwinTaskAdapter(0, cfg, {}, env_seed=0)
+    robot = RotatedRobot()
+    adapter.task = type("Task", (), {"robot": robot})()
+
+    raw = adapter._to_robotwin_action(np.zeros(14, dtype=np.float32))
+
+    np.testing.assert_allclose(raw[:7], robot.get_left_ee_pose(), atol=1e-6)
+    np.testing.assert_allclose(raw[7], 0.25)
+    np.testing.assert_allclose(raw[8:15], robot.get_right_ee_pose(), atol=1e-6)
+    np.testing.assert_allclose(raw[15], 0.75)
+
+
 def test_ee_delta_pose_action_space_and_conversion():
     cfg = RoboTwinEnvConfig(
         control_mode="ee_delta_pose",
@@ -414,9 +435,20 @@ def test_ee_delta_pose_action_space_and_conversion():
         raw[3:7], [np.cos(0.1), 0.0, 0.0, np.sin(0.1)], atol=1e-6
     )
     np.testing.assert_allclose(raw[7], 0.35)
-    np.testing.assert_allclose(raw[8:11], [-0.01, 0.0, 0.0])
+    np.testing.assert_allclose(raw[8:11], [0.49, 0.0, 0.0])
     np.testing.assert_allclose(raw[11:15], [1.0, 0.0, 0.0, 0.0])
     np.testing.assert_allclose(raw[15], 0.65)
+
+
+def test_ee_delta_pose_rejects_nonfinite_action():
+    cfg = RoboTwinEnvConfig(control_mode="ee_delta_pose", device="cpu")
+    adapter = RoboTwinTaskAdapter(0, cfg, {}, env_seed=0)
+    adapter.task = type("Task", (), {"robot": _Robot()})()
+    action = np.zeros(14, dtype=np.float32)
+    action[3] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        adapter._to_robotwin_action(action)
 
 
 def test_absolute_ee_pose_action_space_and_conversion():

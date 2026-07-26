@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from rl_garden.envs.robotwin.kinematics import (
     RoboTwinJointTargetFK,
+    absolute_ee_pose_to_normalized_delta,
+    apply_normalized_ee_delta,
     quaternion_to_rotvec_wxyz,
     quaternion_to_matrix_wxyz,
     robotwin_gripper_pose,
@@ -167,3 +170,87 @@ def test_robotwin_gripper_pose_reproduces_offset_and_noncommuting_rotation() -> 
         expected_rotation,
         atol=1e-6,
     )
+
+
+def test_absolute_ee_pose_delta_roundtrip_uses_relative_quaternion() -> None:
+    current = np.zeros(14, dtype=np.float32)
+    target = np.zeros(14, dtype=np.float32)
+    current[0:3] = [0.1, -0.2, 0.3]
+    target[0:3] = [0.2, -0.1, 0.25]
+    current[7:10] = [-0.1, 0.2, -0.3]
+    target[7:10] = [-0.2, 0.1, -0.25]
+    current[3:6] = quaternion_to_rotvec_wxyz(
+        np.array([np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0])
+    )
+    target[3:6] = quaternion_to_rotvec_wxyz(
+        np.array([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)])
+    )
+    current[10:13] = target[3:6]
+    target[10:13] = current[3:6]
+    current[[6, 13]] = [0.25, 0.75]
+    target[[6, 13]] = [0.35, 0.65]
+
+    scales = {
+        "ee_delta_pos_scale": 1.0,
+        "ee_delta_rot_scale": np.pi,
+        "gripper_delta_scale": 1.0,
+    }
+    delta = absolute_ee_pose_to_normalized_delta(current, target, **scales)
+    reconstructed = apply_normalized_ee_delta(current, delta, **scales)
+
+    np.testing.assert_allclose(
+        reconstructed[[0, 1, 2, 6, 7, 8, 9, 13]],
+        target[[0, 1, 2, 6, 7, 8, 9, 13]],
+        atol=1e-6,
+    )
+    for rotvec_slice in (slice(3, 6), slice(10, 13)):
+        reconstructed_q = rotvec_to_quaternion_wxyz(reconstructed[rotvec_slice])
+        target_q = rotvec_to_quaternion_wxyz(target[rotvec_slice])
+        np.testing.assert_allclose(abs(np.dot(reconstructed_q, target_q)), 1.0, atol=1e-6)
+
+
+def test_absolute_ee_pose_delta_is_finite_and_clipped() -> None:
+    current = np.zeros(14, dtype=np.float32)
+    target = np.array(
+        [10.0, -10.0, 5.0, np.pi, 0.0, 0.0, 4.0,
+         -5.0, 10.0, -10.0, 0.0, -np.pi, 0.0, -4.0],
+        dtype=np.float32,
+    )
+
+    delta = absolute_ee_pose_to_normalized_delta(
+        current,
+        target,
+        ee_delta_pos_scale=0.01,
+        ee_delta_rot_scale=0.01,
+        gripper_delta_scale=0.01,
+    )
+
+    assert delta.shape == (14,)
+    assert np.isfinite(delta).all()
+    assert np.all(delta >= -1.0)
+    assert np.all(delta <= 1.0)
+
+
+@pytest.mark.parametrize("scale_name", [
+    "ee_delta_pos_scale",
+    "ee_delta_rot_scale",
+    "gripper_delta_scale",
+])
+@pytest.mark.parametrize("bad_scale", [0.0, -1.0, np.nan, np.inf])
+def test_absolute_ee_pose_delta_rejects_invalid_scales(
+    scale_name: str,
+    bad_scale: float,
+) -> None:
+    scales = {
+        "ee_delta_pos_scale": 0.1,
+        "ee_delta_rot_scale": 0.2,
+        "gripper_delta_scale": 0.3,
+    }
+    scales[scale_name] = bad_scale
+
+    with pytest.raises(ValueError, match=scale_name):
+        absolute_ee_pose_to_normalized_delta(
+            np.zeros(14, dtype=np.float32),
+            np.zeros(14, dtype=np.float32),
+            **scales,
+        )

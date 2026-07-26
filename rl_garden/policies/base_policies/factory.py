@@ -9,6 +9,7 @@ from gymnasium import spaces
 
 from rl_garden.policies.base_policies.act import (
     ACTBasePolicy,
+    RoboTwinACTEEDeltaPoseBasePolicy,
     RoboTwinACTEEPoseBasePolicy,
 )
 from rl_garden.policies.base_policies.base import BasePolicyProvider
@@ -43,18 +44,23 @@ def make_base_policy(
         return ZeroBasePolicy(observation_space, action_space, device=device)
     if base_policy == "act":
         control_mode = getattr(getattr(env, "cfg", None), "control_mode", None)
-        if control_mode == "ee_pose":
+        if control_mode in {"ee_pose", "ee_delta_pose"}:
             if env is None or not hasattr(env, "qpos_targets_to_ee_pose"):
                 raise ValueError(
-                    "RoboTwin ee_pose ACT evaluation requires an environment "
+                    f"RoboTwin {control_mode} ACT execution requires an environment "
                     "with qpos_targets_to_ee_pose()."
                 )
             if tuple(action_space.shape) != (14,):
                 raise ValueError(
-                    "RoboTwin ee_pose ACT evaluation requires a 14D action "
+                    f"RoboTwin {control_mode} ACT execution requires a 14D action "
                     f"space, got {action_space.shape}."
                 )
-            return RoboTwinACTEEPoseBasePolicy.from_checkpoint(
+            wrapper = (
+                RoboTwinACTEEDeltaPoseBasePolicy
+                if control_mode == "ee_delta_pose"
+                else RoboTwinACTEEPoseBasePolicy
+            )
+            return wrapper.from_checkpoint(
                 env=env,
                 observation_space=observation_space,
                 action_space=action_space,

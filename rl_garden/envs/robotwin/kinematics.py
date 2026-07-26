@@ -137,6 +137,13 @@ def matrix_to_quaternion_wxyz(matrix: np.ndarray) -> np.ndarray:
     return quaternion if quaternion[0] >= 0 else -quaternion
 
 
+def quaternion_inverse_wxyz(quaternion: np.ndarray) -> np.ndarray:
+    """Return the inverse of a WXYZ rotation quaternion."""
+
+    w, x, y, z = normalize_quaternion_wxyz(quaternion)
+    return np.array([w, -x, -y, -z], dtype=np.float64)
+
+
 def quaternion_multiply_wxyz(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     lw, lx, ly, lz = normalize_quaternion_wxyz(left)
     rw, rx, ry, rz = normalize_quaternion_wxyz(right)
@@ -150,6 +157,117 @@ def quaternion_multiply_wxyz(left: np.ndarray, right: np.ndarray) -> np.ndarray:
             ]
         )
     )
+
+
+def _validated_ee_delta_scales(
+    *,
+    ee_delta_pos_scale: float,
+    ee_delta_rot_scale: float,
+    gripper_delta_scale: float,
+) -> tuple[float, float, float]:
+    scales = {
+        "ee_delta_pos_scale": float(ee_delta_pos_scale),
+        "ee_delta_rot_scale": float(ee_delta_rot_scale),
+        "gripper_delta_scale": float(gripper_delta_scale),
+    }
+    for name, value in scales.items():
+        if not np.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{name} must be finite and > 0, got {value!r}.")
+    return (
+        scales["ee_delta_pos_scale"],
+        scales["ee_delta_rot_scale"],
+        scales["gripper_delta_scale"],
+    )
+
+
+def _finite_ee14(value: np.ndarray, *, name: str) -> np.ndarray:
+    value = np.asarray(value, dtype=np.float64)
+    if value.shape != (14,):
+        raise ValueError(f"{name} must have shape (14,), got {value.shape}.")
+    if not np.isfinite(value).all():
+        raise ValueError(f"{name} values must be finite.")
+    return value
+
+
+def absolute_ee_pose_to_normalized_delta(
+    current_pose: np.ndarray,
+    target_pose: np.ndarray,
+    *,
+    ee_delta_pos_scale: float,
+    ee_delta_rot_scale: float,
+    gripper_delta_scale: float,
+) -> np.ndarray:
+    """Convert two absolute EE14 poses to a bounded world-frame EE delta."""
+
+    current_pose = _finite_ee14(current_pose, name="current_pose")
+    target_pose = _finite_ee14(target_pose, name="target_pose")
+    pos_scale, rot_scale, grip_scale = _validated_ee_delta_scales(
+        ee_delta_pos_scale=ee_delta_pos_scale,
+        ee_delta_rot_scale=ee_delta_rot_scale,
+        gripper_delta_scale=gripper_delta_scale,
+    )
+    delta = np.empty(14, dtype=np.float64)
+    for position, rotation, gripper in (
+        (slice(0, 3), slice(3, 6), 6),
+        (slice(7, 10), slice(10, 13), 13),
+    ):
+        delta[position] = (
+            target_pose[position] - current_pose[position]
+        ) / pos_scale
+        current_quaternion = rotvec_to_quaternion_wxyz(current_pose[rotation])
+        target_quaternion = rotvec_to_quaternion_wxyz(target_pose[rotation])
+        relative_quaternion = quaternion_multiply_wxyz(
+            target_quaternion,
+            quaternion_inverse_wxyz(current_quaternion),
+        )
+        delta[rotation] = (
+            quaternion_to_rotvec_wxyz(relative_quaternion) / rot_scale
+        )
+        delta[gripper] = (
+            target_pose[gripper] - current_pose[gripper]
+        ) / grip_scale
+    return np.clip(delta, -1.0, 1.0).astype(np.float32)
+
+
+def apply_normalized_ee_delta(
+    live_pose: np.ndarray,
+    normalized_delta: np.ndarray,
+    *,
+    ee_delta_pos_scale: float,
+    ee_delta_rot_scale: float,
+    gripper_delta_scale: float,
+) -> np.ndarray:
+    """Apply a normalized world-frame EE delta to a live absolute EE14 pose."""
+
+    live_pose = _finite_ee14(live_pose, name="live_pose")
+    normalized_delta = _finite_ee14(
+        normalized_delta,
+        name="normalized_delta",
+    )
+    pos_scale, rot_scale, grip_scale = _validated_ee_delta_scales(
+        ee_delta_pos_scale=ee_delta_pos_scale,
+        ee_delta_rot_scale=ee_delta_rot_scale,
+        gripper_delta_scale=gripper_delta_scale,
+    )
+    command = live_pose.copy()
+    for position, rotation, gripper in (
+        (slice(0, 3), slice(3, 6), 6),
+        (slice(7, 10), slice(10, 13), 13),
+    ):
+        command[position] += normalized_delta[position] * pos_scale
+        delta_quaternion = rotvec_to_quaternion_wxyz(
+            normalized_delta[rotation] * rot_scale
+        )
+        live_quaternion = rotvec_to_quaternion_wxyz(live_pose[rotation])
+        command[rotation] = quaternion_to_rotvec_wxyz(
+            quaternion_multiply_wxyz(delta_quaternion, live_quaternion)
+        )
+        command[gripper] = np.clip(
+            live_pose[gripper] + normalized_delta[gripper] * grip_scale,
+            0.0,
+            1.0,
+        )
+    return command.astype(np.float32)
 
 
 def compose_pose(root_pose: Any, local_pose: Any) -> tuple[np.ndarray, np.ndarray]:

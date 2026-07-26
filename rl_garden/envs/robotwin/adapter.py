@@ -18,6 +18,8 @@ import numpy as np
 from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
 from rl_garden.envs.robotwin.kinematics import (
     RoboTwinJointTargetFK,
+    apply_normalized_ee_delta,
+    quaternion_to_rotvec_wxyz,
     rotvec_to_quaternion_wxyz,
 )
 from rl_garden.envs.robotwin.rewards import build_task_reward
@@ -342,26 +344,35 @@ class RoboTwinTaskAdapter:
                 "ee_delta_pose expects 14 dims: "
                 "left xyz+rotvec+gripper and right xyz+rotvec+gripper."
             )
+        if not np.isfinite(action).all():
+            raise ValueError("ee_delta_pose action values must be finite.")
         assert self.task is not None
         robot = self.task.robot
-        left_gripper = _get_gripper_val(robot, "left")
-        right_gripper = _get_gripper_val(robot, "right")
-        out = np.empty(16, dtype=np.float32)
-        out[0:3] = action[0:3] * self.cfg.ee_delta_pos_scale
-        out[3:7] = _rotvec_to_wxyz(action[3:6] * self.cfg.ee_delta_rot_scale)
-        out[7] = np.clip(
-            left_gripper + action[6] * self.cfg.gripper_delta_scale,
-            0.0,
-            1.0,
+        live_pose = np.empty(14, dtype=np.float32)
+        for arm, position, rotation, gripper in (
+            ("left", slice(0, 3), slice(3, 6), 6),
+            ("right", slice(7, 10), slice(10, 13), 13),
+        ):
+            ee_pose = np.asarray(
+                getattr(robot, f"get_{arm}_ee_pose")(),
+                dtype=np.float32,
+            ).reshape(-1)
+            if ee_pose.shape != (7,):
+                raise ValueError(
+                    f"RoboTwin {arm} EE pose must have shape (7,), "
+                    f"got {ee_pose.shape}."
+                )
+            live_pose[position] = ee_pose[:3]
+            live_pose[rotation] = quaternion_to_rotvec_wxyz(ee_pose[3:7])
+            live_pose[gripper] = _get_gripper_val(robot, arm)
+        absolute_action = apply_normalized_ee_delta(
+            live_pose,
+            action,
+            ee_delta_pos_scale=self.cfg.ee_delta_pos_scale,
+            ee_delta_rot_scale=self.cfg.ee_delta_rot_scale,
+            gripper_delta_scale=self.cfg.gripper_delta_scale,
         )
-        out[8:11] = action[7:10] * self.cfg.ee_delta_pos_scale
-        out[11:15] = _rotvec_to_wxyz(action[10:13] * self.cfg.ee_delta_rot_scale)
-        out[15] = np.clip(
-            right_gripper + action[13] * self.cfg.gripper_delta_scale,
-            0.0,
-            1.0,
-        )
-        return out
+        return self._to_robotwin_ee_pose_action(absolute_action)
 
     def _robotwin_action_type(self) -> str:
         if self.cfg.control_mode in {"ee_delta_pose", "ee_pose"}:
@@ -564,18 +575,6 @@ def _get_gripper_val(robot, arm: str) -> float:
         return float(getter())
     joint_state = getattr(robot, f"get_{arm}_arm_jointState")()
     return float(joint_state[-1])
-
-
-def _rotvec_to_wxyz(rotvec: np.ndarray) -> np.ndarray:
-    angle = float(np.linalg.norm(rotvec))
-    if angle < 1e-8:
-        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-    axis = rotvec / angle
-    half_angle = 0.5 * angle
-    quat = np.empty(4, dtype=np.float32)
-    quat[0] = np.cos(half_angle)
-    quat[1:] = axis * np.sin(half_angle)
-    return quat
 
 
 def _ffmpeg_executable() -> str:
