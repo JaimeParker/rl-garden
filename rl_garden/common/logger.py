@@ -9,6 +9,33 @@ from torch.utils.tensorboard import SummaryWriter
 LogType = Literal["tensorboard", "wandb", "none"]
 
 
+def _flatten_wandb_config(config: dict[str, Any], sep: str = ".") -> dict[str, Any]:
+    """Flatten a resolved-config dict for wandb's config table.
+
+    ``resolved_run_config()`` nests every training arg under one ``"args"``
+    key (so ``config.json`` reads as a structured record), but wandb's table
+    view doesn't expand nested dicts into columns. Promote ``args``' own keys
+    to the top level unprefixed (matching the pre-refactor flat schema every
+    existing wandb report/table filter was built against), and dot-flatten
+    any further nesting (e.g. per-backend ``EnvBackendArgs`` groups).
+    """
+    flat: dict[str, Any] = {}
+
+    def _add(prefix: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for key, sub_value in value.items():
+                _add(f"{prefix}{sep}{key}" if prefix else str(key), sub_value)
+        else:
+            flat[prefix] = value
+
+    for key, value in config.items():
+        if key == "args" and isinstance(value, dict):
+            _add("", value)
+        else:
+            _add(str(key), value)
+    return flat
+
+
 class Logger:
     def __init__(
         self,
@@ -81,7 +108,7 @@ class Logger:
         init_kwargs: dict[str, Any] = {
             "project": wandb_project,
             "name": wandb_name,
-            "config": config or {},
+            "config": _flatten_wandb_config(config or {}),
         }
         if wandb_entity:
             init_kwargs["entity"] = wandb_entity
