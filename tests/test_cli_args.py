@@ -376,6 +376,7 @@ def test_robotwin_config_defaults() -> None:
 
     assert rt.include_wrist_cameras is True
     assert rt.reward_mode == "dense"
+    assert rt.use_relative_reward is False
     assert rt.step_lim == 400
     assert rt.planner_backend == "mplib"
     assert rt.embodiment == ["aloha-agilex"]
@@ -473,6 +474,7 @@ def test_robotwin_backend_forwards_all_options() -> None:
         profile_interval=7,
         render_every_control_step=True,
         control_step_cap=16,
+        use_relative_reward=True,
         random_light=True,
         crazy_random_light_rate=0.1,
         head_camera_type="Train_D435_128x96",
@@ -486,6 +488,7 @@ def test_robotwin_backend_forwards_all_options() -> None:
     assert cfg.profile_interval == 7
     assert cfg.render_every_control_step is True
     assert cfg.control_step_cap == 16
+    assert cfg.use_relative_reward is True
     assert cfg.random_light is True
     assert cfg.crazy_random_light_rate == 0.1
     assert cfg.head_camera_type == "Train_D435_128x96"

@@ -90,6 +90,7 @@ class RoboTwinBackend(EnvBackend):
             reward_mode=rt.reward_mode if rt is not None else "dense",  # type: ignore[arg-type]
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
+            use_relative_reward=rt.use_relative_reward if rt is not None else False,
             control_mode=control_mode,  # type: ignore[arg-type]
             action_dim=action_dim,
             joint_delta_scale=rt.joint_delta_scale if rt is not None else 0.05,

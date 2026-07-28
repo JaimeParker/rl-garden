@@ -76,6 +76,7 @@ class RoboTwinConfig:
     planner_backend: str = "mplib"
     embodiment: list = field(default_factory=lambda: ["aloha-agilex"])
     reward_mode: str = "dense"
+    use_relative_reward: bool = False
 
     # control scaling
     joint_delta_scale: float = 0.05
