@@ -141,10 +141,20 @@ The wrapper validates the processed human action against
   `pd_ee_twist` controllers.
 
 On actor startup the teleoperation source is checked before training begins.
-For Pico, the actor waits for the first ZMQ input sample for
+The default teleoperation device is SpaceMouse. For Pico, the actor waits for
+the first ZMQ input sample for
 `--teleop_init_timeout_s` seconds (default: `120.0`) and raises if none arrives.
 For SpaceMouse, initialization raises if the HID device cannot be opened. Set
 `--teleop_init_timeout_s 0` to skip the Pico startup wait.
+
+Actor processes show the latest RGB observations in an OpenCV window by
+default. All observation keys named `rgb`, `rgb_*`, or `*_rgb` are tiled into
+one window named by `--actor_rgb_window_name` (default:
+`residual_hil_serl_actor`). Disable this on headless runs with:
+
+```bash
+--actor_show_rgb_window false
+```
 
 ## ManiSkill Usage
 
@@ -180,7 +190,7 @@ python examples/train_hitl.py residual_hil_serl \
   --log_type none
 ```
 
-Example actor with SpaceMouse:
+Example actor with explicit SpaceMouse selection:
 
 ```bash
 python examples/train_hitl.py residual_hil_serl \
@@ -236,10 +246,10 @@ python examples/train_hitl.py residual_hil_serl \
   --teleop_record_gripper true
 ```
 
-Use SpaceMouse on the real-robot actor by adding:
+SpaceMouse is the default teleop device. Use Pico on the actor by adding:
 
 ```bash
---teleop_device spacemouse
+--teleop_device pico
 ```
 
 Actor and learner must use matching environment/action-space configuration and

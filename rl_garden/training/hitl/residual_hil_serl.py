@@ -6,6 +6,7 @@ import os
 import time
 from typing import Any, Optional, Sequence
 
+import numpy as np
 import torch
 
 
@@ -84,9 +85,19 @@ def _build_env(args, env_request, *, enable_teleop: bool, enable_classifier: boo
         env = RewardClassifierWrapper(env, classifier_fn, threshold=args.classifier_threshold)
 
     if enable_teleop:
-        from rl_garden.envs.wrappers.teleop_intervention import TeleopInterventionWrapper
+        import gymnasium as gym
 
-        env = TeleopInterventionWrapper(
+        from rl_garden.envs.wrappers.teleop_intervention import (
+            TeleopInterventionVectorWrapper,
+            TeleopInterventionWrapper,
+        )
+
+        wrapper_cls = (
+            TeleopInterventionVectorWrapper
+            if isinstance(env, gym.vector.VectorEnv)
+            else TeleopInterventionWrapper
+        )
+        env = wrapper_cls(
             env,
             device=args.teleop_device,
             record_gripper=args.teleop_record_gripper,
@@ -210,6 +221,8 @@ class ResidualHilSerlActorLoop:
         control_hz: float = 10.0,
         deterministic: bool = False,
         seed: int = 1,
+        show_rgb_window: bool = True,
+        rgb_window_name: str = "residual_hil_serl_actor",
     ) -> None:
         if getattr(env, "num_envs", 1) != 1:
             raise ValueError(
@@ -222,6 +235,7 @@ class ResidualHilSerlActorLoop:
         self.control_period = 1.0 / control_hz
         self.deterministic = deterministic
         self.seed = seed
+        self.rgb_viewer = ActorRGBViewer(rgb_window_name) if show_rgb_window else None
 
     def _maybe_refresh_policy(self) -> None:
         params = self.sync_client.latest_policy_params()
@@ -251,6 +265,8 @@ class ResidualHilSerlActorLoop:
         try:
             obs, _ = self.env.reset(seed=self.seed)
             self.agent._on_env_reset(obs)
+            if self.rgb_viewer is not None:
+                self.rgb_viewer.show(obs)
             step = 0
             while total_steps is None or step < total_steps:
                 loop_start = time.perf_counter()
@@ -259,6 +275,8 @@ class ResidualHilSerlActorLoop:
                 env_action, final_actions, base_actions = self._select_action(obs)
                 env_action = env_action.to(self._env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                if self.rgb_viewer is not None:
+                    self.rgb_viewer.show(next_obs)
 
                 intervened = "intervene_action" in info
                 replay_action = final_actions
@@ -287,6 +305,8 @@ class ResidualHilSerlActorLoop:
                 if bool(done.any()):
                     obs, _ = self.env.reset(seed=self.seed)
                     self.agent._on_env_reset(obs)
+                    if self.rgb_viewer is not None:
+                        self.rgb_viewer.show(obs)
                 else:
                     obs = next_obs
                     self.agent._cached_base_actions = next_base_actions.detach()
@@ -296,12 +316,147 @@ class ResidualHilSerlActorLoop:
                 if sleep_for > 0:
                     time.sleep(sleep_for)
         finally:
+            if self.rgb_viewer is not None:
+                self.rgb_viewer.close()
             self.sync_client.stop()
 
     @staticmethod
     def _env_device(obs) -> torch.device:
         sample = next(iter(obs.values())) if isinstance(obs, dict) else obs
         return sample.device
+
+
+class ActorRGBViewer:
+    def __init__(
+        self,
+        window_name: str,
+        *,
+        max_columns: int = 3,
+        rgb_scale: int = 5,
+    ) -> None:
+        self.window_name = window_name
+        self.max_columns = int(max_columns)
+        self.rgb_scale = max(1, int(rgb_scale))
+        self._cv2 = None
+        self._disabled = False
+        self._reported_no_frames = False
+
+    def show(self, obs: Any) -> None:
+        if self._disabled:
+            return
+        frames = self._rgb_frames(obs)
+        if not frames:
+            if not self._reported_no_frames:
+                print(
+                    "[residual_hil_serl] actor RGB window enabled but no RGB "
+                    "image keys were found in observations; disabling viewer.",
+                    flush=True,
+                )
+                self._reported_no_frames = True
+                self._disabled = True
+            return
+        try:
+            cv2 = self._cv2_module()
+            frame = self._tile_frames(frames)
+            cv2.imshow(self.window_name, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)
+        except Exception as exc:
+            print(
+                "[residual_hil_serl] failed to update actor RGB window; "
+                f"disabling viewer: {exc}",
+                flush=True,
+            )
+            self._disabled = True
+
+    def close(self) -> None:
+        if self._cv2 is None:
+            return
+        try:
+            self._cv2.destroyWindow(self.window_name)
+        except Exception:
+            pass
+
+    def _cv2_module(self):
+        if self._cv2 is None:
+            import cv2
+
+            self._cv2 = cv2
+            self._cv2.namedWindow(self.window_name, self._cv2.WINDOW_NORMAL)
+        return self._cv2
+
+    @classmethod
+    def _rgb_frames(cls, obs: Any) -> list[tuple[str, np.ndarray]]:
+        if not isinstance(obs, dict):
+            return []
+        frames = []
+        for key in sorted(obs):
+            if not cls._looks_like_rgb_key(key):
+                continue
+            frame = cls._to_rgb_frame(obs[key])
+            if frame is not None:
+                frames.append((key, frame))
+        return frames
+
+    @staticmethod
+    def _looks_like_rgb_key(key: str) -> bool:
+        return key == "rgb" or key.startswith("rgb_") or key.endswith("_rgb")
+
+    @staticmethod
+    def _to_rgb_frame(value: Any) -> Optional[np.ndarray]:
+        if isinstance(value, torch.Tensor):
+            array = value.detach().cpu().numpy()
+        else:
+            array = np.asarray(value)
+        if array.ndim >= 4:
+            array = array[0]
+        if array.ndim == 4 and array.shape[-1] >= 3:
+            array = array[-1]
+        if array.ndim != 3 or array.shape[-1] < 3:
+            return None
+        array = array[..., :3]
+        if array.dtype != np.uint8:
+            if np.issubdtype(array.dtype, np.floating) and np.nanmax(array) <= 1.0:
+                array = array * 255.0
+            array = np.clip(array, 0, 255).astype(np.uint8)
+        return np.ascontiguousarray(array)
+
+    def _scale_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.rgb_scale == 1:
+            return frame
+        return np.repeat(
+            np.repeat(frame, self.rgb_scale, axis=0),
+            self.rgb_scale,
+            axis=1,
+        )
+
+    def _tile_frames(self, frames: list[tuple[str, np.ndarray]]) -> np.ndarray:
+        frames = [(name, self._scale_frame(frame)) for name, frame in frames]
+        cols = min(max(1, self.max_columns), len(frames))
+        rows = int(np.ceil(len(frames) / cols))
+        label_height = 20
+        cell_h = max(frame.shape[0] for _, frame in frames) + label_height
+        cell_w = max(frame.shape[1] for _, frame in frames)
+        canvas = np.zeros((rows * cell_h, cols * cell_w, 3), dtype=np.uint8)
+        for index, (name, frame) in enumerate(frames):
+            row, col = divmod(index, cols)
+            y0 = row * cell_h + label_height
+            x0 = col * cell_w
+            canvas[y0:y0 + frame.shape[0], x0:x0 + frame.shape[1]] = frame
+            self._draw_label(canvas, name, x0, row * cell_h)
+        return canvas
+
+    def _draw_label(self, canvas: np.ndarray, label: str, x: int, y: int) -> None:
+        cv2 = self._cv2_module()
+        cv2.putText(
+            canvas,
+            label,
+            (x + 4, y + 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def _run_actor(args) -> None:
@@ -331,6 +486,8 @@ def _run_actor(args) -> None:
         control_hz=args.control_hz,
         deterministic=args.deterministic_actor,
         seed=args.seed,
+        show_rgb_window=args.actor_show_rgb_window,
+        rgb_window_name=args.actor_rgb_window_name,
     )
     loop.run()
 

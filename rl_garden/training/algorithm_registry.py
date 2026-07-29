@@ -52,6 +52,22 @@ class BaseAlgorithmRegistry:
         self.discover()
         if not self._entries:
             raise RuntimeError(f"No algorithms registered in {self.package_name!r}")
+        cli_args = list(sys.argv[1:] if args is None else args)
+        if len(self._entries) == 1:
+            name, entry = next(iter(self._entries.items()))
+            if not cli_args or cli_args[0] != name:
+                raise SystemExit(
+                    f"Expected algorithm subcommand {name!r} for {self.phase_name} training."
+                )
+            default = entry.args_cls()
+            logging_args = logging_args_from(default)
+            if logging_args is not None:
+                apply_log_env_defaults(logging_args)
+            return tyro.cli(
+                entry.args_cls,
+                default=default,
+                args=cli_args[1:],
+            )
         defaults = {}
         for name, entry in self._entries.items():
             default = entry.args_cls()

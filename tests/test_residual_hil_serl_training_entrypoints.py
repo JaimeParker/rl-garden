@@ -6,6 +6,7 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.training.hitl.residual_hil_serl import (
+    ActorRGBViewer,
     ResidualHilSerlArgs,
     _build_env,
 )
@@ -19,6 +20,33 @@ class _FakeEnv(gym.Env):
         self.single_action_space = spaces.Box(-1, 1, (6,), dtype="float32")
         self.observation_space = batch_space(self.single_observation_space, 1)
         self.action_space = batch_space(self.single_action_space, 1)
+
+
+class _FakeVectorEnv(gym.vector.VectorEnv):
+    def __init__(self):
+        observation_space = spaces.Box(-1, 1, (4,), dtype="float32")
+        action_space = spaces.Box(-1, 1, (6,), dtype="float32")
+        self.num_envs = 1
+        self.single_observation_space = observation_space
+        self.single_action_space = action_space
+        self.observation_space = batch_space(observation_space, 1)
+        self.action_space = batch_space(action_space, 1)
+        self.metadata = {}
+
+    def reset(self, **kwargs):
+        return torch.zeros(1, 4), {}
+
+    def step(self, actions):
+        return (
+            torch.zeros(1, 4),
+            torch.zeros(1),
+            torch.zeros(1, dtype=torch.bool),
+            torch.zeros(1, dtype=torch.bool),
+            {},
+        )
+
+    def close(self, **kwargs):
+        pass
 
 
 class _FakeTeleop:
@@ -71,7 +99,11 @@ def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
     )
 
     env = _build_env(
-        _args(teleop_record_gripper=False, teleop_init_timeout_s=12.5),
+        _args(
+            teleop_device="pico",
+            teleop_record_gripper=False,
+            teleop_init_timeout_s=12.5,
+        ),
         env_request=None,
         enable_teleop=True,
         enable_classifier=True,
@@ -84,6 +116,31 @@ def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
     assert env.record_gripper is False
     assert _FakeTeleop.init_kwargs["init_timeout_s"] == 12.5
     assert not isinstance(env.env, RewardClassifierWrapper)
+
+
+def test_build_env_uses_vector_teleop_wrapper_for_vector_env(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.backend_registry.make_training_envs",
+        lambda backend, req: (_FakeVectorEnv(), None),
+    )
+    monkeypatch.setattr(
+        "rl_garden.envs.wrappers.teleop_intervention.EETwistTeleOpWrapper",
+        _FakeTeleop,
+    )
+
+    env = _build_env(
+        _args(teleop_device="pico", teleop_record_gripper=False),
+        env_request=None,
+        enable_teleop=True,
+        enable_classifier=True,
+    )
+
+    from rl_garden.envs.wrappers.teleop_intervention import (
+        TeleopInterventionVectorWrapper,
+    )
+
+    assert isinstance(env, TeleopInterventionVectorWrapper)
+    assert env.record_gripper is False
 
 
 def test_run_actor_builds_scratch_agent_and_residual_actor_loop(monkeypatch):
@@ -130,6 +187,36 @@ def test_run_actor_builds_scratch_agent_and_residual_actor_loop(monkeypatch):
     assert captured["checkpoint_dir"] is None
     assert captured["ran"] is True
     assert captured["loop_kwargs"]["sync_client"]._base_url == "http://10.0.0.1:7000"
+    assert captured["loop_kwargs"]["show_rgb_window"] is True
+    assert captured["loop_kwargs"]["rgb_window_name"] == "residual_hil_serl_actor"
+
+
+def test_actor_rgb_viewer_extracts_and_tiles_rgb_observations():
+    obs = {
+        "state": torch.zeros((1, 4)),
+        "rgb_hand_camera": torch.full((1, 4, 5, 3), 10, dtype=torch.uint8),
+        "rgb_base_camera": torch.full((1, 3, 6, 3), 20, dtype=torch.uint8),
+        "depth_base_camera": torch.zeros((1, 3, 6, 1), dtype=torch.float32),
+    }
+    viewer = ActorRGBViewer("test", max_columns=2)
+    viewer._cv2 = type(
+        "_FakeCV2",
+        (),
+        {
+            "FONT_HERSHEY_SIMPLEX": 0,
+            "LINE_AA": 0,
+            "putText": lambda *args, **kwargs: None,
+        },
+    )()
+
+    frames = viewer._rgb_frames(obs)
+    tiled = viewer._tile_frames(frames)
+
+    assert [name for name, _ in frames] == ["rgb_base_camera", "rgb_hand_camera"]
+    assert viewer.rgb_scale == 5
+    assert tiled.shape == (40, 60, 3)
+    assert torch.as_tensor(tiled[20, 0]).tolist() == [20, 20, 20]
+    assert torch.as_tensor(tiled[20, 30]).tolist() == [10, 10, 10]
 
 
 def test_run_learner_initializes_demo_buffer_and_loop(monkeypatch, tmp_path):

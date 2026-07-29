@@ -27,18 +27,17 @@ from robot_infra.teleop.utils.telo_op_control_twist import EETwistTeleOpWrapper
 TeleopSource = Union[EETwistTeleOpWrapper, "SpaceMouseTeleOpWrapper"]  # noqa: F821
 
 
-class TeleopInterventionWrapper(gym.Wrapper):
-    def __init__(
+class _TeleopInterventionMixin:
+    def _init_teleop_intervention(
         self,
-        env: gym.Env,
         teleop: Optional[TeleopSource] = None,
         device: Literal["pico", "spacemouse"] = "pico",
         record_gripper: bool = True,
         teleop_init_timeout_s: float = 120.0,
         **teleop_kwargs: Any,
     ) -> None:
-        super().__init__(env)
         self.record_gripper = bool(record_gripper)
+        self._validate_configured_action_dim()
         if teleop is not None:
             self.teleop = teleop
         elif device == "pico":
@@ -65,7 +64,7 @@ class TeleopInterventionWrapper(gym.Wrapper):
             raise ValueError(f"device must be 'pico' or 'spacemouse', got {device!r}.")
 
     def __getattr__(self, name: str):
-        # gymnasium.Wrapper (>=1.0) no longer forwards arbitrary attributes to
+        # Gymnasium wrappers (>=1.0) no longer forward arbitrary attributes to
         # ``self.env`` -- but this repo's env-backend contract (num_envs,
         # single_observation_space, ...) relies on direct attribute access,
         # not ``get_wrapper_attr()``, so this wrapper must still be
@@ -81,6 +80,21 @@ class TeleopInterventionWrapper(gym.Wrapper):
         if space is None:
             return None
         return int(np.prod(space.shape))
+
+    def _configured_action_dim(self) -> int:
+        return 7 if self.record_gripper else 6
+
+    def _validate_configured_action_dim(self) -> None:
+        expected_dim = self._expected_action_dim()
+        if expected_dim is None:
+            return
+        configured_dim = self._configured_action_dim()
+        if configured_dim != expected_dim:
+            raise ValueError(
+                "Teleop intervention action dimension mismatch: "
+                f"record_gripper={self.record_gripper} produces {configured_dim} dims, "
+                f"but env.single_action_space expects {expected_dim}."
+            )
 
     def _intervention_action(self, sample_action, device: torch.device) -> torch.Tensor:
         action_np = np.asarray(sample_action, dtype=np.float32)
@@ -109,3 +123,43 @@ class TeleopInterventionWrapper(gym.Wrapper):
         info["intervene_action"] = human_action
         info["human_episode_end"] = sample.episode_end
         return obs, reward, terminated, truncated, info
+
+
+class TeleopInterventionWrapper(_TeleopInterventionMixin, gym.Wrapper):
+    def __init__(
+        self,
+        env: gym.Env,
+        teleop: Optional[TeleopSource] = None,
+        device: Literal["pico", "spacemouse"] = "pico",
+        record_gripper: bool = True,
+        teleop_init_timeout_s: float = 120.0,
+        **teleop_kwargs: Any,
+    ) -> None:
+        super().__init__(env)
+        self._init_teleop_intervention(
+            teleop=teleop,
+            device=device,
+            record_gripper=record_gripper,
+            teleop_init_timeout_s=teleop_init_timeout_s,
+            **teleop_kwargs,
+        )
+
+
+class TeleopInterventionVectorWrapper(_TeleopInterventionMixin, gym.vector.VectorWrapper):
+    def __init__(
+        self,
+        env: gym.vector.VectorEnv,
+        teleop: Optional[TeleopSource] = None,
+        device: Literal["pico", "spacemouse"] = "pico",
+        record_gripper: bool = True,
+        teleop_init_timeout_s: float = 120.0,
+        **teleop_kwargs: Any,
+    ) -> None:
+        super().__init__(env)
+        self._init_teleop_intervention(
+            teleop=teleop,
+            device=device,
+            record_gripper=record_gripper,
+            teleop_init_timeout_s=teleop_init_timeout_s,
+            **teleop_kwargs,
+        )

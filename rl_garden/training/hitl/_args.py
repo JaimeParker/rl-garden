@@ -15,10 +15,12 @@ class HITLArgs:
 
     control_hz: float = 10.0
     deterministic_actor: bool = False
+    actor_show_rgb_window: bool = True
+    actor_rgb_window_name: str = "residual_hil_serl_actor"
     train_freq: int = 1
     publish_freq: int = 100
 
-    teleop_device: Literal["pico", "spacemouse"] = "pico"
+    teleop_device: Literal["pico", "spacemouse"] = "spacemouse"
     teleop_record_gripper: bool = True
     teleop_init_timeout_s: float = 120.0
 
