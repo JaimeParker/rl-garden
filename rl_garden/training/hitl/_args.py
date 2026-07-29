@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Sequence
+from typing import Literal, Optional, Sequence
 
 
 @dataclass
@@ -17,6 +17,8 @@ class HITLArgs:
     deterministic_actor: bool = False
     actor_show_rgb_window: bool = True
     actor_rgb_window_name: str = "residual_hil_serl_actor"
+    vis_camera_width: Optional[int] = 256
+    vis_camera_height: Optional[int] = 256
     train_freq: int = 1
     publish_freq: int = 100
 

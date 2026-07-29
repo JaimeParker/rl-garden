@@ -6,8 +6,10 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.training.hitl.residual_hil_serl import (
+    ActorObservationResizeWrapper,
     ActorRGBViewer,
     ResidualHilSerlArgs,
+    _actor_env_request,
     _build_env,
 )
 
@@ -43,6 +45,45 @@ class _FakeVectorEnv(gym.vector.VectorEnv):
             torch.zeros(1, dtype=torch.bool),
             torch.zeros(1, dtype=torch.bool),
             {},
+        )
+
+    def close(self, **kwargs):
+        pass
+
+
+class _FakeVisualVectorEnv(gym.vector.VectorEnv):
+    def __init__(self):
+        self.num_envs = 1
+        self.single_observation_space = spaces.Dict(
+            {
+                "state": spaces.Box(-1, 1, (4,), dtype="float32"),
+                "rgb_base_camera": spaces.Box(0, 255, (4, 6, 3), dtype="uint8"),
+                "depth_base_camera": spaces.Box(0, 1, (4, 6, 1), dtype="float32"),
+            }
+        )
+        self.single_action_space = spaces.Box(-1, 1, (6,), dtype="float32")
+        self.observation_space = batch_space(self.single_observation_space, 1)
+        self.action_space = batch_space(self.single_action_space, 1)
+        self.metadata = {}
+
+    def _obs(self):
+        return {
+            "state": torch.zeros((1, 4)),
+            "rgb_base_camera": torch.full((1, 4, 6, 3), 20, dtype=torch.uint8),
+            "depth_base_camera": torch.ones((1, 4, 6, 1), dtype=torch.float32),
+        }
+
+    def reset(self, **kwargs):
+        return self._obs(), {}
+
+    def step(self, actions):
+        obs = self._obs()
+        return (
+            obs,
+            torch.zeros(1),
+            torch.zeros(1, dtype=torch.bool),
+            torch.zeros(1, dtype=torch.bool),
+            {"final_observation": obs},
         )
 
     def close(self, **kwargs):
@@ -191,6 +232,40 @@ def test_run_actor_builds_scratch_agent_and_residual_actor_loop(monkeypatch):
     assert captured["loop_kwargs"]["rgb_window_name"] == "residual_hil_serl_actor"
 
 
+def test_actor_env_request_uses_visual_camera_resolution_for_actor():
+    req = _actor_env_request(
+        _args(
+            obs_mode="rgb",
+            camera_width=64,
+            camera_height=64,
+            vis_camera_width=256,
+            vis_camera_height=192,
+        )
+    )
+
+    assert req.camera_width == 256
+    assert req.camera_height == 192
+
+
+def test_actor_observation_resize_wrapper_downscales_policy_obs_and_keeps_highres():
+    wrapped = ActorObservationResizeWrapper(
+        _FakeVisualVectorEnv(),
+        target_width=3,
+        target_height=2,
+    )
+
+    obs, _ = wrapped.reset()
+    next_obs, _, _, _, info = wrapped.step(torch.zeros((1, 6)))
+
+    assert wrapped.single_observation_space["rgb_base_camera"].shape == (2, 3, 3)
+    assert wrapped.single_observation_space["depth_base_camera"].shape == (2, 3, 1)
+    assert obs["rgb_base_camera"].shape == (1, 2, 3, 3)
+    assert obs["depth_base_camera"].shape == (1, 2, 3, 1)
+    assert wrapped.latest_highres_obs["rgb_base_camera"].shape == (1, 4, 6, 3)
+    assert next_obs["rgb_base_camera"].shape == (1, 2, 3, 3)
+    assert info["final_observation"]["rgb_base_camera"].shape == (1, 2, 3, 3)
+
+
 def test_actor_rgb_viewer_extracts_and_tiles_rgb_observations():
     obs = {
         "state": torch.zeros((1, 4)),
@@ -213,10 +288,9 @@ def test_actor_rgb_viewer_extracts_and_tiles_rgb_observations():
     tiled = viewer._tile_frames(frames)
 
     assert [name for name, _ in frames] == ["rgb_base_camera", "rgb_hand_camera"]
-    assert viewer.rgb_scale == 5
-    assert tiled.shape == (40, 60, 3)
+    assert tiled.shape == (24, 12, 3)
     assert torch.as_tensor(tiled[20, 0]).tolist() == [20, 20, 20]
-    assert torch.as_tensor(tiled[20, 30]).tolist() == [10, 10, 10]
+    assert torch.as_tensor(tiled[20, 6]).tolist() == [10, 10, 10]
 
 
 def test_run_learner_initializes_demo_buffer_and_loop(monkeypatch, tmp_path):

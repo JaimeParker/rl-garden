@@ -8,6 +8,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 def _residual_hil_serl_env_request(args, run_name, *, create_eval_env: bool = False):
@@ -210,6 +211,205 @@ def build_residual_hil_serl(args, env, eval_env, logger, checkpoint_dir):
     return agent
 
 
+class ActorObservationResizeWrapper:
+    """Keep high-res actor observations for display while exposing policy-size obs."""
+
+    def __init__(self, env: Any, *, target_width: int, target_height: int) -> None:
+        if target_width <= 0 or target_height <= 0:
+            raise ValueError(
+                "ActorObservationResizeWrapper target size must be positive, got "
+                f"{target_width}x{target_height}."
+            )
+        self.env = env
+        self.target_width = int(target_width)
+        self.target_height = int(target_height)
+        self.latest_highres_obs: Any = None
+        self.num_envs = getattr(env, "num_envs", 1)
+        self.metadata = getattr(env, "metadata", {})
+        self.single_observation_space = self._resize_observation_space(
+            getattr(env, "single_observation_space", env.observation_space)
+        )
+        self.observation_space = self._batched_space(self.single_observation_space)
+        self.single_action_space = getattr(env, "single_action_space", None)
+        self.action_space = getattr(env, "action_space", None)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        return self._cache_and_resize_obs(obs), info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        resized_obs = self._cache_and_resize_obs(obs)
+        return resized_obs, reward, terminated, truncated, self._resize_info(info)
+
+    def close(self, **kwargs):
+        close = getattr(self.env, "close", None)
+        if close is not None:
+            return close(**kwargs)
+        return None
+
+    @property
+    def unwrapped(self):
+        return getattr(self.env, "unwrapped", self.env)
+
+    def __getattr__(self, name: str):
+        return getattr(self.env, name)
+
+    def _cache_and_resize_obs(self, obs: Any) -> Any:
+        self.latest_highres_obs = obs
+        return self._resize_observation(obs)
+
+    def _resize_info(self, info: Any) -> Any:
+        if not isinstance(info, dict) or "final_observation" not in info:
+            return info
+        resized_info = dict(info)
+        resized_info["final_observation"] = self._resize_observation(
+            info["final_observation"]
+        )
+        return resized_info
+
+    def _resize_observation(self, obs: Any) -> Any:
+        if isinstance(obs, dict):
+            return {
+                key: self._resize_image_value(value)
+                if self._looks_like_image_key(key)
+                else self._resize_observation(value)
+                for key, value in obs.items()
+            }
+        return obs
+
+    def _resize_image_value(self, value: Any) -> Any:
+        if isinstance(value, torch.Tensor):
+            return self._resize_image_tensor(value)
+        if isinstance(value, np.ndarray):
+            resized = self._resize_image_tensor(torch.as_tensor(value))
+            return resized.cpu().numpy()
+        return value
+
+    def _resize_image_tensor(self, value: torch.Tensor) -> torch.Tensor:
+        if value.ndim < 3 or value.shape[-1] not in (1, 3, 4):
+            return value
+        height, width = int(value.shape[-3]), int(value.shape[-2])
+        if height == self.target_height and width == self.target_width:
+            return value
+
+        leading_shape = value.shape[:-3]
+        channels = value.shape[-1]
+        image = value.reshape(-1, height, width, channels).permute(0, 3, 1, 2)
+        resized = F.interpolate(
+            image.float(),
+            size=(self.target_height, self.target_width),
+            mode="area",
+        )
+        resized = resized.permute(0, 2, 3, 1).reshape(
+            *leading_shape,
+            self.target_height,
+            self.target_width,
+            channels,
+        )
+        if torch.is_floating_point(value):
+            return resized.to(dtype=value.dtype)
+        if value.dtype == torch.bool:
+            return resized >= 0.5
+        dtype_info = torch.iinfo(value.dtype)
+        return resized.round().clamp(dtype_info.min, dtype_info.max).to(dtype=value.dtype)
+
+    def _resize_observation_space(self, space: Any) -> Any:
+        from gymnasium import spaces
+
+        if isinstance(space, spaces.Dict):
+            return spaces.Dict(
+                {
+                    key: self._resize_image_space(value)
+                    if self._looks_like_image_key(key)
+                    else self._resize_observation_space(value)
+                    for key, value in space.spaces.items()
+                }
+            )
+        return space
+
+    def _resize_image_space(self, space: Any) -> Any:
+        from gymnasium import spaces
+
+        if not isinstance(space, spaces.Box):
+            return space
+        if len(space.shape) < 3 or space.shape[-1] not in (1, 3, 4):
+            return space
+        shape = (
+            *space.shape[:-3],
+            self.target_height,
+            self.target_width,
+            space.shape[-1],
+        )
+        low = np.full(shape, np.min(space.low), dtype=space.dtype)
+        high = np.full(shape, np.max(space.high), dtype=space.dtype)
+        return spaces.Box(low=low, high=high, dtype=space.dtype)
+
+    def _batched_space(self, single_observation_space: Any) -> Any:
+        from gymnasium.vector.utils import batch_space
+
+        return batch_space(single_observation_space, self.num_envs)
+
+    @staticmethod
+    def _looks_like_image_key(key: str) -> bool:
+        return (
+            key == "rgb"
+            or key.startswith("rgb_")
+            or key.endswith("_rgb")
+            or key == "depth"
+            or key.startswith("depth_")
+            or key.endswith("_depth")
+        )
+
+
+def _actor_env_request(args):
+    env_request = _residual_hil_serl_env_request(
+        args, run_name="hitl_residual_actor", create_eval_env=False
+    )
+    if args.obs_mode == "state":
+        return env_request
+
+    vis_width = (
+        args.vis_camera_width if args.vis_camera_width is not None else args.camera_width
+    )
+    vis_height = (
+        args.vis_camera_height if args.vis_camera_height is not None else args.camera_height
+    )
+    if vis_width is not None and vis_width <= 0:
+        raise ValueError(
+            f"--vis_camera_width must be positive or None, got {vis_width}."
+        )
+    if vis_height is not None and vis_height <= 0:
+        raise ValueError(
+            f"--vis_camera_height must be positive or None, got {vis_height}."
+        )
+    return dataclasses.replace(
+        env_request,
+        camera_width=vis_width,
+        camera_height=vis_height,
+    )
+
+
+def _maybe_wrap_actor_visual_observations(args, env):
+    if args.obs_mode == "state":
+        return env
+    if args.camera_width is None or args.camera_height is None:
+        return env
+    vis_width = (
+        args.vis_camera_width if args.vis_camera_width is not None else args.camera_width
+    )
+    vis_height = (
+        args.vis_camera_height if args.vis_camera_height is not None else args.camera_height
+    )
+    if vis_width == args.camera_width and vis_height == args.camera_height:
+        return env
+    return ActorObservationResizeWrapper(
+        env,
+        target_width=args.camera_width,
+        target_height=args.camera_height,
+    )
+
+
 class ResidualHilSerlActorLoop:
     """Actor loop that pushes ResidualSAC replay fields over the sync client."""
 
@@ -236,6 +436,10 @@ class ResidualHilSerlActorLoop:
         self.deterministic = deterministic
         self.seed = seed
         self.rgb_viewer = ActorRGBViewer(rgb_window_name) if show_rgb_window else None
+
+    def _viewer_obs(self, obs: Any) -> Any:
+        highres_obs = getattr(self.env, "latest_highres_obs", None)
+        return highres_obs if highres_obs is not None else obs
 
     def _maybe_refresh_policy(self) -> None:
         params = self.sync_client.latest_policy_params()
@@ -266,7 +470,7 @@ class ResidualHilSerlActorLoop:
             obs, _ = self.env.reset(seed=self.seed)
             self.agent._on_env_reset(obs)
             if self.rgb_viewer is not None:
-                self.rgb_viewer.show(obs)
+                self.rgb_viewer.show(self._viewer_obs(obs))
             step = 0
             while total_steps is None or step < total_steps:
                 loop_start = time.perf_counter()
@@ -276,7 +480,7 @@ class ResidualHilSerlActorLoop:
                 env_action = env_action.to(self._env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
                 if self.rgb_viewer is not None:
-                    self.rgb_viewer.show(next_obs)
+                    self.rgb_viewer.show(self._viewer_obs(next_obs))
 
                 intervened = "intervene_action" in info
                 replay_action = final_actions
@@ -306,7 +510,7 @@ class ResidualHilSerlActorLoop:
                     obs, _ = self.env.reset(seed=self.seed)
                     self.agent._on_env_reset(obs)
                     if self.rgb_viewer is not None:
-                        self.rgb_viewer.show(obs)
+                        self.rgb_viewer.show(self._viewer_obs(obs))
                 else:
                     obs = next_obs
                     self.agent._cached_base_actions = next_base_actions.detach()
@@ -332,11 +536,9 @@ class ActorRGBViewer:
         window_name: str,
         *,
         max_columns: int = 3,
-        rgb_scale: int = 5,
     ) -> None:
         self.window_name = window_name
         self.max_columns = int(max_columns)
-        self.rgb_scale = max(1, int(rgb_scale))
         self._cv2 = None
         self._disabled = False
         self._reported_no_frames = False
@@ -420,17 +622,7 @@ class ActorRGBViewer:
             array = np.clip(array, 0, 255).astype(np.uint8)
         return np.ascontiguousarray(array)
 
-    def _scale_frame(self, frame: np.ndarray) -> np.ndarray:
-        if self.rgb_scale == 1:
-            return frame
-        return np.repeat(
-            np.repeat(frame, self.rgb_scale, axis=0),
-            self.rgb_scale,
-            axis=1,
-        )
-
     def _tile_frames(self, frames: list[tuple[str, np.ndarray]]) -> np.ndarray:
-        frames = [(name, self._scale_frame(frame)) for name, frame in frames]
         cols = min(max(1, self.max_columns), len(frames))
         rows = int(np.ceil(len(frames) / cols))
         label_height = 20
@@ -462,10 +654,9 @@ class ActorRGBViewer:
 def _run_actor(args) -> None:
     from rl_garden.real_world.hil_serl import HilSerlActorSyncClient
 
-    env_request = _residual_hil_serl_env_request(
-        args, run_name="hitl_residual_actor", create_eval_env=False
-    )
+    env_request = _actor_env_request(args)
     env = _build_env(args, env_request, enable_teleop=True, enable_classifier=True)
+    env = _maybe_wrap_actor_visual_observations(args, env)
     scratch_args = dataclasses.replace(
         args,
         buffer_size=8,

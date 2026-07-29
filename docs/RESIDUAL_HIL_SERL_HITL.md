@@ -156,6 +156,11 @@ one window named by `--actor_rgb_window_name` (default:
 --actor_show_rgb_window false
 ```
 
+For visual actor runs, `--vis_camera_width` and `--vis_camera_height` control the
+camera resolution used for local visualization only (default: `256x256`). Actor
+observations are resized back to `--camera_width` and `--camera_height` before
+they are passed to the policy, replay buffer, or learner sync client.
+
 ## ManiSkill Usage
 
 ManiSkill uses its own environment reward and termination. The HITL path does
