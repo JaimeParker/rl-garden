@@ -264,12 +264,17 @@ def run_offline_pretraining(
         and hasattr(agent, "_log_eval_metrics")
     )
 
+    interval_update_time = 0.0
+    interval_update_steps = 0
     for step in trange(start_step, final_target, desc=desc):
         global_step = step + 1
         should_log = log_freq > 0 and (
             global_step % log_freq == 0 or global_step == final_target
         )
+        update_t = time.perf_counter()
         last_metrics = agent.train(gradient_steps, compute_info=should_log)
+        interval_update_time += time.perf_counter() - update_t
+        interval_update_steps += gradient_steps
         agent._global_step = global_step
 
         if (
@@ -290,6 +295,21 @@ def run_offline_pretraining(
 
         if log_freq > 0 and global_step % log_freq == 0:
             _log_update_metrics(agent, last_metrics, global_step)
+            logger = getattr(agent, "logger", None)
+            if logger is not None:
+                offline_update_fps = (
+                    interval_update_steps / interval_update_time
+                    if interval_update_time > 0
+                    else float("nan")
+                )
+                logger.add_scalar(
+                    "time/offline_update_time", interval_update_time, global_step
+                )
+                logger.add_scalar(
+                    "time/offline_update_fps", offline_update_fps, global_step
+                )
+            interval_update_time = 0.0
+            interval_update_steps = 0
             if std_log:
                 completed = global_step - start_step
                 progress = 100.0 * completed / num_steps
