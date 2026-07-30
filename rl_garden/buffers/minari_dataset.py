@@ -97,9 +97,7 @@ def load_minari_dataset_to_replay_buffer(
         rewards = _to_tensor(episode.rewards, storage_device).float()
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
-        terminations = _to_tensor(episode.terminations, storage_device).float()
-        truncations = _to_tensor(episode.truncations, storage_device).float()
-        dones = terminations
+        dones = _to_tensor(episode.terminations, storage_device).float()
         length = actions.shape[0]
 
         obs = _to_tensor(_slice(episode.observations, 0, length), storage_device)
@@ -117,11 +115,10 @@ def load_minari_dataset_to_replay_buffer(
                 success_threshold=float(getattr(buffer, "success_threshold", 0.5)),
             )
             success_parts.append(success)
-            mc_dones = (terminations.bool() | truncations.bool()).float()
             mc_parts.append(
                 _sparse_mc_returns(
                     rewards,
-                    mc_dones,
+                    dones,
                     success,
                     float(buffer.gamma),
                     float(getattr(buffer, "sparse_negative_reward", 0.0)),

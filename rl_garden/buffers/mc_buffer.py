@@ -145,6 +145,10 @@ class MCReplayBufferMixin:
         """
         T = self.per_env_buffer_size
         rewards = self.rewards  # (T, N)
+        # For Minari-sourced data, `dones` is terminations-only (timeouts excluded,
+        # see minari_dataset.py); with `--online_replay_mode append`, truncated
+        # Minari episodes stored here won't reset this recursion at their boundary,
+        # so MC returns can bootstrap across a truncated-episode cutoff.
         dones = self.dones      # (T, N)
         order = self._chronological_order()
 

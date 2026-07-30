@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from gymnasium import spaces
 
@@ -14,6 +15,7 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.common.alpha_tuning import softplus_inverse
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
@@ -24,7 +26,43 @@ from rl_garden.encoders.combined import (
     default_image_encoder_factory,
 )
 from rl_garden.encoders.flatten import FlattenExtractor
-from rl_garden.policies.sac_policy import CQLAlphaLagrange, SACPolicy, TemperatureLagrange
+from rl_garden.policies.sac_policy import SACPolicy, TemperatureLagrange
+
+
+class CQLAlphaLagrange(nn.Module):
+    """Lagrange multiplier for auto-tuning CQL alpha.
+
+    ``param_type="softplus"`` (default) is unbounded softplus, matching the
+    WSRL reference. ``param_type="exp_clip"`` matches official JAX Cal-QL /
+    CORL: ``clip(exp(log_alpha), 0, exp_clip_max)``.
+    """
+
+    def __init__(
+        self,
+        init_value: float = 1.0,
+        param_type: Literal["softplus", "exp_clip"] = "softplus",
+        exp_clip_max: float = 1e6,
+    ):
+        super().__init__()
+        if init_value <= 0:
+            raise ValueError("CQL alpha Lagrange init value must be positive.")
+        if param_type not in ("softplus", "exp_clip"):
+            raise ValueError(f"Unknown param_type: {param_type!r}")
+        self.param_type = param_type
+        self.exp_clip_max = exp_clip_max
+        init_log_alpha = (
+            softplus_inverse(init_value)
+            if param_type == "softplus"
+            else float(np.log(init_value))
+        )
+        self.log_alpha = nn.Parameter(
+            torch.tensor(init_log_alpha, dtype=torch.float32)
+        )
+
+    def forward(self) -> torch.Tensor:
+        if self.param_type == "exp_clip":
+            return torch.clamp(self.log_alpha.exp(), min=0.0, max=self.exp_clip_max)
+        return F.softplus(self.log_alpha)
 
 
 class CQLCore(SACCore):
@@ -88,8 +126,9 @@ class CQLCore(SACCore):
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
-        cql_lagrange_official_scaling: bool = False,
-        cql_always_clip: bool = False,
+        cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only",
+        cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune",
+        cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus",
         # Phase control
         use_td_loss: bool = True,
         # General
@@ -162,8 +201,9 @@ class CQLCore(SACCore):
         self.cql_clip_diff_min = cql_clip_diff_min
         self.cql_clip_diff_max = cql_clip_diff_max
         self.cql_action_sample_method = cql_action_sample_method
-        self.cql_lagrange_official_scaling = cql_lagrange_official_scaling
-        self.cql_always_clip = cql_always_clip
+        self.cql_penalty_scale = cql_penalty_scale
+        self.cql_diff_clip_mode = cql_diff_clip_mode
+        self.cql_alpha_param = cql_alpha_param
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
@@ -219,8 +259,9 @@ class CQLCore(SACCore):
             "cql_clip_diff_min": self.cql_clip_diff_min,
             "cql_clip_diff_max": self.cql_clip_diff_max,
             "cql_action_sample_method": self.cql_action_sample_method,
-            "cql_lagrange_official_scaling": self.cql_lagrange_official_scaling,
-            "cql_always_clip": self.cql_always_clip,
+            "cql_penalty_scale": self.cql_penalty_scale,
+            "cql_diff_clip_mode": self.cql_diff_clip_mode,
+            "cql_alpha_param": self.cql_alpha_param,
         }
         if self._is_dict_obs:
             metadata.update(
@@ -453,7 +494,8 @@ class CQLCore(SACCore):
 
         if self.cql_autotune_alpha:
             self.cql_alpha_lagrange = CQLAlphaLagrange(
-                init_value=self.cql_alpha_lagrange_init
+                init_value=self.cql_alpha_lagrange_init,
+                param_type=self.cql_alpha_param,
             ).to(self.device)
             self.cql_alpha_optimizer = make_optimizer(
                 list(self.cql_alpha_lagrange.parameters()),
@@ -638,7 +680,7 @@ class CQLCore(SACCore):
 
         cql_ood_values = torch.logsumexp(q_ood / self.cql_temp, dim=-1) * self.cql_temp
         cql_q_diff = cql_ood_values - q_pred_for_diff
-        if not self.cql_autotune_alpha or self.cql_always_clip:
+        if not self.cql_autotune_alpha or self.cql_diff_clip_mode == "always":
             cql_q_diff = torch.clamp(
                 cql_q_diff, self.cql_clip_diff_min, self.cql_clip_diff_max
             )
@@ -727,7 +769,7 @@ class CQLCore(SACCore):
             cql_alpha = self._current_cql_alpha()
             cql_loss = cql_loss_raw - self.cql_target_action_gap if self.cql_autotune_alpha else cql_loss_raw
             cql_loss = cql_alpha * cql_loss
-            if self.cql_autotune_alpha and self.cql_lagrange_official_scaling:
+            if self.cql_autotune_alpha and self.cql_penalty_scale == "lagrange_times_alpha":
                 cql_loss = cql_loss * self.cql_alpha
             info["cql_loss"] = cql_loss_raw.detach()
             info["cql_alpha"] = cql_alpha.detach()
@@ -753,7 +795,7 @@ class CQLCore(SACCore):
             cql_loss_raw, _ = self._cql_loss(data, q_pred)
         cql_alpha = self._current_cql_alpha()
         alpha_loss = -cql_alpha * (cql_loss_raw - self.cql_target_action_gap)
-        if self.cql_lagrange_official_scaling:
+        if self.cql_penalty_scale == "lagrange_times_alpha":
             alpha_loss = alpha_loss * self.cql_alpha
         return alpha_loss
 
@@ -855,8 +897,9 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
-        cql_lagrange_official_scaling: bool = False,
-        cql_always_clip: bool = False,
+        cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only",
+        cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune",
+        cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus",
         # Phase control
         use_td_loss: bool = True,
         # General
@@ -949,8 +992,9 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             cql_clip_diff_min=cql_clip_diff_min,
             cql_clip_diff_max=cql_clip_diff_max,
             cql_action_sample_method=cql_action_sample_method,
-            cql_lagrange_official_scaling=cql_lagrange_official_scaling,
-            cql_always_clip=cql_always_clip,
+            cql_penalty_scale=cql_penalty_scale,
+            cql_diff_clip_mode=cql_diff_clip_mode,
+            cql_alpha_param=cql_alpha_param,
             use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
             seed=seed,
@@ -1024,8 +1068,9 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
-        cql_lagrange_official_scaling: bool = False,
-        cql_always_clip: bool = False,
+        cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only",
+        cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune",
+        cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus",
         use_td_loss: bool = True,
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
         image_keys: Optional[tuple[str, ...]] = None,
@@ -1118,8 +1163,9 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             cql_clip_diff_min=cql_clip_diff_min,
             cql_clip_diff_max=cql_clip_diff_max,
             cql_action_sample_method=cql_action_sample_method,
-            cql_lagrange_official_scaling=cql_lagrange_official_scaling,
-            cql_always_clip=cql_always_clip,
+            cql_penalty_scale=cql_penalty_scale,
+            cql_diff_clip_mode=cql_diff_clip_mode,
+            cql_alpha_param=cql_alpha_param,
             use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
             seed=seed,

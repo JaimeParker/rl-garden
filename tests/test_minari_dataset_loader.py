@@ -214,6 +214,38 @@ def test_sparse_mc_uses_observation_aligned_minari_success(monkeypatch):
     assert buffer._mc_table[:3, 0].tolist() == pytest.approx([-5.45, -0.5, 5.0])
 
 
+def test_final_step_truncation_vs_termination_does_not_change_mc_returns(monkeypatch):
+    """Within one Minari episode, the done flags only ever differ at the final
+    index, and the backward MC recursion's ``running`` accumulator is still 0
+    there -- so whether that final step is a termination or a truncation
+    cannot change the computed MC returns. If this ever starts failing, the
+    loader's MC computation is no longer per-episode isolated and the
+    truncation-handling question needs revisiting."""
+    for timeout in (False, True):
+        episode = _make_sparse_success_episode(success=True, timeout=timeout)
+        dataset = _make_box_dataset([episode])
+        _install_fake_minari(monkeypatch, dataset)
+
+        buffer = MCTensorReplayBuffer(
+            observation_space=dataset.observation_space,
+            action_space=dataset.action_space,
+            num_envs=1,
+            buffer_size=10,
+            gamma=0.9,
+            sparse_reward_mc=True,
+            sparse_negative_reward=-5.0,
+            success_threshold=0.5,
+            storage_device="cpu",
+            sample_device="cpu",
+        )
+
+        load_minari_dataset_to_replay_buffer(
+            buffer, "fake/dataset-v0", reward_scale=10.0, reward_bias=-5.0
+        )
+
+        assert buffer._mc_table[:3, 0].tolist() == pytest.approx([-5.45, -0.5, 5.0])
+
+
 def test_sparse_mc_failed_episode_uses_infinite_horizon_floor(monkeypatch):
     episode = _make_sparse_success_episode(success=False, timeout=True)
     dataset = _make_box_dataset([episode])

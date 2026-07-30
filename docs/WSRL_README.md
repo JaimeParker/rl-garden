@@ -192,6 +192,19 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 - `--cql_autotune_alpha`: Auto-tune CQL alpha via Lagrange multiplier
 - `--cql_importance_sample`: Use importance sampling (default: True)
 - `--cql_max_target_backup`: Use max Q for target (default: True)
+- `--cql_diff_clip_mode {skip_when_autotune,always}`: When to clamp the CQL
+  OOD/data Q-diff to `[cql_clip_diff_min, cql_clip_diff_max]` (default:
+  `skip_when_autotune`, matching WSRL — the clamp is skipped whenever
+  `cql_autotune_alpha=True`). `always` matches the official Cal-QL JAX repo
+  and CORL, which clamp unconditionally regardless of autotuning.
+- `--cql_penalty_scale {lagrange_only,lagrange_times_alpha}`: How the
+  autotuned Lagrange-weighted CQL penalty is scaled (default: `lagrange_only`,
+  matching WSRL: `alpha_prime * (diff - target_gap)`). `lagrange_times_alpha`
+  matches official Cal-QL JAX and CORL, which also multiply by the fixed
+  `cql_alpha` scalar: `alpha_prime * cql_alpha * (diff - target_gap)`.
+- `--cql_alpha_param {softplus,exp_clip}`: Parameterization of the CQL alpha
+  Lagrange multiplier (default: `softplus`, unbounded, matching WSRL).
+  `exp_clip` matches official Cal-QL JAX and CORL: `clip(exp(log_alpha), 0, 1e6)`.
 - `--backup_entropy`: Include entropy in TD target backups (default: False, matching
   upstream WSRL/Cal-QL). This is a single global config — the same value applies to
   both offline and online phases. `switch_to_online_mode` does **not** flip it.
@@ -265,6 +278,27 @@ either pure WSRL (CQL off) or Cal-QL retention (mixed/append buffer).
 - `gamma=0.99`, `tau=0.005`
 - WSRL actor/critic MLPs use layer norm by default
 - Actor std parameterization supports `exp` and `uniform`
+
+#### Reproducing official Cal-QL JAX / CORL exactly
+
+rl-garden's CQL/Cal-QL loss defaults follow the WSRL reference. To instead
+match the official Cal-QL JAX repo and CORL's Cal-QL numerically (twin
+critic, always-clip, official Lagrange scaling and parameterization), pass:
+
+```bash
+--n_critics 2 \
+--cql_diff_clip_mode always \
+--cql_penalty_scale lagrange_times_alpha \
+--cql_alpha_param exp_clip
+```
+
+`--n_critics 2` alone reproduces the plain twin-critic setup used by all
+three references (no REDQ-style ensemble/subsampling) — `critic_subsample_size`
+self-disables whenever it is `>= n_critics`, so no separate override is
+needed. There is no single `--cql-preset` flag for this: official-JAX and
+CORL agree with each other on these three points, but neither agrees with
+WSRL, which is why each is its own opt-in toggle rather than baked into one
+name.
 
 ### Vision-Specific
 - `--obs_mode rgb`: Observation mode (rgb | rgbd)

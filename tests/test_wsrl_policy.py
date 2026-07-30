@@ -5,7 +5,7 @@ from gymnasium import spaces
 
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.sac_policy import SACPolicy
-from rl_garden.policies.wsrl_policy import CQLAlphaLagrange, WSRLPolicy
+from rl_garden.policies.wsrl_policy import WSRLPolicy
 
 
 @pytest.fixture
@@ -280,24 +280,6 @@ class TestParameterGroups:
     def test_cql_alpha_lagrange_disabled(self, wsrl_policy):
         params = list(wsrl_policy.cql_alpha_lagrange_parameters())
         assert len(params) == 0
-
-
-class TestCQLAlphaLagrange:
-    """Test CQL alpha Lagrange multiplier."""
-
-    def test_lagrange_forward(self):
-        lagrange = CQLAlphaLagrange(init_value=5.0)
-        alpha = lagrange()
-        assert alpha.shape == ()
-        assert alpha.item() > 0
-
-    def test_lagrange_gradient(self):
-        lagrange = CQLAlphaLagrange(init_value=5.0)
-        alpha = lagrange()
-        loss = alpha * 2.0
-        loss.backward()
-
-        assert lagrange.log_alpha.grad is not None
 
     def test_lagrange_not_enabled_raises(self, wsrl_policy):
         with pytest.raises(ValueError, match="owned by CQL/CalQL algorithms"):

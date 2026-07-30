@@ -92,6 +92,9 @@ class CQLOff2OnArgs:
     cql_temp: float = 1.0
     cql_clip_diff_min: float = float("-inf")
     cql_clip_diff_max: float = float("inf")
+    cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only"
+    cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune"
+    cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus"
     backup_entropy: bool = False
     use_calql: bool = True
     calql_bound_random_actions: bool = False
