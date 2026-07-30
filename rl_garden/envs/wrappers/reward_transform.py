@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import gymnasium as gym
 
+# gymnasium >=1.0 exposes the vector wrapper base class as ``gym.vector.VectorWrapper``;
+# gymnasium 0.29.x (pinned by ManiSkill) only has the equivalent ``VectorEnvWrapper``.
+_VectorWrapperBase = getattr(gym.vector, "VectorWrapper", None) or gym.vector.VectorEnvWrapper
+
 
 class RewardScaleBiasWrapper(gym.Wrapper):
     """Multiply reward by ``scale`` and add ``bias`` on each step.
@@ -28,7 +32,7 @@ class RewardScaleBiasWrapper(gym.Wrapper):
         return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, info
 
 
-class RewardScaleBiasVectorWrapper(gym.vector.VectorWrapper):
+class RewardScaleBiasVectorWrapper(_VectorWrapperBase):
     """Multiply reward by ``scale`` and add ``bias`` on each step, for vector envs.
 
     ``RewardScaleBiasWrapper`` above subclasses ``gym.Wrapper``, whose
