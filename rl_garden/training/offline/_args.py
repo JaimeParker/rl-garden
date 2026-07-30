@@ -175,6 +175,13 @@ class OfflineActorArgs:
 
 
 @dataclass
+class OfflineSACNetworkArgs:
+    hidden_dim: int = 256
+    actor_hidden_layers: int = 2
+    critic_hidden_layers: int = 4
+
+
+@dataclass
 class OfflineCriticArgs:
     n_critics: int = 10
     critic_subsample_size: int = 2
@@ -217,6 +224,8 @@ class OfflineCQLArgs:
     cql_temp: float = 1.0
     cql_clip_diff_min: float = float("-inf")
     cql_clip_diff_max: float = float("inf")
+    cql_lagrange_official_scaling: bool = False
+    cql_always_clip: bool = False
     backup_entropy: bool = False
 
 

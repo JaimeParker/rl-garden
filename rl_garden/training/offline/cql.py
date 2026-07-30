@@ -10,6 +10,7 @@ from rl_garden.training.offline._args import (
     OfflineCQLArgs,
     OfflineCriticArgs,
     OfflineDiscountArgs,
+    OfflineSACNetworkArgs,
 )
 from rl_garden.training.offline._registry import registry
 
@@ -24,6 +25,7 @@ class CQLArgs(
     OfflineDiscountArgs,
     OfflineActorArgs,
     OfflineCriticArgs,
+    OfflineSACNetworkArgs,
     OfflineCompileArgs,
     OfflineCQLArgs,
 ):
@@ -41,6 +43,10 @@ def _cql_kwargs(
     )
     from rl_garden.encoders import discover_image_keys
 
+    net_arch = {
+        "pi": [args.hidden_dim] * args.actor_hidden_layers,
+        "qf": [args.hidden_dim] * args.critic_hidden_layers,
+    }
     kwargs = dict(
         env=env_spec,
         buffer_size=args.buffer_size,
@@ -68,6 +74,7 @@ def _cql_kwargs(
         ent_coef="auto",
         target_entropy="auto",
         backup_entropy=args.backup_entropy,
+        net_arch=net_arch,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         use_cql_loss=args.use_cql_loss,
@@ -83,6 +90,8 @@ def _cql_kwargs(
         cql_clip_diff_min=args.cql_clip_diff_min,
         cql_clip_diff_max=args.cql_clip_diff_max,
         cql_action_sample_method=args.cql_action_sample_method,
+        cql_lagrange_official_scaling=args.cql_lagrange_official_scaling,
+        cql_always_clip=args.cql_always_clip,
         actor_use_layer_norm=args.actor_use_layer_norm,
         critic_use_layer_norm=args.critic_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,

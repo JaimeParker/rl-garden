@@ -91,6 +91,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         cql_clip_diff_min: float = float("-inf"),
         cql_clip_diff_max: float = float("inf"),
         cql_action_sample_method: str = "uniform",
+        cql_lagrange_official_scaling: bool = False,
+        cql_always_clip: bool = False,
         # Cal-QL parameters
         use_calql: bool = True,
         calql_bound_random_actions: bool = False,
@@ -198,6 +200,8 @@ class WSRL(_CalQLRolloutTrainingShell):
             cql_clip_diff_min=cql_clip_diff_min,
             cql_clip_diff_max=cql_clip_diff_max,
             cql_action_sample_method=cql_action_sample_method,
+            cql_lagrange_official_scaling=cql_lagrange_official_scaling,
+            cql_always_clip=cql_always_clip,
             use_calql=use_calql,
             calql_bound_random_actions=calql_bound_random_actions,
             sparse_reward_mc=sparse_reward_mc,

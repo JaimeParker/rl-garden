@@ -15,7 +15,9 @@ from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.common import Logger
 from rl_garden.encoders.combined import CombinedExtractor
+from rl_garden.training.offline.cql import CQLArgs, _cql_kwargs
 
 
 class DummyVecEnv:
@@ -157,6 +159,19 @@ def test_cql_accepts_and_wires_eval_env_constructor_args():
     assert agent.eval_env is eval_env
     assert agent.eval_freq == 5
     assert agent.num_eval_steps == 3
+
+
+def test_offline_cql_cli_network_args_build_net_arch():
+    args = CQLArgs(
+        offline_dataset_path="demo.h5",
+        hidden_dim=17,
+        actor_hidden_layers=2,
+        critic_hidden_layers=4,
+    )
+
+    kwargs = _cql_kwargs(args, _offline_env(), Logger(log_type="none"))
+
+    assert kwargs["net_arch"] == {"pi": [17, 17], "qf": [17, 17, 17, 17]}
 
 
 def test_cql_train_step_and_checkpoint(tmp_path):

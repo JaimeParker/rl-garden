@@ -132,6 +132,8 @@ def _load_success(
         if success.numel() == 1:
             return success.reshape(1).expand(length), False
         success = success.reshape(-1)
+        if success.numel() == length + 1:
+            return success[1 : length + 1], False
         if success.numel() < length:
             raise ValueError(
                 f"Success field {key!r} has {success.numel()} entries, "

@@ -20,6 +20,18 @@ from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 
+def _sparse_mc_returns(
+    rewards: torch.Tensor,
+    dones: torch.Tensor,
+    success: torch.Tensor,
+    gamma: float,
+    sparse_negative_reward: float,
+) -> torch.Tensor:
+    if bool((success > 0.5).any()):
+        return _mc_returns(rewards, dones, gamma)
+    return torch.full_like(rewards, sparse_negative_reward / (1.0 - gamma))
+
+
 def _require_minari():
     try:
         import minari  # type: ignore
@@ -85,7 +97,9 @@ def load_minari_dataset_to_replay_buffer(
         rewards = _to_tensor(episode.rewards, storage_device).float()
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
-        dones = _to_tensor(episode.terminations, storage_device).float()
+        terminations = _to_tensor(episode.terminations, storage_device).float()
+        truncations = _to_tensor(episode.truncations, storage_device).float()
+        dones = terminations
         length = actions.shape[0]
 
         obs = _to_tensor(_slice(episode.observations, 0, length), storage_device)
@@ -103,6 +117,16 @@ def load_minari_dataset_to_replay_buffer(
                 success_threshold=float(getattr(buffer, "success_threshold", 0.5)),
             )
             success_parts.append(success)
+            mc_dones = (terminations.bool() | truncations.bool()).float()
+            mc_parts.append(
+                _sparse_mc_returns(
+                    rewards,
+                    mc_dones,
+                    success,
+                    float(buffer.gamma),
+                    float(getattr(buffer, "sparse_negative_reward", 0.0)),
+                )
+            )
             if inferred and not warned_success_fallback:
                 warnings.warn(
                     "sparse_reward_mc=True but no success field was found in the "

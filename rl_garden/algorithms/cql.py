@@ -88,6 +88,8 @@ class CQLCore(SACCore):
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
+        cql_lagrange_official_scaling: bool = False,
+        cql_always_clip: bool = False,
         # Phase control
         use_td_loss: bool = True,
         # General
@@ -160,6 +162,8 @@ class CQLCore(SACCore):
         self.cql_clip_diff_min = cql_clip_diff_min
         self.cql_clip_diff_max = cql_clip_diff_max
         self.cql_action_sample_method = cql_action_sample_method
+        self.cql_lagrange_official_scaling = cql_lagrange_official_scaling
+        self.cql_always_clip = cql_always_clip
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
@@ -215,6 +219,8 @@ class CQLCore(SACCore):
             "cql_clip_diff_min": self.cql_clip_diff_min,
             "cql_clip_diff_max": self.cql_clip_diff_max,
             "cql_action_sample_method": self.cql_action_sample_method,
+            "cql_lagrange_official_scaling": self.cql_lagrange_official_scaling,
+            "cql_always_clip": self.cql_always_clip,
         }
         if self._is_dict_obs:
             metadata.update(
@@ -632,7 +638,7 @@ class CQLCore(SACCore):
 
         cql_ood_values = torch.logsumexp(q_ood / self.cql_temp, dim=-1) * self.cql_temp
         cql_q_diff = cql_ood_values - q_pred_for_diff
-        if not self.cql_autotune_alpha:
+        if not self.cql_autotune_alpha or self.cql_always_clip:
             cql_q_diff = torch.clamp(
                 cql_q_diff, self.cql_clip_diff_min, self.cql_clip_diff_max
             )
@@ -721,6 +727,8 @@ class CQLCore(SACCore):
             cql_alpha = self._current_cql_alpha()
             cql_loss = cql_loss_raw - self.cql_target_action_gap if self.cql_autotune_alpha else cql_loss_raw
             cql_loss = cql_alpha * cql_loss
+            if self.cql_autotune_alpha and self.cql_lagrange_official_scaling:
+                cql_loss = cql_loss * self.cql_alpha
             info["cql_loss"] = cql_loss_raw.detach()
             info["cql_alpha"] = cql_alpha.detach()
 
@@ -744,7 +752,10 @@ class CQLCore(SACCore):
             q_pred = self._critic_forward(data.obs, data.actions, target=False)
             cql_loss_raw, _ = self._cql_loss(data, q_pred)
         cql_alpha = self._current_cql_alpha()
-        return -cql_alpha * (cql_loss_raw - self.cql_target_action_gap)
+        alpha_loss = -cql_alpha * (cql_loss_raw - self.cql_target_action_gap)
+        if self.cql_lagrange_official_scaling:
+            alpha_loss = alpha_loss * self.cql_alpha
+        return alpha_loss
 
     def _backup_entropy_enabled(self) -> bool:
         return self.backup_entropy
@@ -844,6 +855,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
+        cql_lagrange_official_scaling: bool = False,
+        cql_always_clip: bool = False,
         # Phase control
         use_td_loss: bool = True,
         # General
@@ -936,6 +949,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             cql_clip_diff_min=cql_clip_diff_min,
             cql_clip_diff_max=cql_clip_diff_max,
             cql_action_sample_method=cql_action_sample_method,
+            cql_lagrange_official_scaling=cql_lagrange_official_scaling,
+            cql_always_clip=cql_always_clip,
             use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
             seed=seed,
@@ -1009,6 +1024,8 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         cql_action_sample_method: str = "uniform",
+        cql_lagrange_official_scaling: bool = False,
+        cql_always_clip: bool = False,
         use_td_loss: bool = True,
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
         image_keys: Optional[tuple[str, ...]] = None,
@@ -1101,6 +1118,8 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             cql_clip_diff_min=cql_clip_diff_min,
             cql_clip_diff_max=cql_clip_diff_max,
             cql_action_sample_method=cql_action_sample_method,
+            cql_lagrange_official_scaling=cql_lagrange_official_scaling,
+            cql_always_clip=cql_always_clip,
             use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
             seed=seed,
