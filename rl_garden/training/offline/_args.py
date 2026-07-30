@@ -83,6 +83,8 @@ class OfflineRuntimeArgs:
 class OfflineEvalArgs:
     env_id: Optional[str] = None
     num_eval_envs: int = 1
+    num_eval_episodes: int = 100
+    num_eval_steps: Optional[int] = None
     control_mode: str = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
 

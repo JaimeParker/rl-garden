@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pytest
 import torch
 import torch.nn as nn
 from gymnasium import spaces
@@ -45,6 +46,52 @@ class DummyOfflineAlgorithm(OfflineRLAlgorithm):
         if not compute_info:
             return {}
         return {"dummy_loss": float(self._global_update)}
+
+
+class _CompletedEpisodeEvalEnv:
+    num_envs = 2
+    single_observation_space = spaces.Box(low=-1.0, high=1.0, shape=(3,))
+    single_action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,))
+
+    def __init__(self) -> None:
+        self.step_idx = 0
+
+    def reset(self):
+        self.step_idx = 0
+        return torch.zeros(2, 3), {}
+
+    def step(self, actions):
+        del actions
+        base = 2 * self.step_idx
+        self.step_idx += 1
+        return (
+            torch.zeros(2, 3),
+            torch.zeros(2),
+            torch.ones(2, dtype=torch.bool),
+            torch.zeros(2, dtype=torch.bool),
+            {
+                "final_info": {
+                    "episode": {
+                        "r": torch.tensor([base + 1.0, base + 2.0]),
+                        "l": torch.tensor([10.0, 20.0]),
+                    }
+                },
+                "_final_info": torch.tensor([True, True]),
+            },
+        )
+
+
+class _NoDoneEvalEnv(_CompletedEpisodeEvalEnv):
+    def step(self, actions):
+        del actions
+        self.step_idx += 1
+        return (
+            torch.zeros(2, 3),
+            torch.zeros(2),
+            torch.zeros(2, dtype=torch.bool),
+            torch.zeros(2, dtype=torch.bool),
+            {},
+        )
 
 
 def test_infer_box_specs_from_h5(tmp_path):
@@ -149,6 +196,47 @@ def test_offline_algorithm_learn_uses_offline_steps(tmp_path):
     assert agent._global_step == 2
     assert agent._global_update == 2
     assert (tmp_path / "offline_pretrained.pt").exists()
+
+
+def test_offline_evaluate_stops_after_requested_completed_episodes():
+    env = OfflineEnvSpec(
+        observation_space=spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32),
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+        num_envs=1,
+    )
+    agent = DummyOfflineAlgorithm(
+        env,
+        eval_env=_CompletedEpisodeEvalEnv(),
+        device="cpu",
+        num_eval_steps=10,
+        num_eval_episodes=3,
+    )
+
+    metrics = agent._evaluate()
+
+    assert metrics["return"] == pytest.approx(2.0)
+    assert metrics["episode_len"] == pytest.approx(40.0 / 3.0)
+    assert metrics["episodes_completed"] == 3.0
+    assert metrics["eval_steps"] == 2.0
+
+
+def test_offline_evaluate_reports_partial_completion_at_step_cap():
+    env = OfflineEnvSpec(
+        observation_space=spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32),
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+        num_envs=1,
+    )
+    agent = DummyOfflineAlgorithm(
+        env,
+        eval_env=_NoDoneEvalEnv(),
+        device="cpu",
+        num_eval_steps=4,
+        num_eval_episodes=3,
+    )
+
+    metrics = agent._evaluate()
+
+    assert metrics == {"episodes_completed": 0.0, "eval_steps": 4.0}
 
 
 def test_run_offline_pretraining_can_skip_final_checkpoint(tmp_path):
@@ -257,3 +345,38 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
     assert req.camera_height == 64
     assert req.reward_scale == 2.0
     assert req.reward_bias == -1.0
+
+
+def test_minari_antmaze_offline_eval_defaults_to_episode_budget_cap():
+    from rl_garden.training.offline._runner import _eval_env_request
+    from rl_garden.training.offline.bc import BCArgs
+
+    args = BCArgs(
+        dataset_source="minari",
+        env_backend="minari",
+        offline_dataset_path="D4RL/antmaze/large-diverse-v2",
+        env_id="D4RL/antmaze/large-diverse-v2",
+        num_eval_episodes=7,
+    )
+
+    req = _eval_env_request(args)
+
+    assert req.num_eval_steps == 7_000
+
+
+def test_minari_antmaze_explicit_small_eval_cap_warns():
+    from rl_garden.training.offline._runner import _eval_env_request
+    from rl_garden.training.offline.bc import BCArgs
+
+    args = BCArgs(
+        dataset_source="minari",
+        env_backend="minari",
+        offline_dataset_path="D4RL/antmaze/large-diverse-v2",
+        env_id="D4RL/antmaze/large-diverse-v2",
+        num_eval_steps=50,
+    )
+
+    with pytest.warns(RuntimeWarning, match="may undercount completed episodes"):
+        req = _eval_env_request(args)
+
+    assert req.num_eval_steps == 50

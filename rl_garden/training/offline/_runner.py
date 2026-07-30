@@ -21,6 +21,30 @@ from rl_garden.envs.backend_registry import (
 from rl_garden.training._dataset import infer_offline_dataset_specs, load_offline_dataset
 
 
+def _is_minari_antmaze(args: Any) -> bool:
+    if args.env_backend != "minari":
+        return False
+    env_id = args.env_id or args.offline_dataset_path or ""
+    return "antmaze" in str(env_id).lower()
+
+
+def _resolve_num_eval_steps(args: Any, *, warn_on_small_antmaze: bool = True) -> int:
+    if args.num_eval_steps is not None:
+        steps = int(args.num_eval_steps)
+        if warn_on_small_antmaze and _is_minari_antmaze(args) and steps < 1_000:
+            warnings.warn(
+                "AntMaze offline eval usually needs up to 1000 vector steps "
+                "to finish a trajectory; the explicit num_eval_steps="
+                f"{steps} may undercount completed episodes.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return steps
+    if _is_minari_antmaze(args):
+        return max(int(args.num_eval_episodes) * 1_000, 1)
+    return 50
+
+
 def _save_filename(args: Any, algorithm: str) -> str:
     if args.save_filename is not None:
         return args.save_filename
@@ -44,7 +68,12 @@ def _eval_env_request(args: Any) -> EnvRequest:
         reward_bias=args.reward_bias,
         num_eval_envs=args.num_eval_envs,
         capture_video=False,
-        num_eval_steps=args.num_eval_steps,
+        num_eval_steps=_resolve_num_eval_steps(
+            args,
+            warn_on_small_antmaze=not getattr(
+                args, "_offline_num_eval_steps_resolved", False
+            ),
+        ),
         backend_config=backend_config,
     )
 
@@ -68,6 +97,8 @@ def run_offline(
     if args.buffer_device == "cuda" and not torch.cuda.is_available():
         warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
         args.buffer_device = "cpu"
+    args.num_eval_steps = _resolve_num_eval_steps(args)
+    args._offline_num_eval_steps_resolved = True
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
@@ -119,6 +150,7 @@ def run_offline(
         eval_env = make_evaluation_env(args.env_backend, _eval_env_request(args))
 
     agent = build_agent(args, env_spec, logger, eval_env)
+    agent.num_eval_episodes = int(args.num_eval_episodes)
     loaded = load_offline_dataset(agent.replay_buffer, args)
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:
