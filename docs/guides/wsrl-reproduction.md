@@ -7,7 +7,7 @@ This guide describes the current state-based PickCube WSRL workflow:
 3. Run WSRL offline pre-training followed by online fine-tuning.
 
 For algorithm details and individual configuration options, see
-[`docs/WSRL_README.md`](WSRL_README.md). This document is an operator guide for
+[`docs/design/wsrl-overview.md`](../design/wsrl-overview.md). This document is an operator guide for
 collaborators who need to reproduce the workflow end to end.
 
 ## Environment Assumptions

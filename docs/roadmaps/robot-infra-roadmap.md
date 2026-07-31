@@ -104,7 +104,7 @@ decided.
   inference loader, training script, and data-collection script now live
   under `rl_garden/models/reward/success/` (moved from
   `rl_garden/envs/franka_real/classifier.py` and completed -- see
-  `docs/hil_serl_roadmap.md` item 3), alongside a reorganized
+  `docs/roadmaps/hil-serl-roadmap.md` item 3), alongside a reorganized
   `rl_garden/models/reward/` that also holds the pre-existing offline
   HDF5-labeled classifiers (`classifiers/`).
 

@@ -2,7 +2,7 @@
 ``3rd_party/hil-serl/examples/train_reward_classifier.py`` (balanced
 success/failure batch sampling, ``sigmoid_binary_cross_entropy``-equivalent
 loss, random-shift augmentation, fixed number of epochs, no train/val split
--- see ``docs/hil_serl_roadmap.md`` item 2). Standalone argparse CLI, not
+-- see ``docs/roadmaps/hil-serl-roadmap.md`` item 2). Standalone argparse CLI, not
 routed through ``BaseAlgorithmRegistry``: this is supervised classifier
 training, not an RL algorithm.
 

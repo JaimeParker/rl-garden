@@ -19,7 +19,7 @@ Standalone offline training is also available:
 
 For the end-to-end PickCube reproduction workflow, including SAC checkpoint
 training, WSRL dataset generation, and offline-to-online launch commands, see
-[`WSRL_REPRODUCTION.md`](WSRL_REPRODUCTION.md).
+[`wsrl-reproduction.md`](../guides/wsrl-reproduction.md).
 
 ## Key Features
 
@@ -281,45 +281,118 @@ either pure WSRL (CQL off) or Cal-QL retention (mixed/append buffer).
 
 #### Aligning with official Cal-QL JAX / CORL
 
-rl-garden's CQL/Cal-QL loss defaults follow the WSRL reference. To instead
-match the official Cal-QL JAX repo and CORL's Cal-QL numerically (twin
-critic, always-clip, official Lagrange scaling and parameterization), pass:
+rl-garden's CQL/Cal-QL loss defaults follow the WSRL reference. Official
+Cal-QL JAX and CORL's Cal-QL are **not interchangeable targets** — they
+agree on the core CQL/Cal-QL math but diverge on the CQL diff-clip value,
+critic/actor depth, and weight-init scheme, so each gets its own recipe
+below rather than one shared flag block. Both recipes need the legacy D4RL
+AntMaze environment, not the Minari-recovered one: install the
+`d4rl-legacy` extra before running either.
+
+##### Parameter reference
+
+| Axis | Official Cal-QL JAX | CORL Cal-QL | rl-garden flag |
+|---|---|---|---|
+| Reward transform | scale=10, bias=-5 | scale=10, bias=-5 | `--reward_scale 10 --reward_bias -5` |
+| Discount / target update | gamma=0.99, tau=0.005 | gamma=0.99, tau=0.005 | `--gamma 0.99 --tau 0.005` |
+| CQL alpha (static weight) | 5.0 | 5.0 (offline and online) | `--cql_alpha 5.0` |
+| Lagrange target gap | 0.8 | 0.8 | `--cql_target_action_gap 0.8` |
+| Lagrange penalty formula | `alpha_prime * cql_min_q_weight * (diff - gap)` | same | `--cql_penalty_scale lagrange_times_alpha` |
+| Lagrange multiplier parameterization | `clip(exp(log_alpha), 0, 1e6)`, raw param initialized to `1.0` → effective α′₀ = `e` | same clip form | `--cql_alpha_param exp_clip --cql_alpha_lagrange_init 2.718281828459045` |
+| CQL diff clip | applied unconditionally, but left at `[-inf, inf]` (a no-op) | applied unconditionally, **`cql_clip_diff_min=-200`** | `--cql_diff_clip_mode always` (add `--cql_clip_diff_min -200.0` for CORL only) |
+| Critic depth | 4 hidden layers × 256 | **5** hidden layers × 256 | see "Architecture cannot be set for off2on" below |
+| Actor depth | 2 hidden layers × 256 | **3** hidden layers × 256 (hardcoded in CORL, not config-driven) | see below |
+| Critic count | twin-Q | twin-Q | `--n_critics 2 --critic_subsample_size 2` (self-disables ensembling whenever `>= n_critics`) |
+| Weight init | orthogonal, hidden gain=√2, **final layer gain=1e-2**, bias=0 | orthogonal, gain=√2 **uniformly on every layer including outputs**, bias=0 | `--kernel_init orthogonal_near_zero_output` matches JAX exactly; **no option currently matches CORL** (Gap 2 below) |
+| Actor log_std affine | multiplier=1.0, offset=-1.0 | multiplier=1.0, offset=-1.0 | `--policy_log_std_multiplier 1.0 --policy_log_std_offset -1.0` |
+| Offline / online steps | 1M / 1M | 1M / 1M | `--num_offline_steps 1000000` / `--num_online_steps 1000000` |
+| Offline/online mix ratio | 0.5 | 0.5 | `--online_replay_mode mixed --offline_data_ratio 0.5` — set explicitly; rl-garden's off2on default is `"auto"`, an adaptive scheme unique to rl-garden that matches neither reference |
+| Online CQL | stays active, same `cql_alpha=5.0` | stays active, same `cql_alpha=5.0` | `--online_use_cql_loss True --online_cql_alpha 5.0` |
+| Online Cal-QL calibration (`max(Q, mc_return)` bound) | **stays active** — `enable_calql` is one static flag never toggled at the online switch, and online MC returns are computed per-trajectory, not placeholders | **disabled** at the online switch via `switch_calibration()` | rl-garden's `use_calql` is one static value for the whole run — matches JAX as-is; **cannot reproduce CORL's online-off behavior** (Gap 3 below) |
+| Eval episodes | script uses 20; use 100 to reduce sparse-success-rate noise | 100 | `--num_eval_episodes 100` for both |
+| Env / dataset | legacy D4RL | legacy D4RL | `--env_backend d4rl_legacy --dataset_source d4rl_legacy` |
+
+##### Official Cal-QL JAX — offline pretrain
+
+`scripts/pretrain_calql_d4rl_legacy.sh` already encodes this exact recipe —
+run it directly rather than reassembling the flags by hand. (It is currently
+an untracked file in this checkout; if it's gone, rebuild it from the table
+above plus `--actor_hidden_layers 2 --critic_hidden_layers 4` for the
+offline entrypoint's architecture flags.)
+
+##### CORL Cal-QL — offline pretrain
+
+Same script, with the CORL-specific deltas from the table applied:
 
 ```bash
---n_critics 2 \
---cql_diff_clip_mode always \
---cql_penalty_scale lagrange_times_alpha \
---cql_alpha_param exp_clip \
---kernel_init orthogonal_near_zero_output
+scripts/pretrain_calql_d4rl_legacy.sh \
+    --actor_hidden_layers 3 \
+    --critic_hidden_layers 5 \
+    --cql_clip_diff_min -200.0
 ```
 
-`--n_critics 2` alone reproduces the plain twin-critic setup used by all
-three references (no REDQ-style ensemble/subsampling) — `critic_subsample_size`
-self-disables whenever it is `>= n_critics`, so no separate override is
-needed. There is no single `--cql-preset` flag for this: official-JAX and
-CORL agree with each other on these three points, but neither agrees with
-WSRL, which is why each is its own opt-in toggle rather than baked into one
-name.
+`--kernel_init` has no exact CORL match (Gap 2) — `orthogonal_near_zero_output`
+is the closest available option, but it does not reproduce CORL's
+uniform-gain scheme.
 
-`--kernel_init orthogonal_near_zero_output` reproduces official Cal-QL JAX's
-per-layer weight initialization (`orthogonal_init=True` in
-`JaxCQL/model.py`): hidden layers use `orthogonal(gain=sqrt(2))`, the final
-linear layer of each network uses `orthogonal(gain=1e-2)`, and every bias is
-zero. rl-garden's other `kernel_init` options apply one gain uniformly to
-every layer including the output layer, so they do not reproduce this
-scheme.
+##### Online fine-tuning — currently blocked for both
 
-For the official policy initialization, also pass
-`--policy_log_std_multiplier 1.0 --policy_log_std_offset -1.0`. These values
-create the trainable scalar affine parameters used by the JAX policy. The
-flags above align the CQL loss and network construction; entropy-temperature
-parameterization and optimizer update ordering still follow rl-garden.
+The reference recipe for continuing either checkpoint into online
+fine-tuning would be:
 
-The legacy D4RL AntMaze reproduction additionally requires the original Gym
-0.23/MuJoCo 2.1 environment and dataset semantics. Install the
-`d4rl-legacy` extra and run `scripts/pretrain_calql_d4rl_legacy.sh`; do not use
-the Minari-recovered AntMaze environment for comparisons against the original
-Cal-QL result.
+```bash
+python examples/train_off2on.py calql \
+    --load_checkpoint <offline_checkpoint.pt> \
+    --env_backend d4rl_legacy --dataset_source d4rl_legacy \
+    --online_replay_mode mixed --offline_data_ratio 0.5 \
+    --online_use_cql_loss True --online_cql_alpha 5.0 \
+    --num_online_steps 1000000
+```
+
+**This currently fails for both styles** — see Gap 1 below. Continuing a
+JAX/CORL-aligned offline checkpoint through the standard off2on entrypoint
+is not possible today.
+
+##### Known gaps
+
+- **Gap 1 (blocking — hard error).** Two independent structural mismatches
+  between the offline-pretrained checkpoint and the off2on-constructed
+  model:
+  - `rl_garden/training/off2on/_args.py`'s `CQLOff2OnArgs` has no
+    `policy_log_std_multiplier` / `policy_log_std_offset` fields, and
+    `off2on/calql.py` / `off2on/wsrl.py`'s `build_calql` / `build_wsrl`
+    never pass them through to `Off2OnCalQL(...)` / `WSRL(...)`. A
+    JAX/CORL-aligned offline actor has trainable `log_std_multiplier` /
+    `log_std_offset` parameters in its `state_dict`; the off2on-constructed
+    actor does not.
+  - The off2on entrypoint exposes no `net_arch` / hidden-layer flags at
+    all — `CQLCore._resolve_net_arch` (`rl_garden/algorithms/cql.py:411-441`)
+    falls back to `{"pi": [256, 256], "qf": [256, 256]}` for every off2on
+    run, regardless of what architecture the offline checkpoint used (4 or
+    5 critic hidden layers, 2 or 3 actor hidden layers per the table above).
+
+  Either mismatch alone produces a `state_dict` key/shape mismatch.
+  `agent.load()` defaults to `strict=True`
+  (`rl_garden/algorithms/base_algorithm.py:257`), so loading a JAX/CORL-aligned
+  offline checkpoint into `train_off2on.py` raises a `RuntimeError`. There
+  is currently no way to continue such a checkpoint into online
+  fine-tuning through the standard off2on entrypoint.
+- **Gap 2 (non-blocking — silent divergence, offline phase only).** No
+  `kernel_init` value reproduces CORL's `orthogonal_init=True` scheme
+  (uniform gain=√2 on every `nn.Linear`, including output layers) —
+  rl-garden's `"orthogonal"` uses gain=1.0
+  (`rl_garden/networks/mlp.py:35-36`), and `"orthogonal_near_zero_output"`
+  uses JAX's mixed-gain scheme, not CORL's. This only affects the offline
+  pretrain phase (initialization is overwritten once a checkpoint loads on
+  top), so CORL-style offline pretraining currently cannot match CORL's
+  exact initial weights.
+- **Gap 3 (non-blocking — silent divergence, CORL online phase only).**
+  rl-garden's `use_calql` is one static value for an entire run; there is
+  no `online_use_calql` toggle analogous to CORL's `switch_calibration()`.
+  Official JAX doesn't need this — it keeps calibration active throughout
+  online fine-tuning, so JAX-style reproduction is unaffected. CORL-style
+  online fine-tuning currently cannot disable the calibration bound at the
+  online switch the way CORL does.
 
 ### Vision-Specific
 - `--obs_mode rgb`: Observation mode (rgb | rgbd)

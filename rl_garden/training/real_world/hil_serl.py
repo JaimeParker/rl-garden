@@ -190,7 +190,7 @@ def _run_learner(args) -> None:
 def _run_eval(args) -> None:
     """Loads a checkpoint and runs deterministic evaluation episodes directly
     on the real robot -- no sync client, no learner process, no data
-    collection (item 10 of docs/hil_serl_roadmap.md, HIL-SERL's own
+    collection (item 10 of docs/roadmaps/hil-serl-roadmap.md, HIL-SERL's own
     ``--eval_checkpoint_step``/``--eval_n_trajs``, ``train_rlpd.py:71-110``).
     Per-episode success is read off ``terminated``: ``RewardClassifierWrapper``
     sets it True exactly when the classifier judges success
@@ -271,7 +271,7 @@ class HilSerlArgs(RealWorldFrankaArgs, RLPDHybridArgs):
     franka_real: FrankaRealConfig = field(default_factory=FrankaRealConfig)
 
     # Overrides RealWorldFrankaArgs.role's Literal["actor", "learner"] with a
-    # third "eval" role (item 10 of docs/hil_serl_roadmap.md) -- kept local to
+    # third "eval" role (item 10 of docs/roadmaps/hil-serl-roadmap.md) -- kept local to
     # HilSerlArgs rather than the shared RealWorldFrankaArgs so this round's
     # scope stays limited to hil_serl; serl.py is unaffected.
     role: Literal["actor", "learner", "eval"] = "actor"
@@ -317,7 +317,7 @@ class HilSerlArgs(RealWorldFrankaArgs, RLPDHybridArgs):
     # (serl_launcher/serl_launcher/utils/launcher.py) actually run --
     # scoped here only, not touched on RLPDHybridArgs/VisionArgs themselves,
     # so sim rlpd_hybrid training and serl.py/SerlArgs are unaffected. See
-    # docs/hil_serl_roadmap.md's "Behavioral Divergences" section.
+    # docs/roadmaps/hil-serl-roadmap.md's "Behavioral Divergences" section.
     backup_entropy: bool = False
     image_augmentation: Literal["none", "random_shift"] = "random_shift"
     pooling_method: PoolingMethod = "spatial_learned_embeddings"

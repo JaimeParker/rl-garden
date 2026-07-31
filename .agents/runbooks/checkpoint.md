@@ -1,7 +1,7 @@
 # Checkpoint Runbook
 
 The public checkpoint format and compatibility contract are documented in
-[`docs/CHECKPOINT.md`](../../docs/CHECKPOINT.md). Read that document before changing
+[`docs/guides/checkpoint.md`](../../docs/guides/checkpoint.md). Read that document before changing
 checkpoint code or relying on resume semantics.
 
 ## Save Location

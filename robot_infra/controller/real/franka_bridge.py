@@ -11,7 +11,7 @@ actually calls: ``/pose``, ``/getstate``, ``/jointreset``, ``/open_gripper``,
 
 Explicitly a **transitional** solution -- see
 ``docs/superpowers/specs/2026-07-09-real-robot-rl-design.md`` and
-``docs/robot_infra_roadmap.md``: this file does no control-law computation
+``docs/roadmaps/robot-infra-roadmap.md``: this file does no control-law computation
 itself, it only forwards to the ROS controller so the ROS dependency stays
 confined to this one module.
 

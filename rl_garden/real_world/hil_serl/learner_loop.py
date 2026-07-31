@@ -3,7 +3,7 @@ capability set (online RLPD + demo mixing + HITL + reward classifier), which
 uses RLPD's existing static ``offline_dataset_path`` loading, not a
 continuously growing on-disk dataset. So ``_refresh_offline_data()`` stays
 the base class's no-op default here too; HG-DAgger's growing-dataset problem
-is out of scope for this round (see docs/robot_infra_roadmap.md).
+is out of scope for this round (see docs/roadmaps/robot-infra-roadmap.md).
 
 Overrides ``_on_transition`` to route transitions the way HIL-SERL's own
 actor loop does (``3rd_party/hil-serl/examples/train_rlpd.py:178-193``):

@@ -15,7 +15,7 @@ from rl_garden.training.real_world.hil_serl import HilSerlArgs, _build_env
 def test_hil_serl_args_override_real_robot_recipe_defaults_locally():
     """HilSerlArgs overrides backup_entropy/image_augmentation/pooling_method
     to match HIL-SERL's own real-robot recipe -- scoped here only, per
-    docs/hil_serl_roadmap.md's "Behavioral Divergences" section."""
+    docs/roadmaps/hil-serl-roadmap.md's "Behavioral Divergences" section."""
     hil_serl_args = HilSerlArgs()
     assert hil_serl_args.backup_entropy is False
     assert hil_serl_args.image_augmentation == "random_shift"

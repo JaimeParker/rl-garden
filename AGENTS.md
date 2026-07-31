@@ -64,7 +64,9 @@ entrypoints to a specific simulator.
 - `examples/` — thin training dispatchers and specialized experiment entrypoints.
 - `scripts/` — launchers with experiment defaults.
 - `tests/` — unit tests and accelerator/backend integration smoke tests.
-- `docs/` — public design, workflow, and operational documentation.
+- `docs/` — public documentation, split into `guides/` (operational how-to),
+  `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
+  notes). `docs/superpowers/` is skill-owned and out of scope here.
 - `3rd_party/` — reference submodules and external clones; do not edit unless the
   user explicitly requests it.
 

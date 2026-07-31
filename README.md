@@ -45,7 +45,7 @@ robot_infra/       # Controllers, teleoperation, and real-robot utilities
 examples/          # Thin dispatchers and specialized experiment entrypoints
 scripts/           # Launchers with experiment defaults
 tests/             # Unit and backend/accelerator integration tests
-docs/              # Workflow and subsystem documentation
+docs/              # Guides, design docs, and roadmaps (see docs/README.md)
 3rd_party/         # Read-only research references and external projects
 ```
 
@@ -167,7 +167,7 @@ scripts/train_wsrl.sh
 scripts/train_wsrl_rgbd.sh
 ```
 
-See [Reproducing WSRL](docs/WSRL_REPRODUCTION.md) for the complete checkpoint,
+See [Reproducing WSRL](docs/guides/wsrl-reproduction.md) for the complete checkpoint,
 dataset-generation, offline-pretraining, and online-fine-tuning workflow.
 
 ### Environment Backends
@@ -183,7 +183,7 @@ python examples/train_online.py ppo \
   --robotwin.robotwin-root /path/to/RoboTwin
 ```
 
-See [RoboTwin Integration](docs/ROBOTWIN.md) for installation, assets, observation
+See [RoboTwin Integration](docs/guides/robotwin.md) for installation, assets, observation
 mapping, rewards, and performance controls.
 
 The peg-insertion environment has dedicated camera, controller, and robot defaults
@@ -260,7 +260,7 @@ Checkpoints are torch-native `.pt` dictionaries containing model, optimizer, and
 training state. Replay snapshots are optional separate files; save them when exact
 off-policy continuation requires preserving replay distribution.
 
-See [Checkpoint Save & Load](docs/CHECKPOINT.md) for default paths, resume commands,
+See [Checkpoint Save & Load](docs/guides/checkpoint.md) for default paths, resume commands,
 replay-buffer tradeoffs, and algorithm compatibility.
 
 ## Library Composition
@@ -307,7 +307,7 @@ combined extractor and dict replay path.
 demonstration-recording utilities. See:
 
 - [Controller setup](robot_infra/controller/README.md)
-- [Teleoperation and recording](docs/TELEOP_README.md)
+- [Teleoperation and recording](docs/guides/teleop.md)
 
 Learned reward utilities live under `rl_garden/models/reward/`. Typical entrypoints
 include:
@@ -341,14 +341,17 @@ rather than changing the framework's preferred device path.
 
 ## Documentation
 
-- [Checkpoint Save & Load](docs/CHECKPOINT.md)
-- [Offline Training Acceleration](docs/OFFLINE_ACCELERATION.md)
-- [Residual SAC](docs/RESIDUAL_SAC.md)
-- [RNG and Numerical Determinism](docs/RNG_AND_NUMERICAL_DETERMINISM.md)
-- [RoboTwin Integration](docs/ROBOTWIN.md)
-- [Teleoperation and Recording](docs/TELEOP_README.md)
-- [WSRL Overview](docs/WSRL_README.md)
-- [WSRL Reproduction](docs/WSRL_REPRODUCTION.md)
+See [docs/README.md](docs/README.md) for the full index. Highlights:
+
+- [Checkpoint Save & Load](docs/guides/checkpoint.md)
+- [Configuration System](docs/guides/configuration.md)
+- [Offline Training Acceleration](docs/guides/offline-acceleration.md)
+- [RoboTwin Integration](docs/guides/robotwin.md)
+- [Teleoperation and Recording](docs/guides/teleop.md)
+- [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
+- [WSRL Overview](docs/design/wsrl-overview.md)
+- [Residual SAC](docs/design/residual-sac.md)
+- [RNG and Numerical Determinism](docs/design/rng-numerical-determinism.md)
 
 ## Research Influences
 
