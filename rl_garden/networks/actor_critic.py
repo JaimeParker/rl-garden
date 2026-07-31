@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Literal, Optional, Sequence
 
@@ -110,6 +111,8 @@ class SquashedGaussianActor(nn.Module):
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
+        log_std_multiplier_init: Optional[float] = None,
+        log_std_offset_init: Optional[float] = None,
     ) -> None:
         super().__init__()
         if std_parameterization not in ("exp", "uniform"):
@@ -148,6 +151,29 @@ class SquashedGaussianActor(nn.Module):
             self.fc_logstd = None
             self.log_stds = nn.Parameter(torch.zeros(act_dim))
 
+        self.log_std_multiplier = (
+            nn.Parameter(torch.tensor(float(log_std_multiplier_init)))
+            if log_std_multiplier_init is not None
+            else None
+        )
+        self.log_std_offset = (
+            nn.Parameter(torch.tensor(float(log_std_offset_init)))
+            if log_std_offset_init is not None
+            else None
+        )
+
+        if kernel_init == "orthogonal_near_zero_output":
+            for module in self.trunk.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+            for module in (self.fc_mean, self.fc_logstd):
+                if module is not None:
+                    nn.init.orthogonal_(module.weight, gain=1e-2)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+
         high = torch.as_tensor(action_space.high, dtype=torch.float32)
         low = torch.as_tensor(action_space.low, dtype=torch.float32)
         self.register_buffer("action_scale", (high - low) / 2.0)
@@ -163,6 +189,11 @@ class SquashedGaussianActor(nn.Module):
         else:
             assert self.log_stds is not None
             raw_log_std = self.log_stds.expand_as(mean)
+
+        if self.log_std_multiplier is not None:
+            raw_log_std = self.log_std_multiplier * raw_log_std
+        if self.log_std_offset is not None:
+            raw_log_std = raw_log_std + self.log_std_offset
 
         if self.log_std_mode == "tanh":
             log_std = torch.tanh(raw_log_std)

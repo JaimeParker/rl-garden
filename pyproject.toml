@@ -22,6 +22,11 @@ dependencies = [
 maniskill = ["mani_skill"]
 robotwin = ["pillow", "pyyaml"]
 minari = ["minari", "gymnasium-robotics"]
+d4rl-legacy = [
+    "gym==0.23.1",
+    "mujoco-py==2.1.2.14",
+    "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f",
+]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
 # Real-world RL (rl_garden/real_world/, rl_garden/envs/franka_real/,

@@ -103,6 +103,8 @@ def _cql_kwargs(
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
+        policy_log_std_multiplier=args.policy_log_std_multiplier,
+        policy_log_std_offset=args.policy_log_std_offset,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

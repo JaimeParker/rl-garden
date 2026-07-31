@@ -68,6 +68,20 @@ def test_infer_specs_routes_to_minari(monkeypatch):
     assert called == {"dataset_id": "D4RL/halfcheetah/medium-v0"}
 
 
+def test_infer_specs_routes_to_d4rl_legacy(monkeypatch):
+    obs_space, action_space = _box_spaces()
+    monkeypatch.setattr(
+        "rl_garden.training._dataset.infer_specs_from_d4rl_legacy",
+        lambda env_id: (obs_space, action_space),
+    )
+
+    result = infer_offline_dataset_specs(
+        _args(dataset_source="d4rl_legacy", offline_dataset_path="antmaze-test-v2")
+    )
+
+    assert result == (obs_space, action_space)
+
+
 def test_infer_specs_rejects_discrete_minari_action_space(monkeypatch):
     obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
     discrete_action_space = spaces.Discrete(4)
@@ -142,6 +156,33 @@ def test_load_offline_dataset_routes_to_minari(monkeypatch):
     assert loaded == 7
     assert called["dataset_id"] == "D4RL/halfcheetah/medium-v0"
     assert called["num_episodes"] == 10
+
+
+def test_load_offline_dataset_routes_to_d4rl_legacy(monkeypatch):
+    called = {}
+
+    def _fake_load(buffer, env_id, **kwargs):
+        called.update(buffer=buffer, env_id=env_id, **kwargs)
+        return 9
+
+    monkeypatch.setattr(
+        "rl_garden.training._dataset.load_d4rl_legacy_dataset_to_replay_buffer",
+        _fake_load,
+    )
+    buffer = object()
+    loaded = load_offline_dataset(
+        buffer,
+        _args(
+            dataset_source="d4rl_legacy",
+            offline_dataset_path="antmaze-test-v2",
+            offline_num_traj=12,
+        ),
+    )
+
+    assert loaded == 9
+    assert called["buffer"] is buffer
+    assert called["env_id"] == "antmaze-test-v2"
+    assert called["num_episodes"] == 12
 
 
 def test_load_offline_dataset_unsupported_source_raises():

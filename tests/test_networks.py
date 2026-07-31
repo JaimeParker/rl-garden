@@ -213,6 +213,45 @@ def test_create_mlp_kernel_init_orthogonal_near_zero_output():
     assert torch.allclose(out_svals, torch.full_like(out_svals, 1e-2), atol=1e-6)
 
 
+def test_calql_actor_orthogonal_init_and_trainable_log_std_affine():
+    actor = SquashedGaussianActor(
+        features_dim=4,
+        action_space=spaces.Box(-1.0, 1.0, (3,), dtype=np.float32),
+        hidden_dims=[8, 8],
+        kernel_init="orthogonal_near_zero_output",
+        log_std_multiplier_init=1.0,
+        log_std_offset_init=-1.0,
+    )
+
+    hidden = [
+        module
+        for module in actor.trunk.modules()
+        if isinstance(module, torch.nn.Linear)
+    ]
+    for layer in hidden:
+        singular_values = torch.linalg.svdvals(layer.weight.detach())
+        assert torch.allclose(
+            singular_values,
+            torch.full_like(singular_values, math.sqrt(2.0)),
+            atol=1e-4,
+        )
+        assert torch.count_nonzero(layer.bias) == 0
+    for head in (actor.fc_mean, actor.fc_logstd):
+        singular_values = torch.linalg.svdvals(head.weight.detach())
+        assert torch.allclose(
+            singular_values,
+            torch.full_like(singular_values, 1e-2),
+            atol=1e-6,
+        )
+        assert torch.count_nonzero(head.bias) == 0
+
+    mean, log_std = actor(torch.zeros(2, 4))
+    torch.testing.assert_close(mean, torch.zeros_like(mean))
+    torch.testing.assert_close(log_std, torch.full_like(log_std, -1.0))
+    assert isinstance(actor.log_std_multiplier, torch.nn.Parameter)
+    assert isinstance(actor.log_std_offset, torch.nn.Parameter)
+
+
 def test_mlp_resnet_forward_shape():
     net = MLPResNet(
         input_dim=12,

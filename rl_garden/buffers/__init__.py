@@ -1,4 +1,8 @@
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.d4rl_legacy_dataset import (
+    infer_specs_from_d4rl_legacy,
+    load_d4rl_legacy_dataset_to_replay_buffer,
+)
 from rl_garden.buffers.dict_buffer import DictArray, DictReplayBuffer
 from rl_garden.buffers.mc_buffer import (
     MCDictReplayBuffer,
@@ -13,10 +17,6 @@ from rl_garden.buffers.maniskill_h5 import (
 from rl_garden.buffers.residual_h5 import (
     count_residual_h5_transitions,
     load_residual_h5_to_replay_buffer,
-)
-from rl_garden.buffers.minari_dataset import (
-    infer_specs_from_minari,
-    load_minari_dataset_to_replay_buffer,
 )
 from rl_garden.buffers.minari_dataset import (
     infer_specs_from_minari,
@@ -72,9 +72,11 @@ __all__ = [
     "TransformerReplayBufferSample",
     "count_residual_h5_transitions",
     "infer_box_specs_from_h5",
+    "infer_specs_from_d4rl_legacy",
     "infer_specs_from_h5",
     "infer_specs_from_minari",
     "load_maniskill_h5_to_replay_buffer",
+    "load_d4rl_legacy_dataset_to_replay_buffer",
     "load_minari_dataset_to_replay_buffer",
     "load_residual_h5_to_replay_buffer",
 ]

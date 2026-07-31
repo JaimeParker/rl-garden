@@ -279,7 +279,7 @@ either pure WSRL (CQL off) or Cal-QL retention (mixed/append buffer).
 - WSRL actor/critic MLPs use layer norm by default
 - Actor std parameterization supports `exp` and `uniform`
 
-#### Reproducing official Cal-QL JAX / CORL exactly
+#### Aligning with official Cal-QL JAX / CORL
 
 rl-garden's CQL/Cal-QL loss defaults follow the WSRL reference. To instead
 match the official Cal-QL JAX repo and CORL's Cal-QL numerically (twin
@@ -301,13 +301,25 @@ CORL agree with each other on these three points, but neither agrees with
 WSRL, which is why each is its own opt-in toggle rather than baked into one
 name.
 
-`--kernel_init orthogonal_near_zero_output` reproduces official Cal-QL JAX's exact
+`--kernel_init orthogonal_near_zero_output` reproduces official Cal-QL JAX's
 per-layer weight initialization (`orthogonal_init=True` in
 `JaxCQL/model.py`): hidden layers use `orthogonal(gain=sqrt(2))`, the final
 linear layer of each network uses `orthogonal(gain=1e-2)`, and every bias is
 zero. rl-garden's other `kernel_init` options apply one gain uniformly to
 every layer including the output layer, so they do not reproduce this
 scheme.
+
+For the official policy initialization, also pass
+`--policy_log_std_multiplier 1.0 --policy_log_std_offset -1.0`. These values
+create the trainable scalar affine parameters used by the JAX policy. The
+flags above align the CQL loss and network construction; entropy-temperature
+parameterization and optimizer update ordering still follow rl-garden.
+
+The legacy D4RL AntMaze reproduction additionally requires the original Gym
+0.23/MuJoCo 2.1 environment and dataset semantics. Install the
+`d4rl-legacy` extra and run `scripts/pretrain_calql_d4rl_legacy.sh`; do not use
+the Minari-recovered AntMaze environment for comparisons against the original
+Cal-QL result.
 
 ### Vision-Specific
 - `--obs_mode rgb`: Observation mode (rgb | rgbd)

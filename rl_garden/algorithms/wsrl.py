@@ -73,6 +73,8 @@ class WSRL(_CalQLRolloutTrainingShell):
         kernel_init: Optional[str] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        policy_log_std_multiplier: Optional[float] = None,
+        policy_log_std_offset: Optional[float] = None,
         # Q-ensemble (REDQ)
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
@@ -185,6 +187,8 @@ class WSRL(_CalQLRolloutTrainingShell):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
+            policy_log_std_multiplier=policy_log_std_multiplier,
+            policy_log_std_offset=policy_log_std_offset,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
             actor_feature_dim=actor_feature_dim,

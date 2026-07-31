@@ -27,7 +27,7 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
     # instead (e.g. "D4RL/halfcheetah/medium-v2").
     num_online_steps: int = 1_000_000
-    dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
+    dataset_source: Literal["maniskill_h5", "minari", "d4rl_legacy"] = "maniskill_h5"
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"

@@ -108,6 +108,8 @@ class CQLCore(SACCore):
         kernel_init: Optional[str] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        policy_log_std_multiplier: Optional[float] = None,
+        policy_log_std_offset: Optional[float] = None,
         # Q-ensemble (REDQ)
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
@@ -182,6 +184,8 @@ class CQLCore(SACCore):
         self.kernel_init = kernel_init
         self.backbone_type = backbone_type
         self.std_parameterization = std_parameterization
+        self.policy_log_std_multiplier = policy_log_std_multiplier
+        self.policy_log_std_offset = policy_log_std_offset
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
         self.actor_feature_dim = actor_feature_dim
@@ -242,6 +246,8 @@ class CQLCore(SACCore):
             "kernel_init": self.kernel_init,
             "backbone_type": self.backbone_type,
             "std_parameterization": self.std_parameterization,
+            "policy_log_std_multiplier": self.policy_log_std_multiplier,
+            "policy_log_std_offset": self.policy_log_std_offset,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
             "actor_feature_dim": self.actor_feature_dim,
@@ -473,6 +479,8 @@ class CQLCore(SACCore):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
+            log_std_multiplier_init=self.policy_log_std_multiplier,
+            log_std_offset_init=self.policy_log_std_offset,
             log_std_mode="clamp",
             log_std_min=-20.0,
             actor_feature_dim=self.actor_feature_dim,
@@ -879,6 +887,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         kernel_init: Optional[str] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        policy_log_std_multiplier: Optional[float] = None,
+        policy_log_std_offset: Optional[float] = None,
         # Q-ensemble (REDQ)
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
@@ -976,6 +986,8 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
+            policy_log_std_multiplier=policy_log_std_multiplier,
+            policy_log_std_offset=policy_log_std_offset,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
             actor_feature_dim=actor_feature_dim,
@@ -1052,6 +1064,8 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         kernel_init: Optional[str] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        policy_log_std_multiplier: Optional[float] = None,
+        policy_log_std_offset: Optional[float] = None,
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
         actor_feature_dim: Optional[int] = None,
@@ -1147,6 +1161,8 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
+            policy_log_std_multiplier=policy_log_std_multiplier,
+            policy_log_std_offset=policy_log_std_offset,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
             actor_feature_dim=actor_feature_dim,

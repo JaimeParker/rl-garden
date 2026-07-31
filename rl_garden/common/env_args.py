@@ -90,6 +90,13 @@ class MinariConfig:
 
 
 @dataclass
+class D4RLLegacyConfig:
+    """Legacy Gym/D4RL environment settings. CLI prefix: ``--d4rl-legacy``."""
+
+    device: str = "cpu"
+
+
+@dataclass
 class MujocoConfig:
     """MuJoCo-specific env settings. CLI prefix: ``--mujoco.<field>``"""
 
@@ -123,6 +130,7 @@ class EnvBackendArgs:
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
     minari: MinariConfig = field(default_factory=MinariConfig)
+    d4rl_legacy: D4RLLegacyConfig = field(default_factory=D4RLLegacyConfig)
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
 
