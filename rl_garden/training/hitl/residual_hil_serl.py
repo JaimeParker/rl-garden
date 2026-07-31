@@ -89,15 +89,24 @@ def _build_env(args, env_request, *, enable_teleop: bool, enable_classifier: boo
         import gymnasium as gym
 
         from rl_garden.envs.wrappers.teleop_intervention import (
+            ManiSkillHITLInterventionVectorWrapper,
             TeleopInterventionVectorWrapper,
             TeleopInterventionWrapper,
         )
 
-        wrapper_cls = (
-            TeleopInterventionVectorWrapper
-            if isinstance(env, gym.vector.VectorEnv)
-            else TeleopInterventionWrapper
-        )
+        if args.env_backend == "maniskill":
+            if not isinstance(env, gym.vector.VectorEnv):
+                raise TypeError(
+                    "ManiSkill HITL expects a Gymnasium VectorEnv, got "
+                    f"{type(env).__name__}."
+                )
+            wrapper_cls = ManiSkillHITLInterventionVectorWrapper
+        else:
+            wrapper_cls = (
+                TeleopInterventionVectorWrapper
+                if isinstance(env, gym.vector.VectorEnv)
+                else TeleopInterventionWrapper
+            )
         env = wrapper_cls(
             env,
             device=args.teleop_device,
@@ -479,6 +488,10 @@ class ResidualHilSerlActorLoop:
                 env_action, final_actions, base_actions = self._select_action(obs)
                 env_action = env_action.to(self._env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                print(
+                    f"[actor] step={step + 1} success={self._success_label(info)}",
+                    flush=True,
+                )
                 if self.rgb_viewer is not None:
                     self.rgb_viewer.show(self._viewer_obs(next_obs))
 
@@ -507,7 +520,11 @@ class ResidualHilSerlActorLoop:
                 )
 
                 if bool(done.any()):
-                    obs, _ = self.env.reset(seed=self.seed)
+                    reset_after_done = getattr(self.env, "hitl_reset_after_done", None)
+                    if reset_after_done is None:
+                        obs, _ = self.env.reset(seed=self.seed)
+                    else:
+                        obs = reset_after_done(next_obs, info)
                     self.agent._on_env_reset(obs)
                     if self.rgb_viewer is not None:
                         self.rgb_viewer.show(self._viewer_obs(obs))
@@ -528,6 +545,16 @@ class ResidualHilSerlActorLoop:
     def _env_device(obs) -> torch.device:
         sample = next(iter(obs.values())) if isinstance(obs, dict) else obs
         return sample.device
+
+    @staticmethod
+    def _success_label(info) -> str:
+        if not isinstance(info, dict) or "success" not in info:
+            return "unknown"
+        success = info["success"]
+        if isinstance(success, torch.Tensor):
+            return str(bool(success.detach().bool().any().item())).lower()
+        array = np.asarray(success)
+        return str(bool(array.astype(bool).any())).lower()
 
 
 class ActorRGBViewer:

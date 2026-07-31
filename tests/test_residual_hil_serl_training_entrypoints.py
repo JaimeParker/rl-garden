@@ -8,6 +8,7 @@ from gymnasium.vector.utils import batch_space
 from rl_garden.training.hitl.residual_hil_serl import (
     ActorObservationResizeWrapper,
     ActorRGBViewer,
+    ResidualHilSerlActorLoop,
     ResidualHilSerlArgs,
     _actor_env_request,
     _build_env,
@@ -115,6 +116,110 @@ class _FakeAgent:
         self.demo_init = (buffer_size, demo_data_ratio)
 
 
+class _FakeActionScaler:
+    def unscale(self, action):
+        return action
+
+    def scale(self, action):
+        return action
+
+
+class _FakeLoopPolicy:
+    def __init__(self):
+        self.eval_called = False
+
+    def eval(self):
+        self.eval_called = True
+
+    def predict(self, obs, *, base_actions, deterministic):
+        del obs, base_actions, deterministic
+        return torch.zeros((1, 6), dtype=torch.float32)
+
+    def load_state_dict(self, params):
+        self.params = params
+
+
+class _FakeLoopAgent:
+    def __init__(self):
+        self.policy = _FakeLoopPolicy()
+        self.device = torch.device("cpu")
+        self.action_scaler = _FakeActionScaler()
+        self._cached_base_actions = None
+        self.reset_obs = []
+
+    def _on_env_reset(self, obs):
+        self.reset_obs.append(obs.clone())
+        self._cached_base_actions = None
+
+    def _base_naction(self, obs):
+        del obs
+        return torch.zeros((1, 6), dtype=torch.float32)
+
+    def _obs_to_policy_device(self, obs):
+        return obs
+
+    def _combine_base_residual(self, base_actions, unit_residual):
+        return base_actions + unit_residual
+
+
+class _FakeSyncClient:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.transitions = []
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def latest_policy_params(self):
+        return None
+
+    def push_transition(self, transition):
+        self.transitions.append(transition)
+
+
+class _DoneAfterOneStepEnv:
+    num_envs = 1
+
+    def __init__(self):
+        self.reset_seeds = []
+        self.reset_count = 0
+        self.step_count = 0
+        self.single_action_space = spaces.Box(-1, 1, (6,), dtype="float32")
+        self.action_space = batch_space(self.single_action_space, 1)
+
+    def reset(self, **kwargs):
+        self.reset_count += 1
+        self.reset_seeds.append(kwargs.get("seed"))
+        return torch.full((1, 4), float(self.reset_count)), {}
+
+    def step(self, action):
+        del action
+        self.step_count += 1
+        next_obs = torch.full((1, 4), 99.0)
+        return (
+            next_obs,
+            torch.zeros(1),
+            torch.zeros(1, dtype=torch.bool),
+            torch.ones(1, dtype=torch.bool),
+            {"success": torch.ones(1, dtype=torch.bool)},
+        )
+
+
+class _AutoresetDoneAfterOneStepEnv(_DoneAfterOneStepEnv):
+    def __init__(self):
+        super().__init__()
+        self.hitl_reset_after_done_count = 0
+
+    def hitl_reset_after_done(self, next_obs, info):
+        del info
+        self.hitl_reset_after_done_count += 1
+        return next_obs
+
+
 def _args(**overrides) -> ResidualHilSerlArgs:
     kwargs = dict(
         env_backend="maniskill",
@@ -129,7 +234,7 @@ def _args(**overrides) -> ResidualHilSerlArgs:
     return ResidualHilSerlArgs(**kwargs)
 
 
-def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
+def test_build_env_wraps_teleop_for_franka_without_classifier(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.envs.backend_registry.make_training_envs",
         lambda backend, req: (_FakeEnv(), None),
@@ -141,6 +246,7 @@ def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
 
     env = _build_env(
         _args(
+            env_backend="franka_real",
             teleop_device="pico",
             teleop_record_gripper=False,
             teleop_init_timeout_s=12.5,
@@ -159,7 +265,7 @@ def test_build_env_wraps_teleop_for_maniskill_without_classifier(monkeypatch):
     assert not isinstance(env.env, RewardClassifierWrapper)
 
 
-def test_build_env_uses_vector_teleop_wrapper_for_vector_env(monkeypatch):
+def test_build_env_uses_maniskill_hitl_wrapper_for_maniskill_vector_env(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.envs.backend_registry.make_training_envs",
         lambda backend, req: (_FakeVectorEnv(), None),
@@ -171,6 +277,35 @@ def test_build_env_uses_vector_teleop_wrapper_for_vector_env(monkeypatch):
 
     env = _build_env(
         _args(teleop_device="pico", teleop_record_gripper=False),
+        env_request=None,
+        enable_teleop=True,
+        enable_classifier=True,
+    )
+
+    from rl_garden.envs.wrappers.teleop_intervention import (
+        ManiSkillHITLInterventionVectorWrapper,
+    )
+
+    assert isinstance(env, ManiSkillHITLInterventionVectorWrapper)
+    assert env.record_gripper is False
+
+
+def test_build_env_uses_generic_vector_teleop_wrapper_for_franka_vector_env(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.backend_registry.make_training_envs",
+        lambda backend, req: (_FakeVectorEnv(), None),
+    )
+    monkeypatch.setattr(
+        "rl_garden.envs.wrappers.teleop_intervention.EETwistTeleOpWrapper",
+        _FakeTeleop,
+    )
+
+    env = _build_env(
+        _args(
+            env_backend="franka_real",
+            teleop_device="pico",
+            teleop_record_gripper=False,
+        ),
         env_request=None,
         enable_teleop=True,
         enable_classifier=True,
@@ -230,6 +365,56 @@ def test_run_actor_builds_scratch_agent_and_residual_actor_loop(monkeypatch):
     assert captured["loop_kwargs"]["sync_client"]._base_url == "http://10.0.0.1:7000"
     assert captured["loop_kwargs"]["show_rgb_window"] is True
     assert captured["loop_kwargs"]["rgb_window_name"] == "residual_hil_serl_actor"
+
+
+def test_actor_loop_uses_hitl_reset_after_done_hook_without_manual_reset(capsys):
+    env = _AutoresetDoneAfterOneStepEnv()
+    agent = _FakeLoopAgent()
+    sync_client = _FakeSyncClient()
+    loop = ResidualHilSerlActorLoop(
+        env,
+        agent,
+        sync_client,
+        control_hz=1_000_000.0,
+        seed=7,
+        show_rgb_window=False,
+    )
+
+    loop.run(total_steps=1)
+
+    assert sync_client.started is True
+    assert sync_client.stopped is True
+    assert env.reset_count == 1
+    assert env.reset_seeds == [7]
+    assert env.hitl_reset_after_done_count == 1
+    assert len(agent.reset_obs) == 2
+    assert torch.equal(agent.reset_obs[0], torch.full((1, 4), 1.0))
+    assert torch.equal(agent.reset_obs[1], torch.full((1, 4), 99.0))
+    assert "[actor] step=1 success=true" in capsys.readouterr().out
+
+
+def test_actor_loop_falls_back_to_manual_seeded_reset_without_hook():
+    env = _DoneAfterOneStepEnv()
+    agent = _FakeLoopAgent()
+    sync_client = _FakeSyncClient()
+    loop = ResidualHilSerlActorLoop(
+        env,
+        agent,
+        sync_client,
+        control_hz=1_000_000.0,
+        seed=7,
+        show_rgb_window=False,
+    )
+
+    loop.run(total_steps=1)
+
+    assert sync_client.started is True
+    assert sync_client.stopped is True
+    assert env.reset_count == 2
+    assert env.reset_seeds == [7, 7]
+    assert len(agent.reset_obs) == 2
+    assert torch.equal(agent.reset_obs[0], torch.full((1, 4), 1.0))
+    assert torch.equal(agent.reset_obs[1], torch.full((1, 4), 2.0))
 
 
 def test_actor_env_request_uses_visual_camera_resolution_for_actor():

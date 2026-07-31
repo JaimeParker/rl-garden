@@ -163,3 +163,12 @@ class TeleopInterventionVectorWrapper(_TeleopInterventionMixin, gym.vector.Vecto
             teleop_init_timeout_s=teleop_init_timeout_s,
             **teleop_kwargs,
         )
+
+
+class ManiSkillHITLInterventionVectorWrapper(TeleopInterventionVectorWrapper):
+    """HITL teleop wrapper for ManiSkill's same-step autoreset vector envs."""
+
+    def hitl_reset_after_done(self, next_obs: Any, info: dict[str, Any]) -> Any:
+        del info
+        self.teleop.reset()
+        return next_obs
