@@ -170,7 +170,13 @@ class OfflineActorArgs:
     num_groups: int = 32
     actor_dropout_rate: Optional[float] = None
     kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        Literal[
+            "xavier_uniform",
+            "xavier_normal",
+            "orthogonal",
+            "kaiming_uniform",
+            "orthogonal_near_zero_output",
+        ]
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"

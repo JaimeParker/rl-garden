@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import math
 from typing import Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-KernelInit = Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+KernelInit = Literal[
+    "xavier_uniform",
+    "xavier_normal",
+    "orthogonal",
+    "kaiming_uniform",
+    "orthogonal_near_zero_output",
+]
 
 
 class _L2Normalize(nn.Module):
@@ -19,20 +26,26 @@ class _L2Normalize(nn.Module):
 def _apply_kernel_init(module: nn.Module, kernel_init: Optional[KernelInit]) -> None:
     if kernel_init is None:
         return
-    for m in module.modules():
-        if isinstance(m, nn.Linear):
-            if kernel_init == "xavier_uniform":
-                nn.init.xavier_uniform_(m.weight)
-            elif kernel_init == "xavier_normal":
-                nn.init.xavier_normal_(m.weight)
-            elif kernel_init == "orthogonal":
-                nn.init.orthogonal_(m.weight)
-            elif kernel_init == "kaiming_uniform":
-                nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
-            else:
-                raise ValueError(f"Unknown kernel_init: {kernel_init!r}")
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+    linears = [m for m in module.modules() if isinstance(m, nn.Linear)]
+    for i, m in enumerate(linears):
+        if kernel_init == "xavier_uniform":
+            nn.init.xavier_uniform_(m.weight)
+        elif kernel_init == "xavier_normal":
+            nn.init.xavier_normal_(m.weight)
+        elif kernel_init == "orthogonal":
+            nn.init.orthogonal_(m.weight)
+        elif kernel_init == "orthogonal_near_zero_output":
+            # Matches official Cal-QL JAX's FullyConnectedNetwork(orthogonal_init=True):
+            # hidden layers use orthogonal(gain=sqrt(2)), the final linear layer uses
+            # orthogonal(gain=1e-2), and every bias is zero.
+            gain = 1e-2 if i == len(linears) - 1 else math.sqrt(2.0)
+            nn.init.orthogonal_(m.weight, gain=gain)
+        elif kernel_init == "kaiming_uniform":
+            nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
+        else:
+            raise ValueError(f"Unknown kernel_init: {kernel_init!r}")
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
 
 
 def _make_norm(

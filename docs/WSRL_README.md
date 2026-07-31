@@ -289,7 +289,8 @@ critic, always-clip, official Lagrange scaling and parameterization), pass:
 --n_critics 2 \
 --cql_diff_clip_mode always \
 --cql_penalty_scale lagrange_times_alpha \
---cql_alpha_param exp_clip
+--cql_alpha_param exp_clip \
+--kernel_init orthogonal_near_zero_output
 ```
 
 `--n_critics 2` alone reproduces the plain twin-critic setup used by all
@@ -299,6 +300,14 @@ needed. There is no single `--cql-preset` flag for this: official-JAX and
 CORL agree with each other on these three points, but neither agrees with
 WSRL, which is why each is its own opt-in toggle rather than baked into one
 name.
+
+`--kernel_init orthogonal_near_zero_output` reproduces official Cal-QL JAX's exact
+per-layer weight initialization (`orthogonal_init=True` in
+`JaxCQL/model.py`): hidden layers use `orthogonal(gain=sqrt(2))`, the final
+linear layer of each network uses `orthogonal(gain=1e-2)`, and every bias is
+zero. rl-garden's other `kernel_init` options apply one gain uniformly to
+every layer including the output layer, so they do not reproduce this
+scheme.
 
 ### Vision-Specific
 - `--obs_mode rgb`: Observation mode (rgb | rgbd)

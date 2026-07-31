@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -192,6 +194,23 @@ def test_create_mlp_kernel_init_orthogonal():
     assert torch.allclose(gram, torch.eye(gram.shape[0]), atol=1e-5)
     # Bias should be zeroed by our init helper
     assert torch.allclose(linears[0].bias.detach(), torch.zeros_like(linears[0].bias))
+
+
+def test_create_mlp_kernel_init_orthogonal_near_zero_output():
+    """Matches official Cal-QL JAX: hidden gain=sqrt(2), output gain=1e-2, zero bias."""
+    mlp = create_mlp(32, 4, [16, 16], kernel_init="orthogonal_near_zero_output")
+    linears = [m for m in mlp.modules() if isinstance(m, torch.nn.Linear)]
+    assert len(linears) == 3  # 2 hidden + 1 output
+
+    for lin in linears:
+        assert torch.allclose(lin.bias.detach(), torch.zeros_like(lin.bias))
+
+    for lin in linears[:-1]:
+        svals = torch.linalg.svdvals(lin.weight.detach())
+        assert torch.allclose(svals, torch.full_like(svals, math.sqrt(2.0)), atol=1e-4)
+
+    out_svals = torch.linalg.svdvals(linears[-1].weight.detach())
+    assert torch.allclose(out_svals, torch.full_like(out_svals, 1e-2), atol=1e-6)
 
 
 def test_mlp_resnet_forward_shape():
