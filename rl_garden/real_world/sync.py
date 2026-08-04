@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import queue
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,6 +44,11 @@ class LearnerSyncServer:
         self._params_lock = threading.Lock()
         self._params_bytes: Optional[bytes] = None
         self._params_version = 0
+        self._stats_lock = threading.Lock()
+        self._transition_posts = 0
+        self._policy_param_gets = 0
+        self._last_transition_post_ts: Optional[float] = None
+        self._last_policy_param_get_ts: Optional[float] = None
 
         handler = _make_handler(self)
         self._httpd = ThreadingHTTPServer((host, port), handler)
@@ -52,8 +58,24 @@ class LearnerSyncServer:
     def server_address(self) -> tuple[str, int]:
         return self._httpd.server_address
 
+    @property
+    def published_version(self) -> int:
+        with self._params_lock:
+            return self._params_version
+
+    def connection_stats(self) -> dict[str, Any]:
+        with self._stats_lock:
+            return {
+                "transition_posts": self._transition_posts,
+                "policy_param_gets": self._policy_param_gets,
+                "last_transition_post_ts": self._last_transition_post_ts,
+                "last_policy_param_get_ts": self._last_policy_param_get_ts,
+            }
+
     def start(self) -> None:
         self._thread.start()
+        host, port = self.server_address
+        print(f"[sync] learner listening on {host}:{port}", flush=True)
 
     def stop(self) -> None:
         self._httpd.shutdown()
@@ -71,6 +93,16 @@ class LearnerSyncServer:
         with self._params_lock:
             return self._params_version, self._params_bytes
 
+    def _record_transition_post(self) -> None:
+        with self._stats_lock:
+            self._transition_posts += 1
+            self._last_transition_post_ts = time.monotonic()
+
+    def _record_policy_param_get(self) -> None:
+        with self._stats_lock:
+            self._policy_param_gets += 1
+            self._last_policy_param_get_ts = time.monotonic()
+
 
 def _make_handler(server: LearnerSyncServer):
     class Handler(BaseHTTPRequestHandler):
@@ -86,6 +118,7 @@ def _make_handler(server: LearnerSyncServer):
             body = self.rfile.read(length)
             transition = torch.load(io.BytesIO(body), weights_only=False)
             server._on_transition(transition)
+            server._record_transition_post()
             self.send_response(204)
             self.end_headers()
 
@@ -100,6 +133,7 @@ def _make_handler(server: LearnerSyncServer):
                 params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
                 if "version" in params:
                     client_version = int(params["version"])
+            server._record_policy_param_get()
             version, payload = server._latest_params()
             if payload is None or version == client_version:
                 self.send_response(204)
@@ -133,29 +167,51 @@ class ActorSyncClient:
         learner_url: str,
         poll_interval: float = 1.0,
         timeout: float = 5.0,
+        monitor_interval: float = 5.0,
     ) -> None:
         self._base_url = learner_url.rstrip("/")
         self._timeout = timeout
         self._poll_interval = poll_interval
+        self._monitor_interval = monitor_interval
 
         self._queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self._params_lock = threading.Lock()
         self._cached_version = -1
         self._cached_params: Optional[dict[str, Any]] = None
+        self._stats_lock = threading.Lock()
+        self._posted_transitions = 0
+        self._failed_transition_posts = 0
+        self._policy_param_updates = 0
+        self._policy_poll_noops = 0
+        self._failed_policy_polls = 0
+        self._last_transition_post_ts: Optional[float] = None
+        self._last_policy_poll_ts: Optional[float] = None
+        self._last_policy_update_ts: Optional[float] = None
 
         self._stop_event = threading.Event()
         self._push_thread = threading.Thread(target=self._push_worker, daemon=True)
         self._poll_thread = threading.Thread(target=self._poll_worker, daemon=True)
+        self._monitor_thread = (
+            threading.Thread(target=self._monitor_worker, daemon=True)
+            if self._monitor_interval > 0
+            else None
+        )
+        self._logged_first_transition_post = False
+        self._logged_first_policy_params = False
 
     def start(self) -> None:
         self._push_thread.start()
         self._poll_thread.start()
+        if self._monitor_thread is not None:
+            self._monitor_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
         self._queue.put(None)  # unblock the push worker's queue.get()
         self._push_thread.join(timeout=5.0)
         self._poll_thread.join(timeout=5.0)
+        if self._monitor_thread is not None:
+            self._monitor_thread.join(timeout=5.0)
 
     def push_transition(self, transition: dict[str, Any]) -> None:
         self._queue.put(transition)
@@ -181,7 +237,18 @@ class ActorSyncClient:
                 )
                 with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                     resp.read()
+                with self._stats_lock:
+                    self._posted_transitions += 1
+                    self._last_transition_post_ts = time.monotonic()
+                if not self._logged_first_transition_post:
+                    print(
+                        f"[sync] actor posted first transition to {self._base_url}",
+                        flush=True,
+                    )
+                    self._logged_first_transition_post = True
             except urllib.error.URLError:
+                with self._stats_lock:
+                    self._failed_transition_posts += 1
                 pass  # dropped transition; robot control must not stall on this
 
     def _poll_worker(self) -> None:
@@ -197,11 +264,58 @@ class ActorSyncClient:
                 version = int(resp.headers.get("X-Params-Version", self._cached_version))
                 if resp.status == 204:
                     self._cached_version = version
+                    with self._stats_lock:
+                        self._policy_poll_noops += 1
+                        self._last_policy_poll_ts = time.monotonic()
                     return
                 body = resp.read()
                 params = torch.load(io.BytesIO(body), weights_only=False)
             with self._params_lock:
                 self._cached_version = version
                 self._cached_params = params
+            with self._stats_lock:
+                self._policy_param_updates += 1
+                self._last_policy_poll_ts = time.monotonic()
+                self._last_policy_update_ts = self._last_policy_poll_ts
+            if not self._logged_first_policy_params:
+                print(
+                    f"[sync] actor received first policy params from {self._base_url} "
+                    f"(version={version})",
+                    flush=True,
+                )
+                self._logged_first_policy_params = True
         except urllib.error.URLError:
+            with self._stats_lock:
+                self._failed_policy_polls += 1
             pass  # keep the previously cached params
+
+    def _monitor_worker(self) -> None:
+        while not self._stop_event.wait(self._monitor_interval):
+            now = time.monotonic()
+            with self._stats_lock:
+                posted = self._posted_transitions
+                post_failures = self._failed_transition_posts
+                policy_updates = self._policy_param_updates
+                policy_noops = self._policy_poll_noops
+                policy_failures = self._failed_policy_polls
+                last_post = self._last_transition_post_ts
+                last_poll = self._last_policy_poll_ts
+                last_update = self._last_policy_update_ts
+            print(
+                "[sync] actor link "
+                f"url={self._base_url} "
+                f"queue={self._queue.qsize()} "
+                f"posted={posted} post_failures={post_failures} "
+                f"policy_updates={policy_updates} policy_noops={policy_noops} "
+                f"policy_failures={policy_failures} "
+                f"last_post={self._format_age(last_post, now)} "
+                f"last_policy_poll={self._format_age(last_poll, now)} "
+                f"last_policy_update={self._format_age(last_update, now)}",
+                flush=True,
+            )
+
+    @staticmethod
+    def _format_age(timestamp: Optional[float], now: float) -> str:
+        if timestamp is None:
+            return "never"
+        return f"{max(0.0, now - timestamp):.1f}s_ago"

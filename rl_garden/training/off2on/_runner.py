@@ -45,7 +45,11 @@ from tqdm import trange
 
 from rl_garden.algorithms.offline import _log_eval_stdout
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.cli_args import resolve_checkpoint_dir, resolve_eval_record_dir
+from rl_garden.common.cli_args import (
+    apply_checkpoint_retention,
+    resolve_checkpoint_dir,
+    resolve_eval_record_dir,
+)
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import (
     EnvRequest,
@@ -285,6 +289,7 @@ def run_off2on(
     _require_continuous_action_space(env, args)
 
     agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
+    apply_checkpoint_retention(agent, args)
 
     # Offline training phase
     if args.num_offline_steps > 0:

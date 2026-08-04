@@ -24,6 +24,110 @@ from rl_garden.policies.base import BasePolicy
 from rl_garden.real_world.sync import ActorSyncClient
 
 
+class EpisodeMetricTracker:
+    """Collects online-style train episode metrics on the actor side."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._return = 0.0
+        self._length = 0
+        self._success_once = False
+
+    def record(
+        self,
+        reward: Any,
+        terminated: Any,
+        truncated: Any,
+        info: dict[str, Any],
+    ) -> Optional[dict[str, float]]:
+        reward_value = self._float_mean(reward)
+        self._return += reward_value
+        self._length += 1
+        success = self._bool_any(info.get("success", False))
+        self._success_once = self._success_once or success
+
+        done = self._bool_any(terminated) or self._bool_any(truncated)
+        if not done:
+            return None
+
+        fallback = {
+            "return": self._return,
+            "episode_len": float(self._length),
+            "reward": self._return / max(1, self._length),
+            "success_once": float(self._success_once),
+            "success_at_end": float(success),
+        }
+        metrics = self._final_info_episode_metrics(info)
+        if metrics is None:
+            metrics = fallback
+        else:
+            for key, value in fallback.items():
+                metrics.setdefault(key, value)
+        self.reset()
+        return metrics
+
+    @classmethod
+    def _final_info_episode_metrics(
+        cls, info: dict[str, Any]
+    ) -> Optional[dict[str, float]]:
+        final_info = info.get("final_info")
+        if not isinstance(final_info, dict):
+            return None
+        episode = final_info.get("episode")
+        if not isinstance(episode, dict):
+            return None
+        mask = info.get("_final_info")
+        if mask is not None and not cls._bool_any(mask):
+            return None
+        out: dict[str, float] = {}
+        for key, value in episode.items():
+            scalar = cls._masked_float_mean(value, mask)
+            if scalar is not None:
+                out[key] = scalar
+        return out or None
+
+    @staticmethod
+    def _bool_any(value: Any) -> bool:
+        if isinstance(value, torch.Tensor):
+            return bool(value.detach().bool().any().item())
+        try:
+            return bool(torch.as_tensor(value).bool().any().item())
+        except Exception:
+            return bool(value)
+
+    @staticmethod
+    def _float_mean(value: Any) -> float:
+        if isinstance(value, torch.Tensor):
+            tensor = value.detach().float()
+        else:
+            tensor = torch.as_tensor(value, dtype=torch.float32)
+        return float(tensor.mean().item())
+
+    @classmethod
+    def _masked_float_mean(cls, value: Any, mask: Any) -> Optional[float]:
+        try:
+            tensor = (
+                value.detach().float()
+                if isinstance(value, torch.Tensor)
+                else torch.as_tensor(value, dtype=torch.float32)
+            )
+            if mask is not None:
+                mask_t = (
+                    mask.detach().bool()
+                    if isinstance(mask, torch.Tensor)
+                    else torch.as_tensor(mask, dtype=torch.bool)
+                )
+                if tensor.numel() == mask_t.numel():
+                    tensor = tensor.reshape(-1)[mask_t.reshape(-1)]
+            if tensor.numel() == 0:
+                return None
+            return float(tensor.mean().item())
+        except Exception:
+            return None
+
+
 class ActorLoop:
     def __init__(
         self,
@@ -47,6 +151,7 @@ class ActorLoop:
         self.device = torch.device(device)
         self.deterministic = deterministic
         self.seed = seed
+        self.episode_metrics = EpisodeMetricTracker()
 
     def _obs_to_policy_device(self, obs):
         if isinstance(obs, dict):
@@ -83,18 +188,22 @@ class ActorLoop:
                 policy_action = self._predict(obs)
                 env_action = policy_action.to(self.env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                episode_metrics = self.episode_metrics.record(
+                    reward, terminated, truncated, info
+                )
 
                 executed_action = info.get("intervene_action", policy_action)
-                self.sync_client.push_transition(
-                    {
-                        "obs": obs,
-                        "next_obs": next_obs,
-                        "action": executed_action,
-                        "reward": reward,
-                        "done": terminated,
-                        **self._extra_transition_fields(info),
-                    }
-                )
+                transition = {
+                    "obs": obs,
+                    "next_obs": next_obs,
+                    "action": executed_action,
+                    "reward": reward,
+                    "done": terminated,
+                    **self._extra_transition_fields(info),
+                }
+                if episode_metrics is not None:
+                    transition["episode_metrics"] = episode_metrics
+                self.sync_client.push_transition(transition)
 
                 if bool(terminated) or bool(truncated):
                     obs, _ = self.env.reset(seed=self.seed)
@@ -154,6 +263,7 @@ class FWBWActorLoop:
         self.device = torch.device(device)
         self.deterministic = deterministic
         self.seed = seed
+        self.episode_metrics = EpisodeMetricTracker()
 
     def _obs_to_policy_device(self, obs):
         if isinstance(obs, dict):
@@ -188,18 +298,22 @@ class FWBWActorLoop:
                     )
                 env_action = policy_action.to(ActorLoop.env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                episode_metrics = self.episode_metrics.record(
+                    reward, terminated, truncated, info
+                )
 
                 executed_action = info.get("intervene_action", policy_action)
-                sync_client.push_transition(
-                    {
-                        "obs": obs,
-                        "next_obs": next_obs,
-                        "action": executed_action,
-                        "reward": reward,
-                        "done": terminated,
-                        **self._extra_transition_fields(info),
-                    }
-                )
+                transition = {
+                    "obs": obs,
+                    "next_obs": next_obs,
+                    "action": executed_action,
+                    "reward": reward,
+                    "done": terminated,
+                    **self._extra_transition_fields(info),
+                }
+                if episode_metrics is not None:
+                    transition["episode_metrics"] = episode_metrics
+                sync_client.push_transition(transition)
 
                 direction = info.get("fwbw_direction", direction)
                 if bool(terminated) or bool(truncated):

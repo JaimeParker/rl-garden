@@ -390,6 +390,13 @@ def test_actor_loop_uses_hitl_reset_after_done_hook_without_manual_reset(capsys)
     assert len(agent.reset_obs) == 2
     assert torch.equal(agent.reset_obs[0], torch.full((1, 4), 1.0))
     assert torch.equal(agent.reset_obs[1], torch.full((1, 4), 99.0))
+    assert sync_client.transitions[0]["episode_metrics"] == {
+        "return": 0.0,
+        "episode_len": 1.0,
+        "reward": 0.0,
+        "success_once": 1.0,
+        "success_at_end": 1.0,
+    }
     assert "[actor] step=1 success=true" in capsys.readouterr().out
 
 
@@ -451,6 +458,56 @@ def test_actor_observation_resize_wrapper_downscales_policy_obs_and_keeps_highre
     assert info["final_observation"]["rgb_base_camera"].shape == (1, 2, 3, 3)
 
 
+def test_actor_observation_resize_wrapper_downscales_stacked_multicamera_rgb():
+    class _FakeStackedRGBVectorEnv(gym.vector.VectorEnv):
+        def __init__(self):
+            self.num_envs = 1
+            self.single_observation_space = spaces.Dict(
+                {
+                    "state": spaces.Box(-1, 1, (4,), dtype="float32"),
+                    "rgb": spaces.Box(0, 255, (4, 6, 6), dtype="uint8"),
+                }
+            )
+            self.single_action_space = spaces.Box(-1, 1, (6,), dtype="float32")
+            self.observation_space = batch_space(self.single_observation_space, 1)
+            self.action_space = batch_space(self.single_action_space, 1)
+            self.metadata = {}
+
+        def _obs(self):
+            return {
+                "state": torch.zeros((1, 4)),
+                "rgb": torch.full((1, 4, 6, 6), 20, dtype=torch.uint8),
+            }
+
+        def reset(self, **kwargs):
+            return self._obs(), {}
+
+        def step(self, actions):
+            obs = self._obs()
+            return (
+                obs,
+                torch.zeros(1),
+                torch.zeros(1, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.bool),
+                {"final_observation": obs},
+            )
+
+    wrapped = ActorObservationResizeWrapper(
+        _FakeStackedRGBVectorEnv(),
+        target_width=3,
+        target_height=2,
+    )
+
+    obs, _ = wrapped.reset()
+    next_obs, _, _, _, info = wrapped.step(torch.zeros((1, 6)))
+
+    assert wrapped.single_observation_space["rgb"].shape == (2, 3, 6)
+    assert obs["rgb"].shape == (1, 2, 3, 6)
+    assert wrapped.latest_highres_obs["rgb"].shape == (1, 4, 6, 6)
+    assert next_obs["rgb"].shape == (1, 2, 3, 6)
+    assert info["final_observation"]["rgb"].shape == (1, 2, 3, 6)
+
+
 def test_actor_rgb_viewer_extracts_and_tiles_rgb_observations():
     obs = {
         "state": torch.zeros((1, 4)),
@@ -476,6 +533,30 @@ def test_actor_rgb_viewer_extracts_and_tiles_rgb_observations():
     assert tiled.shape == (24, 12, 3)
     assert torch.as_tensor(tiled[20, 0]).tolist() == [20, 20, 20]
     assert torch.as_tensor(tiled[20, 6]).tolist() == [10, 10, 10]
+
+
+def test_actor_rgb_viewer_splits_stacked_multicamera_rgb_channels():
+    first_camera = torch.full((1, 3, 4, 3), 30, dtype=torch.uint8)
+    second_camera = torch.full((1, 3, 4, 3), 90, dtype=torch.uint8)
+    obs = {"rgb": torch.cat([first_camera, second_camera], dim=-1)}
+    viewer = ActorRGBViewer("test", max_columns=2)
+    viewer._cv2 = type(
+        "_FakeCV2",
+        (),
+        {
+            "FONT_HERSHEY_SIMPLEX": 0,
+            "LINE_AA": 0,
+            "putText": lambda *args, **kwargs: None,
+        },
+    )()
+
+    frames = viewer._rgb_frames(obs)
+    tiled = viewer._tile_frames(frames)
+
+    assert [name for name, _ in frames] == ["rgb_0", "rgb_1"]
+    assert tiled.shape == (23, 8, 3)
+    assert torch.as_tensor(tiled[20, 0]).tolist() == [30, 30, 30]
+    assert torch.as_tensor(tiled[20, 4]).tolist() == [90, 90, 90]
 
 
 def test_run_learner_initializes_demo_buffer_and_loop(monkeypatch, tmp_path):

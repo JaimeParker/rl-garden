@@ -8,6 +8,7 @@ from gymnasium import spaces
 from rl_garden.algorithms import SAC, WSRL
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
+from rl_garden.common.checkpoint import replay_buffer_path_for_checkpoint
 from rl_garden.common.training_phase import InitialTrainingPhase
 
 
@@ -154,6 +155,36 @@ def test_sac_checkpoint_roundtrip_with_replay_buffer(tmp_path):
     assert torch.equal(loaded.replay_buffer.actions, agent.replay_buffer.actions)
 
 
+def test_replay_buffer_checkpoints_keep_only_latest_by_default(tmp_path):
+    agent = SAC(env=_state_env(), **_sac_kwargs())
+    _add_state_transitions(agent)
+
+    first = tmp_path / "checkpoint_4.pt"
+    second = tmp_path / "checkpoint_8.pt"
+    agent.save(first, include_replay_buffer=True)
+    first_replay = replay_buffer_path_for_checkpoint(first)
+    assert first_replay.exists()
+
+    agent.save(second, include_replay_buffer=True)
+
+    assert not first_replay.exists()
+    assert replay_buffer_path_for_checkpoint(second).exists()
+
+
+def test_replay_buffer_checkpoints_can_keep_history(tmp_path):
+    agent = SAC(env=_state_env(), **_sac_kwargs())
+    agent.keep_all_replay_buffers = True
+    _add_state_transitions(agent)
+
+    first = tmp_path / "checkpoint_4.pt"
+    second = tmp_path / "checkpoint_8.pt"
+    agent.save(first, include_replay_buffer=True)
+    agent.save(second, include_replay_buffer=True)
+
+    assert replay_buffer_path_for_checkpoint(first).exists()
+    assert replay_buffer_path_for_checkpoint(second).exists()
+
+
 def test_sac_checkpoint_restores_initial_phase_progress(tmp_path):
     phase = InitialTrainingPhase(
         duration_steps=100,
@@ -189,7 +220,7 @@ def test_learn_writes_periodic_and_final_checkpoints(tmp_path):
     agent.learn(total_timesteps=4)
 
     assert (tmp_path / "checkpoint_4.pt").exists()
-    assert (tmp_path / "replay_buffer_4.pt").exists()
+    assert not (tmp_path / "replay_buffer_4.pt").exists()
     assert (tmp_path / "final.pt").exists()
     assert (tmp_path / "replay_buffer_final.pt").exists()
 

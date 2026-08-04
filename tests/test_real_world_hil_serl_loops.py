@@ -59,6 +59,14 @@ class _DummyVecEnv:
         return None
 
 
+class _FakeLogger:
+    def __init__(self):
+        self.scalars = []
+
+    def add_scalar(self, tag: str, value: float, step: int) -> None:
+        self.scalars.append((tag, value, step))
+
+
 def _agent() -> RLPDHybrid:
     return RLPDHybrid(
         env=_DummyVecEnv(),
@@ -123,6 +131,25 @@ def test_hil_serl_learner_loop_routes_by_intervened_flag(tmp_path):
     assert len(agent.replay_buffer) == 3
     assert len(agent.offline_replay_buffer) == 2
     assert loop.received_transitions == 3
+
+
+def test_hil_serl_learner_loop_logs_actor_episode_metrics(tmp_path):
+    agent = _agent()
+    agent.init_demo_buffer(buffer_size=16, demo_data_ratio=0.5)
+    logger = _FakeLogger()
+    agent.logger = logger
+    loop = HilSerlLearnerLoop(
+        agent, "127.0.0.1", 0, checkpoint_dir=str(tmp_path), buffer_period=1000
+    )
+
+    transition = _transition(intervened=False)
+    transition["episode_metrics"] = {"success_at_end": 1.0, "return": 2.0}
+    loop._on_transition(transition)
+
+    assert logger.scalars == [
+        ("train/success_at_end", 1.0, 1),
+        ("train/return", 2.0, 1),
+    ]
 
 
 def test_hil_serl_learner_loop_snapshots_and_reloads_on_restart(tmp_path):

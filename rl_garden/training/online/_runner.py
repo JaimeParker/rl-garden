@@ -9,6 +9,7 @@ from typing import Any, Callable
 import torch
 
 from rl_garden.common import Logger, seed_everything
+from rl_garden.common.cli_args import apply_checkpoint_retention
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
 
@@ -71,6 +72,7 @@ def run_online(
     env, eval_env = make_training_envs(args.env_backend, req)
 
     agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
+    apply_checkpoint_retention(agent, args)
     agent.learn(total_timesteps=args.total_timesteps)
     if post_learn is not None:
         post_learn(agent)

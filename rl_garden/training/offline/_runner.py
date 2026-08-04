@@ -11,7 +11,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import OfflineEnvSpec, run_offline_pretraining
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.cli_args import resolve_checkpoint_dir
+from rl_garden.common.cli_args import apply_checkpoint_retention, resolve_checkpoint_dir
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import (
     EnvRequest,
@@ -119,6 +119,7 @@ def run_offline(
         eval_env = make_evaluation_env(args.env_backend, _eval_env_request(args))
 
     agent = build_agent(args, env_spec, logger, eval_env)
+    apply_checkpoint_retention(agent, args)
     loaded = load_offline_dataset(agent.replay_buffer, args)
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:

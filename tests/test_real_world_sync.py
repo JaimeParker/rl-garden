@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import torch
 
@@ -85,3 +86,48 @@ def test_push_transition_survives_learner_being_down_temporarily():
         assert client.latest_policy_params() is None
     finally:
         client.stop()
+
+
+def test_sync_stats_track_transition_posts_and_policy_polls():
+    received = []
+    event = threading.Event()
+
+    def on_transition(transition):
+        received.append(transition)
+        event.set()
+
+    server, url = _start_server(on_transition)
+    client = ActorSyncClient(url, poll_interval=10.0, monitor_interval=0.0)
+    client.start()
+    try:
+        client._poll_once()
+        assert server.connection_stats()["policy_param_gets"] == 1
+
+        server.publish_params({"w": torch.tensor([1.0])})
+        client._poll_once()
+        assert client._policy_param_updates == 1
+        assert server.published_version == 1
+        assert server.connection_stats()["policy_param_gets"] == 2
+
+        client.push_transition(
+            {
+                "obs": torch.zeros(1, 4),
+                "next_obs": torch.ones(1, 4),
+                "action": torch.zeros(1, 2),
+                "reward": torch.tensor([1.0]),
+                "done": torch.tensor([False]),
+            }
+        )
+        assert event.wait(timeout=5.0), "transition never reached the learner"
+
+        stats = server.connection_stats()
+        assert stats["transition_posts"] == 1
+        assert stats["last_transition_post_ts"] is not None
+        assert stats["last_policy_param_get_ts"] is not None
+        deadline = time.time() + 5.0
+        while client._posted_transitions < 1 and time.time() < deadline:
+            time.sleep(0.01)
+        assert client._posted_transitions == 1
+    finally:
+        client.stop()
+        server.stop()

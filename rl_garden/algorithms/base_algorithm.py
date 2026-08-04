@@ -48,6 +48,7 @@ class BaseAlgorithm(ABC):
         self.seed = seed
         self.device = get_device(device)
         self.logger = logger
+        self.keep_all_replay_buffers = False
 
         seed_everything(seed)
         self._global_step = 0
@@ -252,7 +253,19 @@ class BaseAlgorithm(ABC):
         save_checkpoint_file(checkpoint_path, checkpoint)
         if replay_path is not None:
             save_replay_buffer_file(replay_path, self.replay_buffer)
+            if not self.keep_all_replay_buffers:
+                self._prune_old_replay_buffers(replay_path)
         return checkpoint_path
+
+    def _prune_old_replay_buffers(self, keep_path: Path) -> None:
+        keep_path = keep_path.resolve()
+        for candidate in keep_path.parent.glob("replay_buffer_*.pt"):
+            if candidate.resolve() == keep_path:
+                continue
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                pass
 
     def load(
         self,

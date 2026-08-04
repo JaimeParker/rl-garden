@@ -27,6 +27,7 @@ class CheckpointArgs:
     checkpoint_freq: int = 0
     load_checkpoint: Optional[str] = None
     save_replay_buffer: bool = False
+    keep_all_replay_buffers: bool = False
     load_replay_buffer: bool = True
     save_final_checkpoint: bool = True
 
@@ -117,6 +118,12 @@ def resolve_checkpoint_dir(args: Any, run_name: str) -> Optional[str]:
     if not args.save_final_checkpoint and args.checkpoint_freq <= 0:
         return None
     return os.path.join(args.log_dir, run_name, "checkpoints")
+
+
+def apply_checkpoint_retention(agent: Any, args: Any) -> None:
+    """Apply CLI checkpoint retention controls to an algorithm instance."""
+    if hasattr(args, "keep_all_replay_buffers"):
+        agent.keep_all_replay_buffers = bool(args.keep_all_replay_buffers)
 
 
 def resolve_eval_record_dir(args: Any, run_name: str) -> str:

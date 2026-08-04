@@ -10,6 +10,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from rl_garden.real_world.actor_loop import EpisodeMetricTracker
+
 
 def _residual_hil_serl_env_request(args, run_name, *, create_eval_env: bool = False):
     from rl_garden.common.cli_args import resolve_eval_record_dir
@@ -296,7 +298,7 @@ class ActorObservationResizeWrapper:
         return value
 
     def _resize_image_tensor(self, value: torch.Tensor) -> torch.Tensor:
-        if value.ndim < 3 or value.shape[-1] not in (1, 3, 4):
+        if value.ndim < 3:
             return value
         height, width = int(value.shape[-3]), int(value.shape[-2])
         if height == self.target_height and width == self.target_width:
@@ -342,7 +344,7 @@ class ActorObservationResizeWrapper:
 
         if not isinstance(space, spaces.Box):
             return space
-        if len(space.shape) < 3 or space.shape[-1] not in (1, 3, 4):
+        if len(space.shape) < 3:
             return space
         shape = (
             *space.shape[:-3],
@@ -445,6 +447,7 @@ class ResidualHilSerlActorLoop:
         self.deterministic = deterministic
         self.seed = seed
         self.rgb_viewer = ActorRGBViewer(rgb_window_name) if show_rgb_window else None
+        self.episode_metrics = EpisodeMetricTracker()
 
     def _viewer_obs(self, obs: Any) -> Any:
         highres_obs = getattr(self.env, "latest_highres_obs", None)
@@ -488,6 +491,9 @@ class ResidualHilSerlActorLoop:
                 env_action, final_actions, base_actions = self._select_action(obs)
                 env_action = env_action.to(self._env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                episode_metrics = self.episode_metrics.record(
+                    reward, terminated, truncated, info
+                )
                 print(
                     f"[actor] step={step + 1} success={self._success_label(info)}",
                     flush=True,
@@ -506,18 +512,19 @@ class ResidualHilSerlActorLoop:
                 with torch.no_grad():
                     next_base_actions = self.agent._base_naction(next_obs)
 
-                self.sync_client.push_transition(
-                    {
-                        "obs": obs,
-                        "next_obs": next_obs,
-                        "action": replay_action,
-                        "reward": reward,
-                        "done": done,
-                        "base_actions": base_actions,
-                        "next_base_actions": next_base_actions,
-                        "intervened": intervened,
-                    }
-                )
+                transition = {
+                    "obs": obs,
+                    "next_obs": next_obs,
+                    "action": replay_action,
+                    "reward": reward,
+                    "done": done,
+                    "base_actions": base_actions,
+                    "next_base_actions": next_base_actions,
+                    "intervened": intervened,
+                }
+                if episode_metrics is not None:
+                    transition["episode_metrics"] = episode_metrics
+                self.sync_client.push_transition(transition)
 
                 if bool(done.any()):
                     reset_after_done = getattr(self.env, "hitl_reset_after_done", None)
@@ -621,9 +628,8 @@ class ActorRGBViewer:
         for key in sorted(obs):
             if not cls._looks_like_rgb_key(key):
                 continue
-            frame = cls._to_rgb_frame(obs[key])
-            if frame is not None:
-                frames.append((key, frame))
+            for name, frame in cls._to_rgb_frames(key, obs[key]):
+                frames.append((name, frame))
         return frames
 
     @staticmethod
@@ -632,6 +638,11 @@ class ActorRGBViewer:
 
     @staticmethod
     def _to_rgb_frame(value: Any) -> Optional[np.ndarray]:
+        frames = ActorRGBViewer._to_rgb_frames("rgb", value)
+        return frames[0][1] if frames else None
+
+    @staticmethod
+    def _to_rgb_frames(key: str, value: Any) -> list[tuple[str, np.ndarray]]:
         if isinstance(value, torch.Tensor):
             array = value.detach().cpu().numpy()
         else:
@@ -641,8 +652,16 @@ class ActorRGBViewer:
         if array.ndim == 4 and array.shape[-1] >= 3:
             array = array[-1]
         if array.ndim != 3 or array.shape[-1] < 3:
-            return None
-        array = array[..., :3]
+            return []
+        if key == "rgb" and array.shape[-1] > 3 and array.shape[-1] % 3 == 0:
+            return [
+                (f"rgb_{index}", ActorRGBViewer._normalize_rgb_frame(array[..., start:start + 3]))
+                for index, start in enumerate(range(0, array.shape[-1], 3))
+            ]
+        return [(key, ActorRGBViewer._normalize_rgb_frame(array[..., :3]))]
+
+    @staticmethod
+    def _normalize_rgb_frame(array: np.ndarray) -> np.ndarray:
         if array.dtype != np.uint8:
             if np.issubdtype(array.dtype, np.floating) and np.nanmax(array) <= 1.0:
                 array = array * 255.0
@@ -696,7 +715,10 @@ def _run_actor(args) -> None:
     agent = build_residual_hil_serl(
         scratch_args, env, None, logger=None, checkpoint_dir=None
     )
-    sync_client = HilSerlActorSyncClient(f"http://{args.sync_host}:{args.sync_port}")
+    sync_client = HilSerlActorSyncClient(
+        f"http://{args.sync_host}:{args.sync_port}",
+        monitor_interval=args.sync_monitor_interval_s,
+    )
     loop = ResidualHilSerlActorLoop(
         env,
         agent,
@@ -712,6 +734,7 @@ def _run_actor(args) -> None:
 
 def _run_learner(args) -> None:
     from rl_garden.common import Logger, seed_everything
+    from rl_garden.common.cli_args import apply_checkpoint_retention
     from rl_garden.common.resolved_config import persist_resolved_config
     from rl_garden.real_world.hil_serl import HilSerlLearnerLoop
 
@@ -749,6 +772,7 @@ def _run_learner(args) -> None:
     agent = build_residual_hil_serl(
         args, env, None, logger=logger, checkpoint_dir=checkpoint_dir
     )
+    apply_checkpoint_retention(agent, args)
     agent.init_demo_buffer(args.demo_buffer_size, args.demo_data_ratio)
 
     loop = HilSerlLearnerLoop(
@@ -760,6 +784,7 @@ def _run_learner(args) -> None:
         demo_dataset_paths=args.demo_dataset_paths,
         train_freq=args.train_freq,
         publish_freq=args.publish_freq,
+        monitor_interval=args.sync_monitor_interval_s,
     )
     try:
         loop.run()

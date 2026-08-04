@@ -55,8 +55,17 @@ class HilSerlLearnerLoop(LearnerLoop):
         train_freq: int = 1,
         publish_freq: int = 100,
         idle_poll_interval: float = 0.1,
+        monitor_interval: float = 5.0,
     ) -> None:
-        super().__init__(agent, host, port, train_freq, publish_freq, idle_poll_interval)
+        super().__init__(
+            agent,
+            host,
+            port,
+            train_freq,
+            publish_freq,
+            idle_poll_interval,
+            monitor_interval,
+        )
         self._checkpoint_dir = checkpoint_dir
         self._buffer_period = buffer_period
         self._pending_online: list[dict[str, Any]] = []
@@ -113,6 +122,8 @@ class HilSerlLearnerLoop(LearnerLoop):
         adder(tensors["obs"], tensors["next_obs"], tensors["action"], tensors["reward"], tensors["done"], **extra)
 
     def _on_transition(self, transition: dict[str, Any]) -> None:
+        transition = dict(transition)
+        episode_metrics = transition.pop("episode_metrics", None)
         intervened = bool(transition.pop("intervened", False))
         device = self.agent.buffer_device
         with self._lock:
@@ -122,9 +133,12 @@ class HilSerlLearnerLoop(LearnerLoop):
                 self._add_transition(self.agent.add_demo_transition, transition, device)
                 self._pending_demo.append(transition)
             self._received += 1
+            self._log_received_transition_count()
+            received = self._received
             self._step_since_snapshot += 1
             if self._step_since_snapshot >= self._buffer_period:
                 self._snapshot()
+        self._log_episode_metrics(episode_metrics, received)
 
     def _snapshot(self) -> None:
         buffer_dir = os.path.join(self._checkpoint_dir, "buffer")

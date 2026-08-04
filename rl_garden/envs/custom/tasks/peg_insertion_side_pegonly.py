@@ -238,8 +238,12 @@ class PegInsertionSidePegOnlyEnv(PegInsertionSideEnv):
     # _human_render_camera_target = [0, 0, 0.1]
     # _human_render_camera_eye = [0.4, -0.2, 0.2]
     # _human_render_camera_target = [0, 0, 0.1]
-    _human_render_camera_eye = [0., -0.8, 0.1] 
-    _human_render_camera_target = [0, 0, 0.1]
+    ## 左视角
+    _human_render_camera_eye = [-0.55, -0.05, 0.15] 
+    _human_render_camera_target = [0, -0.00, 0.1]   
+    ## 正视角
+    # _human_render_camera_eye = [0., -0.8, 0.1] 
+    # _human_render_camera_target = [0, 0, 0.1]
 
     @property
     def _default_sensor_configs(self):

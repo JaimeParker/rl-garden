@@ -38,6 +38,18 @@ class _FakePolicy:
         return {"version": torch.tensor([self.version])}
 
 
+class _FakeLogger:
+    def __init__(self):
+        self.metrics = []
+        self.scalars = []
+
+    def log_metrics(self, metrics: dict[str, float], step: int) -> None:
+        self.metrics.append((metrics, step))
+
+    def add_scalar(self, tag: str, value: float, step: int) -> None:
+        self.scalars.append((tag, value, step))
+
+
 class _FakeAgent:
     def __init__(
         self,
@@ -47,6 +59,8 @@ class _FakeAgent:
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        log_freq: int = 1000,
+        logger=None,
     ):
         self.buffer_device = "cpu"
         self.replay_buffer = _FakeReplayBuffer()
@@ -58,15 +72,18 @@ class _FakeAgent:
         self.checkpoint_freq = checkpoint_freq
         self.save_replay_buffer = save_replay_buffer
         self.save_final_checkpoint = save_final_checkpoint
+        self.log_freq = log_freq
+        self.logger = logger
         self.global_update = 0
         self.save_calls: list[tuple[str, bool]] = []
+        self.compute_info_calls: list[bool] = []
 
     def train(self, gradient_steps: int, compute_info: bool = False):
-        del compute_info
+        self.compute_info_calls.append(compute_info)
         self.train_calls.append(gradient_steps)
         self.global_update += gradient_steps
         self.policy.version += 1
-        return {}
+        return {"critic_loss": 1.25} if compute_info else {}
 
     def save(self, path, include_replay_buffer: bool = False):
         self.save_calls.append((str(path), include_replay_buffer))
@@ -100,6 +117,27 @@ def test_on_transition_passes_extra_kwargs_through():
     transition["discounts"] = torch.tensor([0.99])
     loop._on_transition(transition)
     assert "discounts" in agent.replay_buffer.add_calls[0]
+
+
+def test_on_transition_logs_actor_episode_metrics_without_storing_them():
+    logger = _FakeLogger()
+    agent = _FakeAgent(logger=logger)
+    loop = LearnerLoop(agent, "127.0.0.1", 0)
+    transition = _transition(0.0)
+    transition["episode_metrics"] = {
+        "return": 3.0,
+        "success_at_end": 1.0,
+        "success_once": 1.0,
+    }
+
+    loop._on_transition(transition)
+
+    assert "episode_metrics" not in agent.replay_buffer.add_calls[0]
+    assert logger.scalars == [
+        ("train/return", 3.0, 1),
+        ("train/success_at_end", 1.0, 1),
+        ("train/success_once", 1.0, 1),
+    ]
 
 
 def test_run_waits_for_learning_starts_before_training():
@@ -203,6 +241,20 @@ def test_train_step_does_not_save_when_checkpointing_disabled():
     loop = LearnerLoop(agent, "127.0.0.1", 0, train_freq=2, publish_freq=1)
     loop._train_step()
     assert agent.save_calls == []
+
+
+def test_train_step_logs_metrics_when_update_crosses_log_freq():
+    logger = _FakeLogger()
+    agent = _FakeAgent(utd=1.0, log_freq=2, logger=logger)
+    loop = LearnerLoop(agent, "127.0.0.1", 0, train_freq=1, publish_freq=1)
+
+    loop._train_step()
+    assert agent.compute_info_calls == [False]
+    assert logger.metrics == []
+
+    loop._train_step()
+    assert agent.compute_info_calls == [False, True]
+    assert logger.metrics == [({"critic_loss": 1.25}, 2)]
 
 
 def test_run_saves_final_checkpoint_on_stop_when_enabled():

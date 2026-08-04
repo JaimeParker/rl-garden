@@ -25,7 +25,7 @@ class SpaceMouseTeleOpWrapper:
         self,
         intervention_threshold: float = DEFAULT_INTERVENTION_THRESHOLD,
         spacemouse_index: int = 0,
-        spacemouse_scale: float = 1.0,
+        spacemouse_scale: float = 1,
     ) -> None:
         if spacemouse_index < 0:
             raise ValueError("spacemouse_index must be non-negative.")

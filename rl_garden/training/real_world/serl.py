@@ -31,7 +31,10 @@ def _run_actor(args) -> None:
     )
     agent = build_rlpd(scratch_args, env, None, logger=None, checkpoint_dir=None)
 
-    sync_client = SerlActorSyncClient(f"http://{args.sync_host}:{args.sync_port}")
+    sync_client = SerlActorSyncClient(
+        f"http://{args.sync_host}:{args.sync_port}",
+        monitor_interval=args.sync_monitor_interval_s,
+    )
     loop = SerlActorLoop(
         env,
         agent.policy,
@@ -95,6 +98,7 @@ def _run_learner(args) -> None:
         port=args.sync_port,
         train_freq=args.train_freq,
         publish_freq=args.publish_freq,
+        monitor_interval=args.sync_monitor_interval_s,
     )
     try:
         loop.run()

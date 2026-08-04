@@ -12,6 +12,7 @@ class HITLArgs:
     # Actor: address of the learner's sync server. Learner: bind address.
     sync_host: str = "127.0.0.1"
     sync_port: int = 6000
+    sync_monitor_interval_s: float = 5.0
 
     control_hz: float = 10.0
     deterministic_actor: bool = False

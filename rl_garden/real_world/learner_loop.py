@@ -59,15 +59,21 @@ class LearnerLoop:
         train_freq: int = 1,
         publish_freq: int = 100,
         idle_poll_interval: float = 0.1,
+        monitor_interval: float = 5.0,
     ) -> None:
         self.agent = agent
         self.train_freq = train_freq
         self.publish_freq = publish_freq
         self.idle_poll_interval = idle_poll_interval
+        self.monitor_interval = monitor_interval
 
         self._lock = threading.Lock()
         self._received = 0
+        self._transition_log_period = 1000
         self._last_checkpoint_update = 0
+        self._last_monitor_ts: Optional[float] = None
+        self._last_monitor_received = 0
+        self._last_monitor_update = 0
         self._server = LearnerSyncServer(host, port, on_transition=self._on_transition)
 
     @property
@@ -76,6 +82,8 @@ class LearnerLoop:
             return self._received
 
     def _on_transition(self, transition: dict[str, Any]) -> None:
+        transition = dict(transition)
+        episode_metrics = transition.pop("episode_metrics", None)
         device = self.agent.buffer_device
         tensors = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -97,16 +105,60 @@ class LearnerLoop:
                 **extra,
             )
             self._received += 1
+            self._log_received_transition_count()
+            received = self._received
+        self._log_episode_metrics(episode_metrics, received)
+
+    def _log_received_transition_count(self) -> None:
+        if (
+            self._transition_log_period > 0
+            and self._received % self._transition_log_period == 0
+        ):
+            print(
+                f"[sync] learner received_transitions={self._received}",
+                flush=True,
+            )
 
     def _refresh_offline_data(self) -> None:
         """Hook for methods that need to periodically re-read a growing
         on-disk dataset (e.g. HIL-SERL's demo/correction data). No-op by
         default -- SERL doesn't need it."""
 
-    def _train_step(self, compute_info: bool = False) -> dict[str, float]:
+    def _should_log_train_info(self, gradient_steps: int) -> bool:
+        if getattr(self.agent, "logger", None) is None:
+            return False
+        log_freq = int(getattr(self.agent, "log_freq", 0))
+        if log_freq <= 0:
+            return False
+        update = int(self.agent.global_update)
+        return update // log_freq < (update + gradient_steps) // log_freq
+
+    def _log_train_info(self, info: dict[str, float]) -> None:
+        if not info:
+            return
+        logger = getattr(self.agent, "logger", None)
+        if logger is None:
+            return
+        logger.log_metrics(info, int(self.agent.global_update))
+
+    def _log_episode_metrics(self, metrics: Any, step: int) -> None:
+        if not isinstance(metrics, dict):
+            return
+        logger = getattr(self.agent, "logger", None)
+        if logger is None:
+            return
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)):
+                logger.add_scalar(f"train/{key}", float(value), step)
+
+    def _train_step(self, compute_info: Optional[bool] = None) -> dict[str, float]:
         gradient_steps = max(1, int(self.train_freq * self.agent.utd))
+        if compute_info is None:
+            compute_info = self._should_log_train_info(gradient_steps)
         with self._lock:
             info = self.agent.train(gradient_steps, compute_info=compute_info)
+        if compute_info:
+            self._log_train_info(info)
         self._maybe_save_periodic_checkpoint()
         return info
 
@@ -115,13 +167,58 @@ class LearnerLoop:
         if agent.checkpoint_dir is None or agent.checkpoint_freq <= 0:
             return
         update = agent.global_update
-        if update // agent.checkpoint_freq <= self._last_checkpoint_update // agent.checkpoint_freq:
+        if (
+            update // agent.checkpoint_freq
+            <= self._last_checkpoint_update // agent.checkpoint_freq
+        ):
             return
         agent.save(
             Path(agent.checkpoint_dir) / f"checkpoint_{update}.pt",
             include_replay_buffer=agent.save_replay_buffer,
         )
         self._last_checkpoint_update = update
+
+    def _maybe_log_monitor(self) -> None:
+        if self.monitor_interval <= 0:
+            return
+        now = time.monotonic()
+        if self._last_monitor_ts is None:
+            self._last_monitor_ts = now
+            self._last_monitor_received = self.received_transitions
+            self._last_monitor_update = self.agent.global_update
+            return
+        elapsed = now - self._last_monitor_ts
+        if elapsed < self.monitor_interval:
+            return
+        with self._lock:
+            received = self._received
+            replay_len = len(self.agent.replay_buffer)
+        update = self.agent.global_update
+        server_stats = self._server.connection_stats()
+        received_rate = (received - self._last_monitor_received) / max(elapsed, 1e-6)
+        update_rate = (update - self._last_monitor_update) / max(elapsed, 1e-6)
+        print(
+            "[sync] learner link "
+            f"received={received} received_rate={received_rate:.2f}/s "
+            f"replay_len={replay_len} "
+            f"global_update={update} update_rate={update_rate:.2f}/s "
+            f"published_policy_version={self._server.published_version} "
+            f"waiting_for_learning_starts={received < self.agent.learning_starts} "
+            f"http_transition_posts={server_stats['transition_posts']} "
+            f"http_policy_gets={server_stats['policy_param_gets']} "
+            f"last_http_transition={self._format_age(server_stats['last_transition_post_ts'], now)} "
+            f"last_http_policy_get={self._format_age(server_stats['last_policy_param_get_ts'], now)}",
+            flush=True,
+        )
+        self._last_monitor_ts = now
+        self._last_monitor_received = received
+        self._last_monitor_update = update
+
+    @staticmethod
+    def _format_age(timestamp: Optional[float], now: float) -> str:
+        if timestamp is None:
+            return "never"
+        return f"{max(0.0, now - timestamp):.1f}s_ago"
 
     def run(self, total_transitions: Optional[int] = None) -> None:
         """Runs until ``total_transitions`` have been received (or forever,
@@ -131,7 +228,11 @@ class LearnerLoop:
         try:
             update = 0
             while not self._stop:
-                if total_transitions is not None and self.received_transitions >= total_transitions:
+                self._maybe_log_monitor()
+                if (
+                    total_transitions is not None
+                    and self.received_transitions >= total_transitions
+                ):
                     break
                 if self.received_transitions < self.agent.learning_starts:
                     time.sleep(self.idle_poll_interval)

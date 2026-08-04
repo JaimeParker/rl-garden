@@ -77,7 +77,10 @@ def _run_actor(args) -> None:
 
     if not args.fwbw:
         agent = _rebuild_scratch_agent_for_env(args, env)
-        sync_client = HilSerlActorSyncClient(f"http://{args.sync_host}:{args.sync_port}")
+        sync_client = HilSerlActorSyncClient(
+            f"http://{args.sync_host}:{args.sync_port}",
+            monitor_interval=args.sync_monitor_interval_s,
+        )
         loop = HilSerlActorLoop(
             env,
             agent.policy,
@@ -96,8 +99,14 @@ def _run_actor(args) -> None:
         "backward": _rebuild_scratch_agent_for_env(args, env),
     }
     sync_clients = {
-        "forward": HilSerlActorSyncClient(f"http://{args.sync_host}:{args.sync_port}"),
-        "backward": HilSerlActorSyncClient(f"http://{args.sync_host}:{backward_port}"),
+        "forward": HilSerlActorSyncClient(
+            f"http://{args.sync_host}:{args.sync_port}",
+            monitor_interval=args.sync_monitor_interval_s,
+        ),
+        "backward": HilSerlActorSyncClient(
+            f"http://{args.sync_host}:{backward_port}",
+            monitor_interval=args.sync_monitor_interval_s,
+        ),
     }
     loop = FWBWActorLoop(
         env,
@@ -180,6 +189,7 @@ def _run_learner(args) -> None:
         demo_dataset_paths=args.demo_dataset_paths,
         train_freq=args.train_freq,
         publish_freq=args.publish_freq,
+        monitor_interval=args.sync_monitor_interval_s,
     )
     try:
         loop.run()
