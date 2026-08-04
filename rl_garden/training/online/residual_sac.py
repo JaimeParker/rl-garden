@@ -21,12 +21,72 @@ def _validate_residual_action_config(args) -> None:
         )
 
 
+def _resolve_residual_observation_view(args, env):
+    """Resolve the algorithm-facing observation without changing the base view."""
+    import numpy as np
+    from gymnasium import spaces
+
+    from rl_garden.common.observation_view import (
+        ObservationView,
+        resolve_agent_observation_view,
+    )
+
+    full_view = resolve_agent_observation_view(env)
+    if args.residual_obs_mode == "env":
+        return full_view
+
+    observation_space = full_view.observation_space
+    if not isinstance(observation_space, spaces.Dict):
+        raise TypeError(
+            "--residual-obs-mode state requires a Dict observation space "
+            "containing 'state'."
+        )
+    if "state" not in observation_space.spaces:
+        raise ValueError(
+            "--residual-obs-mode state requires observation key 'state'."
+        )
+    state_space = observation_space.spaces["state"]
+    if not isinstance(state_space, spaces.Box) or len(state_space.shape) != 1:
+        raise ValueError(
+            "Residual state observation must be a one-dimensional Box, got "
+            f"{state_space!r}."
+        )
+    if not np.issubdtype(state_space.dtype, np.floating):
+        raise ValueError(
+            "Residual state observation must use a floating dtype, got "
+            f"{state_space.dtype}."
+        )
+    if args.env_backend == "robotwin" and state_space.shape != (14,):
+        raise ValueError(
+            "RoboTwin residual state observation must have shape (14,), got "
+            f"{state_space.shape}."
+        )
+
+    source_key = next(
+        (
+            source
+            for target, source in full_view.key_map
+            if target == "state"
+        ),
+        "state",
+    )
+    return ObservationView(
+        spaces.Dict({"state": state_space}),
+        (("state", source_key),),
+    )
+
+
 def _residual_sac_env_request(args, run_name):
     from rl_garden.common.cli_args import resolve_eval_record_dir
     from rl_garden.envs.backend_registry import EnvRequest
 
     _validate_residual_action_config(args)
     is_visual = args.obs_mode != "state"
+    include_state = (
+        True
+        if not is_visual
+        else args.include_state or args.residual_obs_mode == "state"
+    )
     backend_config = args.resolve_backend_config()
     eval_record_dir = resolve_eval_record_dir(args, run_name)
     return EnvRequest(
@@ -38,7 +98,7 @@ def _residual_sac_env_request(args, run_name):
         seed=args.seed,
         camera_width=args.camera_width if is_visual else None,
         camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
+        include_state=include_state,
         per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
         frame_stack=args.frame_stack,
         num_eval_envs=args.num_eval_envs,
@@ -104,7 +164,6 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
-    from rl_garden.common.observation_view import resolve_agent_observation_view
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
     _validate_residual_action_config(args)
@@ -115,7 +174,8 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
             "--base_ckpt_path for the frozen base policy."
         )
 
-    is_visual = args.obs_mode != "state"
+    observation_view = _resolve_residual_observation_view(args, env)
+    is_visual = args.residual_obs_mode == "env" and args.obs_mode != "state"
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
@@ -144,7 +204,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         residual_action_coordinates=args.residual_action_coordinates,
         joint_delta_scale=args.robotwin.joint_delta_scale,
         gripper_delta_scale=args.robotwin.gripper_delta_scale,
-        observation_view=resolve_agent_observation_view(env),
+        observation_view=observation_view,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
@@ -209,7 +269,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
 def run_residual_sac(args: ResidualSACArgs) -> None:
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
+    is_visual = args.residual_obs_mode == "env" and args.obs_mode != "state"
     base_policy = _effective_base_policy(args)
     base_tag = "debug_zero_base" if args.debug else f"{base_policy}_base"
     obs_tag = f"{base_tag}_rgbd_{args.encoder}" if is_visual else f"{base_tag}_state"
@@ -241,6 +301,7 @@ class ResidualSACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """
 
     residual_action_scale: float = 0.1
+    residual_obs_mode: Literal["env", "state"] = "env"
     residual_action_coordinates: Literal[
         "normalized_final", "raw_joint_delta"
     ] = "normalized_final"

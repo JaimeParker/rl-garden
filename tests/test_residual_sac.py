@@ -157,6 +157,77 @@ def test_build_residual_sac_forwards_bootstrap_at_done(monkeypatch) -> None:
     assert captured["bootstrap_at_done"] == "truncated"
 
 
+def test_state_residual_keeps_full_base_obs_and_projects_only_14d_state(
+    monkeypatch,
+) -> None:
+    import rl_garden.algorithms as algorithms
+    from rl_garden.training.online.residual_sac import (
+        ResidualSACArgs,
+        _residual_sac_env_request,
+        build_residual_sac,
+    )
+
+    assert ResidualSACArgs().residual_obs_mode == "env"
+    args = ResidualSACArgs(
+        env_backend="robotwin",
+        obs_mode="rgb",
+        residual_obs_mode="state",
+        base_policy="zero",
+        include_state=False,
+    )
+
+    env = RawActionVecEnv(num_envs=1)
+    env.single_observation_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(
+                low=0,
+                high=255,
+                shape=(8, 8, 3),
+                dtype=np.uint8,
+            ),
+            "state": spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(14,),
+                dtype=np.float32,
+            ),
+        }
+    )
+    captured = {}
+
+    class StubResidualSAC:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(algorithms, "ResidualSAC", StubResidualSAC)
+
+    request = _residual_sac_env_request(args, "state_residual_test")
+    build_residual_sac(
+        args,
+        env,
+        eval_env=None,
+        logger=None,
+        checkpoint_dir=None,
+    )
+
+    assert request.obs_mode == "rgb"
+    assert request.include_state is True
+    assert (
+        captured["base_action_provider"].observation_space
+        is env.single_observation_space
+    )
+    view = captured["observation_view"]
+    assert tuple(view.observation_space.spaces) == ("state",)
+    full_obs = {
+        "rgb": torch.zeros(1, 8, 8, 3, dtype=torch.uint8),
+        "state": torch.zeros(1, 14),
+    }
+    projected = view.transform(full_obs)
+    assert tuple(projected) == ("state",)
+    assert projected["state"] is full_obs["state"]
+    assert not {"image_encoder_factory", "image_keys"} & captured.keys()
+
+
 def _raw_joint_agent(base_action=None, **kwargs) -> ResidualSAC:
     action_space = spaces.Box(
         low=-np.inf,
