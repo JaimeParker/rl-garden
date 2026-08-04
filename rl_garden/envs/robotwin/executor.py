@@ -75,9 +75,15 @@ class ThreadedRoboTwinExecutor:
         for offset, idx in enumerate(indices):
             seed = None if env_seeds is None else env_seeds[offset]
             futures[idx] = self.pool.submit(self.envs[idx].reset, seed)
-        for idx in indices:
-            futures[idx].result(timeout=180)
-        return self.get_obs()
+        reset_observations = {
+            idx: futures[idx].result(timeout=180) for idx in indices
+        }
+        return [
+            reset_observations[idx]
+            if idx in reset_observations
+            else self.envs[idx].get_obs()
+            for idx in range(self.num_envs)
+        ]
 
     def step(self, actions: np.ndarray) -> list[StepResult]:
         if actions.shape[0] != self.num_envs:

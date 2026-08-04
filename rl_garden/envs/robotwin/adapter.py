@@ -94,6 +94,7 @@ class RoboTwinTaskAdapter:
         self.env_seed = env_seed if env_seed is not None else cfg.seed + env_id
         self.task = None
         self.elapsed_steps = 0
+        self._completed_resets = 0
         self.last_dense_reward = 0.0
         self._eval_video_index = 0
         self._joint_target_fk: Optional[RoboTwinJointTargetFK] = None
@@ -101,10 +102,12 @@ class RoboTwinTaskAdapter:
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
             self.env_seed = int(env_seed)
+        clear_cache_freq = int(self.cfg.clear_cache_freq)
         self.close(
             clear_cache=(
-                self.elapsed_steps > 0
-                and self.elapsed_steps % self.cfg.clear_cache_freq == 0
+                clear_cache_freq > 0
+                and self._completed_resets > 0
+                and self._completed_resets % clear_cache_freq == 0
             )
         )
         self.task = make_task(self.task_name, self.cfg.robotwin_root)
@@ -219,6 +222,7 @@ class RoboTwinTaskAdapter:
         obs = self.get_obs()
         obs["_env_seed"] = self.env_seed
         self._start_eval_video_if_needed(obs.get("rgb"))
+        self._completed_resets += 1
         return obs
 
     def step(self, action: np.ndarray) -> StepResult:
