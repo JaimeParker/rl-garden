@@ -116,7 +116,10 @@ def test_loader_preserves_mc_returns_from_trajectory_boundaries(tmp_path):
             [3.8, 2.0],
         ]
     )
-    assert torch.allclose(buffer._mc_table[:3], expected)
+    # Loader-provided MC values are stored as _external_mc (trusted as-is,
+    # not derived from _build_mc_table()'s own recursion) -- see mc_buffer.py.
+    assert torch.allclose(buffer._external_mc[:3], expected)
+    assert buffer._externally_valid[:3].all()
 
 
 def test_loader_infers_success_when_sparse_reward_mc_enabled(tmp_path):

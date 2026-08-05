@@ -38,7 +38,7 @@ from __future__ import annotations
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from gymnasium import spaces
 from tqdm import trange
@@ -69,7 +69,13 @@ def _offline_update_loop(
     std_log: bool,
     *,
     start_step: int = 0,
+    eval_freq: Optional[int] = None,
 ) -> None:
+    # `eval_freq` here is in *gradient-update* units (this loop takes exactly
+    # one gradient step per `step`), independent of the online phase's
+    # env-step-unit `eval_freq` (see `OffPolicyAlgorithm.learn()`). `None`
+    # preserves the pre-existing behavior of reading `agent.eval_freq`.
+    offline_eval_freq = agent.eval_freq if eval_freq is None else eval_freq
     gradient_steps = 1
     interval_update_time = 0.0
     interval_update_steps = 0
@@ -83,9 +89,9 @@ def _offline_update_loop(
         interval_update_steps += gradient_steps
 
         if (
-            agent.eval_freq > 0
+            offline_eval_freq > 0
             and agent.eval_env is not None
-            and (step + 1) % agent.eval_freq == 0
+            and (step + 1) % offline_eval_freq == 0
         ):
             eval_t = time.perf_counter()
             eval_metrics = agent._evaluate()
@@ -160,7 +166,7 @@ def _save_offline_checkpoint(
 
 
 def _set_offline_probe(agent: Any, logger: Logger, std_log: bool) -> None:
-    probe_size = min(agent.batch_size, len(agent.replay_buffer))
+    probe_size = min(agent.batch_size, agent.replay_buffer.sampleable_size)
     if probe_size <= 0:
         logger.add_summary("off2on/offline_probe_size", 0)
         return
@@ -205,6 +211,21 @@ def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -
     )
     if args.std_log:
         print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+
+
+def _apply_online_eval_freq(agent: Any, args: Off2OnCommonArgs) -> None:
+    """Switch ``agent.eval_freq`` to the online (env-step-unit) cadence.
+
+    ``OffPolicyAlgorithm.learn()`` (the online rollout loop) reads
+    ``agent.eval_freq`` directly, in env-step units -- distinct from the
+    offline phase's gradient-update-unit cadence (see
+    ``_offline_update_loop``'s ``eval_freq`` param). A missing/``None``
+    ``online_eval_freq`` (e.g. non-Cal-QL off2on algorithms, which don't
+    expose this field) leaves ``agent.eval_freq`` as already configured.
+    """
+    online_eval_freq = getattr(args, "online_eval_freq", None)
+    if online_eval_freq is not None:
+        agent.eval_freq = online_eval_freq
 
 
 def run_off2on(
@@ -253,9 +274,10 @@ def run_off2on(
         + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
 
-    if args.eval_freq > 0 and args.num_eval_envs <= 0:
+    if should_create_eval_env(args) and args.num_eval_envs <= 0:
         raise SystemExit(
-            "--eval_freq > 0 requires --num_eval_envs > 0 to provide an eval environment."
+            "--eval_freq, --offline_eval_freq, or --online_eval_freq > 0 requires "
+            "--num_eval_envs > 0 to provide an eval environment."
         )
 
     backend_config = args.resolve_backend_config()
@@ -305,6 +327,7 @@ def run_off2on(
             args.log_freq,
             args.std_log,
             start_step=offline_start_step,
+            eval_freq=getattr(args, "offline_eval_freq", None),
         )
         offline_end_step = offline_start_step + args.num_offline_steps
         agent._global_step = offline_end_step
@@ -318,6 +341,7 @@ def run_off2on(
         _set_offline_probe(agent, logger, args.std_log)
 
     _switch_to_online_mode(agent, args, logger)
+    _apply_online_eval_freq(agent, args)
 
     # Online training phase
     if args.num_online_steps > 0:

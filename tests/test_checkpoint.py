@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -93,13 +94,15 @@ def _wsrl_kwargs() -> dict[str, object]:
 
 
 def _add_state_transitions(agent, steps: int = 4) -> None:
+    # Marks the final step done=True so the run is one complete trajectory --
+    # MC-buffer-backed agents (Cal-QL/WSRL) only sample complete trajectories.
     env = agent.env
     for i in range(steps):
         obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
         next_obs = torch.randn_like(obs)
         action = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         reward = torch.full((env.num_envs,), float(i))
-        done = torch.zeros(env.num_envs)
+        done = torch.ones(env.num_envs) if i == steps - 1 else torch.zeros(env.num_envs)
         agent.replay_buffer.add(obs, next_obs, action, reward, done)
 
 
@@ -340,7 +343,8 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
         sample_device="cpu",
     )
 
-    for _ in range(3):
+    for step in range(3):
+        is_last = step == 2
         dict_source.add(
             {
                 "rgb": torch.randint(0, 256, (2, 4, 4, 3), dtype=torch.uint8),
@@ -354,12 +358,14 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
             torch.randn(2),
             torch.zeros(2),
         )
+        # Close the trajectory on the final step: the MC buffer only
+        # samples/counts complete trajectories.
         mc_source.add(
             torch.randn(2, 3),
             torch.randn(2, 3),
             torch.randn(2, 1),
             torch.randn(2),
-            torch.zeros(2),
+            torch.ones(2) if is_last else torch.zeros(2),
         )
     mc_source.sample(2)
 
@@ -377,6 +383,100 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
     assert mc_target.gamma == 0.7
     assert mc_target._mc_table is not None
     assert torch.equal(mc_target._mc_table, mc_source._mc_table)
+    assert torch.equal(mc_target._episode_end, mc_source._episode_end)
+
+
+def test_mc_buffer_loads_legacy_checkpoint_missing_externally_valid(tmp_path):
+    """Regression for the codex review's claim #3: a checkpoint saved before
+    `_externally_valid`/`_external_mc` existed, with all-False `dones` (as
+    `bootstrap_at_done="always"` produces) and a present legacy `mc_table`,
+    must still load and be sampleable -- the old fallback (defaulting
+    `episode_end` to `dones`) made `sampleable_size == 0` and `sample()`
+    raise, even though the restored `mc_table` was already correct.
+    """
+    from rl_garden.common.checkpoint import (
+        load_replay_buffer_state_dict,
+        replay_buffer_state_dict,
+    )
+
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+    source = MCTensorReplayBuffer(
+        obs_space, act_space, 2, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
+    )
+    for step in range(4):
+        is_last = step == 3
+        source.add(
+            torch.randn(2, 3), torch.randn(2, 3), torch.randn(2, 1),
+            torch.ones(2), torch.zeros(2),  # bootstrap_at_done="always": dones stays all-zero
+            episode_end=torch.full((2,), float(is_last)).bool(),
+        )
+    mc_table = source._build_mc_table()
+    source._mc_table = mc_table
+
+    state = replay_buffer_state_dict(source)
+    # Simulate a checkpoint saved before this fix: strip the new keys, and
+    # simulate dones as they'd actually be under bootstrap_at_done="always".
+    del state["episode_end"]
+    del state["externally_valid"]
+    del state["external_mc"]
+    state["dones"] = torch.zeros(4, 2)
+
+    target = MCTensorReplayBuffer(
+        obs_space, act_space, 2, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
+    )
+    load_replay_buffer_state_dict(target, state)
+
+    assert target.sampleable_size == 8
+    sample = target.sample(4)
+    assert sample.mc_returns.shape == (4,)
+
+
+def test_checkpoint_load_resets_stale_derived_sampling_caches(tmp_path):
+    """Regression for the codex re-review's P2 finding: `_valid_table` was
+    reset on load, but `_valid_indices_cache`/`_sampleable_size_cache`
+    (added alongside it for claim #2) and `WithoutReplaceSamplerMixin`'s
+    `_perm` were not -- a buffer reused across a checkpoint load could keep
+    serving pre-load cached indices/counts/permutation instead of reflecting
+    the just-loaded state.
+    """
+    from rl_garden.common.checkpoint import (
+        load_replay_buffer_state_dict,
+        replay_buffer_state_dict,
+    )
+
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+
+    def _make_buffer_with_valid_count(n_episodes: int) -> MCTensorReplayBuffer:
+        buf = MCTensorReplayBuffer(
+            obs_space, act_space, 1, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
+        )
+        for _ in range(n_episodes):
+            buf.add(
+                torch.randn(1, 3), torch.randn(1, 3), torch.randn(1, 1),
+                torch.ones(1), torch.zeros(1), episode_end=torch.ones(1).bool(),
+            )
+        return buf
+
+    target = _make_buffer_with_valid_count(6)
+    # Populate every derived sampling cache before the load.
+    assert target.sampleable_size == 6
+    _ = target._valid_indices()
+    target.sample_without_repeat(2)
+    assert target._perm is not None
+
+    source = _make_buffer_with_valid_count(2)
+    state = replay_buffer_state_dict(source)
+    load_replay_buffer_state_dict(target, state)
+
+    assert target.sampleable_size == 2  # not the stale pre-load 6
+    assert target._valid_indices().shape[0] == 2
+    assert target._perm is None  # forces a reshuffle, not a stale permutation
+    sample = target.sample_without_repeat(2)
+    assert sample.mc_returns.shape == (2,)
+    with pytest.raises(ValueError):
+        target.sample_without_repeat(6)  # would have silently succeeded on the stale cache
 
 
 def test_legacy_offline_cql_algorithm_class_alias_resolves_to_cql():

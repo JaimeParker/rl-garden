@@ -126,9 +126,16 @@ def should_create_eval_env(args: Any) -> bool:
     Single source of truth for the "build an eval env only if periodic
     evaluation was actually requested" decision, shared by the online,
     offline, and off2on training entrypoints so they don't each re-derive it
-    (and potentially disagree, as online/off2on previously did).
+    (and potentially disagree, as online/off2on previously did). Off2on's
+    phase-specific ``offline_eval_freq``/``online_eval_freq`` (not present on
+    the online/offline-only entrypoints, hence ``getattr``) can each
+    independently trigger evaluation even when the general ``eval_freq`` is 0.
     """
-    return args.eval_freq > 0
+    if args.eval_freq > 0:
+        return True
+    return bool(
+        getattr(args, "offline_eval_freq", None) or getattr(args, "online_eval_freq", None)
+    )
 
 
 def make_evaluation_env(backend_name: str, req: EnvRequest):

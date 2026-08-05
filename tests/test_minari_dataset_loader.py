@@ -183,8 +183,10 @@ def test_mc_table_populated_for_mc_buffer(monkeypatch):
     )
 
     load_minari_dataset_to_replay_buffer(buffer, "fake/dataset-v0")
-    assert buffer._mc_table is not None
-    assert buffer._mc_table[:3, 0].tolist() == pytest.approx([2.71, 1.9, 1.0])
+    # Loader-provided MC values are stored as _external_mc (trusted as-is,
+    # not derived from _build_mc_table()'s own recursion) -- see mc_buffer.py.
+    assert buffer._externally_valid[:3, 0].all()
+    assert buffer._external_mc[:3, 0].tolist() == pytest.approx([2.71, 1.9, 1.0])
 
 
 def test_sparse_mc_uses_observation_aligned_minari_success(monkeypatch):
@@ -209,9 +211,9 @@ def test_sparse_mc_uses_observation_aligned_minari_success(monkeypatch):
         buffer, "fake/dataset-v0", reward_scale=10.0, reward_bias=-5.0
     )
 
-    assert buffer._mc_table is not None
+    assert buffer._externally_valid[:3, 0].all()
     assert buffer._step_success[:3, 0].tolist() == [0.0, 0.0, 1.0]
-    assert buffer._mc_table[:3, 0].tolist() == pytest.approx([-5.45, -0.5, 5.0])
+    assert buffer._external_mc[:3, 0].tolist() == pytest.approx([-5.45, -0.5, 5.0])
 
 
 def test_final_step_truncation_vs_termination_does_not_change_mc_returns(monkeypatch):
@@ -243,7 +245,7 @@ def test_final_step_truncation_vs_termination_does_not_change_mc_returns(monkeyp
             buffer, "fake/dataset-v0", reward_scale=10.0, reward_bias=-5.0
         )
 
-        assert buffer._mc_table[:3, 0].tolist() == pytest.approx([-5.45, -0.5, 5.0])
+        assert buffer._external_mc[:3, 0].tolist() == pytest.approx([-5.45, -0.5, 5.0])
 
 
 def test_sparse_mc_failed_episode_uses_infinite_horizon_floor(monkeypatch):
@@ -268,9 +270,9 @@ def test_sparse_mc_failed_episode_uses_infinite_horizon_floor(monkeypatch):
         buffer, "fake/dataset-v0", reward_scale=10.0, reward_bias=-5.0
     )
 
-    assert buffer._mc_table is not None
+    assert buffer._externally_valid[:3, 0].all()
     assert buffer._step_success[:3, 0].tolist() == [0.0, 0.0, 0.0]
-    assert buffer._mc_table[:3, 0].tolist() == pytest.approx([-50.0, -50.0, -50.0])
+    assert buffer._external_mc[:3, 0].tolist() == pytest.approx([-50.0, -50.0, -50.0])
 
 
 def test_num_episodes_caps_loaded_episodes(monkeypatch):

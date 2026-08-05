@@ -252,6 +252,44 @@ def test_calql_actor_orthogonal_init_and_trainable_log_std_affine():
     assert isinstance(actor.log_std_offset, torch.nn.Parameter)
 
 
+def test_qhead_orthogonal_init_applies_to_real_output_head_not_trunk_last_layer():
+    """Regression for the codex review's claim #4: _apply_kernel_init only
+    sees the trunk (built via _build_trunk), so it wrongly gave the trunk's
+    last hidden Linear the near-zero gain while the real output head
+    (self.head, built outside the trunk) got no init at all. Mirrors
+    test_calql_actor_orthogonal_init_and_trainable_log_std_affine's actor
+    check, but for the critic's trunk+head split.
+    """
+    from rl_garden.networks.actor_critic import _QHead
+
+    head_net = _QHead(
+        features_dim=4,
+        act_dim=3,
+        hidden_dims=[8, 8],
+        backbone_type="mlp",
+        use_layer_norm=False,
+        use_group_norm=False,
+        num_groups=32,
+        dropout_rate=None,
+        kernel_init="orthogonal_near_zero_output",
+    )
+
+    hidden = [m for m in head_net.trunk.modules() if isinstance(m, torch.nn.Linear)]
+    assert len(hidden) == 2
+    for layer in hidden:
+        singular_values = torch.linalg.svdvals(layer.weight.detach())
+        assert torch.allclose(
+            singular_values, torch.full_like(singular_values, math.sqrt(2.0)), atol=1e-4
+        )
+        assert torch.count_nonzero(layer.bias) == 0
+
+    singular_values = torch.linalg.svdvals(head_net.head.weight.detach())
+    assert torch.allclose(
+        singular_values, torch.full_like(singular_values, 1e-2), atol=1e-6
+    )
+    assert torch.count_nonzero(head_net.head.bias) == 0
+
+
 def test_mlp_resnet_forward_shape():
     net = MLPResNet(
         input_dim=12,

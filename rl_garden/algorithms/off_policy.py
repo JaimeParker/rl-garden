@@ -56,6 +56,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        online_episodes_per_iteration: Optional[int] = None,
     ) -> None:
         super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
         self.buffer_size = buffer_size
@@ -68,6 +69,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.utd = utd
         assert bootstrap_at_done in ("always", "never", "truncated"), bootstrap_at_done
         self.bootstrap_at_done = bootstrap_at_done
+        assert online_episodes_per_iteration is None or online_episodes_per_iteration > 0
+        self.online_episodes_per_iteration = online_episodes_per_iteration
         self.std_log = std_log
         self.log_freq = log_freq
         self.eval_freq = eval_freq
@@ -339,16 +342,23 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self._on_training_start(total_timesteps)
         obs, _ = self.env.reset(seed=self.seed)
         self._on_env_reset(obs)
-        learning_has_started = False
+        # Resumed or post-offline runs can already be past learning_starts --
+        # seeding False would make the first rollout iteration explore randomly.
+        learning_has_started = self._global_step >= self.learning_starts
         cumulative = defaultdict(float)
-        global_steps_per_iteration = self.num_envs * self.steps_per_env
+        # Start of the previous iteration's rollout, for the eval-boundary
+        # check below. Can't use a hardcoded `training_freq` window there:
+        # episode-mode iterations advance by a variable `collected_transitions`
+        # instead, which can be many times larger or smaller than training_freq.
+        previous_iteration_start = self._global_step
 
         while self._global_step < total_timesteps:
             previous_step = self._global_step
-            # Eval at iteration boundary.
+            # Eval at iteration boundary: did the just-finished iteration's
+            # rollout cross an eval_freq multiple?
             if (
                 self.eval_freq > 0
-                and (self._global_step - self.training_freq) // self.eval_freq
+                and previous_iteration_start // self.eval_freq
                 < self._global_step // self.eval_freq
             ):
                 stime = time.perf_counter()
@@ -371,13 +381,25 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         flush=True,
                     )
 
-            # Rollout.
+            # Fixed-step by default; in episode_mode, simultaneous episode
+            # completions across envs can overshoot the per-iteration target.
             rollout_t = time.perf_counter()
             rollout_reward_sum = 0.0
             rollout_reward_count = 0
             rollout_episode_metrics: dict[str, list[float]] = defaultdict(list)
-            for _ in range(self.steps_per_env):
+            collected_transitions = 0
+            episode_mode = self.online_episodes_per_iteration is not None
+            if episode_mode:
+                episodes_completed = torch.zeros(
+                    self.num_envs, dtype=torch.long, device=self.device
+                )
+            substep = 0
+            while True:
+                if not episode_mode and substep >= self.steps_per_env:
+                    break
+                substep += 1
                 self._global_step += self.num_envs
+                collected_transitions += self.num_envs
                 actions, env_actions, action_context = self._rollout_action(
                     obs, learning_has_started
                 )
@@ -431,6 +453,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 )
                 self._post_rollout_step(action_context, terminations, truncations, infos)
                 obs = next_obs
+                if episode_mode:
+                    episodes_completed += (terminations | truncations).long()
+                    if bool((episodes_completed >= self.online_episodes_per_iteration).all()):
+                        break
             rollout_time = time.perf_counter() - rollout_t
             cumulative["rollout_time"] += rollout_time
             rollout_reward_mean = (
@@ -449,11 +475,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             )
             should_log = (
                 self.log_freq > 0
-                and (self._global_step - self.training_freq) // self.log_freq
-                < self._global_step // self.log_freq
+                and previous_step // self.log_freq < self._global_step // self.log_freq
             )
             rollout_fps = (
-                global_steps_per_iteration / rollout_time
+                collected_transitions / rollout_time
                 if rollout_time > 0
                 else float("nan")
             )
@@ -472,12 +497,20 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         f"fps={self._fmt_metric(rollout_fps)}",
                         flush=True,
                     )
+                previous_iteration_start = previous_step
                 continue
             learning_has_started = True
 
-            # Update.
+            # Episode-mode gradient steps scale with what was collected,
+            # matching the official Cal-QL JAX reference (`len(trajectory) *
+            # utd` steps per collected online trajectory).
+            grad_steps = (
+                max(1, int(collected_transitions * self.utd))
+                if episode_mode
+                else self.grad_steps_per_iteration
+            )
             update_t = time.perf_counter()
-            losses = self.train(self.grad_steps_per_iteration, compute_info=should_log)
+            losses = self.train(grad_steps, compute_info=should_log)
             update_time = time.perf_counter() - update_t
             cumulative["update_time"] += update_time
 
@@ -507,6 +540,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     )
 
             self._maybe_save_periodic_checkpoint(previous_step)
+            previous_iteration_start = previous_step
 
         if self.checkpoint_dir is not None and self.save_final_checkpoint:
             self._save_checkpoint("final.pt")

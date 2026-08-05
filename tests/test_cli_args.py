@@ -756,6 +756,37 @@ def test_rgbd_wsrl_defaults_match_existing_cli() -> None:
     assert args.gamma == 0.99
 
 
+def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
+    """Regression for the codex review's claim #6: these 8 fields were added
+    to the shared CQLOff2OnArgs, so WSRLOff2OnArgs exposed CLI flags that
+    build_wsrl() silently never consumes. They must live only on
+    CalQLOff2OnArgs. offline_eval_freq/online_eval_freq stay shared since
+    _runner.py applies those generically regardless of algorithm.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from rl_garden.training.off2on.calql import CalQLOff2OnArgs
+    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+
+    calql_only_fields = {
+        "hidden_dim",
+        "actor_hidden_layers",
+        "critic_hidden_layers",
+        "policy_log_std_multiplier",
+        "policy_log_std_offset",
+        "bootstrap_at_done",
+        "online_episodes_per_iteration",
+        "num_eval_episodes",
+    }
+    wsrl_fields = {f.name for f in dataclass_fields(WSRLOff2OnArgs)}
+    calql_fields = {f.name for f in dataclass_fields(CalQLOff2OnArgs)}
+
+    assert calql_only_fields.isdisjoint(wsrl_fields)
+    assert calql_only_fields <= calql_fields
+    assert {"offline_eval_freq", "online_eval_freq"} <= wsrl_fields
+    assert {"offline_eval_freq", "online_eval_freq"} <= calql_fields
+
+
 @dataclass
 class _BadPlainConvArgs:
     encoder: str = "plain_conv"

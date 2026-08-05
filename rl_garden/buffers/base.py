@@ -49,6 +49,16 @@ class BaseReplayBuffer(ABC):
         """Total transitions available across all envs."""
         return self.size * self.num_envs
 
+    @property
+    def sampleable_size(self) -> int:
+        """Total transitions currently eligible for sampling.
+
+        Defaults to ``len(self)``; buffers that can hold not-yet-sampleable
+        transitions (e.g. an MC buffer's incomplete trailing trajectories)
+        override this.
+        """
+        return len(self)
+
     def _advance(self) -> None:
         """Advance the circular write cursor, wrapping when the per-env buffer fills."""
         self.pos += 1

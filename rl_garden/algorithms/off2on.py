@@ -154,6 +154,18 @@ class Off2OnReplayMixin:
         self.replay_buffer.full = False
         if hasattr(self.replay_buffer, "_mc_table"):
             self.replay_buffer._mc_table = None
+        # Mirror checkpoint.py's load_replay_buffer_state_dict: every cache
+        # derived from position/validity state must be invalidated alongside
+        # pos/full, not just _mc_table, or a caller reading before the next
+        # add() would see stale pre-clear indices/counts/permutation.
+        if hasattr(self.replay_buffer, "_valid_table"):
+            self.replay_buffer._valid_table = None
+        if hasattr(self.replay_buffer, "_valid_indices_cache"):
+            self.replay_buffer._valid_indices_cache = None
+        if hasattr(self.replay_buffer, "_sampleable_size_cache"):
+            self.replay_buffer._sampleable_size_cache = None
+        if hasattr(self.replay_buffer, "_perm"):
+            self.replay_buffer._perm = None
         return previous_len
 
     def _sample_batch(self, batch_size: int):
@@ -171,25 +183,32 @@ class Off2OnReplayMixin:
     def _sample_train_batch(self, batch_size: int):
         return self._sample_batch(batch_size)
 
-    def _resolve_offline_data_ratio(self) -> float:
+    def _resolve_offline_data_ratio(self, online_size: Optional[int] = None) -> float:
         """Resolve ``offline_data_ratio`` to a numeric fraction.
 
         ``"auto"`` reproduces the official Cal-QL formula
         (``offline_size / (offline_size + online_size)``), so the offline
         share decays automatically as online data accumulates, instead of a
-        fixed constant.
+        fixed constant. ``online_size`` lets a caller that already has it
+        (``_sample_mixed_batch``) avoid a second ``sampleable_size`` read.
         """
         if self.offline_data_ratio == "auto":
-            offline_n = len(self.offline_replay_buffer)
-            online_n = len(self.replay_buffer)
+            offline_n = self.offline_replay_buffer.sampleable_size
+            online_n = (
+                online_size if online_size is not None else self.replay_buffer.sampleable_size
+            )
             total = offline_n + online_n
             return offline_n / total if total > 0 else 1.0
         return self.offline_data_ratio
 
     def _sample_mixed_batch(self, batch_size: int):
-        ratio = self._resolve_offline_data_ratio()
-        n_online = batch_size - int(round(batch_size * ratio))
-        online_size = len(self.replay_buffer)
+        online_size = self.replay_buffer.sampleable_size
+        ratio = self._resolve_offline_data_ratio(online_size)
+        # Floor, matching the official Cal-QL JAX split
+        # (`int(batch_size * ratio)`, conservative_sac_main.py:225) rather than
+        # rounding to nearest -- a global behavior change, but at typical
+        # batch sizes the two differ by at most one sample.
+        n_online = batch_size - int(batch_size * ratio)
         if online_size == 0:
             return self.offline_replay_buffer.sample(batch_size)
         n_offline = batch_size - n_online

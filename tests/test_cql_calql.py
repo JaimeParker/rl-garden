@@ -59,13 +59,15 @@ def _offline_kwargs() -> dict[str, object]:
 
 
 def _fill(agent, steps: int = 8) -> None:
+    # Marks the final step done=True so the run is one complete trajectory --
+    # the MC buffer only samples/counts complete trajectories.
     env = agent.env
-    for _ in range(steps):
+    for step in range(steps):
         obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
         next_obs = torch.randn_like(obs)
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
-        dones = torch.zeros(env.num_envs)
+        dones = torch.ones(env.num_envs) if step == steps - 1 else torch.zeros(env.num_envs)
         agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
 
@@ -92,8 +94,10 @@ def _dict_offline_env(num_envs: int = 2) -> OfflineEnvSpec:
 
 
 def _fill_dict(agent, steps: int = 4) -> None:
+    # Marks the final step done=True so the run is one complete trajectory --
+    # the MC buffer only samples/counts complete trajectories.
     env = agent.env
-    for _ in range(steps):
+    for step in range(steps):
         obs = {
             "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
@@ -104,7 +108,7 @@ def _fill_dict(agent, steps: int = 4) -> None:
         }
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
-        dones = torch.zeros(env.num_envs)
+        dones = torch.ones(env.num_envs) if step == steps - 1 else torch.zeros(env.num_envs)
         agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
 

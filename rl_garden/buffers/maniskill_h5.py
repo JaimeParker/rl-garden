@@ -241,4 +241,7 @@ def load_maniskill_h5_to_replay_buffer(
         dones_all,
         mc_all,
         success_all,
+        # `_transition_done` already ORs every terminal-like field (or defaults
+        # the last step True), so it already equals the true episode boundary.
+        episode_ends=dones_all.bool(),
     )

@@ -66,7 +66,7 @@ entrypoints to a specific simulator.
 - `tests/` — unit tests and accelerator/backend integration smoke tests.
 - `docs/` — public documentation, split into `guides/` (operational how-to),
   `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
-  notes). `docs/superpowers/` is skill-owned and out of scope here.
+  notes).
 - `3rd_party/` — reference submodules and external clones; do not edit unless the
   user explicitly requests it.
 

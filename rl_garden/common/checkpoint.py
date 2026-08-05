@@ -217,6 +217,13 @@ def replay_buffer_state_dict(buffer: BaseReplayBuffer) -> dict[str, Any]:
         state["gamma"] = float(buffer.gamma)
     if hasattr(buffer, "_mc_table"):
         state["mc_table"] = buffer._mc_table
+    if hasattr(buffer, "_episode_end"):
+        state["episode_end"] = buffer._episode_end
+    if hasattr(buffer, "_externally_valid"):
+        state["externally_valid"] = buffer._externally_valid
+        state["external_mc"] = buffer._external_mc
+    if hasattr(buffer, "_step_success") and buffer._step_success is not None:
+        state["step_success"] = buffer._step_success
     return state
 
 
@@ -275,6 +282,47 @@ def load_replay_buffer_state_dict(
     if hasattr(buffer, "_mc_table"):
         mc_table = state.get("mc_table")
         buffer._mc_table = None if mc_table is None else mc_table.to(storage_device)
+    if hasattr(buffer, "_episode_end"):
+        # Missing on checkpoints saved before episode_end tracking existed;
+        # default to `dones` (already loaded above), matching add()'s own
+        # fallback for rows added without an explicit episode_end.
+        episode_end = state.get("episode_end")
+        buffer._episode_end = (
+            episode_end.to(storage_device) if episode_end is not None
+            else buffer.dones.clone().bool()
+        )
+        buffer._valid_table = None
+    if hasattr(buffer, "_externally_valid"):
+        externally_valid = state.get("externally_valid")
+        external_mc = state.get("external_mc")
+        if externally_valid is not None and external_mc is not None:
+            buffer._externally_valid = externally_valid.to(storage_device)
+            buffer._external_mc = external_mc.to(storage_device)
+        elif mc_table is not None:
+            # Checkpoint predates this field but has a legacy whole-table
+            # mc_table: trust it wholesale rather than falling back to
+            # `dones` for episode_end above, which can be all-False (e.g.
+            # bootstrap_at_done="always") and would otherwise make every
+            # restored row look like an incomplete trailing trajectory.
+            buffer._externally_valid = torch.ones_like(buffer.dones, dtype=torch.bool)
+            buffer._external_mc = mc_table.to(storage_device)
+        else:
+            buffer._externally_valid = torch.zeros_like(buffer.dones, dtype=torch.bool)
+            buffer._external_mc = torch.zeros_like(buffer.rewards)
+    if getattr(buffer, "_step_success", None) is not None:
+        step_success = state.get("step_success")
+        if step_success is not None:
+            buffer._step_success = step_success.to(storage_device)
+    # Any cache derived from the buffer's position/validity state (not just
+    # _valid_table, reset above) must be invalidated after a load -- stale
+    # cached indices/counts/permutation from before the load would otherwise
+    # keep being served instead of reflecting the just-loaded state.
+    if hasattr(buffer, "_valid_indices_cache"):
+        buffer._valid_indices_cache = None
+    if hasattr(buffer, "_sampleable_size_cache"):
+        buffer._sampleable_size_cache = None
+    if hasattr(buffer, "_perm"):
+        buffer._perm = None
 
 
 def save_replay_buffer_file(path: str | Path, buffer: BaseReplayBuffer) -> Path:

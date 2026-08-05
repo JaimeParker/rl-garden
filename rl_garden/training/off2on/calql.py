@@ -9,7 +9,7 @@ keeps the CQL/Cal-QL regularizer online — matching Nakamoto et al. 2023
 `wsrl` entrypoint.
 """
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
@@ -36,6 +36,17 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     offline_data_ratio: float | str = "auto"
     online_use_cql_loss: bool = True
     online_cql_alpha: float = 5.0  # same as cql_alpha default: "unchanged" going online
+    # Official Cal-QL JAX parity: network shape and policy log-std transform.
+    # Cal-QL-only: build_wsrl() doesn't consume these, so they don't belong
+    # on the shared CQLOff2OnArgs (WSRL's CLI would silently ignore them).
+    hidden_dim: int = 256
+    actor_hidden_layers: int = 2
+    critic_hidden_layers: int = 2
+    policy_log_std_multiplier: Optional[float] = None
+    policy_log_std_offset: Optional[float] = None
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    online_episodes_per_iteration: Optional[int] = None
+    num_eval_episodes: Optional[int] = None
 
 
 def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
@@ -53,6 +64,11 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
+    net_arch = {
+        "pi": [args.hidden_dim] * args.actor_hidden_layers,
+        "qf": [args.hidden_dim] * args.critic_hidden_layers,
+    }
+
     agent = Off2OnCalQL(
         env=env,
         eval_env=eval_env,
@@ -64,6 +80,8 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         tau=args.tau,
         training_freq=args.training_freq,
         utd=args.utd,
+        bootstrap_at_done=args.bootstrap_at_done,
+        online_episodes_per_iteration=args.online_episodes_per_iteration,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
         alpha_lr=args.alpha_lr,
@@ -109,6 +127,9 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
+        net_arch=net_arch,
+        policy_log_std_multiplier=args.policy_log_std_multiplier,
+        policy_log_std_offset=args.policy_log_std_offset,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
         initial_training_phase=initial_training_phase_from_args(args),
@@ -122,6 +143,7 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         log_freq=args.log_freq,
         eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=args.num_eval_episodes,
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,

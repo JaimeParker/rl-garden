@@ -163,8 +163,9 @@ class TestWSRLDictTraining:
         assert wsrlrgbd_agent.replay_buffer.pos == 1
 
     def test_sample_dict_batch(self, wsrlrgbd_agent):
-        # Add some transitions
-        for _ in range(10):
+        # Add some transitions, closing the trajectory on the last step -- the
+        # MC buffer only samples complete trajectories.
+        for step in range(10):
             obs = {
                 "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
                 "state": torch.randn(2, 4),
@@ -175,7 +176,7 @@ class TestWSRLDictTraining:
             }
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
-            dones = torch.zeros(2)
+            dones = torch.ones(2) if step == 9 else torch.zeros(2)
             wsrlrgbd_agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
         # Sample batch
@@ -198,8 +199,9 @@ class TestWSRLDictTraining:
         assert log_prob.shape == (4, 1)
 
     def test_train_step_with_dict_obs(self, wsrlrgbd_agent):
-        # Add enough data to replay buffer
-        for _ in range(20):
+        # Add enough data to replay buffer, closing the trajectory on the last
+        # step -- the MC buffer only samples complete trajectories.
+        for step in range(20):
             obs = {
                 "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
                 "state": torch.randn(2, 4),
@@ -210,7 +212,7 @@ class TestWSRLDictTraining:
             }
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
-            dones = torch.zeros(2)
+            dones = torch.ones(2) if step == 19 else torch.zeros(2)
             wsrlrgbd_agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
         # Run training step

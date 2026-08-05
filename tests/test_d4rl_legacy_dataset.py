@@ -95,9 +95,11 @@ def test_legacy_loader_populates_replay_mc_table(monkeypatch):
 
     assert loaded == 5
     assert env.closed
-    assert buffer._mc_table is not None
+    # Loader-provided MC values are stored as _external_mc (trusted as-is,
+    # not derived from _build_mc_table()'s own recursion) -- see mc_buffer.py.
+    assert buffer._externally_valid[:5, 0].all()
     torch.testing.assert_close(
-        buffer._mc_table[:5, 0],
+        buffer._external_mc[:5, 0],
         torch.tensor([-500.0, -500.0, -5.0495, -0.05, 5.0]),
     )
 

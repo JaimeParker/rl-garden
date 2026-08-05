@@ -504,6 +504,22 @@ class _QHead(nn.Module):
         )
         self.head = nn.Linear(trunk_dim, 1)
 
+        if kernel_init == "orthogonal_near_zero_output":
+            # _apply_kernel_init (called inside _build_trunk) only sees the
+            # trunk, so it wrongly treats the trunk's last hidden Linear as
+            # the "output" and gives it the near-zero gain -- the real output
+            # head (self.head) is built outside the trunk and gets no init
+            # at all. Re-init both explicitly, mirroring
+            # SquashedGaussianActor's analogous fc_mean/fc_logstd pass.
+            for module in self.trunk.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+            nn.init.orthogonal_(self.head.weight, gain=1e-2)
+            if self.head.bias is not None:
+                nn.init.zeros_(self.head.bias)
+
     def forward(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         x = torch.cat([features, actions], dim=-1)
         return self.head(self.trunk(x))

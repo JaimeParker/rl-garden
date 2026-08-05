@@ -114,6 +114,13 @@ def _official_calql_antmaze_dataset(
                 gamma=gamma,
                 negative_reward=reward_bias,
             )
+            # True episode boundary (this episode's own last stored step),
+            # independent of `terminals` -- an episode closed by `final_timestep`
+            # (timeout) has `terminals[-1] == False` but is still a real MC
+            # recursion boundary.
+            episode_end = np.zeros_like(terminals)
+            episode_end[-1] = 1.0
+            episode["episode_end"] = episode_end
             episodes.append(episode)
             current = defaultdict(list)
             episode_step = 0
@@ -130,6 +137,7 @@ def _official_calql_antmaze_dataset(
         "rewards",
         "terminals",
         "mc_returns",
+        "episode_end",
     )
     return {
         key: np.concatenate([episode[key] for episode in episodes], axis=0).astype(
@@ -179,4 +187,5 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
         torch.as_tensor(dataset["terminals"], device=device),
         torch.as_tensor(dataset["mc_returns"], device=device),
         successes,
+        episode_ends=torch.as_tensor(dataset["episode_end"], device=device).bool(),
     )

@@ -57,7 +57,13 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     actor_dropout_rate: Optional[float] = None
     critic_dropout_rate: Optional[float] = None
     kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        Literal[
+            "xavier_uniform",
+            "xavier_normal",
+            "orthogonal",
+            "kaiming_uniform",
+            "orthogonal_near_zero_output",
+        ]
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"
@@ -103,6 +109,10 @@ class CQLOff2OnArgs:
     sparse_reward_mc: bool = False
     sparse_negative_reward: float = 0.0
     success_threshold: float = 0.5
+    # Phase-specific eval cadences: generic across CQL/Cal-QL/WSRL off2on --
+    # _runner.py applies these regardless of which algorithm is running.
+    offline_eval_freq: Optional[int] = None
+    online_eval_freq: Optional[int] = None
 
 
 @dataclass

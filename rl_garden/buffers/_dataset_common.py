@@ -153,7 +153,13 @@ def _add_flat_transitions(
     dones: torch.Tensor,
     mc_returns: torch.Tensor | None = None,
     successes: torch.Tensor | None = None,
+    episode_ends: torch.Tensor | None = None,
 ) -> int:
+    """``episode_ends`` marks each episode's true final transition (termination
+    *or* truncation), independent of ``dones`` -- callers whose ``dones``
+    already represents the true boundary (e.g. ManiSkill H5, which ORs every
+    terminal-like field) can pass the same tensor for both.
+    """
     total = actions.shape[0]
     usable = (total // buffer.num_envs) * buffer.num_envs
     if usable <= 0:
@@ -162,8 +168,11 @@ def _add_flat_transitions(
         )
 
     mc_table = None
+    written_mask = None
     if mc_returns is not None and hasattr(buffer, "_mc_table"):
         mc_table = torch.zeros_like(buffer.rewards)
+        written_mask = torch.zeros_like(buffer.rewards, dtype=torch.bool)
+    has_episode_end = episode_ends is not None and hasattr(buffer, "_episode_end")
 
     for start in range(0, usable, buffer.num_envs):
         end = start + buffer.num_envs
@@ -171,6 +180,8 @@ def _add_flat_transitions(
         add_kwargs = {}
         if successes is not None:
             add_kwargs["success"] = successes[start:end]
+        if has_episode_end:
+            add_kwargs["episode_end"] = episode_ends[start:end]
         buffer.add(
             _slice(obs, start, end),
             _slice(next_obs, start, end),
@@ -181,7 +192,20 @@ def _add_flat_transitions(
         )
         if mc_table is not None:
             mc_table[pos] = mc_returns[start:end].to(buffer.storage_device)
+            written_mask[pos] = True
 
     if mc_table is not None:
-        buffer._mc_table = mc_table
+        # Loader-provided MC values are trusted as-is (see mc_buffer.py's
+        # _externally_valid mechanism): the (T, N) grid these chunks land in
+        # is an artifact of load order, not a real per-column trajectory
+        # stream, so this buffer must not try to recompute them via its own
+        # backward-sweep recursion. add() already cleared _externally_valid
+        # at each written position; restore it here, after the full load, so
+        # it isn't immediately wiped by the loop's own add() calls.
+        buffer._external_mc = torch.where(written_mask, mc_table, buffer._external_mc)
+        buffer._externally_valid = buffer._externally_valid | written_mask
+        buffer._mc_table = None
+        buffer._valid_table = None
+        buffer._valid_indices_cache = None
+        buffer._sampleable_size_cache = None
     return usable
