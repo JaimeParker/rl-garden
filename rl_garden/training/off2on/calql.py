@@ -46,6 +46,7 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     policy_log_std_offset: Optional[float] = None
     bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
     online_episodes_per_iteration: Optional[int] = None
+    stats_window_size: Optional[int] = None
     num_eval_episodes: Optional[int] = None
 
 
@@ -82,6 +83,7 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         utd=args.utd,
         bootstrap_at_done=args.bootstrap_at_done,
         online_episodes_per_iteration=args.online_episodes_per_iteration,
+        stats_window_size=args.stats_window_size,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
         alpha_lr=args.alpha_lr,

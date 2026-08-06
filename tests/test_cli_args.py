@@ -776,6 +776,7 @@ def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
         "policy_log_std_offset",
         "bootstrap_at_done",
         "online_episodes_per_iteration",
+        "stats_window_size",
         "num_eval_episodes",
     }
     wsrl_fields = {f.name for f in dataclass_fields(WSRLOff2OnArgs)}
@@ -785,6 +786,31 @@ def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
     assert calql_only_fields <= calql_fields
     assert {"offline_eval_freq", "online_eval_freq"} <= wsrl_fields
     assert {"offline_eval_freq", "online_eval_freq"} <= calql_fields
+
+
+def test_build_calql_forwards_stats_window_size_from_args_to_agent() -> None:
+    """Regression: a CalQLOff2OnArgs field declared but not forwarded inside
+    build_calql would silently no-op from the CLI -- exactly the gap that
+    stats_window_size itself was previously missing at the Off2OnCalQL
+    constructor level. state obs_mode keeps this a plain-args-forwarding
+    check, not a vision-encoder construction test."""
+    from unittest.mock import MagicMock
+
+    from gymnasium import spaces
+
+    from rl_garden.training.off2on.calql import CalQLOff2OnArgs, build_calql
+
+    env = MagicMock()
+    env.num_envs = 2
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+
+    args = CalQLOff2OnArgs(
+        obs_mode="state", buffer_device="cpu", stats_window_size=10, hidden_dim=8
+    )
+    agent = build_calql(args, env, None, None, None)
+
+    assert agent.stats_window_size == 10
 
 
 @dataclass

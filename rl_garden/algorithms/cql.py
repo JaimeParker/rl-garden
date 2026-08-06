@@ -854,6 +854,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         utd: float = 1.0,
         bootstrap_at_done: str = "always",
         online_episodes_per_iteration: Optional[int] = None,
+        stats_window_size: Optional[int] = None,
         # Optimizers
         policy_lr: float = 1e-4,
         q_lr: float = 3e-4,
@@ -941,6 +942,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
             online_episodes_per_iteration=online_episodes_per_iteration,
+            stats_window_size=stats_window_size,
             seed=seed,
             device=device,
             logger=logger,

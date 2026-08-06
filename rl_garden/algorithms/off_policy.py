@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 from abc import abstractmethod
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Optional
 
@@ -57,6 +57,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
         online_episodes_per_iteration: Optional[int] = None,
+        stats_window_size: Optional[int] = None,
     ) -> None:
         super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
         self.buffer_size = buffer_size
@@ -86,6 +87,15 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.num_envs = env.num_envs
         self.steps_per_env = max(1, training_freq // self.num_envs)
         self.grad_steps_per_iteration = max(1, int(training_freq * utd))
+
+        # None (default) keeps return=/success_at_end= per-iteration-only; a window
+        # adds separate return_w{N}= fields. Not persisted across checkpoints.
+        self.stats_window_size = stats_window_size
+        self._episode_metric_windows: Optional[dict[str, deque]] = (
+            defaultdict(lambda: deque(maxlen=self.stats_window_size))
+            if stats_window_size is not None
+            else None
+        )
 
     # --- subclass hooks ---
 
@@ -381,8 +391,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         flush=True,
                     )
 
-            # Fixed-step by default; in episode_mode, simultaneous episode
-            # completions across envs can overshoot the per-iteration target.
+            # Rollout actions reach the env and the buffer -- no dropout here.
+            self.policy.eval()
             rollout_t = time.perf_counter()
             rollout_reward_sum = 0.0
             rollout_reward_count = 0
@@ -394,6 +404,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     self.num_envs, dtype=torch.long, device=self.device
                 )
             substep = 0
+            # Fixed-step by default; in episode_mode, simultaneous episode
+            # completions across envs can overshoot the per-iteration target.
             while True:
                 if not episode_mode and substep >= self.steps_per_env:
                     break
@@ -426,6 +438,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         mean_value = float(done_values.float().mean().item())
                         self._log_rollout_metric(k, mean_value, self._global_step)
                         rollout_episode_metrics[k].append(mean_value)
+                        if self._episode_metric_windows is not None:
+                            self._episode_metric_windows[k].extend(done_values.tolist())
                 elif "final_info" in infos:
                     fi = infos["final_info"]
                     done_mask = infos["_final_info"]
@@ -436,6 +450,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         rollout_episode_metrics[k].append(
                             float(done_values.float().mean().item())
                         )
+                        if self._episode_metric_windows is not None:
+                            self._episode_metric_windows[k].extend(done_values.tolist())
 
                 replay_kwargs = self._replay_buffer_add_kwargs(
                     action_context,
@@ -457,6 +473,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     episodes_completed += (terminations | truncations).long()
                     if bool((episodes_completed >= self.online_episodes_per_iteration).all()):
                         break
+            self.policy.train()
             rollout_time = time.perf_counter() - rollout_t
             cumulative["rollout_time"] += rollout_time
             rollout_reward_mean = (
@@ -472,6 +489,23 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             rollout_return = self._first_metric(episode_means, ("return",))
             rollout_success = self._first_metric(
                 episode_means, ("success_at_end", "success_once")
+            )
+            window_return = window_success = None
+            if self._episode_metric_windows is not None:
+                window_means = {
+                    k: float(sum(v) / len(v))
+                    for k, v in self._episode_metric_windows.items()
+                    if len(v) > 0
+                }
+                window_return = self._first_metric(window_means, ("return",))
+                window_success = self._first_metric(
+                    window_means, ("success_at_end", "success_once")
+                )
+            stats_window_extra = (
+                f" return_w{self.stats_window_size}={self._fmt_metric(window_return)} "
+                f"success_w{self.stats_window_size}={self._fmt_metric(window_success)}"
+                if window_return is not None
+                else ""
             )
             should_log = (
                 self.log_freq > 0
@@ -494,7 +528,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         f"reward={self._fmt_metric(rollout_reward_mean)} "
                         f"return={self._fmt_metric(rollout_return)} "
                         f"success_at_end={self._fmt_metric(rollout_success)} "
-                        f"fps={self._fmt_metric(rollout_fps)}",
+                        f"fps={self._fmt_metric(rollout_fps)}"
+                        f"{stats_window_extra}",
                         flush=True,
                     )
                 previous_iteration_start = previous_step
@@ -535,7 +570,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         f"reward={self._fmt_metric(rollout_reward_mean)} "
                         f"return={self._fmt_metric(rollout_return)} "
                         f"success_at_end={self._fmt_metric(rollout_success)} "
-                        f"fps={self._fmt_metric(rollout_fps)}",
+                        f"fps={self._fmt_metric(rollout_fps)}"
+                        f"{stats_window_extra}",
                         flush=True,
                     )
 

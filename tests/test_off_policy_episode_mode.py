@@ -6,6 +6,8 @@ These tests exercise it through `Off2OnCalQL`, the first algorithm wired to
 expose it, but the behavior under test lives entirely in
 `OffPolicyAlgorithm.learn()`.
 """
+import re
+
 import torch
 from gymnasium import spaces
 
@@ -164,6 +166,149 @@ def test_episode_mode_eval_fires_when_boundary_is_outside_a_training_freq_window
     # Iteration 1 spans [0, 20) and crosses the eval_freq=15 boundary; that
     # crossing is detected at the top of iteration 2 (global_step=20 there).
     assert eval_calls == [20]
+
+
+def test_policy_is_in_eval_mode_during_rollout_collection(monkeypatch):
+    """Regression: rollout action selection never toggled the policy to eval
+    mode -- policy.eval()/.train() only appeared in BaseAlgorithm._evaluate()
+    (the eval-env loop), never around OffPolicyAlgorithm.learn()'s rollout
+    substep loop. If actor_dropout_rate/critic_dropout_rate were set, the
+    actions used for real env interaction (and stored in the replay buffer)
+    would be computed with dropout still active. learn() now brackets the
+    rollout substep loop with policy.eval()/.train(), mirroring the existing
+    _evaluate() pattern."""
+    env = _ScriptedVecEnv(episode_len=[1_000, 1_000])  # never completes in this test
+    agent = _agent(env)
+    _stub_train(agent, monkeypatch)
+
+    training_mode_during_rollout: list[bool] = []
+    original = agent._rollout_action
+
+    def spy(obs, learning_has_started):
+        training_mode_during_rollout.append(agent.policy.training)
+        return original(obs, learning_has_started)
+
+    monkeypatch.setattr(agent, "_rollout_action", spy)
+
+    assert agent.policy.training is True  # freshly constructed nn.Module default
+
+    total = agent.num_envs * agent.steps_per_env * 3
+    agent.learn(total_timesteps=total)
+
+    assert training_mode_during_rollout
+    assert all(mode is False for mode in training_mode_during_rollout)
+    assert agent.policy.training is True  # restored before/after train()
+
+
+class _ScriptedVecEnvWithEpisodeInfo(_ScriptedVecEnv):
+    """Like _ScriptedVecEnv, but also populates the Gymnasium vector-env
+    final_info/_final_info convention learn() reads for episode metrics.
+
+    `reward_per_env`, if given, overrides the per-env reward value reported
+    as the episode "return" (the base class always uses a constant 1.0 for
+    every env, which can't distinguish which env a given completion came
+    from -- some tests need per-env-distinct values for that)."""
+
+    def __init__(self, episode_len: list[int], reward_per_env: list[float] | None = None) -> None:
+        super().__init__(episode_len)
+        self.reward_per_env = (
+            torch.tensor(reward_per_env, dtype=torch.float32)
+            if reward_per_env is not None
+            else None
+        )
+
+    def step(self, actions):
+        obs, rewards, terminations, truncations, _ = super().step(actions)
+        if self.reward_per_env is not None:
+            rewards = self.reward_per_env.clone()
+        done_mask = terminations | truncations
+        infos = {}
+        if bool(done_mask.any()):
+            infos["_final_info"] = done_mask
+            infos["final_info"] = {"episode": {"return": rewards.clone()}}
+        return obs, rewards, terminations, truncations, infos
+
+
+def test_stats_window_size_none_preserves_per_iteration_nan(monkeypatch, capsys):
+    """stats_window_size defaults to None: return=/success_at_end= must keep
+    their original per-iteration-only meaning (nan when the iteration
+    completed zero episodes), unchanged from pre-rolling-window behavior, and
+    no return_w{N}=/success_w{N}= field should be printed at all.
+
+    episode_len=20, training_freq=4 (the _agent default), num_envs=1 ->
+    steps_per_env=4, so global_step advances by 4 every iteration and the
+    episode (length 20) completes only once every 5 iterations. The last of
+    7 iterations (steps 25-28) completes zero episodes, so its return= must
+    be nan even though an earlier iteration did complete one.
+    """
+    episode_len = 20
+    env = _ScriptedVecEnvWithEpisodeInfo(episode_len=[episode_len])
+    agent = _agent(env, log_freq=1)
+    assert agent.stats_window_size is None
+    _stub_train(agent, monkeypatch)
+
+    agent.learn(total_timesteps=4 * 7)
+
+    out = capsys.readouterr().out
+    train_lines = [line for line in out.splitlines() if line.startswith("[train]")]
+    assert len(train_lines) == 7
+    last_line = train_lines[-1]
+    assert "step=28/28" in last_line
+    match = re.search(r"return=(\S+)", last_line)
+    assert match is not None
+    assert match.group(1) == "nan"
+    assert "return_w" not in last_line
+    assert "success_w" not in last_line
+
+
+def test_stats_window_size_set_adds_separate_per_episode_weighted_field(monkeypatch, capsys):
+    """With stats_window_size set, a separate return_w{N}= field must appear
+    (even on an iteration whose own return= is nan) and must be a genuine
+    per-episode mean -- not skewed toward iterations where more envs happened
+    to finish simultaneously in the same completion batch.
+
+    Two envs: env 0 has episode_len=2 (finishes every iteration, alone), env
+    1 has episode_len=8 (finishes once, together with env 0, at iteration 4).
+    reward_per_env gives env 0's completions a distinct "return" marker
+    (2.0) from env 1's (8.0), so a batch-mean-weighted window (the old bug)
+    and a true per-episode-weighted window produce different numbers,
+    letting the test distinguish them.
+    """
+    env = _ScriptedVecEnvWithEpisodeInfo(episode_len=[2, 8], reward_per_env=[2.0, 8.0])
+    agent = _agent(env, log_freq=1, stats_window_size=10)
+    assert agent.stats_window_size == 10
+    _stub_train(agent, monkeypatch)
+
+    # training_freq=4, num_envs=2 -> steps_per_env=2, so 4 iterations cover
+    # global_step 0->8: env 0 finishes at iterations 1,2,3,4 (4 completions,
+    # each alone); env 1 finishes only at iteration 4 (alongside env 0).
+    agent.learn(total_timesteps=4 * 4)
+
+    out = capsys.readouterr().out
+    train_lines = [line for line in out.splitlines() if line.startswith("[train]")]
+    assert len(train_lines) == 4
+
+    # Iteration 3 (global_step 6->8 is iteration 4; iteration 3 is
+    # global_step 4->6) completes zero episodes on its own for env 1, but
+    # env 0 finishes at every iteration boundary -- pick the first line to
+    # confirm the window field is present independent of that iteration's
+    # own completions.
+    first_line = train_lines[0]
+    match = re.search(r"return_w10=(\S+)", first_line)
+    assert match is not None
+    assert match.group(1) != "nan"
+
+    # Five episode completions total: env 0 finishes 4 times (return=2.0
+    # each) and env 1 finishes once (return=8.0), all within the window
+    # (maxlen=10). True per-episode mean: (4*2.0 + 1*8.0) / 5 = 3.2.
+    # A batch-mean-weighted window (the old bug) would instead average one
+    # entry per completion *batch* -- 3 solo-env-0 batches (2.0 each) and 1
+    # joint batch containing both env 0 and env 1 ((2.0+8.0)/2=5.0) -> a
+    # batch-weighted mean of (3*2.0 + 1*5.0) / 4 = 2.75, a different value.
+    last_line = train_lines[-1]
+    match = re.search(r"return_w10=(\S+)", last_line)
+    assert match is not None
+    assert abs(float(match.group(1)) - 3.2) < 1e-6
 
 
 def test_learning_has_started_seeded_from_global_step_not_always_false(monkeypatch):
