@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import importlib
 import logging
 import os
@@ -11,7 +12,7 @@ import sys
 import types
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 
@@ -110,8 +111,6 @@ class RoboTwinTaskAdapter:
                 and self._completed_resets % clear_cache_freq == 0
             )
         )
-        self.task = make_task(self.task_name, self.cfg.robotwin_root)
-        self._joint_target_fk = None
         args = dict(self.task_args)
         args.setdefault(
             "step_lim", self.cfg.step_lim or self.cfg.max_episode_steps or 400
@@ -174,12 +173,16 @@ class RoboTwinTaskAdapter:
         trial_seed = self.env_seed
         retry_count = 0
         while True:
+            # A failed setup may leave a partially initialized SAPIEN object graph.
+            # Never carry that task instance into the next seed attempt.
+            self.task = make_task(self.task_name, self.cfg.robotwin_root)
+            self._joint_target_fk = None
             try:
                 with robotwin_workdir(self.cfg.robotwin_root):
                     self.task.setup_demo(now_ep_num=trial_seed, seed=trial_seed, **args)
-                break
             except Exception as exc:
                 if type(exc).__name__ != "UnStableError":
+                    self._dispose_current_task(clear_cache=True, seed=trial_seed)
                     raise
                 retry_count += 1
                 LOGGER.warning(
@@ -191,7 +194,8 @@ class RoboTwinTaskAdapter:
                     trial_seed + 1,
                     exc,
                 )
-                self.task.close_env(clear_cache=True)
+                exc.__traceback__ = None
+                self._dispose_current_task(clear_cache=True, seed=trial_seed)
                 if retry_count % UNSTABLE_RETRY_WARNING_INTERVAL == 0:
                     LOGGER.warning(
                         "RoboTwin reset is still retrying after %s unstable seeds; "
@@ -202,26 +206,34 @@ class RoboTwinTaskAdapter:
                         trial_seed,
                     )
                 trial_seed += 1
+                continue
+            break
+
         self.env_seed = trial_seed
-        self.task.step_lim = int(args["step_lim"])
-        self.task.take_action_cnt = 0
-        self.task.run_steps = 0
-        self.task.reward_step = 0
-        self.task.eval_success = False
-        if self.cfg.profile_timing:
-            from envs.utils.step_timer import StepTimer
-            self.task._step_timer = StepTimer(
-                enabled=True, log_interval=self.cfg.profile_interval
-            )
-        self._install_helpers()
-        self._install_task_compatibility()
-        if self.cfg.reward_mode == "dense":
-            build_task_reward(self.task_name, self.task)
-        self.elapsed_steps = 0
-        self.last_dense_reward = 0.0
-        obs = self.get_obs()
-        obs["_env_seed"] = self.env_seed
-        self._start_eval_video_if_needed(obs.get("rgb"))
+        try:
+            self.task.step_lim = int(args["step_lim"])
+            self.task.take_action_cnt = 0
+            self.task.run_steps = 0
+            self.task.reward_step = 0
+            self.task.eval_success = False
+            if self.cfg.profile_timing:
+                from envs.utils.step_timer import StepTimer
+
+                self.task._step_timer = StepTimer(
+                    enabled=True, log_interval=self.cfg.profile_interval
+                )
+            self._install_helpers()
+            self._install_task_compatibility()
+            if self.cfg.reward_mode == "dense":
+                build_task_reward(self.task_name, self.task)
+            self.elapsed_steps = 0
+            self.last_dense_reward = 0.0
+            obs = self.get_obs()
+            obs["_env_seed"] = self.env_seed
+            self._start_eval_video_if_needed(obs.get("rgb"))
+        except Exception:
+            self._dispose_current_task(clear_cache=True, seed=trial_seed)
+            raise
         self._completed_resets += 1
         return obs
 
@@ -271,11 +283,66 @@ class RoboTwinTaskAdapter:
         return self._joint_target_fk.transform(action)
 
     def close(self, clear_cache: bool = True) -> None:
-        if self.task is not None:
-            self._stop_eval_video_if_needed()
-            self.task.close_env(clear_cache=clear_cache)
+        self._dispose_current_task(clear_cache=clear_cache)
+
+    def _dispose_current_task(
+        self, clear_cache: bool = True, seed: Optional[int] = None
+    ) -> None:
+        """Best-effort release of every task-owned simulator resource."""
+
+        task = self.task
+        self._joint_target_fk = None
+        if task is None:
+            return
+
+        cleanup_errors: list[str] = []
+
+        def run_cleanup(stage: str, callback: Callable[[], Any]) -> None:
+            try:
+                callback()
+            except Exception as exc:
+                cleanup_errors.append(f"{stage}={type(exc).__name__}: {exc}")
+
+        try:
+            run_cleanup("eval_video_stop", self._stop_eval_video_if_needed)
+            run_cleanup(
+                "eval_video_release",
+                lambda: _clear_task_attr(task, "eval_video_ffmpeg"),
+            )
+            run_cleanup("reward_release", lambda: _clear_task_attr(task, "reward"))
+            run_cleanup(
+                "helper_release", lambda: _remove_adapter_is_in_hand(task)
+            )
+            run_cleanup("viewer_release", lambda: _close_task_viewer(task))
+            for attr in ("cameras", "robot", "scene", "renderer", "engine"):
+                run_cleanup(
+                    f"{attr}_release",
+                    lambda attr=attr: _clear_task_attr(task, attr),
+                )
+            run_cleanup(
+                "native_close",
+                lambda: task.close_env(clear_cache=clear_cache),
+            )
+        finally:
             self.task = None
             self._joint_target_fk = None
+
+        task_type = type(task).__name__
+        del task
+        if clear_cache:
+            run_cleanup("python_gc", gc.collect)
+
+        if cleanup_errors:
+            LOGGER.warning(
+                "RoboTwin cleanup encountered errors; env_id=%s task=%s "
+                "task_type=%s seed=%s clear_cache=%s errors=%s",
+                self.env_id,
+                self.task_name,
+                task_type,
+                self.env_seed if seed is None else seed,
+                clear_cache,
+                "; ".join(cleanup_errors),
+            )
 
     def _to_robotwin_action(self, action: np.ndarray) -> np.ndarray:
         action = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -503,6 +570,36 @@ class RoboTwinTaskAdapter:
         if callable(getter):
             return getter()
         return getattr(self.task, "instruction", None)
+
+
+def _clear_task_attr(task: Any, name: str) -> None:
+    if hasattr(task, name):
+        setattr(task, name, None)
+
+
+def _close_task_viewer(task: Any) -> None:
+    if not hasattr(task, "viewer"):
+        return
+    viewer = getattr(task, "viewer", None)
+    try:
+        close = getattr(viewer, "close", None)
+        if callable(close):
+            close()
+    finally:
+        setattr(task, "viewer", None)
+
+
+def _remove_adapter_is_in_hand(task: Any) -> None:
+    task_dict = getattr(task, "__dict__", None)
+    if not isinstance(task_dict, dict):
+        return
+    helper = task_dict.get("is_in_hand")
+    if (
+        isinstance(helper, types.MethodType)
+        and helper.__self__ is task
+        and helper.__func__ is _is_in_hand
+    ):
+        task_dict.pop("is_in_hand", None)
 
 
 def _extract_robotwin_obs(
