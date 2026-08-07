@@ -82,9 +82,8 @@ entrypoints to a specific simulator.
 - Keep optimizer ownership explicit for actor, critic, encoder, entropy coefficient,
   and value networks.
 - Add focused tests for changed behavior and relevant edge cases.
-- Name classes, functions, and variables so the name itself conveys what they
-  do or represent to a reader with no special background. Provenance and rationale belong in a
-  comment, not the identifier.
+- Code(name classes, functions, and variables) should be self-explanatory.
+- Comment when necessary, but avoid redundant comments.
 
 ## Verification
 

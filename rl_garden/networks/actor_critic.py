@@ -310,12 +310,16 @@ class UnsquashedGaussianActor(nn.Module):
     """Unsquashed Gaussian actor for AWAC, faithful to CORL's ``awac.py::Actor``.
 
     Unlike ``SquashedGaussianActor`` (tanh squash + Jacobian log-prob
-    correction, used by IQL), this samples a plain ``Normal``, hard-clamps to
-    the action bounds, and evaluates log-prob directly on the (possibly
-    clamped) action with **no** change-of-variables correction. This is not
-    distributionally self-consistent, but it reproduces CORL's actual
-    numerical behavior, which AWAC's advantage-weighted regression loss was
-    tuned against.
+    correction), this samples a plain ``Normal``, hard-clamps to the action
+    bounds, and evaluates log-prob directly on the (possibly clamped) action
+    with **no** change-of-variables correction. This is not distributionally
+    self-consistent, but it reproduces CORL's actual numerical behavior,
+    which AWAC's advantage-weighted regression loss was tuned against.
+
+    ``tanh_mean`` (default ``False``) additionally tanh-bounds the mean
+    before it's used, matching CORL's ``iql.py::GaussianPolicy`` and the
+    official JAX IQL repo's ``NormalTanhPolicy`` (``tanh_squash_distribution=False``)
+    -- both keep the mean tanh-bounded but still skip the Jacobian correction.
     """
 
     def __init__(
@@ -333,6 +337,7 @@ class UnsquashedGaussianActor(nn.Module):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
+        tanh_mean: bool = False,
     ) -> None:
         super().__init__()
         if std_parameterization not in ("exp", "uniform"):
@@ -343,6 +348,7 @@ class UnsquashedGaussianActor(nn.Module):
         self.std_parameterization = std_parameterization
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
+        self.tanh_mean = tanh_mean
 
         act_dim = int(np.prod(action_space.shape))
         self.trunk, trunk_dim = _build_trunk(
@@ -371,6 +377,8 @@ class UnsquashedGaussianActor(nn.Module):
     def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.trunk(features)
         mean = self.fc_mean(x)
+        if self.tanh_mean:
+            mean = torch.tanh(mean)
         if self.std_parameterization == "exp":
             assert self.fc_logstd is not None
             raw_log_std = self.fc_logstd(x)

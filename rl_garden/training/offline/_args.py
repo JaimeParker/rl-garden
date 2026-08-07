@@ -256,6 +256,11 @@ class OfflineIQLArgs:
     expectile: float = 0.7
     temperature: float = 3.0
     adv_clip_max: float = 100.0
+    actor_distribution: Literal["squashed", "unsquashed"] = "squashed"
+    actor_lr_schedule: Optional[Literal["constant", "linear_warmup", "warmup_cosine"]] = None
+    actor_lr_warmup_steps: Optional[int] = None
+    actor_lr_decay_steps: Optional[int] = None
+    actor_lr_min_ratio: Optional[float] = None
 
 
 @dataclass

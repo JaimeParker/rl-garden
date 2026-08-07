@@ -218,3 +218,75 @@ def test_iql_polyak_update_moves_target_toward_online():
         assert not torch.equal(before, after)
         # tau=0.5 -> new target should be closer to (moved) online params.
         assert torch.allclose(after, 0.5 * before + 0.5 * online)
+
+
+def test_actor_distribution_default_is_squashed_gaussian():
+    from rl_garden.networks import SquashedGaussianActor
+
+    agent = _make_state_agent()
+    assert isinstance(agent.policy.actor, SquashedGaussianActor)
+
+
+def test_actor_distribution_unsquashed_uses_tanh_mean_unsquashed_actor():
+    from rl_garden.networks import UnsquashedGaussianActor
+
+    agent = _make_state_agent(actor_distribution="unsquashed")
+
+    assert isinstance(agent.policy.actor, UnsquashedGaussianActor)
+    assert agent.policy.actor.tanh_mean is True
+
+
+def test_actor_distribution_unsquashed_train_step_is_finite():
+    agent = _make_state_agent(actor_distribution="unsquashed")
+    _fill_state(agent)
+
+    for _ in range(3):
+        info = agent.train(1)
+
+    assert torch.isfinite(torch.tensor(info["loss"]))
+
+
+def test_actor_distribution_invalid_value_raises():
+    with pytest.raises(ValueError, match="actor_distribution"):
+        _make_state_agent(actor_distribution="bogus")
+
+
+def test_actor_lr_schedule_decoupled_from_critic_value_schedule():
+    agent = _make_state_agent(
+        actor_lr_schedule="warmup_cosine",
+        actor_lr_decay_steps=10,
+        actor_lr=1.0,
+        critic_value_lr=1.0,
+    )
+    _fill_state(agent)
+
+    for _ in range(5):
+        agent.train(1)
+
+    actor_lr_now = agent.actor_optimizer.param_groups[0]["lr"]
+    critic_value_lr_now = agent.critic_value_optimizer.param_groups[0]["lr"]
+
+    # actor_lr_schedule anneals the actor optimizer only; critic_value_optimizer
+    # stays at the shared (default "constant") lr_schedule -- unchanged.
+    assert actor_lr_now < 1.0
+    assert critic_value_lr_now == pytest.approx(1.0)
+
+
+def test_actor_lr_schedule_warmup_cosine_requires_decay_steps():
+    with pytest.raises(ValueError, match="actor_lr_decay_steps"):
+        _make_state_agent(actor_lr_schedule="warmup_cosine")
+
+
+def test_actor_lr_schedule_checkpoint_resume_starts_fresh_without_saved_schedule(
+    tmp_path,
+):
+    agent = _make_state_agent()  # lr_schedule="constant" -> saved scheduler state is None
+    _fill_state(agent)
+    agent.train(2)
+    path = agent.save(tmp_path / "iql.pt")
+
+    loaded = _make_state_agent(actor_lr_schedule="warmup_cosine", actor_lr_decay_steps=10)
+    loaded.load(path, load_replay_buffer=False)
+
+    assert loaded._lr_schedulers[1].last_epoch == 0
+    assert loaded.actor_optimizer.param_groups[0]["lr"] == pytest.approx(loaded.actor_lr)

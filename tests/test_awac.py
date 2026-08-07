@@ -118,6 +118,28 @@ def test_unsquashed_actor_log_prob_has_no_tanh_jacobian():
     assert torch.allclose(actual, expected)
 
 
+def test_unsquashed_actor_tanh_mean_matches_corl_iql_gaussian_policy():
+    """tanh_mean=True (IQL's actor_distribution="unsquashed" opt-in) matches
+    CORL's iql.py::GaussianPolicy / official JAX's NormalTanhPolicy shape:
+    tanh-bounded mean, still no Jacobian correction on log_prob -- the
+    discriminating check for the opt-in mode, not just an isinstance check."""
+    from rl_garden.networks import UnsquashedGaussianActor
+
+    action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    actor = UnsquashedGaussianActor(4, action_space, hidden_dims=[16], tanh_mean=True)
+    features = torch.randn(5, 4)
+    actions = torch.rand(5, 2) * 1.8 - 0.9
+
+    mean, log_std = actor(features)
+    assert torch.allclose(mean, torch.tanh(actor.fc_mean(actor.trunk(features))))
+
+    expected = torch.distributions.Normal(mean, log_std.exp()).log_prob(actions).sum(
+        -1, keepdim=True
+    )
+    actual = actor.evaluate_action_log_prob(features, actions)
+    assert torch.allclose(actual, expected)
+
+
 def test_checkpoint_round_trip_preserves_normalizer_and_critic_target():
     agent = _make_agent()
     _fill(agent)

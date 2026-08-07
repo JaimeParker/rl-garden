@@ -813,6 +813,63 @@ def test_build_calql_forwards_stats_window_size_from_args_to_agent() -> None:
     assert agent.stats_window_size == 10
 
 
+def test_build_iql_forwards_actor_distribution_and_actor_lr_schedule_from_args() -> None:
+    """Regression: an OfflineIQLArgs field declared but not forwarded inside
+    build_iql (offline entrypoint) would silently no-op from the CLI --
+    mirrors test_build_calql_forwards_stats_window_size_from_args_to_agent."""
+    from gymnasium import spaces
+
+    from rl_garden.algorithms import OfflineEnvSpec
+    from rl_garden.training.offline.iql import IQLArgs, build_iql
+
+    env_spec = OfflineEnvSpec(
+        spaces.Box(low=-1, high=1, shape=(4,), dtype=float),
+        spaces.Box(low=-1, high=1, shape=(2,), dtype=float),
+        num_envs=1,
+    )
+    args = IQLArgs(
+        obs_mode="state",
+        buffer_device="cpu",
+        actor_distribution="unsquashed",
+        actor_lr_schedule="warmup_cosine",
+        actor_lr_decay_steps=10,
+    )
+    agent = build_iql(args, env_spec, logger=None)
+
+    assert agent.actor_distribution == "unsquashed"
+    assert agent.actor_lr_schedule == "warmup_cosine"
+    assert agent.actor_lr_decay_steps == 10
+
+
+def test_build_iql_off2on_forwards_actor_distribution_and_actor_lr_schedule_from_args() -> (
+    None
+):
+    """Same regression, off2on entrypoint (rl_garden/training/off2on/iql.py)."""
+    from unittest.mock import MagicMock
+
+    from gymnasium import spaces
+
+    from rl_garden.training.off2on.iql import IQLOff2OnArgs, build_iql
+
+    env = MagicMock()
+    env.num_envs = 2
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+
+    args = IQLOff2OnArgs(
+        obs_mode="state",
+        buffer_device="cpu",
+        actor_distribution="unsquashed",
+        actor_lr_schedule="warmup_cosine",
+        actor_lr_decay_steps=10,
+    )
+    agent = build_iql(args, env, None, None, None)
+
+    assert agent.actor_distribution == "unsquashed"
+    assert agent.actor_lr_schedule == "warmup_cosine"
+    assert agent.actor_lr_decay_steps == 10
+
+
 @dataclass
 class _BadPlainConvArgs:
     encoder: str = "plain_conv"

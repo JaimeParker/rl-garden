@@ -19,6 +19,7 @@ from rl_garden.networks import (
     EnsembleQCritic,
     KernelInit,
     SquashedGaussianActor,
+    UnsquashedGaussianActor,
     ValueNetwork,
 )
 from rl_garden.policies.base import BasePolicy
@@ -65,9 +66,15 @@ class IQLPolicy(BasePolicy):
         log_std_mode: Literal["clamp", "tanh"] = "tanh",
         log_std_min: float = WSRL_LOG_STD_MIN,
         log_std_max: float = LOG_STD_MAX,
+        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "IQL requires a Box action space."
+        if actor_distribution not in ("squashed", "unsquashed"):
+            raise ValueError(
+                "actor_distribution must be 'squashed' or 'unsquashed', "
+                f"got {actor_distribution!r}"
+            )
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
         if critic_subsample_size is not None and critic_subsample_size > n_critics:
@@ -83,21 +90,41 @@ class IQLPolicy(BasePolicy):
 
         actor_arch, critic_arch, value_arch = get_iql_arch(net_arch)
         fd = features_extractor.features_dim
-        self.actor = SquashedGaussianActor(
-            fd,
-            action_space,
-            hidden_dims=actor_arch,
-            use_layer_norm=actor_use_layer_norm,
-            use_group_norm=actor_use_group_norm,
-            num_groups=num_groups,
-            dropout_rate=actor_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
-            log_std_mode=log_std_mode,
-            log_std_min=log_std_min,
-            log_std_max=log_std_max,
-        )
+        if actor_distribution == "squashed":
+            self.actor = SquashedGaussianActor(
+                fd,
+                action_space,
+                hidden_dims=actor_arch,
+                use_layer_norm=actor_use_layer_norm,
+                use_group_norm=actor_use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=actor_dropout_rate,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+                std_parameterization=std_parameterization,
+                log_std_mode=log_std_mode,
+                log_std_min=log_std_min,
+                log_std_max=log_std_max,
+            )
+        else:
+            # Matches CORL's iql.py::GaussianPolicy / official JAX's NormalTanhPolicy
+            # (tanh_squash_distribution=False): tanh-bounded mean, no Jacobian
+            # correction on log-prob. See UnsquashedGaussianActor's docstring.
+            self.actor = UnsquashedGaussianActor(
+                fd,
+                action_space,
+                hidden_dims=actor_arch,
+                use_layer_norm=actor_use_layer_norm,
+                use_group_norm=actor_use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=actor_dropout_rate,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+                std_parameterization=std_parameterization,
+                log_std_min=log_std_min,
+                log_std_max=log_std_max,
+                tanh_mean=True,
+            )
         self.critic = EnsembleQCritic(
             fd,
             action_space,
