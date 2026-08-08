@@ -347,16 +347,19 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
     assert req.reward_bias == -1.0
 
 
-def test_minari_antmaze_offline_eval_defaults_to_episode_budget_cap():
+def test_offline_eval_step_cap_derives_from_episode_horizon():
+    # Deliberately not minari/antmaze -- the mechanism must be backend/env
+    # independent, unlike the old _is_minari_antmaze special case.
     from rl_garden.training.offline._runner import _eval_env_request
     from rl_garden.training.offline.bc import BCArgs
 
     args = BCArgs(
-        dataset_source="minari",
-        env_backend="minari",
-        offline_dataset_path="D4RL/antmaze/large-diverse-v2",
-        env_id="D4RL/antmaze/large-diverse-v2",
+        dataset_source="maniskill_h5",
+        env_backend="maniskill",
+        offline_dataset_path="demos/pickcube.h5",
+        env_id="PickCube-v1",
         num_eval_episodes=7,
+        eval_episode_horizon=1_000,
     )
 
     req = _eval_env_request(args)
@@ -364,19 +367,27 @@ def test_minari_antmaze_offline_eval_defaults_to_episode_budget_cap():
     assert req.num_eval_steps == 7_000
 
 
-def test_minari_antmaze_explicit_small_eval_cap_warns():
+def test_explicit_num_eval_steps_wins_and_warns_when_below_derived_budget():
+    from rl_garden.common.cli_args import warn_if_eval_budget_undersized
     from rl_garden.training.offline._runner import _eval_env_request
     from rl_garden.training.offline.bc import BCArgs
 
     args = BCArgs(
-        dataset_source="minari",
-        env_backend="minari",
-        offline_dataset_path="D4RL/antmaze/large-diverse-v2",
-        env_id="D4RL/antmaze/large-diverse-v2",
+        dataset_source="maniskill_h5",
+        env_backend="maniskill",
+        offline_dataset_path="demos/pickcube.h5",
+        env_id="PickCube-v1",
         num_eval_steps=50,
+        num_eval_episodes=7,
+        eval_episode_horizon=1_000,
     )
 
-    with pytest.warns(RuntimeWarning, match="may undercount completed episodes"):
-        req = _eval_env_request(args)
-
+    req = _eval_env_request(args)
     assert req.num_eval_steps == 50
+
+    with pytest.warns(RuntimeWarning, match="eval_episode_horizon"):
+        warn_if_eval_budget_undersized(
+            num_eval_steps=args.num_eval_steps,
+            num_eval_episodes=args.num_eval_episodes,
+            eval_episode_horizon=args.eval_episode_horizon,
+        )

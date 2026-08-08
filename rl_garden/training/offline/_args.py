@@ -85,6 +85,11 @@ class OfflineEvalArgs:
     num_eval_envs: int = 1
     num_eval_episodes: int = 100
     num_eval_steps: Optional[int] = None
+    # Expected worst-case env steps for one eval episode (e.g. 1000 for
+    # AntMaze). Only sizes the eval step budget when num_eval_steps is unset
+    # (num_eval_steps = num_eval_episodes * eval_episode_horizon) -- does not
+    # impose a TimeLimit on the eval env itself.
+    eval_episode_horizon: Optional[int] = None
     control_mode: str = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
 

@@ -15,6 +15,7 @@ from rl_garden.training.off2on._runner import (
     _resolve_env_id,
     _set_offline_probe,
 )
+from rl_garden.training.off2on.calql import CalQLOff2OnArgs
 from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
 
@@ -132,6 +133,71 @@ def test_run_off2on_builds_eval_env_when_only_online_eval_freq_set(monkeypatch, 
         monkeypatch, tmp_path, eval_freq=0, online_eval_freq=2000, num_eval_envs=4
     )
     assert created is True
+
+
+def _run_off2on_and_capture_num_eval_steps(monkeypatch, tmp_path, args_cls, **arg_overrides):
+    captured = {}
+
+    def fake_make_training_envs(backend_name, req):
+        del backend_name
+        captured["num_eval_steps"] = req.num_eval_steps
+        env = SimpleNamespace(
+            single_action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+            close=lambda: None,
+        )
+        eval_env = SimpleNamespace(close=lambda: None) if req.create_eval_env else None
+        return env, eval_env
+
+    monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
+
+    def build_agent(args, env, eval_env, logger, checkpoint_dir):
+        del args, env, eval_env, logger, checkpoint_dir
+        agent = MagicMock()
+        agent.checkpoint_dir = None
+        agent.save_final_checkpoint = False
+        return agent
+
+    args = args_cls(
+        log_type="none",
+        log_dir=str(tmp_path),
+        num_offline_steps=0,
+        num_online_steps=0,
+        save_final_checkpoint=False,
+        **arg_overrides,
+    )
+    _runner.run_off2on(args, build_agent=build_agent, algorithm="calql")
+    return captured["num_eval_steps"]
+
+
+def test_run_off2on_eval_step_cap_derived_from_episode_horizon(monkeypatch, tmp_path):
+    num_eval_steps = _run_off2on_and_capture_num_eval_steps(
+        monkeypatch,
+        tmp_path,
+        CalQLOff2OnArgs,
+        eval_freq=1000,
+        num_eval_envs=4,
+        num_eval_episodes=10,
+        eval_episode_horizon=1_000,
+    )
+    assert num_eval_steps == 10_000
+
+
+def test_run_off2on_eval_step_cap_ignores_horizon_without_episode_target(
+    monkeypatch, tmp_path
+):
+    # WSRLOff2OnArgs has no num_eval_episodes field (only Cal-QL off2on does),
+    # so a horizon alone can't size a budget -- must fall back to the default
+    # and warn, not silently derive something.
+    with pytest.warns(RuntimeWarning, match="was ignored"):
+        num_eval_steps = _run_off2on_and_capture_num_eval_steps(
+            monkeypatch,
+            tmp_path,
+            WSRLOff2OnArgs,
+            eval_freq=1000,
+            num_eval_envs=4,
+            eval_episode_horizon=1_000,
+        )
+    assert num_eval_steps == 50
 
 
 # ---------------------------------------------------------------------------

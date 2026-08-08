@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional
 
@@ -123,6 +124,72 @@ def resolve_eval_record_dir(args: Any, run_name: str) -> str:
     if args.eval_output_dir:
         return args.eval_output_dir
     return os.path.join(args.log_dir, run_name, "eval_videos")
+
+
+def resolve_num_eval_steps(
+    *,
+    num_eval_steps: Optional[int],
+    num_eval_episodes: Optional[int],
+    eval_episode_horizon: Optional[int],
+    default: int,
+) -> int:
+    """Resolve the eval-loop step cap.
+
+    An explicit ``num_eval_steps`` always wins. Otherwise, if both
+    ``num_eval_episodes`` and ``eval_episode_horizon`` (expected worst-case
+    steps for one eval episode) are set, the budget is derived so an
+    episode-count-driven eval loop (e.g. ``run_exact_episode_eval``) has room
+    to finish ``num_eval_episodes`` episodes. Falls back to ``default``
+    otherwise -- including when only one of the two is set, since a fixed-step
+    eval loop (no episode target) can't use a horizon to size anything.
+    """
+    if num_eval_steps is not None:
+        return int(num_eval_steps)
+    if eval_episode_horizon is not None and num_eval_episodes is not None:
+        return max(int(num_eval_episodes) * int(eval_episode_horizon), 1)
+    return default
+
+
+def warn_if_eval_budget_undersized(
+    *,
+    num_eval_steps: Optional[int],
+    num_eval_episodes: Optional[int],
+    eval_episode_horizon: Optional[int],
+) -> None:
+    """Warn about likely-misconfigured eval budgets.
+
+    Two independent, backend/env-agnostic cases: an explicit step cap too
+    small to let ``num_eval_episodes`` finish given ``eval_episode_horizon``,
+    or a horizon that was set but has no episode target to size a budget for.
+    """
+    if (
+        num_eval_steps is not None
+        and eval_episode_horizon is not None
+        and num_eval_episodes is not None
+    ):
+        derived = int(num_eval_episodes) * int(eval_episode_horizon)
+        if int(num_eval_steps) < derived:
+            warnings.warn(
+                f"num_eval_steps={num_eval_steps} is below "
+                f"num_eval_episodes={num_eval_episodes} x "
+                f"eval_episode_horizon={eval_episode_horizon}={derived}; "
+                "evaluation may stop before "
+                f"{num_eval_episodes} episodes finish (watch "
+                "eval/episodes_completed). Leave --num_eval_steps unset to "
+                "derive the budget automatically.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    elif eval_episode_horizon is not None and num_eval_episodes is None:
+        warnings.warn(
+            f"--eval_episode_horizon={eval_episode_horizon} was ignored: this "
+            "algorithm evaluates with a fixed step budget (no episode "
+            "target), so the horizon cannot size the budget. Set "
+            "--num_eval_episodes to enable episode-count evaluation, or "
+            "raise --num_eval_steps directly.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 @dataclass(frozen=True)

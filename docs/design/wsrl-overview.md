@@ -309,23 +309,34 @@ AntMaze environment, not the Minari-recovered one: install the
 | Offline/online mix ratio | 0.5 | 0.5 | `--online_replay_mode mixed --offline_data_ratio 0.5` — set explicitly; rl-garden's off2on default is `"auto"`, an adaptive scheme unique to rl-garden that matches neither reference |
 | Online CQL | stays active, same `cql_alpha=5.0` | stays active, same `cql_alpha=5.0` | `--online_use_cql_loss True --online_cql_alpha 5.0` |
 | Online Cal-QL calibration (`max(Q, mc_return)` bound) | **stays active** — `enable_calql` is one static flag never toggled at the online switch, and online MC returns are computed per-trajectory, not placeholders | **disabled** at the online switch via `switch_calibration()` | rl-garden's `use_calql` is one static value for the whole run — matches JAX as-is; **cannot reproduce CORL's online-off behavior** (Gap 3 below) |
-| Eval episodes | script uses 20; use 100 to reduce sparse-success-rate noise | 100 | `--num_eval_episodes 100` for both |
+| Eval episodes | script uses 20; use 100 to reduce sparse-success-rate noise | 100 | `--num_eval_episodes 100 --eval_episode_horizon 1000` for both — AntMaze episodes need up to 1000 steps to finish; without `--eval_episode_horizon` the eval step budget silently defaults to 50 and no episode ever completes (`eval/episodes_completed` stays 0) |
 | Env / dataset | legacy D4RL | legacy D4RL | `--env_backend d4rl_legacy --dataset_source d4rl_legacy` |
 
 ##### Official Cal-QL JAX — offline pretrain
 
-`scripts/pretrain_calql_d4rl_legacy.sh` already encodes this exact recipe —
-run it directly rather than reassembling the flags by hand. (It is currently
-an untracked file in this checkout; if it's gone, rebuild it from the table
-above plus `--actor_hidden_layers 2 --critic_hidden_layers 4` for the
-offline entrypoint's architecture flags.)
+```bash
+python examples/pretrain_offline.py calql \
+    --env_backend d4rl_legacy --dataset_source d4rl_legacy \
+    --env_id antmaze-medium-play-v2 --offline_dataset_path antmaze-medium-play-v2 \
+    --use_calql --reward_scale 10 --reward_bias -5 \
+    --gamma 0.99 --tau 0.005 \
+    --cql_alpha 5.0 --cql_target_action_gap 0.8 \
+    --cql_penalty_scale lagrange_times_alpha \
+    --cql_alpha_param exp_clip --cql_alpha_lagrange_init 2.718281828459045 \
+    --cql_diff_clip_mode always \
+    --actor_hidden_layers 2 --critic_hidden_layers 4 \
+    --n_critics 2 --critic_subsample_size 2 \
+    --kernel_init orthogonal_near_zero_output \
+    --policy_log_std_multiplier 1.0 --policy_log_std_offset -1.0 \
+    --num_offline_steps 1000000 \
+    --num_eval_episodes 100 --eval_episode_horizon 1000
+```
 
 ##### CORL Cal-QL — offline pretrain
 
-Same script, with the CORL-specific deltas from the table applied:
+Same command as above, with the CORL-specific deltas from the table applied:
 
 ```bash
-scripts/pretrain_calql_d4rl_legacy.sh \
     --actor_hidden_layers 3 \
     --critic_hidden_layers 5 \
     --cql_clip_diff_min -200.0
@@ -346,7 +357,8 @@ python examples/train_off2on.py calql \
     --env_backend d4rl_legacy --dataset_source d4rl_legacy \
     --online_replay_mode mixed --offline_data_ratio 0.5 \
     --online_use_cql_loss True --online_cql_alpha 5.0 \
-    --num_online_steps 1000000
+    --num_online_steps 1000000 \
+    --num_eval_episodes 100 --eval_episode_horizon 1000
 ```
 
 **This currently fails for both styles** — see Gap 1 below. Continuing a

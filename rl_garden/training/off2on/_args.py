@@ -22,6 +22,15 @@ from rl_garden.training.offline._args import OfflineIQLArgs, OfflineValueArgs
 class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     """Orchestration + training fields generic across off2on algorithms."""
 
+    # Override EnvRunArgs/LoggingArgs's fixed int=50 default with the same
+    # "unset" sentinel offline training uses, so resolve_num_eval_steps can
+    # derive a budget from eval_episode_horizon below when appropriate.
+    num_eval_steps: Optional[int] = None
+    # Expected worst-case env steps for one eval episode (e.g. 1000 for
+    # AntMaze). Only sizes the eval step budget when num_eval_steps is unset
+    # and the algorithm's own num_eval_episodes field is set -- does not
+    # impose a TimeLimit on the eval env itself.
+    eval_episode_horizon: Optional[int] = None
     num_offline_steps: int = 0
     # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
     # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id

@@ -1,6 +1,7 @@
 """Tests for shared training example CLI argument defaults."""
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import pytest
@@ -13,7 +14,9 @@ from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
     image_keys_from_env,
     image_keys_from_obs_mode,
+    resolve_num_eval_steps,
     vit_sac_kwargs_from_args,
+    warn_if_eval_budget_undersized,
 )
 from rl_garden.training.offline._args import OfflineVisionArgs, TDMPC2MultitaskTrainingArgs
 from rl_garden.training.offline.awac import AWACArgs
@@ -1032,3 +1035,83 @@ def test_log_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.wandb_project == "custom-project"
     assert args.wandb_entity == "custom-entity"
     assert args.wandb_group == "custom-group"
+
+
+def test_resolve_num_eval_steps_falls_back_to_default_when_unset() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=None,
+            num_eval_episodes=None,
+            eval_episode_horizon=None,
+            default=50,
+        )
+        == 50
+    )
+
+
+def test_resolve_num_eval_steps_derives_budget_from_horizon() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=None,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        == 100_000
+    )
+
+
+def test_resolve_num_eval_steps_explicit_wins_over_horizon() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=50,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        == 50
+    )
+
+
+def test_resolve_num_eval_steps_ignores_horizon_without_episode_target() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=None,
+            num_eval_episodes=None,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        == 50
+    )
+
+    with pytest.warns(RuntimeWarning, match="was ignored"):
+        warn_if_eval_budget_undersized(
+            num_eval_steps=None,
+            num_eval_episodes=None,
+            eval_episode_horizon=1_000,
+        )
+
+
+def test_resolve_num_eval_steps_is_idempotent() -> None:
+    resolved = resolve_num_eval_steps(
+        num_eval_steps=None,
+        num_eval_episodes=100,
+        eval_episode_horizon=1_000,
+        default=50,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        again = resolve_num_eval_steps(
+            num_eval_steps=resolved,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        warn_if_eval_budget_undersized(
+            num_eval_steps=again,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+        )
+
+    assert again == resolved == 100_000

@@ -45,7 +45,12 @@ from tqdm import trange
 
 from rl_garden.algorithms.offline import _log_eval_stdout
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.cli_args import resolve_checkpoint_dir, resolve_eval_record_dir
+from rl_garden.common.cli_args import (
+    resolve_checkpoint_dir,
+    resolve_eval_record_dir,
+    resolve_num_eval_steps,
+    warn_if_eval_budget_undersized,
+)
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import (
     EnvRequest,
@@ -241,6 +246,19 @@ def run_off2on(
     if args.buffer_device == "cuda" and not torch.cuda.is_available():
         warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
         args.buffer_device = "cpu"
+
+    num_eval_episodes = getattr(args, "num_eval_episodes", None)
+    args.num_eval_steps = resolve_num_eval_steps(
+        num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=num_eval_episodes,
+        eval_episode_horizon=args.eval_episode_horizon,
+        default=50,
+    )
+    warn_if_eval_budget_undersized(
+        num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=num_eval_episodes,
+        eval_episode_horizon=args.eval_episode_horizon,
+    )
 
     is_visual = args.obs_mode != "state"
     obs_label = f"rgbd_{args.encoder}" if is_visual else "state"

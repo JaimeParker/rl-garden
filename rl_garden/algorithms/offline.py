@@ -9,6 +9,7 @@ pretraining entrypoints.
 from __future__ import annotations
 
 import time
+import warnings
 from abc import abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
@@ -322,6 +323,15 @@ def run_exact_episode_eval(
             steps += 1
     finally:
         agent.policy.train()
+
+    if completed == 0:
+        warnings.warn(
+            f"Evaluation completed 0 episodes in {steps} steps (num_eval_steps "
+            "cap). Reported eval metrics are empty. Raise --num_eval_steps or "
+            "set --eval_episode_horizon to the task's episode length.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     out: dict[str, float] = {}
     for key, values in metrics.items():

@@ -11,7 +11,11 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import OfflineEnvSpec, run_offline_pretraining
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.cli_args import resolve_checkpoint_dir
+from rl_garden.common.cli_args import (
+    resolve_checkpoint_dir,
+    resolve_num_eval_steps,
+    warn_if_eval_budget_undersized,
+)
 from rl_garden.common.resolved_config import persist_resolved_config
 from rl_garden.envs.backend_registry import (
     EnvRequest,
@@ -19,30 +23,6 @@ from rl_garden.envs.backend_registry import (
     should_create_eval_env,
 )
 from rl_garden.training._dataset import infer_offline_dataset_specs, load_offline_dataset
-
-
-def _is_minari_antmaze(args: Any) -> bool:
-    if args.env_backend != "minari":
-        return False
-    env_id = args.env_id or args.offline_dataset_path or ""
-    return "antmaze" in str(env_id).lower()
-
-
-def _resolve_num_eval_steps(args: Any, *, warn_on_small_antmaze: bool = True) -> int:
-    if args.num_eval_steps is not None:
-        steps = int(args.num_eval_steps)
-        if warn_on_small_antmaze and _is_minari_antmaze(args) and steps < 1_000:
-            warnings.warn(
-                "AntMaze offline eval usually needs up to 1000 vector steps "
-                "to finish a trajectory; the explicit num_eval_steps="
-                f"{steps} may undercount completed episodes.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        return steps
-    if _is_minari_antmaze(args):
-        return max(int(args.num_eval_episodes) * 1_000, 1)
-    return 50
 
 
 def _save_filename(args: Any, algorithm: str) -> str:
@@ -68,11 +48,11 @@ def _eval_env_request(args: Any) -> EnvRequest:
         reward_bias=args.reward_bias,
         num_eval_envs=args.num_eval_envs,
         capture_video=False,
-        num_eval_steps=_resolve_num_eval_steps(
-            args,
-            warn_on_small_antmaze=not getattr(
-                args, "_offline_num_eval_steps_resolved", False
-            ),
+        num_eval_steps=resolve_num_eval_steps(
+            num_eval_steps=args.num_eval_steps,
+            num_eval_episodes=args.num_eval_episodes,
+            eval_episode_horizon=args.eval_episode_horizon,
+            default=50,
         ),
         backend_config=backend_config,
     )
@@ -97,8 +77,17 @@ def run_offline(
     if args.buffer_device == "cuda" and not torch.cuda.is_available():
         warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
         args.buffer_device = "cpu"
-    args.num_eval_steps = _resolve_num_eval_steps(args)
-    args._offline_num_eval_steps_resolved = True
+    args.num_eval_steps = resolve_num_eval_steps(
+        num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=args.num_eval_episodes,
+        eval_episode_horizon=args.eval_episode_horizon,
+        default=50,
+    )
+    warn_if_eval_budget_undersized(
+        num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=args.num_eval_episodes,
+        eval_episode_horizon=args.eval_episode_horizon,
+    )
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (

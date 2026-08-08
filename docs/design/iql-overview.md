@@ -64,7 +64,7 @@ python examples/pretrain_offline.py iql \
     --n_critics 2 \
     --reward_scale 1.0 --reward_bias -1.0 \
     --num_offline_steps 1000000 \
-    --num_eval_episodes 100
+    --num_eval_episodes 100 --eval_episode_horizon 1000
 ```
 
 `--n_critics 2` implicitly drops critic subsampling (`critic_subsample_size` only applies when
@@ -84,7 +84,7 @@ python examples/pretrain_offline.py iql \
     --n_critics 2 \
     --reward_scale 10.0 --reward_bias -5.0 \
     --num_offline_steps 1000000 \
-    --num_eval_episodes 100
+    --num_eval_episodes 100 --eval_episode_horizon 1000
 ```
 
 Leave `--actor_distribution` at its default (`squashed`) or set it to `unsquashed` — neither
