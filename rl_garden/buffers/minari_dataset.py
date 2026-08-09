@@ -20,6 +20,18 @@ from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 
+def _sparse_mc_returns(
+    rewards: torch.Tensor,
+    dones: torch.Tensor,
+    success: torch.Tensor,
+    gamma: float,
+    sparse_negative_reward: float,
+) -> torch.Tensor:
+    if bool((success > 0.5).any()):
+        return _mc_returns(rewards, dones, gamma)
+    return torch.full_like(rewards, sparse_negative_reward / (1.0 - gamma))
+
+
 def _require_minari():
     try:
         import minari  # type: ignore
@@ -72,6 +84,7 @@ def load_minari_dataset_to_replay_buffer(
     action_parts: list[torch.Tensor] = []
     reward_parts: list[torch.Tensor] = []
     done_parts: list[torch.Tensor] = []
+    episode_end_parts: list[torch.Tensor] = []
     mc_parts: list[torch.Tensor] = []
     success_parts: list[torch.Tensor] = []
 
@@ -86,6 +99,12 @@ def load_minari_dataset_to_replay_buffer(
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
         dones = _to_tensor(episode.terminations, storage_device).float()
+        # Unlike `dones` (terminations only, for TD bootstrap-through-timeout),
+        # the MC recursion boundary is the true episode end: this episode's
+        # last stored step, regardless of whether it closed via termination or
+        # a `max_episode_steps` truncation.
+        episode_end = torch.zeros_like(dones, dtype=torch.bool)
+        episode_end[-1] = True
         length = actions.shape[0]
 
         obs = _to_tensor(_slice(episode.observations, 0, length), storage_device)
@@ -103,6 +122,15 @@ def load_minari_dataset_to_replay_buffer(
                 success_threshold=float(getattr(buffer, "success_threshold", 0.5)),
             )
             success_parts.append(success)
+            mc_parts.append(
+                _sparse_mc_returns(
+                    rewards,
+                    dones,
+                    success,
+                    float(buffer.gamma),
+                    float(getattr(buffer, "sparse_negative_reward", 0.0)),
+                )
+            )
             if inferred and not warned_success_fallback:
                 warnings.warn(
                     "sparse_reward_mc=True but no success field was found in the "
@@ -120,6 +148,7 @@ def load_minari_dataset_to_replay_buffer(
         action_parts.append(actions)
         reward_parts.append(rewards)
         done_parts.append(dones)
+        episode_end_parts.append(episode_end)
 
     if not action_parts:
         raise ValueError(f"No episodes found in Minari dataset: {dataset_id!r}")
@@ -129,6 +158,7 @@ def load_minari_dataset_to_replay_buffer(
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
+    episode_end_all = torch.cat(episode_end_parts, dim=0)
     mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     success_all = torch.cat(success_parts, dim=0) if success_parts else None
     return _add_flat_transitions(
@@ -140,4 +170,5 @@ def load_minari_dataset_to_replay_buffer(
         dones_all,
         mc_all,
         success_all,
+        episode_ends=episode_end_all,
     )

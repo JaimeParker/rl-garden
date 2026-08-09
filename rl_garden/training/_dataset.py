@@ -12,7 +12,9 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import infer_specs_from_h5
 from rl_garden.buffers import (
+    infer_specs_from_d4rl_legacy,
     infer_specs_from_minari,
+    load_d4rl_legacy_dataset_to_replay_buffer,
     load_maniskill_h5_to_replay_buffer,
     load_minari_dataset_to_replay_buffer,
 )
@@ -20,6 +22,8 @@ from rl_garden.buffers import (
 
 def infer_offline_dataset_specs(args: Any) -> tuple[spaces.Space, spaces.Box]:
     """Infer observation and action spaces for the configured dataset source."""
+    if args.dataset_source == "d4rl_legacy":
+        return infer_specs_from_d4rl_legacy(args.offline_dataset_path)
     if args.dataset_source == "minari":
         obs_space, action_space = infer_specs_from_minari(args.offline_dataset_path)
         if not isinstance(action_space, spaces.Box):
@@ -45,6 +49,13 @@ def load_offline_dataset(replay_buffer: Any, args: Any) -> int:
         "reward_bias": args.reward_bias,
         "success_key": args.success_key,
     }
+    if args.dataset_source == "d4rl_legacy":
+        return load_d4rl_legacy_dataset_to_replay_buffer(
+            replay_buffer,
+            args.offline_dataset_path,
+            num_episodes=args.offline_num_traj,
+            **common_kwargs,
+        )
     if args.dataset_source == "minari":
         return load_minari_dataset_to_replay_buffer(
             replay_buffer,

@@ -1,0 +1,19 @@
+env_backend: robotwin
+obs_mode: rgb
+env_id: place_empty_cup
+robotwin:
+  head_camera_type: Train_D435_128x96
+  step_lim: 200
+  embodiment: [piper, piper, 0.6]
+  include_wrist_cameras: false
+  reward_mode: dense
+  control_step_cap: 16
+camera_width: 64
+camera_height: 64
+num_envs: 4
+num_eval_envs: 2
+total_timesteps: 1000000
+num_steps: 16
+encoder: plain_conv
+image_fusion_mode: per_key
+control_mode: delta_joint_pos

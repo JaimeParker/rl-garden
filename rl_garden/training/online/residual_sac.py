@@ -1,7 +1,8 @@
 """ResidualSAC run function."""
+
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 
 def _effective_base_policy(args) -> Literal["act", "sac", "zero"]:
@@ -84,6 +85,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
+    from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
     if args.load_actor_checkpoint is not None:
@@ -114,7 +116,8 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         )
 
     base_action_provider = _make_base_action_provider(args, env)
-    agent = ResidualSAC(
+    agent = construct_agent(
+        ResidualSAC,
         env=env,
         eval_env=eval_env,
         base_action_provider=base_action_provider,
@@ -198,11 +201,11 @@ def run_residual_sac(args: ResidualSACArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionSACTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import VisionSACTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -216,17 +219,21 @@ class ResidualSACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     residual_action_scale: float = 0.1
     debug: bool = False
     base_policy: Literal["act", "sac", "zero"] = "act"
-    base_ckpt_path: Optional[str] = "act-peg-only"
+    base_ckpt_path: str | None = "act-peg-only"
     base_act_temporal_agg: bool = True
     base_act_temporal_agg_k: float = 0.01
     base_sac_encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
     base_sac_encoder_features_dim: int = 256
-    base_sac_image_fusion_mode: Optional[Literal["stack_channels", "per_key"]] = None
+    base_sac_image_fusion_mode: Literal["stack_channels", "per_key"] | None = None
     base_sac_deterministic: bool = True
-    offline_dataset_path: Optional[str] = None
-    offline_num_traj: Optional[int] = None
-    offline_buffer_size: Optional[int] = None
+    offline_dataset_path: str | None = None
+    offline_num_traj: int | None = None
+    offline_buffer_size: int | None = None
     offline_data_ratio: float = 0.5
 
 
-registry.register("residual_sac", ResidualSACArgs, run_residual_sac)
+registry.register(
+    "residual_sac",
+    ResidualSACArgs,
+    run_residual_sac,
+)

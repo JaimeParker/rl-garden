@@ -43,7 +43,7 @@ class OfflineDatasetArgs:
     # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
     # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
     # instead (e.g. "D4RL/halfcheetah/medium-v2").
-    dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
+    dataset_source: Literal["maniskill_h5", "minari", "d4rl_legacy"] = "maniskill_h5"
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
     save_filename: Optional[str] = None
@@ -83,6 +83,13 @@ class OfflineRuntimeArgs:
 class OfflineEvalArgs:
     env_id: Optional[str] = None
     num_eval_envs: int = 1
+    num_eval_episodes: int = 100
+    num_eval_steps: Optional[int] = None
+    # Expected worst-case env steps for one eval episode (e.g. 1000 for
+    # AntMaze). Only sizes the eval step budget when num_eval_steps is unset
+    # (num_eval_steps = num_eval_episodes * eval_episode_horizon) -- does not
+    # impose a TimeLimit on the eval env itself.
+    eval_episode_horizon: Optional[int] = None
     control_mode: str = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
 
@@ -168,10 +175,23 @@ class OfflineActorArgs:
     num_groups: int = 32
     actor_dropout_rate: Optional[float] = None
     kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        Literal[
+            "xavier_uniform",
+            "xavier_normal",
+            "orthogonal",
+            "kaiming_uniform",
+            "orthogonal_near_zero_output",
+        ]
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"
+
+
+@dataclass
+class OfflineSACNetworkArgs:
+    hidden_dim: int = 256
+    actor_hidden_layers: int = 2
+    critic_hidden_layers: int = 4
 
 
 @dataclass
@@ -217,7 +237,12 @@ class OfflineCQLArgs:
     cql_temp: float = 1.0
     cql_clip_diff_min: float = float("-inf")
     cql_clip_diff_max: float = float("inf")
+    cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only"
+    cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune"
+    cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus"
     backup_entropy: bool = False
+    policy_log_std_multiplier: Optional[float] = None
+    policy_log_std_offset: Optional[float] = None
 
 
 @dataclass
@@ -236,6 +261,11 @@ class OfflineIQLArgs:
     expectile: float = 0.7
     temperature: float = 3.0
     adv_clip_max: float = 100.0
+    actor_distribution: Literal["squashed", "unsquashed"] = "squashed"
+    actor_lr_schedule: Optional[Literal["constant", "linear_warmup", "warmup_cosine"]] = None
+    actor_lr_warmup_steps: Optional[int] = None
+    actor_lr_decay_steps: Optional[int] = None
+    actor_lr_min_ratio: Optional[float] = None
 
 
 @dataclass

@@ -1,4 +1,5 @@
 """TD-MPC2 run function."""
+
 from __future__ import annotations
 
 
@@ -40,24 +41,29 @@ def _tdmpc2_env_request(args, run_name):
 
 def build_tdmpc2(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms.tdmpc2 import TDMPC2
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
     if is_visual:
-        from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
-
-        image_keys = image_keys_from_env(env, args)
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=args.frame_stack > 1,
-            image_augmentation=args.image_augmentation,
-            random_shift_pad=args.image_random_shift_pad,
-            image_augmentation_seed=args.seed + 1_000_003,
+        from rl_garden.common.cli_args import (
+            image_encoder_factory_from_args,
+            image_keys_from_env,
         )
 
-    agent = TDMPC2(
+        image_keys = image_keys_from_env(env, args)
+        image_kwargs = {
+            "image_keys": image_keys,
+            "image_encoder_factory": image_encoder_factory_from_args(args),
+            "image_fusion_mode": args.image_fusion_mode,
+            "enable_stacking": args.frame_stack > 1,
+            "image_augmentation": args.image_augmentation,
+            "random_shift_pad": args.image_random_shift_pad,
+            "image_augmentation_seed": args.seed + 1_000_003,
+        }
+
+    agent = construct_agent(
+        TDMPC2,
         env=env,
         eval_env=eval_env,
         episode_length=args.episode_length,
@@ -115,7 +121,7 @@ def build_tdmpc2(args, env, eval_env, logger, checkpoint_dir):
     return agent
 
 
-def run_tdmpc2(args: "TDMPC2Args") -> None:
+def run_tdmpc2(args: TDMPC2Args) -> None:
     from rl_garden.training.online._runner import run_online
 
     is_visual = args.obs_mode != "state"
@@ -132,11 +138,11 @@ def run_tdmpc2(args: "TDMPC2Args") -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionTDMPC2TrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import VisionTDMPC2TrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass

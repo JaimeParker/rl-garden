@@ -41,6 +41,8 @@ data/
 3rd_party/residual-offpolicy-rl/
 3rd_party/RLinf/
 3rd_party/RoboTwin
+3rd_party/Cal-QL/
+3rd_party/wsrl/
 pretrained_models/*
 prompts/
 demos/

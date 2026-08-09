@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Literal, Optional, Sequence
 
@@ -110,6 +111,8 @@ class SquashedGaussianActor(nn.Module):
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
+        log_std_multiplier_init: Optional[float] = None,
+        log_std_offset_init: Optional[float] = None,
     ) -> None:
         super().__init__()
         if std_parameterization not in ("exp", "uniform"):
@@ -148,6 +151,29 @@ class SquashedGaussianActor(nn.Module):
             self.fc_logstd = None
             self.log_stds = nn.Parameter(torch.zeros(act_dim))
 
+        self.log_std_multiplier = (
+            nn.Parameter(torch.tensor(float(log_std_multiplier_init)))
+            if log_std_multiplier_init is not None
+            else None
+        )
+        self.log_std_offset = (
+            nn.Parameter(torch.tensor(float(log_std_offset_init)))
+            if log_std_offset_init is not None
+            else None
+        )
+
+        if kernel_init == "orthogonal_near_zero_output":
+            for module in self.trunk.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+            for module in (self.fc_mean, self.fc_logstd):
+                if module is not None:
+                    nn.init.orthogonal_(module.weight, gain=1e-2)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+
         high = torch.as_tensor(action_space.high, dtype=torch.float32)
         low = torch.as_tensor(action_space.low, dtype=torch.float32)
         self.register_buffer("action_scale", (high - low) / 2.0)
@@ -163,6 +189,11 @@ class SquashedGaussianActor(nn.Module):
         else:
             assert self.log_stds is not None
             raw_log_std = self.log_stds.expand_as(mean)
+
+        if self.log_std_multiplier is not None:
+            raw_log_std = self.log_std_multiplier * raw_log_std
+        if self.log_std_offset is not None:
+            raw_log_std = raw_log_std + self.log_std_offset
 
         if self.log_std_mode == "tanh":
             log_std = torch.tanh(raw_log_std)
@@ -279,12 +310,16 @@ class UnsquashedGaussianActor(nn.Module):
     """Unsquashed Gaussian actor for AWAC, faithful to CORL's ``awac.py::Actor``.
 
     Unlike ``SquashedGaussianActor`` (tanh squash + Jacobian log-prob
-    correction, used by IQL), this samples a plain ``Normal``, hard-clamps to
-    the action bounds, and evaluates log-prob directly on the (possibly
-    clamped) action with **no** change-of-variables correction. This is not
-    distributionally self-consistent, but it reproduces CORL's actual
-    numerical behavior, which AWAC's advantage-weighted regression loss was
-    tuned against.
+    correction), this samples a plain ``Normal``, hard-clamps to the action
+    bounds, and evaluates log-prob directly on the (possibly clamped) action
+    with **no** change-of-variables correction. This is not distributionally
+    self-consistent, but it reproduces CORL's actual numerical behavior,
+    which AWAC's advantage-weighted regression loss was tuned against.
+
+    ``tanh_mean`` (default ``False``) additionally tanh-bounds the mean
+    before it's used, matching CORL's ``iql.py::GaussianPolicy`` and the
+    official JAX IQL repo's ``NormalTanhPolicy`` (``tanh_squash_distribution=False``)
+    -- both keep the mean tanh-bounded but still skip the Jacobian correction.
     """
 
     def __init__(
@@ -302,6 +337,7 @@ class UnsquashedGaussianActor(nn.Module):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
+        tanh_mean: bool = False,
     ) -> None:
         super().__init__()
         if std_parameterization not in ("exp", "uniform"):
@@ -312,6 +348,7 @@ class UnsquashedGaussianActor(nn.Module):
         self.std_parameterization = std_parameterization
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
+        self.tanh_mean = tanh_mean
 
         act_dim = int(np.prod(action_space.shape))
         self.trunk, trunk_dim = _build_trunk(
@@ -340,6 +377,8 @@ class UnsquashedGaussianActor(nn.Module):
     def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.trunk(features)
         mean = self.fc_mean(x)
+        if self.tanh_mean:
+            mean = torch.tanh(mean)
         if self.std_parameterization == "exp":
             assert self.fc_logstd is not None
             raw_log_std = self.fc_logstd(x)
@@ -472,6 +511,22 @@ class _QHead(nn.Module):
             use_pnorm=use_pnorm,
         )
         self.head = nn.Linear(trunk_dim, 1)
+
+        if kernel_init == "orthogonal_near_zero_output":
+            # _apply_kernel_init (called inside _build_trunk) only sees the
+            # trunk, so it wrongly treats the trunk's last hidden Linear as
+            # the "output" and gives it the near-zero gain -- the real output
+            # head (self.head) is built outside the trunk and gets no init
+            # at all. Re-init both explicitly, mirroring
+            # SquashedGaussianActor's analogous fc_mean/fc_logstd pass.
+            for module in self.trunk.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+            nn.init.orthogonal_(self.head.weight, gain=1e-2)
+            if self.head.bias is not None:
+                nn.init.zeros_(self.head.bias)
 
     def forward(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         x = torch.cat([features, actions], dim=-1)

@@ -1,4 +1,5 @@
 """PPO run function."""
+
 from __future__ import annotations
 
 
@@ -39,14 +40,16 @@ def _ppo_image_kwargs(args, env) -> dict:
 
     if args.obs_mode == "state":
         return {}
-    return dict(
-        image_keys=image_keys_from_env(env, args),
-        image_encoder_factory=image_encoder_factory_from_args(args),
-        image_fusion_mode=args.image_fusion_mode,
-    )
+    return {
+        "image_keys": image_keys_from_env(env, args),
+        "image_encoder_factory": image_encoder_factory_from_args(args),
+        "image_fusion_mode": args.image_fusion_mode,
+    }
 
 
-def _ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict) -> dict:
+def _ppo_common_kwargs(
+    args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict
+) -> dict:
     """Kwargs shared by ``PPO`` and ``RecurrentPPO`` construction -- everything
     except the rnn-specific params that only ``RecurrentPPO`` accepts."""
     return dict(
@@ -99,9 +102,13 @@ def _ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs
 
 def build_ppo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import PPO
+    from rl_garden.training.inspection import construct_agent
 
     image_kwargs = _ppo_image_kwargs(args, env)
-    agent = PPO(**_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs))
+    agent = construct_agent(
+        PPO,
+        **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+    )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
     return agent
@@ -124,11 +131,11 @@ def run_ppo(args: PPOArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionPPOTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import VisionPPOTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass

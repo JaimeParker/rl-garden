@@ -1,4 +1,5 @@
 """RecurrentSAC run function."""
+
 from __future__ import annotations
 
 from rl_garden.training.online.sac import _sac_common_kwargs, _sac_env_request
@@ -8,25 +9,30 @@ _recurrent_sac_env_request = _sac_env_request
 
 def build_recurrent_sac(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import RecurrentSAC
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+    from rl_garden.common.cli_args import (
+        image_encoder_factory_from_args,
+        image_keys_from_env,
+    )
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
     if is_visual:
-        image_kwargs = dict(
-            image_keys=image_keys_from_env(env, args),
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=args.frame_stack > 1,
-            image_augmentation=args.image_augmentation,
-            random_shift_pad=args.image_random_shift_pad,
-            image_augmentation_seed=args.seed + 1_000_003,
+        image_kwargs = {
+            "image_keys": image_keys_from_env(env, args),
+            "image_encoder_factory": image_encoder_factory_from_args(args),
+            "image_fusion_mode": args.image_fusion_mode,
+            "enable_stacking": args.frame_stack > 1,
+            "image_augmentation": args.image_augmentation,
+            "random_shift_pad": args.image_random_shift_pad,
+            "image_augmentation_seed": args.seed + 1_000_003,
             # Deliberately omit vit_sac_kwargs_from_args(...) here -- ViT
             # token_and_prop layouts are unsupported (RecurrentSAC._build_policy
             # raises NotImplementedError for structured_feature_config()).
-        )
+        }
 
-    agent = RecurrentSAC(
+    agent = construct_agent(
+        RecurrentSAC,
         **_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
         rnn_type=args.rnn_type,
         rnn_hidden_size=args.rnn_hidden_size,
@@ -42,7 +48,7 @@ def build_recurrent_sac(args, env, eval_env, logger, checkpoint_dir):
     return agent
 
 
-def run_recurrent_sac(args: "RecurrentSACArgs") -> None:
+def run_recurrent_sac(args: RecurrentSACArgs) -> None:
     from rl_garden.training.online._runner import run_online
 
     is_visual = args.obs_mode != "state"
@@ -59,11 +65,11 @@ def run_recurrent_sac(args: "RecurrentSACArgs") -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionRecurrentSACTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import VisionRecurrentSACTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -75,4 +81,8 @@ class RecurrentSACArgs(VisionRecurrentSACTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("recurrent_sac", RecurrentSACArgs, run_recurrent_sac)
+registry.register(
+    "recurrent_sac",
+    RecurrentSACArgs,
+    run_recurrent_sac,
+)

@@ -1,4 +1,5 @@
 """ManiSkill env backend — registered as ``"maniskill"``."""
+
 from __future__ import annotations
 
 import json
@@ -8,19 +9,24 @@ from rl_garden.envs.backend_registry import (
     EnvRequest,
     register_env_backend,
 )
+
+
 class ManiSkillBackend(EnvBackend):
+    api_version = 2
     config_field = "maniskill"
 
     @classmethod
-    def _make_cfg(cls, req: EnvRequest, *, is_eval: bool):
-        from rl_garden.envs.maniskill import ManiSkillEnvConfig
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
+        from rl_garden.envs.maniskill.config import ManiSkillEnvConfig
 
         ms = req.backend_config  # ManiSkillConfig or None
         sim_backend = ms.sim_backend if ms is not None else "gpu"
         render_backend = ms.render_backend if ms is not None else "gpu"
         reward_mode = ms.reward_mode if ms is not None else None
         env_kwargs = (
-            json.loads(ms.env_kwargs_json) if ms is not None and ms.env_kwargs_json else {}
+            json.loads(ms.env_kwargs_json)
+            if ms is not None and ms.env_kwargs_json
+            else {}
         )
         return ManiSkillEnvConfig(
             env_id=req.env_id,
@@ -46,18 +52,20 @@ class ManiSkillBackend(EnvBackend):
             max_steps_per_video=req.num_eval_steps if is_eval else None,
         )
 
+    _make_cfg = resolve_config
+
     @classmethod
     def make_train_env(cls, req: EnvRequest):
         from rl_garden.envs.maniskill import make_maniskill_env
 
-        cfg = cls._make_cfg(req, is_eval=False)
+        cfg = cls.resolve_config(req, is_eval=False)
         return make_maniskill_env(cfg)
 
     @classmethod
     def make_eval_env(cls, req: EnvRequest):
         from rl_garden.envs.maniskill import make_maniskill_env
 
-        return make_maniskill_env(cls._make_cfg(req, is_eval=True))
+        return make_maniskill_env(cls.resolve_config(req, is_eval=True))
 
 
 register_env_backend("maniskill", ManiSkillBackend)

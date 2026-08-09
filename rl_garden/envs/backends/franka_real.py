@@ -5,6 +5,7 @@ Unlike the sim backends, this one ignores ``req.num_envs``/``req.num_eval_envs``
 both train and eval -- there is no separate eval-time reconfiguration for
 real hardware.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,15 +18,18 @@ from rl_garden.envs.backend_registry import (
 
 
 class FrankaRealBackend(EnvBackend):
+    api_version = 2
     config_field = "franka_real"
 
     @classmethod
     def _make_cfg(cls, req: EnvRequest):
-        from rl_garden.envs.franka_real import FrankaRealEnvConfig
+        from rl_garden.envs.franka_real.config import FrankaRealEnvConfig
 
         fr = req.backend_config  # FrankaRealConfig or None
         env_kwargs = (
-            json.loads(fr.env_kwargs_json) if fr is not None and fr.env_kwargs_json else {}
+            json.loads(fr.env_kwargs_json)
+            if fr is not None and fr.env_kwargs_json
+            else {}
         )
         return FrankaRealEnvConfig(
             bridge_url=fr.bridge_url if fr is not None else "http://localhost:5000",
@@ -46,6 +50,11 @@ class FrankaRealBackend(EnvBackend):
         from rl_garden.envs.franka_real import make_franka_real_env
 
         return make_franka_real_env(cls._make_cfg(req))
+
+    @classmethod
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
+        del is_eval
+        return cls._make_cfg(req)
 
     @classmethod
     def make_eval_env(cls, req: EnvRequest):

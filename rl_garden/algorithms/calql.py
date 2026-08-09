@@ -7,7 +7,7 @@ the replay sample. The rest of the SAC/REDQ/CQL update path is inherited from
 from __future__ import annotations
 
 import warnings
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -121,6 +121,7 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         online_cql_alpha: float = 0.0,
         online_use_cql_loss: bool = False,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        num_eval_episodes: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         self._init_calql_params(
@@ -134,13 +135,40 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         self.use_calql = use_calql
         self.online_cql_alpha = online_cql_alpha
         self.online_use_cql_loss = online_use_cql_loss
+        # None preserves OffPolicyAlgorithm's step-capped _evaluate default;
+        # set it to switch this shell to exact-episode-count evaluation.
+        self.num_eval_episodes = num_eval_episodes
         self._init_off2on_params(offline_sampling=offline_sampling)
+
+    def _evaluate(self) -> dict[str, float]:
+        if self.num_eval_episodes is None:
+            return super()._evaluate()
+        from rl_garden.algorithms.offline import run_exact_episode_eval
+
+        return run_exact_episode_eval(
+            self,
+            num_eval_episodes=self.num_eval_episodes,
+            num_eval_steps=self.num_eval_steps,
+        )
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
             "online_cql_alpha": self.online_cql_alpha,
             "online_use_cql_loss": self.online_use_cql_loss,
+        }
+
+    def _replay_buffer_step_kwargs(
+        self,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+    ) -> dict[str, Any]:
+        # The MC buffer needs the true episode boundary (termination |
+        # truncation), independent of the Bellman `done` used for TD
+        # bootstrapping -- see MCReplayBufferMixin._build_mc_table.
+        return {
+            **super()._replay_buffer_step_kwargs(terminations, truncations),
+            "episode_end": terminations | truncations,
         }
 
     def _apply_online_regularizer_override(self, online_replay_mode: str) -> None:

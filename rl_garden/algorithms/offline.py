@@ -9,10 +9,12 @@ pretraining entrypoints.
 from __future__ import annotations
 
 import time
+import warnings
 from abc import abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import torch
 from gymnasium import spaces
@@ -23,6 +25,7 @@ from rl_garden.buffers.maniskill_h5 import (
     infer_box_specs_from_h5 as _infer_box_specs_from_h5,
     infer_specs_from_h5 as _infer_specs_from_h5,
 )
+from rl_garden.common.eval_metrics import EVAL_METRIC_ALIASES, EVAL_METRIC_DROP
 from rl_garden.common.logger import Logger
 
 
@@ -79,7 +82,8 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         std_log: bool = True,
         log_freq: int = 1_000,
         eval_freq: int = 0,
-        num_eval_steps: int = 50,
+        num_eval_steps: Optional[int] = 50,
+        num_eval_episodes: int = 100,
         eval_env: Optional[Any] = None,
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
@@ -97,7 +101,8 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         self.std_log = std_log
         self.log_freq = log_freq
         self.eval_freq = eval_freq
-        self.num_eval_steps = num_eval_steps
+        self.num_eval_steps = 50 if num_eval_steps is None else int(num_eval_steps)
+        self.num_eval_episodes = int(num_eval_episodes)
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_freq = checkpoint_freq
         self.save_replay_buffer = save_replay_buffer
@@ -135,6 +140,13 @@ class OfflineRLAlgorithm(BaseAlgorithm):
         )
 
     # --- eval ---
+
+    def _evaluate(self) -> dict[str, float]:
+        return run_exact_episode_eval(
+            self,
+            num_eval_episodes=self.num_eval_episodes,
+            num_eval_steps=self.num_eval_steps,
+        )
 
     def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:
@@ -198,6 +210,136 @@ def _log_update_metrics(agent: Any, metrics: dict[str, float], step: int) -> Non
     if logger is None:
         return
     logger.log_metrics(metrics, step)
+
+
+def _to_cpu_1d(value: Any) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().reshape(-1)
+    return torch.as_tensor(value).detach().cpu().reshape(-1)
+
+
+def _eval_done_mask(
+    infos: Mapping[str, Any], terminations: Any, truncations: Any
+) -> torch.Tensor:
+    if "_final_info" in infos:
+        return _to_cpu_1d(infos["_final_info"]).bool()
+    return (_to_cpu_1d(terminations).bool() | _to_cpu_1d(truncations).bool())
+
+
+def _append_episode_metrics(
+    metrics: dict[str, list[torch.Tensor]],
+    episode: Mapping[str, Any],
+    done_mask: torch.Tensor,
+    remaining: int,
+) -> int:
+    appended = 0
+    for raw_key, value in episode.items():
+        if raw_key.startswith("_") or raw_key in EVAL_METRIC_DROP:
+            continue
+        if isinstance(value, Mapping):
+            continue
+        key = EVAL_METRIC_ALIASES.get(raw_key, raw_key)
+        values = _to_cpu_1d(value)
+        if values.numel() == done_mask.numel():
+            values = values[done_mask]
+        take = min(values.numel(), remaining)
+        if take <= 0:
+            continue
+        metrics[key].append(values[:take])
+        appended = max(appended, int(take))
+    return appended
+
+
+def run_exact_episode_eval(
+    agent: Any, *, num_eval_episodes: int, num_eval_steps: int
+) -> dict[str, float]:
+    """Evaluate for exactly ``num_eval_episodes`` completed episodes (vector-env
+    overshoot on the final step is aggregated, not double-counted), with
+    ``num_eval_steps`` as a hard cap.
+
+    Shared by ``OfflineRLAlgorithm._evaluate`` and any off-policy rollout
+    shell that opts into exact-episode-count evaluation (e.g. Cal-QL off2on
+    via its own ``num_eval_episodes``, kept step-capped by default for other
+    off-policy algorithms). Requires ``agent.eval_env``, ``agent.policy``,
+    and the standard ``BaseAlgorithm`` eval hooks (``_eval_start_hook``,
+    ``_eval_action_and_critic_action``, ``_eval_step_hook``,
+    ``_eval_finalize_hook``).
+    """
+    if agent.eval_env is None:
+        return {}
+    agent.policy.eval()
+    obs, _ = agent.eval_env.reset()
+    agent._eval_start_hook()
+
+    metrics: dict[str, list[torch.Tensor]] = defaultdict(list)
+    running_returns = torch.zeros(agent.eval_env.num_envs, dtype=torch.float32)
+    completed = 0
+    steps = 0
+    target_episodes = max(int(num_eval_episodes), 1)
+    max_steps = max(int(num_eval_steps), 1)
+
+    try:
+        while completed < target_episodes and steps < max_steps:
+            with torch.no_grad():
+                env_action, critic_action = agent._eval_action_and_critic_action(obs)
+                obs_before = obs
+                obs, rewards, terminations, truncations, infos = agent.eval_env.step(
+                    env_action
+                )
+                agent._eval_step_hook(
+                    obs_before,
+                    critic_action,
+                    rewards,
+                    terminations,
+                    truncations,
+                    infos,
+                )
+
+            rewards_cpu = _to_cpu_1d(rewards).float()
+            running_returns[: rewards_cpu.numel()] += rewards_cpu
+            done_mask = _eval_done_mask(infos, terminations, truncations)
+            remaining = target_episodes - completed
+
+            appended = 0
+            if isinstance(infos, Mapping) and "final_info" in infos:
+                final_info = infos["final_info"]
+                if isinstance(final_info, Mapping) and "episode" in final_info:
+                    episode = final_info["episode"]
+                    if isinstance(episode, Mapping):
+                        appended = _append_episode_metrics(
+                            metrics, episode, done_mask, remaining
+                        )
+
+            if appended == 0 and done_mask.any():
+                done_returns = running_returns[done_mask[: running_returns.numel()]]
+                take = min(done_returns.numel(), remaining)
+                if take > 0:
+                    metrics["return"].append(done_returns[:take])
+                    appended = int(take)
+
+            if done_mask.any():
+                running_returns[done_mask[: running_returns.numel()]] = 0.0
+            completed += appended
+            steps += 1
+    finally:
+        agent.policy.train()
+
+    if completed == 0:
+        warnings.warn(
+            f"Evaluation completed 0 episodes in {steps} steps (num_eval_steps "
+            "cap). Reported eval metrics are empty. Raise --num_eval_steps or "
+            "set --eval_episode_horizon to the task's episode length.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    out: dict[str, float] = {}
+    for key, values in metrics.items():
+        out[key] = float(torch.cat(values).float().mean().item())
+    out["episodes_completed"] = float(completed)
+    out["eval_steps"] = float(steps)
+    out.update(agent._eval_finalize_hook())
+    return out
 
 
 def _log_eval_stdout(agent: Any, metrics: dict[str, float], step: int) -> None:

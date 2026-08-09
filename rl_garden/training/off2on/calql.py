@@ -8,6 +8,7 @@ keeps the CQL/Cal-QL regularizer online — matching Nakamoto et al. 2023
 (Cal-QL) instead of the WSRL paper's warmup-then-discard preset used by the
 `wsrl` entrypoint.
 """
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,10 +37,23 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     offline_data_ratio: float | str = "auto"
     online_use_cql_loss: bool = True
     online_cql_alpha: float = 5.0  # same as cql_alpha default: "unchanged" going online
+    # Official Cal-QL JAX parity: network shape and policy log-std transform.
+    # Cal-QL-only: build_wsrl() doesn't consume these, so they don't belong
+    # on the shared CQLOff2OnArgs (WSRL's CLI would silently ignore them).
+    hidden_dim: int = 256
+    actor_hidden_layers: int = 2
+    critic_hidden_layers: int = 2
+    policy_log_std_multiplier: float | None = None
+    policy_log_std_offset: float | None = None
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    online_episodes_per_iteration: int | None = None
+    stats_window_size: int | None = None
+    num_eval_episodes: int | None = None
 
 
 def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnCalQL
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -53,7 +67,13 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = Off2OnCalQL(
+    net_arch = {
+        "pi": [args.hidden_dim] * args.actor_hidden_layers,
+        "qf": [args.hidden_dim] * args.critic_hidden_layers,
+    }
+
+    agent = construct_agent(
+        Off2OnCalQL,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -64,6 +84,9 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         tau=args.tau,
         training_freq=args.training_freq,
         utd=args.utd,
+        bootstrap_at_done=args.bootstrap_at_done,
+        online_episodes_per_iteration=args.online_episodes_per_iteration,
+        stats_window_size=args.stats_window_size,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
         alpha_lr=args.alpha_lr,
@@ -93,6 +116,9 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         cql_clip_diff_min=args.cql_clip_diff_min,
         cql_clip_diff_max=args.cql_clip_diff_max,
         cql_action_sample_method=args.cql_action_sample_method,
+        cql_penalty_scale=args.cql_penalty_scale,
+        cql_diff_clip_mode=args.cql_diff_clip_mode,
+        cql_alpha_param=args.cql_alpha_param,
         backup_entropy=args.backup_entropy,
         use_calql=args.use_calql,
         calql_bound_random_actions=args.calql_bound_random_actions,
@@ -106,6 +132,9 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
+        net_arch=net_arch,
+        policy_log_std_multiplier=args.policy_log_std_multiplier,
+        policy_log_std_offset=args.policy_log_std_offset,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
         initial_training_phase=initial_training_phase_from_args(args),
@@ -119,6 +148,7 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         log_freq=args.log_freq,
         eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=args.num_eval_episodes,
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
@@ -136,4 +166,8 @@ def run_calql(args: CalQLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_calql, algorithm="calql")
 
 
-registry.register("calql", CalQLOff2OnArgs, run_calql)
+registry.register(
+    "calql",
+    CalQLOff2OnArgs,
+    run_calql,
+)

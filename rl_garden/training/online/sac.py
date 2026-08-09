@@ -1,4 +1,5 @@
 """SAC run function."""
+
 from __future__ import annotations
 
 
@@ -31,7 +32,9 @@ def _sac_env_request(args, run_name):
     )
 
 
-def _sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs) -> dict:
+def _sac_common_kwargs(
+    args, env, eval_env, logger, checkpoint_dir, image_kwargs
+) -> dict:
     """Kwargs shared by every SAC-family algorithm built from ``SACTrainingArgs``
     (plain SAC and RecurrentSAC alike) -- everything except the recurrent-only
     ``rnn_*``/``burn_in_len``/etc. fields."""
@@ -93,6 +96,7 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -110,7 +114,10 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = SAC(**_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs))
+    agent = construct_agent(
+        SAC,
+        **_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+    )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     if args.load_actor_checkpoint is not None:
@@ -135,11 +142,11 @@ def run_sac(args: SACArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionSACTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import VisionSACTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass

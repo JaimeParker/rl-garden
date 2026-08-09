@@ -9,6 +9,10 @@ To add a new backend::
 
     # rl_garden/envs/backends/my_backend.py
     class MyBackend(EnvBackend):
+        api_version = 2
+        config_field = "my_backend"
+        @classmethod
+        def resolve_config(cls, req: EnvRequest, *, is_eval: bool): ...
         @classmethod
         def make_train_env(cls, req: EnvRequest): ...
         @classmethod
@@ -18,13 +22,14 @@ To add a new backend::
 
 Backends are discovered automatically on first use.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib
 import pkgutil
 import threading
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -33,13 +38,13 @@ class EnvRequest:
 
     env_id: str
     num_envs: int
-    obs_mode: str           # "state" | "rgb" | "rgbd"
+    obs_mode: str  # "state" | "rgb" | "rgbd"
     control_mode: str
     render_mode: str
     seed: int
     # Visual fields (None when obs_mode == "state"):
-    camera_width: Optional[int]
-    camera_height: Optional[int]
+    camera_width: int | None
+    camera_height: int | None
     include_state: bool = True
     per_camera_rgbd: bool = False
     frame_stack: int = 1
@@ -47,7 +52,7 @@ class EnvRequest:
     reward_bias: float = 0.0
     # Eval env:
     num_eval_envs: int = 8
-    eval_record_dir: Optional[str] = None
+    eval_record_dir: str | None = None
     capture_video: bool = True
     video_fps: int = 30
     num_eval_steps: int = 50
@@ -58,6 +63,9 @@ class EnvRequest:
 
 
 class EnvBackend:
+    """Version 2 environment backend protocol."""
+
+    api_version: int
     config_field: str
 
     @classmethod
@@ -74,6 +82,11 @@ class EnvBackend:
         raise NotImplementedError
 
     @classmethod
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
+        """Build the concrete backend config without creating an environment."""
+        raise NotImplementedError
+
+    @classmethod
     def make_eval_env(cls, req: EnvRequest):
         raise NotImplementedError
 
@@ -86,6 +99,19 @@ _DISCOVERY_LOCK = threading.Lock()
 def register_env_backend(name: str, cls: type[EnvBackend]) -> None:
     if name in _REGISTRY:
         raise ValueError(f"Environment backend {name!r} already registered")
+    if cls.__dict__.get("api_version") != 2:
+        raise TypeError(f"Environment backend {name!r} must declare api_version = 2.")
+    if not isinstance(cls.__dict__.get("config_field"), str):
+        raise TypeError(f"Environment backend {name!r} must declare config_field.")
+    if cls.config_field != name:
+        raise TypeError(
+            f"Environment backend {name!r} config_field must match its registry name."
+        )
+    for method_name in ("resolve_config", "make_train_env", "make_eval_env"):
+        if method_name not in cls.__dict__:
+            raise TypeError(
+                f"Environment backend {name!r} API v2 must implement {method_name}()."
+            )
     _REGISTRY[name] = cls
 
 
@@ -126,9 +152,17 @@ def should_create_eval_env(args: Any) -> bool:
     Single source of truth for the "build an eval env only if periodic
     evaluation was actually requested" decision, shared by the online,
     offline, and off2on training entrypoints so they don't each re-derive it
-    (and potentially disagree, as online/off2on previously did).
+    (and potentially disagree, as online/off2on previously did). Off2on's
+    phase-specific ``offline_eval_freq``/``online_eval_freq`` (not present on
+    the online/offline-only entrypoints, hence ``getattr``) can each
+    independently trigger evaluation even when the general ``eval_freq`` is 0.
     """
-    return args.eval_freq > 0
+    if args.eval_freq > 0:
+        return True
+    return bool(
+        getattr(args, "offline_eval_freq", None)
+        or getattr(args, "online_eval_freq", None)
+    )
 
 
 def make_evaluation_env(backend_name: str, req: EnvRequest):
@@ -142,3 +176,12 @@ def make_training_envs(backend_name: str, req: EnvRequest):
     train_env = backend.make_train_env(req)
     eval_env = backend.make_eval_env(req) if req.create_eval_env else None
     return train_env, eval_env
+
+
+def materialize_backend_configs(backend_name: str, req: EnvRequest) -> dict[str, Any]:
+    """Resolve train/eval backend configs without constructing simulator resources."""
+    backend = _get_backend(backend_name)
+    configs = {"train": backend.resolve_config(req, is_eval=False)}
+    if req.create_eval_env:
+        configs["eval"] = backend.resolve_config(req, is_eval=True)
+    return configs

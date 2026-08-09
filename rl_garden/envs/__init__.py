@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from typing import Any
+
+
 def register_custom_envs() -> None:
     """Register rl-garden's vendored ManiSkill environments if deps are present."""
     try:
@@ -7,10 +12,18 @@ def register_custom_envs() -> None:
             raise
 
 
-register_custom_envs()
+def __getattr__(name: str) -> Any:
+    """Keep optional simulator implementations lazy until explicitly requested."""
+    if name in {"ManiSkillEnvConfig", "make_maniskill_env"}:
+        from rl_garden.envs import maniskill
 
-from rl_garden.envs.maniskill import ManiSkillEnvConfig, make_maniskill_env
-from rl_garden.envs.robotwin import RoboTwinEnvConfig, make_robotwin_env
+        return getattr(maniskill, name)
+    if name in {"RoboTwinEnvConfig", "make_robotwin_env"}:
+        from rl_garden.envs import robotwin
+
+        return getattr(robotwin, name)
+    raise AttributeError(name)
+
 
 __all__ = [
     "ManiSkillEnvConfig",

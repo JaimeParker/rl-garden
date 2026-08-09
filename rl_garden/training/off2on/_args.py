@@ -22,12 +22,21 @@ from rl_garden.training.offline._args import OfflineIQLArgs, OfflineValueArgs
 class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     """Orchestration + training fields generic across off2on algorithms."""
 
+    # Override EnvRunArgs/LoggingArgs's fixed int=50 default with the same
+    # "unset" sentinel offline training uses, so resolve_num_eval_steps can
+    # derive a budget from eval_episode_horizon below when appropriate.
+    num_eval_steps: Optional[int] = None
+    # Expected worst-case env steps for one eval episode (e.g. 1000 for
+    # AntMaze). Only sizes the eval step budget when num_eval_steps is unset
+    # and the algorithm's own num_eval_episodes field is set -- does not
+    # impose a TimeLimit on the eval env itself.
+    eval_episode_horizon: Optional[int] = None
     num_offline_steps: int = 0
     # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
     # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
     # instead (e.g. "D4RL/halfcheetah/medium-v2").
     num_online_steps: int = 1_000_000
-    dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
+    dataset_source: Literal["maniskill_h5", "minari", "d4rl_legacy"] = "maniskill_h5"
     offline_dataset_path: Optional[str] = None
     offline_num_traj: Optional[int] = None
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
@@ -57,7 +66,13 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     actor_dropout_rate: Optional[float] = None
     critic_dropout_rate: Optional[float] = None
     kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        Literal[
+            "xavier_uniform",
+            "xavier_normal",
+            "orthogonal",
+            "kaiming_uniform",
+            "orthogonal_near_zero_output",
+        ]
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
     std_parameterization: Literal["exp", "uniform"] = "exp"
@@ -92,6 +107,9 @@ class CQLOff2OnArgs:
     cql_temp: float = 1.0
     cql_clip_diff_min: float = float("-inf")
     cql_clip_diff_max: float = float("inf")
+    cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only"
+    cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune"
+    cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus"
     backup_entropy: bool = False
     use_calql: bool = True
     calql_bound_random_actions: bool = False
@@ -100,6 +118,10 @@ class CQLOff2OnArgs:
     sparse_reward_mc: bool = False
     sparse_negative_reward: float = 0.0
     success_threshold: float = 0.5
+    # Phase-specific eval cadences: generic across CQL/Cal-QL/WSRL off2on --
+    # _runner.py applies these regardless of which algorithm is running.
+    offline_eval_freq: Optional[int] = None
+    online_eval_freq: Optional[int] = None
 
 
 @dataclass

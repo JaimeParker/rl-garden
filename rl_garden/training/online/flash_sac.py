@@ -1,4 +1,5 @@
 """FlashSAC run function."""
+
 from __future__ import annotations
 
 
@@ -6,7 +7,9 @@ def _flash_sac_env_request(args, run_name):
     from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
 
     backend_config = args.resolve_backend_config()
-    eval_record_dir = f"{args.log_dir}/{run_name}/videos" if args.capture_video else None
+    eval_record_dir = (
+        f"{args.log_dir}/{run_name}/videos" if args.capture_video else None
+    )
     return EnvRequest(
         env_id=args.env_id,
         num_envs=args.num_envs,
@@ -31,8 +34,10 @@ def _flash_sac_env_request(args, run_name):
 
 def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms.flash_sac import FlashSAC
+    from rl_garden.training.inspection import construct_agent
 
-    agent = FlashSAC(
+    agent = construct_agent(
+        FlashSAC,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -98,11 +103,11 @@ def run_flash_sac(args: FlashSACArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import FlashSACTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import FlashSACTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -113,4 +118,8 @@ class FlashSACArgs(FlashSACTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("flash_sac", FlashSACArgs, run_flash_sac)
+registry.register(
+    "flash_sac",
+    FlashSACArgs,
+    run_flash_sac,
+)

@@ -6,6 +6,7 @@ preset mirrors ``Off2OnIQL``'s (no warmup, mixed replay retained by default).
 Box observations only -- pass ``--obs_mode state`` (the ``EnvRunArgs``
 default is ``rgb``).
 """
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -31,8 +32,10 @@ class AWACOff2OnArgs(AWACOff2OnTrainingArgs, EnvBackendArgs):
 
 def build_awac(args: AWACOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnAWAC
+    from rl_garden.training.inspection import construct_agent
 
-    agent = Off2OnAWAC(
+    agent = construct_agent(
+        Off2OnAWAC,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,

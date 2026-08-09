@@ -6,6 +6,7 @@ implementation: IQL needs no online-switch override, so this preset mirrors
 ``Off2OnCalQL``'s (no warmup, mixed replay retained by default) rather than
 WSRL's warmup-then-discard preset.
 """
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,6 +37,7 @@ class IQLOff2OnArgs(VisionIQLOff2OnTrainingArgs, EnvBackendArgs):
 
 def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnIQL
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -49,7 +51,8 @@ def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = Off2OnIQL(
+    agent = construct_agent(
+        Off2OnIQL,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -69,10 +72,15 @@ def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         lr_warmup_steps=args.lr_warmup_steps,
         lr_decay_steps=args.lr_decay_steps,
         lr_min_ratio=args.lr_min_ratio,
+        actor_lr_schedule=args.actor_lr_schedule,
+        actor_lr_warmup_steps=args.actor_lr_warmup_steps,
+        actor_lr_decay_steps=args.actor_lr_decay_steps,
+        actor_lr_min_ratio=args.actor_lr_min_ratio,
         grad_clip_norm=args.grad_clip_norm,
         expectile=args.expectile,
         temperature=args.temperature,
         adv_clip_max=args.adv_clip_max,
+        actor_distribution=args.actor_distribution,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         actor_use_layer_norm=args.actor_use_layer_norm,

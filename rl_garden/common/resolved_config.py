@@ -1,29 +1,17 @@
 """Resolved training configuration serialization and persistence."""
+
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
 import json
-import math
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any
+
+from rl_garden.common.effective_config import json_value
 
 
 def _json_value(value: Any) -> Any:
-    if is_dataclass(value) and not isinstance(value, type):
-        return _json_value(asdict(value))
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        if math.isnan(value):
-            return "NaN"
-        return "Infinity" if value > 0 else "-Infinity"
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
+    return json_value(value)
 
 
 def resolved_run_config(
@@ -31,7 +19,7 @@ def resolved_run_config(
     *,
     training_phase: str,
     algorithm: str,
-    run_name: Optional[str] = None,
+    run_name: str | None = None,
 ) -> dict[str, Any]:
     config = {
         "training_phase": training_phase,

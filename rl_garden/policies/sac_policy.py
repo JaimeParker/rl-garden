@@ -147,6 +147,8 @@ class SACPolicy(BasePolicy):
         log_std_mode: Literal["clamp", "tanh"] = "tanh",
         log_std_min: float = LOG_STD_MIN,
         log_std_max: float = LOG_STD_MAX,
+        log_std_multiplier_init: Optional[float] = None,
+        log_std_offset_init: Optional[float] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
         actor_feature_dim: Optional[int] = None,
@@ -273,6 +275,8 @@ class SACPolicy(BasePolicy):
             log_std_mode=log_std_mode,
             log_std_min=log_std_min,
             log_std_max=log_std_max,
+            log_std_multiplier_init=log_std_multiplier_init,
+            log_std_offset_init=log_std_offset_init,
         )
 
         self.use_cql_alpha_lagrange = False

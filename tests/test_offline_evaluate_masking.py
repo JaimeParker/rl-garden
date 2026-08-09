@@ -30,6 +30,7 @@ class _ScriptedEvalEnv:
     def __init__(self, steps):
         self._steps = list(steps)
         self._i = 0
+        self.num_envs = 2
 
     def reset(self):
         return torch.zeros(2, 1), {}

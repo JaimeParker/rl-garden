@@ -45,7 +45,7 @@ robot_infra/       # Controllers, teleoperation, and real-robot utilities
 examples/          # Thin dispatchers and specialized experiment entrypoints
 scripts/           # Launchers with experiment defaults
 tests/             # Unit and backend/accelerator integration tests
-docs/              # Workflow and subsystem documentation
+docs/              # Guides, design docs, and roadmaps (see docs/README.md)
 3rd_party/         # Read-only research references and external projects
 ```
 
@@ -78,25 +78,24 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `residual_sac` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl` |
-| Offline-to-online | `examples/train_off2on.py` | `wsrl` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `residual_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, recurrent and transformer SAC/PPO |
+| Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac` |
 
-All registry-managed entrypoints accept `--print-config`. It prints the fully
-resolved recursive JSON configuration and exits before creating environments,
-loggers, or agents. Normal runs save the same configuration under
-`{log_dir}/{run_name}/config.json`.
+All registry-managed entrypoints accept `--config PRESET.yaml`, `--print-config`,
+`--dry-run`, and `--explain-param FIELD`. Static printing does not load a
+simulator; dry-run materializes the selected environment and agent but never
+trains. Normal runs atomically save the same versioned effective configuration
+under `{log_dir}/{run_name}/config.json`. See the
+[configuration guide](docs/guides/configuration.md).
 
 ### Online Training
 
-State SAC:
+State SAC with a reusable preset:
 
 ```bash
 python examples/train_online.py sac \
-  --env-id PickCube-v1 --obs-mode state --num-envs 16
-
-# Launcher with experiment defaults
-scripts/train_sac_state.sh
+  --config configs/online/sac_state.yaml
 ```
 
 Visual SAC and PPO:
@@ -127,13 +126,17 @@ base-SAC reconstruction options, and residual demo loading via
 `--offline-dataset-path` / `--offline-data-ratio`. Demo loading is currently
 supported only by `residual_sac`.
 
-Additional launchers include:
+Additional preset-backed entrypoints include:
 
 ```bash
-scripts/train_sac_rgbd.sh --encoder resnet10
-scripts/train_ppo_state.sh
-scripts/train_ppo_rgbd.sh --encoder plain_conv
-scripts/train_drqv2_rgb.sh
+python examples/train_online.py sac \
+  --config configs/online/sac_rgb_resnet.yaml
+python examples/train_online.py ppo \
+  --config configs/online/ppo_state.yaml
+python examples/train_online.py ppo \
+  --config configs/online/ppo_rgb.yaml
+python examples/train_online.py drqv2 \
+  --config configs/online/drqv2_rgb.yaml
 scripts/train_residual_rgbd.sh
 scripts/train_residual_state.sh
 ```
@@ -148,7 +151,7 @@ python examples/pretrain_offline.py calql \
   --offline_dataset_path demos/pickcube.h5 \
   --num_offline_steps 700000
 
-scripts/pretrain_offline.sh iql \
+python examples/pretrain_offline.py iql \
   --offline_dataset_path demos/pickcube.h5
 ```
 
@@ -163,11 +166,13 @@ python examples/train_off2on.py wsrl \
   --env_id PickCube-v1 \
   --offline_dataset_path demos/pickcube.h5
 
-scripts/train_wsrl.sh
-scripts/train_wsrl_rgbd.sh
+python examples/train_off2on.py wsrl \
+  --config configs/off2on/wsrl.yaml
+python examples/train_off2on.py wsrl \
+  --config configs/off2on/wsrl_rgb.yaml
 ```
 
-See [Reproducing WSRL](docs/WSRL_REPRODUCTION.md) for the complete checkpoint,
+See [Reproducing WSRL](docs/guides/wsrl-reproduction.md) for the complete checkpoint,
 dataset-generation, offline-pretraining, and online-fine-tuning workflow.
 
 ### Environment Backends
@@ -183,7 +188,7 @@ python examples/train_online.py ppo \
   --robotwin.robotwin-root /path/to/RoboTwin
 ```
 
-See [RoboTwin Integration](docs/ROBOTWIN.md) for installation, assets, observation
+See [RoboTwin Integration](docs/guides/robotwin.md) for installation, assets, observation
 mapping, rewards, and performance controls.
 
 The peg-insertion environment has dedicated camera, controller, and robot defaults
@@ -260,7 +265,7 @@ Checkpoints are torch-native `.pt` dictionaries containing model, optimizer, and
 training state. Replay snapshots are optional separate files; save them when exact
 off-policy continuation requires preserving replay distribution.
 
-See [Checkpoint Save & Load](docs/CHECKPOINT.md) for default paths, resume commands,
+See [Checkpoint Save & Load](docs/guides/checkpoint.md) for default paths, resume commands,
 replay-buffer tradeoffs, and algorithm compatibility.
 
 ## Library Composition
@@ -307,7 +312,7 @@ combined extractor and dict replay path.
 demonstration-recording utilities. See:
 
 - [Controller setup](robot_infra/controller/README.md)
-- [Teleoperation and recording](docs/TELEOP_README.md)
+- [Teleoperation and recording](docs/guides/teleop.md)
 
 Learned reward utilities live under `rl_garden/models/reward/`. Typical entrypoints
 include:
@@ -341,14 +346,17 @@ rather than changing the framework's preferred device path.
 
 ## Documentation
 
-- [Checkpoint Save & Load](docs/CHECKPOINT.md)
-- [Offline Training Acceleration](docs/OFFLINE_ACCELERATION.md)
-- [Residual SAC](docs/RESIDUAL_SAC.md)
-- [RNG and Numerical Determinism](docs/RNG_AND_NUMERICAL_DETERMINISM.md)
-- [RoboTwin Integration](docs/ROBOTWIN.md)
-- [Teleoperation and Recording](docs/TELEOP_README.md)
-- [WSRL Overview](docs/WSRL_README.md)
-- [WSRL Reproduction](docs/WSRL_REPRODUCTION.md)
+See [docs/README.md](docs/README.md) for the full index. Highlights:
+
+- [Checkpoint Save & Load](docs/guides/checkpoint.md)
+- [Configuration System](docs/guides/configuration.md)
+- [Offline Training Acceleration](docs/guides/offline-acceleration.md)
+- [RoboTwin Integration](docs/guides/robotwin.md)
+- [Teleoperation and Recording](docs/guides/teleop.md)
+- [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
+- [WSRL Overview](docs/design/wsrl-overview.md)
+- [Residual SAC](docs/design/residual-sac.md)
+- [RNG and Numerical Determinism](docs/design/rng-numerical-determinism.md)
 
 ## Research Influences
 

@@ -1,4 +1,5 @@
 """TransformerSAC run function."""
+
 from __future__ import annotations
 
 from rl_garden.training.online.sac import _sac_common_kwargs, _sac_env_request
@@ -8,25 +9,30 @@ _transformer_sac_env_request = _sac_env_request
 
 def build_transformer_sac(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import TransformerSAC
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+    from rl_garden.common.cli_args import (
+        image_encoder_factory_from_args,
+        image_keys_from_env,
+    )
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
     if is_visual:
-        image_kwargs = dict(
-            image_keys=image_keys_from_env(env, args),
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=args.frame_stack > 1,
-            image_augmentation=args.image_augmentation,
-            random_shift_pad=args.image_random_shift_pad,
-            image_augmentation_seed=args.seed + 1_000_003,
+        image_kwargs = {
+            "image_keys": image_keys_from_env(env, args),
+            "image_encoder_factory": image_encoder_factory_from_args(args),
+            "image_fusion_mode": args.image_fusion_mode,
+            "enable_stacking": args.frame_stack > 1,
+            "image_augmentation": args.image_augmentation,
+            "random_shift_pad": args.image_random_shift_pad,
+            "image_augmentation_seed": args.seed + 1_000_003,
             # Deliberately omit vit_sac_kwargs_from_args(...) here -- ViT
             # token_and_prop layouts are unsupported (SequenceSAC._build_policy
             # raises NotImplementedError for structured_feature_config()).
-        )
+        }
 
-    agent = TransformerSAC(
+    agent = construct_agent(
+        TransformerSAC,
         **_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
         embed_dim=args.embed_dim,
         head_dim=args.head_dim,
@@ -47,7 +53,7 @@ def build_transformer_sac(args, env, eval_env, logger, checkpoint_dir):
     return agent
 
 
-def run_transformer_sac(args: "TransformerSACArgs") -> None:
+def run_transformer_sac(args: TransformerSACArgs) -> None:
     from rl_garden.training.online._runner import run_online
 
     is_visual = args.obs_mode != "state"
@@ -64,11 +70,13 @@ def run_transformer_sac(args: "TransformerSACArgs") -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionTransformerSACTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import (
+    VisionTransformerSACTrainingArgs,
+)
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -80,4 +88,8 @@ class TransformerSACArgs(VisionTransformerSACTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("transformer_sac", TransformerSACArgs, run_transformer_sac)
+registry.register(
+    "transformer_sac",
+    TransformerSACArgs,
+    run_transformer_sac,
+)

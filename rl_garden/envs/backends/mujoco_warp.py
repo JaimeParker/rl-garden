@@ -7,6 +7,7 @@ See ``rl_garden.envs.mujoco_warp.env``/``custom_mujoco_warp_env`` module
 docstrings for the native-batched adapter-free design and the SAME_STEP-style
 ``final_observation`` contract.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,11 +20,12 @@ from rl_garden.envs.backend_registry import (
 
 
 class MujocoWarpBackend(EnvBackend):
+    api_version = 2
     config_field = "mujoco_warp"
 
     @classmethod
-    def _make_cfg(cls, req: EnvRequest, *, is_eval: bool):
-        from rl_garden.envs.mujoco_warp import MujocoWarpEnvConfig
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
+        from rl_garden.envs.mujoco_warp.config import MujocoWarpEnvConfig
 
         mjw_cfg = req.backend_config  # MujocoWarpConfig or None
         env_kwargs = (
@@ -45,17 +47,19 @@ class MujocoWarpBackend(EnvBackend):
             reward_bias=req.reward_bias,
         )
 
+    _make_cfg = resolve_config
+
     @classmethod
     def make_train_env(cls, req: EnvRequest):
         from rl_garden.envs.mujoco_warp import make_mujoco_warp_env
 
-        return make_mujoco_warp_env(cls._make_cfg(req, is_eval=False))
+        return make_mujoco_warp_env(cls.resolve_config(req, is_eval=False))
 
     @classmethod
     def make_eval_env(cls, req: EnvRequest):
         from rl_garden.envs.mujoco_warp import make_mujoco_warp_env
 
-        return make_mujoco_warp_env(cls._make_cfg(req, is_eval=True))
+        return make_mujoco_warp_env(cls.resolve_config(req, is_eval=True))
 
 
 register_env_backend("mujoco_warp", MujocoWarpBackend)

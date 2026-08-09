@@ -1,8 +1,9 @@
 """DrQ-v2 run function."""
+
 from __future__ import annotations
 
 import warnings
-from typing import Literal, Optional
+from typing import Literal
 
 
 def _drqv2_env_request(args, run_name):
@@ -12,8 +13,7 @@ def _drqv2_env_request(args, run_name):
     eval_record_dir = (
         None
         if args.eval_freq <= 0
-        else args.eval_output_dir
-        or f"{args.log_dir}/{run_name}/eval_videos"
+        else args.eval_output_dir or f"{args.log_dir}/{run_name}/eval_videos"
     )
     return EnvRequest(
         env_id=args.env_id,
@@ -41,6 +41,7 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms.ddpg import DDPG
     from rl_garden.common.cli_args import image_encoder_factory_from_args
     from rl_garden.encoders import discover_image_keys
+    from rl_garden.training.inspection import construct_agent
 
     if args.encoder != "drqv2_conv":
         warnings.warn(
@@ -50,7 +51,8 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
             stacklevel=2,
         )
     image_keys = discover_image_keys(env.single_observation_space)
-    agent = DDPG(
+    agent = construct_agent(
+        DDPG,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -119,11 +121,10 @@ def run_drqv2(args: DrQv2Args) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import DrQv2TrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -150,7 +151,7 @@ class DrQv2Args(EnvBackendArgs):
     total_timesteps: int = 1_000_000
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
-    mmap_dir: Optional[str] = None
+    mmap_dir: str | None = None
     mmap_mode: Literal["create", "open"] = "create"
     learning_starts: int = 4_000
     batch_size: int = 256
@@ -169,7 +170,7 @@ class DrQv2Args(EnvBackendArgs):
     stddev_schedule: str = "linear(1.0,0.1,500000)"
     stddev_clip: float = 0.3
     num_expl_steps: int = 2000
-    grad_clip_norm: Optional[float] = None
+    grad_clip_norm: float | None = None
     weight_decay: float = 0.0
     use_adamw: bool = False
 
@@ -182,7 +183,7 @@ class DrQv2Args(EnvBackendArgs):
     encoder_features_dim: int = 256
     # Unused for drqv2_conv/cnn3d; required attributes for
     # image_encoder_factory_from_args()'s resnet-only-flag validation.
-    pretrained_weights: Optional[str] = None
+    pretrained_weights: str | None = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
 
@@ -201,15 +202,15 @@ class DrQv2Args(EnvBackendArgs):
     eval_freq: int = 10_000
     num_eval_steps: int = 50
     capture_video: bool = True
-    eval_output_dir: Optional[str] = None
+    eval_output_dir: str | None = None
     video_fps: int = 30
 
     # --- Checkpoint ---
-    checkpoint_dir: Optional[str] = None
+    checkpoint_dir: str | None = None
     checkpoint_freq: int = 0
     save_replay_buffer: bool = False
     save_final_checkpoint: bool = True
-    load_checkpoint: Optional[str] = None
+    load_checkpoint: str | None = None
     load_replay_buffer: bool = False
     replay_lazy_next_obs: bool = False
     replay_pin_sampled_batch: bool = False

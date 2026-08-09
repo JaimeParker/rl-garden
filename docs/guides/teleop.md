@@ -165,5 +165,5 @@ the `wsrl` subcommand when the checkpoint should be resumed by the WSRL
 offline→online flow. This entrypoint infers obs/action specs from the H5 and
 produces pretrained checkpoints that can later be loaded into compatible
 live-env training runs for online fine-tuning. See
-[`WSRL_README.md`](WSRL_README.md#offline-only-pretraining-no-sim-env) for
+[`wsrl-overview.md`](../design/wsrl-overview.md#offline-only-pretraining-no-sim-env) for
 the full workflow.

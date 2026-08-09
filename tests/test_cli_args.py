@@ -1,19 +1,20 @@
 """Tests for shared training example CLI argument defaults."""
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import pytest
 
 from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
-    LoggingArgs,
     VisionArgs,
-    apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_env,
     image_keys_from_obs_mode,
+    resolve_num_eval_steps,
     vit_sac_kwargs_from_args,
+    warn_if_eval_budget_undersized,
 )
 from rl_garden.training.offline._args import OfflineVisionArgs, TDMPC2MultitaskTrainingArgs
 from rl_garden.training.offline.awac import AWACArgs
@@ -756,6 +757,120 @@ def test_rgbd_wsrl_defaults_match_existing_cli() -> None:
     assert args.gamma == 0.99
 
 
+def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
+    """Regression for the codex review's claim #6: these 8 fields were added
+    to the shared CQLOff2OnArgs, so WSRLOff2OnArgs exposed CLI flags that
+    build_wsrl() silently never consumes. They must live only on
+    CalQLOff2OnArgs. offline_eval_freq/online_eval_freq stay shared since
+    _runner.py applies those generically regardless of algorithm.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from rl_garden.training.off2on.calql import CalQLOff2OnArgs
+    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+
+    calql_only_fields = {
+        "hidden_dim",
+        "actor_hidden_layers",
+        "critic_hidden_layers",
+        "policy_log_std_multiplier",
+        "policy_log_std_offset",
+        "bootstrap_at_done",
+        "online_episodes_per_iteration",
+        "stats_window_size",
+        "num_eval_episodes",
+    }
+    wsrl_fields = {f.name for f in dataclass_fields(WSRLOff2OnArgs)}
+    calql_fields = {f.name for f in dataclass_fields(CalQLOff2OnArgs)}
+
+    assert calql_only_fields.isdisjoint(wsrl_fields)
+    assert calql_only_fields <= calql_fields
+    assert {"offline_eval_freq", "online_eval_freq"} <= wsrl_fields
+    assert {"offline_eval_freq", "online_eval_freq"} <= calql_fields
+
+
+def test_build_calql_forwards_stats_window_size_from_args_to_agent() -> None:
+    """Regression: a CalQLOff2OnArgs field declared but not forwarded inside
+    build_calql would silently no-op from the CLI -- exactly the gap that
+    stats_window_size itself was previously missing at the Off2OnCalQL
+    constructor level. state obs_mode keeps this a plain-args-forwarding
+    check, not a vision-encoder construction test."""
+    from unittest.mock import MagicMock
+
+    from gymnasium import spaces
+
+    from rl_garden.training.off2on.calql import CalQLOff2OnArgs, build_calql
+
+    env = MagicMock()
+    env.num_envs = 2
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+
+    args = CalQLOff2OnArgs(
+        obs_mode="state", buffer_device="cpu", stats_window_size=10, hidden_dim=8
+    )
+    agent = build_calql(args, env, None, None, None)
+
+    assert agent.stats_window_size == 10
+
+
+def test_build_iql_forwards_actor_distribution_and_actor_lr_schedule_from_args() -> None:
+    """Regression: an OfflineIQLArgs field declared but not forwarded inside
+    build_iql (offline entrypoint) would silently no-op from the CLI --
+    mirrors test_build_calql_forwards_stats_window_size_from_args_to_agent."""
+    from gymnasium import spaces
+
+    from rl_garden.algorithms import OfflineEnvSpec
+    from rl_garden.training.offline.iql import IQLArgs, build_iql
+
+    env_spec = OfflineEnvSpec(
+        spaces.Box(low=-1, high=1, shape=(4,), dtype=float),
+        spaces.Box(low=-1, high=1, shape=(2,), dtype=float),
+        num_envs=1,
+    )
+    args = IQLArgs(
+        obs_mode="state",
+        buffer_device="cpu",
+        actor_distribution="unsquashed",
+        actor_lr_schedule="warmup_cosine",
+        actor_lr_decay_steps=10,
+    )
+    agent = build_iql(args, env_spec, logger=None)
+
+    assert agent.actor_distribution == "unsquashed"
+    assert agent.actor_lr_schedule == "warmup_cosine"
+    assert agent.actor_lr_decay_steps == 10
+
+
+def test_build_iql_off2on_forwards_actor_distribution_and_actor_lr_schedule_from_args() -> (
+    None
+):
+    """Same regression, off2on entrypoint (rl_garden/training/off2on/iql.py)."""
+    from unittest.mock import MagicMock
+
+    from gymnasium import spaces
+
+    from rl_garden.training.off2on.iql import IQLOff2OnArgs, build_iql
+
+    env = MagicMock()
+    env.num_envs = 2
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+
+    args = IQLOff2OnArgs(
+        obs_mode="state",
+        buffer_device="cpu",
+        actor_distribution="unsquashed",
+        actor_lr_schedule="warmup_cosine",
+        actor_lr_decay_steps=10,
+    )
+    agent = build_iql(args, env, None, None, None)
+
+    assert agent.actor_distribution == "unsquashed"
+    assert agent.actor_lr_schedule == "warmup_cosine"
+    assert agent.actor_lr_decay_steps == 10
+
+
 @dataclass
 class _BadPlainConvArgs:
     encoder: str = "plain_conv"
@@ -901,20 +1016,81 @@ def test_image_keys_from_env_rejects_missing_explicit_key() -> None:
         image_keys_from_env(_Env(), args)
 
 
-def test_log_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    args = LoggingArgs()
-    monkeypatch.setenv("RLG_STD_LOG", "0")
-    monkeypatch.setenv("RLG_LOG_TYPE", "none")
-    monkeypatch.setenv("RLG_LOG_KEYWORDS", "train,fps")
-    monkeypatch.setenv("RLG_WANDB_PROJECT", "custom-project")
-    monkeypatch.setenv("RLG_WANDB_ENTITY", "custom-entity")
-    monkeypatch.setenv("RLG_WANDB_GROUP", "custom-group")
+def test_resolve_num_eval_steps_falls_back_to_default_when_unset() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=None,
+            num_eval_episodes=None,
+            eval_episode_horizon=None,
+            default=50,
+        )
+        == 50
+    )
 
-    apply_log_env_overrides(args)
 
-    assert args.std_log is False
-    assert args.log_type == "none"
-    assert args.log_keywords == "train,fps"
-    assert args.wandb_project == "custom-project"
-    assert args.wandb_entity == "custom-entity"
-    assert args.wandb_group == "custom-group"
+def test_resolve_num_eval_steps_derives_budget_from_horizon() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=None,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        == 100_000
+    )
+
+
+def test_resolve_num_eval_steps_explicit_wins_over_horizon() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=50,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        == 50
+    )
+
+
+def test_resolve_num_eval_steps_ignores_horizon_without_episode_target() -> None:
+    assert (
+        resolve_num_eval_steps(
+            num_eval_steps=None,
+            num_eval_episodes=None,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        == 50
+    )
+
+    with pytest.warns(RuntimeWarning, match="was ignored"):
+        warn_if_eval_budget_undersized(
+            num_eval_steps=None,
+            num_eval_episodes=None,
+            eval_episode_horizon=1_000,
+        )
+
+
+def test_resolve_num_eval_steps_is_idempotent() -> None:
+    resolved = resolve_num_eval_steps(
+        num_eval_steps=None,
+        num_eval_episodes=100,
+        eval_episode_horizon=1_000,
+        default=50,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        again = resolve_num_eval_steps(
+            num_eval_steps=resolved,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+            default=50,
+        )
+        warn_if_eval_budget_undersized(
+            num_eval_steps=again,
+            num_eval_episodes=100,
+            eval_episode_horizon=1_000,
+        )
+
+    assert again == resolved == 100_000

@@ -55,10 +55,15 @@ class IQLCore:
         lr_warmup_steps: int = 0,
         lr_decay_steps: int = 0,
         lr_min_ratio: float = 0.0,
+        actor_lr_schedule: Optional[ScheduleType] = None,
+        actor_lr_warmup_steps: Optional[int] = None,
+        actor_lr_decay_steps: Optional[int] = None,
+        actor_lr_min_ratio: Optional[float] = None,
         grad_clip_norm: Optional[float] = None,
         expectile: float = 0.7,
         temperature: float = 3.0,
         adv_clip_max: float = 100.0,
+        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -93,6 +98,18 @@ class IQLCore:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
             )
+        effective_actor_schedule = (
+            actor_lr_schedule if actor_lr_schedule is not None else lr_schedule
+        )
+        effective_actor_decay_steps = (
+            actor_lr_decay_steps if actor_lr_decay_steps is not None else lr_decay_steps
+        )
+        if effective_actor_schedule == "warmup_cosine" and effective_actor_decay_steps <= 0:
+            raise ValueError(
+                "warmup_cosine requires a positive decay step count for the actor "
+                "schedule; set actor_lr_decay_steps (or lr_decay_steps, which the "
+                f"actor schedule falls back to), got {effective_actor_decay_steps}."
+            )
 
         self.tau = tau
         self.utd = utd
@@ -104,10 +121,15 @@ class IQLCore:
         self.lr_warmup_steps = lr_warmup_steps
         self.lr_decay_steps = lr_decay_steps
         self.lr_min_ratio = lr_min_ratio
+        self.actor_lr_schedule = actor_lr_schedule
+        self.actor_lr_warmup_steps = actor_lr_warmup_steps
+        self.actor_lr_decay_steps = actor_lr_decay_steps
+        self.actor_lr_min_ratio = actor_lr_min_ratio
         self.grad_clip_norm = grad_clip_norm
         self.expectile = expectile
         self.temperature = temperature
         self.adv_clip_max = adv_clip_max
+        self.actor_distribution = actor_distribution
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
@@ -146,10 +168,15 @@ class IQLCore:
             "lr_warmup_steps": self.lr_warmup_steps,
             "lr_decay_steps": self.lr_decay_steps,
             "lr_min_ratio": self.lr_min_ratio,
+            "actor_lr_schedule": self.actor_lr_schedule,
+            "actor_lr_warmup_steps": self.actor_lr_warmup_steps,
+            "actor_lr_decay_steps": self.actor_lr_decay_steps,
+            "actor_lr_min_ratio": self.actor_lr_min_ratio,
             "grad_clip_norm": self.grad_clip_norm,
             "expectile": self.expectile,
             "temperature": self.temperature,
             "adv_clip_max": self.adv_clip_max,
+            "actor_distribution": self.actor_distribution,
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
@@ -369,6 +396,7 @@ class IQLCore:
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
+            actor_distribution=self.actor_distribution,
         ).to(self.device)
 
         self.critic_value_optimizer = make_optimizer(
@@ -386,13 +414,35 @@ class IQLCore:
         self.replay_buffer = self._build_replay_buffer()
         self._lr_schedulers = [
             make_lr_scheduler(
-                opt,
+                self.critic_value_optimizer,
                 schedule_type=self.lr_schedule,
                 warmup_steps=self.lr_warmup_steps,
                 decay_steps=self.lr_decay_steps,
                 min_lr_ratio=self.lr_min_ratio,
-            )
-            for opt in (self.critic_value_optimizer, self.actor_optimizer)
+            ),
+            make_lr_scheduler(
+                self.actor_optimizer,
+                schedule_type=(
+                    self.actor_lr_schedule
+                    if self.actor_lr_schedule is not None
+                    else self.lr_schedule
+                ),
+                warmup_steps=(
+                    self.actor_lr_warmup_steps
+                    if self.actor_lr_warmup_steps is not None
+                    else self.lr_warmup_steps
+                ),
+                decay_steps=(
+                    self.actor_lr_decay_steps
+                    if self.actor_lr_decay_steps is not None
+                    else self.lr_decay_steps
+                ),
+                min_lr_ratio=(
+                    self.actor_lr_min_ratio
+                    if self.actor_lr_min_ratio is not None
+                    else self.lr_min_ratio
+                ),
+            ),
         ]
 
     def _sample_train_batch(self, batch_size: int):
@@ -557,10 +607,15 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
         lr_warmup_steps: int = 0,
         lr_decay_steps: int = 0,
         lr_min_ratio: float = 0.0,
+        actor_lr_schedule: Optional[ScheduleType] = None,
+        actor_lr_warmup_steps: Optional[int] = None,
+        actor_lr_decay_steps: Optional[int] = None,
+        actor_lr_min_ratio: Optional[float] = None,
         grad_clip_norm: Optional[float] = None,
         expectile: float = 0.7,
         temperature: float = 3.0,
         adv_clip_max: float = 100.0,
+        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -651,10 +706,15 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
             lr_warmup_steps=lr_warmup_steps,
             lr_decay_steps=lr_decay_steps,
             lr_min_ratio=lr_min_ratio,
+            actor_lr_schedule=actor_lr_schedule,
+            actor_lr_warmup_steps=actor_lr_warmup_steps,
+            actor_lr_decay_steps=actor_lr_decay_steps,
+            actor_lr_min_ratio=actor_lr_min_ratio,
             grad_clip_norm=grad_clip_norm,
             expectile=expectile,
             temperature=temperature,
             adv_clip_max=adv_clip_max,
+            actor_distribution=actor_distribution,
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
@@ -704,10 +764,15 @@ class IQL(IQLCore, OfflineRLAlgorithm):
         lr_warmup_steps: int = 0,
         lr_decay_steps: int = 0,
         lr_min_ratio: float = 0.0,
+        actor_lr_schedule: Optional[ScheduleType] = None,
+        actor_lr_warmup_steps: Optional[int] = None,
+        actor_lr_decay_steps: Optional[int] = None,
+        actor_lr_min_ratio: Optional[float] = None,
         grad_clip_norm: Optional[float] = None,
         expectile: float = 0.7,
         temperature: float = 3.0,
         adv_clip_max: float = 100.0,
+        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
@@ -781,10 +846,15 @@ class IQL(IQLCore, OfflineRLAlgorithm):
             lr_warmup_steps=lr_warmup_steps,
             lr_decay_steps=lr_decay_steps,
             lr_min_ratio=lr_min_ratio,
+            actor_lr_schedule=actor_lr_schedule,
+            actor_lr_warmup_steps=actor_lr_warmup_steps,
+            actor_lr_decay_steps=actor_lr_decay_steps,
+            actor_lr_min_ratio=actor_lr_min_ratio,
             grad_clip_norm=grad_clip_norm,
             expectile=expectile,
             temperature=temperature,
             adv_clip_max=adv_clip_max,
+            actor_distribution=actor_distribution,
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,

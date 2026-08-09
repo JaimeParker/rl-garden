@@ -9,35 +9,43 @@ also read [the remote training SOP](../rules/remote-training-sop.md) and the ign
 The first positional argument selects the registered algorithm:
 
 ```bash
-# Online: sac, ppo, drqv2, flash_sac
+# Online: sac, ppo, recurrent/transformer variants, drqv2, flash_sac,
+# residual_sac, td3, rlpd, rlpd_hybrid, tdmpc2
 python examples/train_online.py sac --env_id PickCube-v1 --obs_mode state
 
-# Offline: bc, iql, cql, calql, wsrl
+# Offline: bc, iql, cql, calql, wsrl, awac, td3_bc, tdmpc2_multitask
 python examples/pretrain_offline.py calql \
   --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
 
-# Offline-to-online: wsrl
+# Offline-to-online: wsrl, calql, iql, awac
 python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode state
 ```
 
-Use the scripts when their experiment defaults are wanted:
+Use checked-in presets for repeatable experiment defaults:
 
 ```bash
-scripts/train_sac_state.sh
-scripts/train_sac_rgbd.sh --encoder resnet10
-scripts/train_ppo_state.sh
-scripts/train_ppo_rgbd.sh --encoder plain_conv
-scripts/train_drqv2_rgb.sh
-scripts/train_wsrl.sh
-scripts/train_wsrl_rgbd.sh
-scripts/pretrain_offline.sh calql --offline_dataset_path demos/pickcube.h5
+python examples/train_online.py sac --config configs/online/sac_state.yaml
+python examples/train_online.py sac --config configs/online/sac_rgb_resnet.yaml
+python examples/train_online.py ppo --config configs/online/ppo_state.yaml
+python examples/train_online.py ppo --config configs/online/ppo_rgb.yaml
+python examples/train_online.py drqv2 --config configs/online/drqv2_rgb.yaml
+python examples/train_off2on.py wsrl --config configs/off2on/wsrl.yaml
+python examples/train_off2on.py wsrl --config configs/off2on/wsrl_rgb.yaml
+python examples/pretrain_offline.py calql --offline_dataset_path demos/pickcube.h5
 ```
 
 ## Configuration Inspection
 
-All registry-managed entrypoints accept `--print-config`. It prints the resolved
-recursive JSON configuration and exits before creating environments, loggers, or
-agents:
+All registry-managed entrypoints accept a strict, args-only YAML preset. CLI flags
+have final precedence:
+
+```bash
+python examples/train_online.py sac \
+  --config configs/online/sac_state.yaml --gamma 0.95
+```
+
+Use `--print-config` for pure parsing and static validation. It exits before
+loading a simulator or creating environments, loggers, agents, and run directories:
 
 ```bash
 python examples/train_online.py sac --obs_mode state --print-config
@@ -46,9 +54,25 @@ python examples/pretrain_offline.py calql \
 python examples/train_off2on.py wsrl --obs_mode rgb --print-config
 ```
 
-Normal runs save the same resolved configuration to
-`{log_dir}/{run_name}/config.json`. Explicit CLI flags override `RLG_*` logging
-environment defaults.
+Use `--dry-run` when the selected backend is available. It materializes the
+environment request, backend configs, spaces, devices, and agent, then exits before
+training, W&B initialization, full dataset/replay loading, or checkpoint writes.
+If configured, checkpoint agent state is validated and loaded without its replay
+buffer at the same phase as a normal run:
+
+```bash
+python examples/train_online.py sac \
+  --config configs/online/sac_state.yaml --dry-run
+```
+
+Use `--explain-param FIELD` to inspect a value, source history, ownership, active
+condition, definition location, and mapped consumer. The three inspection actions
+are mutually exclusive.
+
+Normal runs atomically save the same EffectiveConfig v2 schema to
+`{log_dir}/{run_name}/config.json`: first `status: preflight`, then
+`status: materialized` after environment and agent construction. Explicit CLI
+flags override `RLG_*` logging environment defaults.
 
 ## Offline Evaluation
 
@@ -98,8 +122,10 @@ This is only a smoke fallback. Keep normal training CUDA-first. Set
 ## Preflight Checklist
 
 1. Confirm the intended registry phase and algorithm.
-2. Run the command with `--print-config` and inspect environment, observation,
-   device, logging, and algorithm parameters.
-3. Confirm dataset and checkpoint paths exist when applicable.
-4. Use the smallest relevant smoke before launching a long run.
-5. For checkpoint behavior, follow [the checkpoint runbook](checkpoint.md).
+2. Run `--print-config`; inspect selection, inputs, active backend, provenance,
+   logging, checkpoint, and algorithm defaults.
+3. Run `--explain-param` for every high-risk override.
+4. Confirm dataset and checkpoint paths exist when applicable.
+5. Run `--dry-run` when the backend and hardware dependencies are available.
+6. Use the smallest relevant smoke before launching a long run.
+7. For checkpoint behavior, follow [the checkpoint runbook](checkpoint.md).

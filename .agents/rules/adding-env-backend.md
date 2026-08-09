@@ -44,38 +44,34 @@ from rl_garden.envs.backend_registry import EnvBackend, EnvRequest, register_env
 
 
 class MyBackend(EnvBackend):
+    api_version = 2
     config_field = "my_backend"   # must match the field name on EnvBackendArgs
 
     @classmethod
-    def make_train_env(cls, req: EnvRequest):
-        from rl_garden.envs.my_backend import MyBackendConfig, make_my_backend_env
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
+        from rl_garden.envs.my_backend import MyBackendConfig
 
-        cfg = MyBackendConfig(
+        return MyBackendConfig(
             env_id=req.env_id,
-            num_envs=req.num_envs,
+            num_envs=req.num_eval_envs if is_eval else req.num_envs,
             obs_mode=req.obs_mode,
             # ... translate every relevant EnvRequest field
             backend_specific_knob=req.backend_config.backend_specific_knob
             if req.backend_config is not None
             else None,
         )
-        return make_my_backend_env(cfg)
+
+    @classmethod
+    def make_train_env(cls, req: EnvRequest):
+        from rl_garden.envs.my_backend import make_my_backend_env
+
+        return make_my_backend_env(cls.resolve_config(req, is_eval=False))
 
     @classmethod
     def make_eval_env(cls, req: EnvRequest):
-        from rl_garden.envs.my_backend import MyBackendConfig, make_my_backend_env
+        from rl_garden.envs.my_backend import make_my_backend_env
 
-        cfg = MyBackendConfig(
-            env_id=req.env_id,
-            num_envs=req.num_eval_envs,   # note: eval uses num_eval_envs
-            # reconfiguration_freq=1,      # reset between episodes if supported
-            record_dir=req.eval_record_dir,
-            save_video=req.capture_video,
-            video_fps=req.video_fps,
-            max_steps_per_video=req.num_eval_steps,
-            # ...
-        )
-        return make_my_backend_env(cfg)
+        return make_my_backend_env(cls.resolve_config(req, is_eval=True))
 
 
 register_env_backend("my_backend", MyBackend)   # ← fires on import
@@ -84,6 +80,12 @@ register_env_backend("my_backend", MyBackend)   # ← fires on import
 **Rules:**
 - The `config_field` string must match the attribute name you add to
   `EnvBackendArgs` in Step 3.
+- Backend API v2 is mandatory: declare `api_version = 2` and implement
+  `resolve_config`, `make_train_env`, and `make_eval_env` directly on the class.
+  Registration rejects incomplete adapters during discovery, before environment
+  construction.
+- `resolve_config` must be side-effect-free. It translates `EnvRequest` into the
+  concrete train/eval config used by dry-run without initializing a simulator.
 - `make_train_env` / `make_eval_env` must return a vectorised env that exposes
   `env.num_envs`, `env.single_observation_space`, `env.single_action_space`,
   and `step` / `reset` returning **GPU torch tensors** (or CPU tensors for

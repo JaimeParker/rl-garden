@@ -14,7 +14,6 @@ from gymnasium import spaces
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, KernelInit
 from rl_garden.policies.sac_policy import (
-    CQLAlphaLagrange,
     SACPolicy,
     TemperatureLagrange,
     WSRL_LOG_STD_MIN,
@@ -74,7 +73,6 @@ class WSRLPolicy(SACPolicy):
 
 
 __all__ = [
-    "CQLAlphaLagrange",
     "TemperatureLagrange",
     "WSRLPolicy",
 ]

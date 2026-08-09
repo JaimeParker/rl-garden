@@ -1,4 +1,5 @@
 """RoboTwin env backend — registered as ``"robotwin"``."""
+
 from __future__ import annotations
 
 from rl_garden.envs.backend_registry import (
@@ -9,10 +10,11 @@ from rl_garden.envs.backend_registry import (
 
 
 class RoboTwinBackend(EnvBackend):
+    api_version = 2
     config_field = "robotwin"
 
     @classmethod
-    def _make_cfg(cls, req: EnvRequest, *, is_eval: bool):
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
 
         rt = req.backend_config  # RoboTwinConfig or None
@@ -102,17 +104,19 @@ class RoboTwinBackend(EnvBackend):
             device=rt.device if rt is not None else "auto",
         )
 
+    _make_cfg = resolve_config
+
     @classmethod
     def make_train_env(cls, req: EnvRequest):
         from rl_garden.envs.robotwin.env import make_robotwin_env
 
-        return make_robotwin_env(cls._make_cfg(req, is_eval=False))
+        return make_robotwin_env(cls.resolve_config(req, is_eval=False))
 
     @classmethod
     def make_eval_env(cls, req: EnvRequest):
         from rl_garden.envs.robotwin.env import make_robotwin_env
 
-        return make_robotwin_env(cls._make_cfg(req, is_eval=True))
+        return make_robotwin_env(cls.resolve_config(req, is_eval=True))
 
 
 register_env_backend("robotwin", RoboTwinBackend)

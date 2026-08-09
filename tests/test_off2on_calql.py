@@ -48,17 +48,22 @@ def off2on_calql_agent(simple_env):
 
 
 def _fill_buffer(buffer, num_steps: int, marker: float = 0.0) -> None:
-    """Fill buffer with deterministic values; obs[0] = marker for identification."""
+    """Fill buffer with deterministic values; obs[0] = marker for identification.
+
+    Marks the final step ``done=True`` so the whole run is one complete
+    trajectory -- the MC buffer only samples/counts complete trajectories.
+    """
     n = buffer.num_envs
     obs_dim = buffer.obs.shape[-1]
     act_dim = buffer.actions.shape[-1]
-    for _ in range(num_steps):
+    for step in range(num_steps):
+        is_last = step == num_steps - 1
         buffer.add(
             torch.full((n, obs_dim), marker),
             torch.full((n, obs_dim), marker + 1.0),
             torch.zeros(n, act_dim),
             torch.zeros(n),
-            torch.zeros(n),
+            torch.ones(n) if is_last else torch.zeros(n),
         )
 
 
@@ -203,8 +208,106 @@ class TestOff2OnCalQLMixedBatchSampling:
         )
 
 
+def test_switch_to_online_mode_empty_resets_stale_mc_caches(off2on_calql_agent):
+    """Regression: _clear_replay_buffer() reset pos/full and cleared
+    _mc_table, but not the derived MC caches (_valid_table,
+    _valid_indices_cache, _sampleable_size_cache) or
+    WithoutReplaceSamplerMixin's _perm -- the same invariant gap already
+    fixed for checkpoint loading (see test_checkpoint.py), at a different
+    call site that predates those fields and was never updated to match."""
+    buffer = off2on_calql_agent.replay_buffer
+    _fill_buffer(buffer, 5, marker=1.0)
+    assert buffer.sampleable_size > 0
+    buffer.sample_without_repeat(2)
+    assert buffer._valid_table is not None
+    assert buffer._valid_indices_cache is not None
+    assert buffer._sampleable_size_cache is not None
+    assert buffer._perm is not None
+
+    off2on_calql_agent.switch_to_online_mode(online_replay_mode="empty")
+
+    assert buffer._valid_table is None
+    assert buffer._valid_indices_cache is None
+    assert buffer._sampleable_size_cache is None
+    assert buffer._perm is None
+
+
 def test_off2on_calql_one_update_smoke(off2on_calql_agent):
     _fill_buffer(off2on_calql_agent.replay_buffer, 5, marker=1.0)
     metrics = off2on_calql_agent.train(1, compute_info=True)
     assert "critic_loss" in metrics
     assert "calql_bound_rate" in metrics
+
+
+class _ScriptedEvalVecEnv:
+    """Every env completes a fixed-length episode in lockstep (num_envs=2)."""
+
+    def __init__(self, episode_len: int) -> None:
+        self.episode_len = episode_len
+        self.num_envs = 2
+        self._t = 0
+
+    def reset(self):
+        self._t = 0
+        return torch.zeros(self.num_envs, 4), {}
+
+    def step(self, actions):
+        self._t += 1
+        obs = torch.zeros(self.num_envs, 4)
+        rewards = torch.ones(self.num_envs)
+        done = self._t % self.episode_len == 0
+        terminations = torch.full((self.num_envs,), done, dtype=torch.bool)
+        truncations = torch.zeros(self.num_envs, dtype=torch.bool)
+        infos: dict = {}
+        if done:
+            infos["final_info"] = {"episode": {"r": torch.full((self.num_envs,), 1.0)}}
+            infos["_final_info"] = torch.ones(self.num_envs, dtype=torch.bool)
+        return obs, rewards, terminations, truncations, infos
+
+
+class TestOff2OnCalQLEvalDispatch:
+    """`num_eval_episodes` switches _evaluate() to exact-episode-count eval;
+    `None` (default) keeps OffPolicyAlgorithm's step-capped default."""
+
+    def _agent(self, simple_env, **overrides):
+        kwargs = dict(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            learning_starts=10,
+            batch_size=8,
+            gamma=0.99,
+            tau=0.005,
+            training_freq=4,
+            utd=1.0,
+            net_arch={"pi": [8], "qf": [8]},
+            n_critics=2,
+            critic_subsample_size=2,
+            use_cql_loss=False,
+            use_calql=False,
+            device="cpu",
+            seed=0,
+            num_eval_steps=50,
+        )
+        kwargs.update(overrides)
+        return Off2OnCalQL(**kwargs)
+
+    def test_num_eval_episodes_set_uses_exact_episode_count_eval(self, simple_env):
+        eval_env = _ScriptedEvalVecEnv(episode_len=3)
+        agent = self._agent(simple_env, eval_env=eval_env, num_eval_episodes=2)
+        metrics = agent._evaluate()
+        # `episodes_completed`/`eval_steps` are unique to run_exact_episode_eval;
+        # OffPolicyAlgorithm's base step-capped _evaluate never returns them.
+        assert metrics["episodes_completed"] == 2
+
+    def test_num_eval_episodes_none_uses_step_capped_default(self, simple_env):
+        eval_env = _ScriptedEvalVecEnv(episode_len=1_000)  # never completes
+        agent = self._agent(
+            simple_env,
+            eval_env=eval_env,
+            num_eval_episodes=None,
+            num_eval_steps=3,
+        )
+        metrics = agent._evaluate()
+        assert "episodes_completed" not in metrics
+        assert "eval_steps" not in metrics
