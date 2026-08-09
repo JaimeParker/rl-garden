@@ -10,7 +10,7 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import CQL, CalQL, OfflineEnvSpec, OfflineRLAlgorithm, WSRL
+from rl_garden.algorithms import CQL, WSRL, CalQL, OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms import __all__ as algorithm_exports
 from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
 from rl_garden.algorithms.cql import CQLAlphaLagrange
@@ -67,7 +67,9 @@ def _fill(agent, steps: int = 8) -> None:
         next_obs = torch.randn_like(obs)
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
-        dones = torch.ones(env.num_envs) if step == steps - 1 else torch.zeros(env.num_envs)
+        dones = (
+            torch.ones(env.num_envs) if step == steps - 1 else torch.zeros(env.num_envs)
+        )
         agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
 
@@ -108,7 +110,9 @@ def _fill_dict(agent, steps: int = 4) -> None:
         }
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
-        dones = torch.ones(env.num_envs) if step == steps - 1 else torch.zeros(env.num_envs)
+        dones = (
+            torch.ones(env.num_envs) if step == steps - 1 else torch.zeros(env.num_envs)
+        )
         agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
 
 
@@ -160,7 +164,9 @@ def test_cql_does_not_own_calql_or_wsrl_flow_state():
 def test_cql_accepts_and_wires_eval_env_constructor_args():
     eval_env = DummyVecEnv()
     kwargs = _offline_kwargs()
-    agent = CQL(env=_offline_env(), eval_env=eval_env, eval_freq=5, num_eval_steps=3, **kwargs)
+    agent = CQL(
+        env=_offline_env(), eval_env=eval_env, eval_freq=5, num_eval_steps=3, **kwargs
+    )
 
     assert agent.eval_env is eval_env
     assert agent.eval_freq == 5
@@ -194,7 +200,9 @@ def test_cql_diff_clip_mode_always_forces_clamp_when_autotuning():
     kwargs["cql_clip_diff_min"] = -1e-6
     kwargs["cql_clip_diff_max"] = 1e-6
 
-    agent_unclamped = CQL(env=_offline_env(), cql_diff_clip_mode="skip_when_autotune", **kwargs)
+    agent_unclamped = CQL(
+        env=_offline_env(), cql_diff_clip_mode="skip_when_autotune", **kwargs
+    )
     _fill(agent_unclamped)
     data = agent_unclamped.replay_buffer.sample(agent_unclamped.batch_size)
     q_pred = agent_unclamped._critic_forward(data.obs, data.actions, target=False)
@@ -224,7 +232,9 @@ def test_cql_penalty_scale_lagrange_times_alpha_multiplies_by_cql_alpha_exactly_
     agent_off = CQL(env=_offline_env(), cql_penalty_scale="lagrange_only", **kwargs)
     loss_off, _ = agent_off._critic_loss(data)
 
-    agent_on = CQL(env=_offline_env(), cql_penalty_scale="lagrange_times_alpha", **kwargs)
+    agent_on = CQL(
+        env=_offline_env(), cql_penalty_scale="lagrange_times_alpha", **kwargs
+    )
     loss_on, _ = agent_on._critic_loss(data)
 
     assert torch.allclose(loss_on, loss_off * agent_off.cql_alpha, rtol=1e-4, atol=1e-6)
@@ -257,23 +267,23 @@ def test_off2on_calql_and_wsrl_thread_all_three_cql_parity_axes():
     env.num_envs = 2
     env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
     env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
-    flags = dict(
-        cql_diff_clip_mode="always",
-        cql_penalty_scale="lagrange_times_alpha",
-        cql_alpha_param="exp_clip",
-    )
-    common = dict(
-        buffer_size=100,
-        buffer_device="cpu",
-        learning_starts=10,
-        batch_size=8,
-        net_arch={"pi": [16], "qf": [16]},
-        n_critics=4,
-        critic_subsample_size=2,
-        cql_autotune_alpha=True,
-        device="cpu",
-        seed=42,
-    )
+    flags = {
+        "cql_diff_clip_mode": "always",
+        "cql_penalty_scale": "lagrange_times_alpha",
+        "cql_alpha_param": "exp_clip",
+    }
+    common = {
+        "buffer_size": 100,
+        "buffer_device": "cpu",
+        "learning_starts": 10,
+        "batch_size": 8,
+        "net_arch": {"pi": [16], "qf": [16]},
+        "n_critics": 4,
+        "critic_subsample_size": 2,
+        "cql_autotune_alpha": True,
+        "device": "cpu",
+        "seed": 42,
+    }
 
     wsrl_agent = WSRL(env=env, **common, **flags)
     off2on_calql_agent = Off2OnCalQL(env=env, **common, **flags)
@@ -304,12 +314,16 @@ class TestCQLAlphaLagrange:
 
     @pytest.mark.parametrize("param_type", ["softplus", "exp_clip"])
     @pytest.mark.parametrize("init_value", [0.5, 1.0, 5.0])
-    def test_lagrange_init_parity_across_parameterizations(self, param_type, init_value):
+    def test_lagrange_init_parity_across_parameterizations(
+        self, param_type, init_value
+    ):
         lagrange = CQLAlphaLagrange(init_value=init_value, param_type=param_type)
         assert abs(lagrange().item() - init_value) < 1e-4
 
     def test_lagrange_exp_clip_upper_bound(self):
-        lagrange = CQLAlphaLagrange(init_value=1.0, param_type="exp_clip", exp_clip_max=1e6)
+        lagrange = CQLAlphaLagrange(
+            init_value=1.0, param_type="exp_clip", exp_clip_max=1e6
+        )
         with torch.no_grad():
             lagrange.log_alpha.fill_(20.0)
         assert lagrange().item() == pytest.approx(1e6)
@@ -521,11 +535,14 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
         subprocess.run(cmd, check=True)
         expected = f"{algorithm}_offline_pretrained.pt"
         assert (checkpoint_dir / expected).exists()
-        config = json.loads(
-            (tmp_path / "logs" / algorithm / "config.json").read_text()
-        )
-        assert config["training_phase"] == "offline"
-        assert config["algorithm"] == algorithm
+        config = json.loads((tmp_path / "logs" / algorithm / "config.json").read_text())
+        assert config["schema_version"] == 2
+        assert config["status"] == "materialized"
+        assert config["runtime"]["dry_run"] is False
+        assert config["selection"] == {
+            "training_phase": "offline",
+            "algorithm": algorithm,
+        }
 
 
 def test_pretrain_offline_cli_rejects_legacy_algorithm_flag():

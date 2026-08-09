@@ -1,7 +1,8 @@
 """RLPD run function."""
+
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 
 def _rlpd_env_request(args, run_name):
@@ -42,6 +43,7 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
+    from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
     is_visual = args.obs_mode != "state"
@@ -64,7 +66,8 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = RLPD(
+    agent = construct_agent(
+        RLPD,
         env=env,
         eval_env=eval_env,
         n_critics=args.n_critics,
@@ -168,12 +171,12 @@ def run_rlpd(args: RLPDArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.networks import BackboneType, KernelInit  # noqa: E402
-from rl_garden.training.online._args import VisionSACTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.networks import BackboneType, KernelInit
+from rl_garden.training.online._args import VisionSACTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -185,13 +188,13 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """
 
     n_critics: int = 10
-    critic_subsample_size: Optional[int] = 2
+    critic_subsample_size: int | None = 2
     critic_use_layer_norm: bool = True
     utd: float = 4.0
 
-    actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    kernel_init: Optional[KernelInit] = None
+    actor_dropout_rate: float | None = None
+    critic_dropout_rate: float | None = None
+    kernel_init: KernelInit | None = None
     backbone_type: BackboneType = "mlp"
     use_pnorm: bool = False
 
@@ -202,19 +205,19 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     lr_warmup_steps: int = 0
     lr_decay_steps: int = 0
     lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
+    grad_clip_norm: float | None = None
 
     dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
-    offline_dataset_path: Optional[str] = None
-    offline_num_traj: Optional[int] = None
-    offline_buffer_size: Optional[int] = None
+    offline_dataset_path: str | None = None
+    offline_num_traj: int | None = None
+    offline_buffer_size: int | None = None
     offline_data_ratio: float = 0.5
     # Applied to both the live env (via EnvRequest) and the offline dataset
     # loader, so online and offline rewards share one scale in the Bellman
     # target RLPD mixes them into. Matches off2on's Off2OnCommonArgs fields.
     reward_scale: float = 1.0
     reward_bias: float = 0.0
-    success_key: Optional[str] = None
+    success_key: str | None = None
 
 
-registry.register("rlpd", RLPDArgs, run_rlpd)
+registry.register("rlpd", RLPDArgs, run_rlpd, target="rl_garden.algorithms.RLPD")

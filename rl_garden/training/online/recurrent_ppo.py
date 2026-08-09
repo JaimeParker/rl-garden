@@ -1,16 +1,23 @@
 """RecurrentPPO run function."""
+
 from __future__ import annotations
 
-from rl_garden.training.online.ppo import _ppo_common_kwargs, _ppo_env_request, _ppo_image_kwargs
+from rl_garden.training.online.ppo import (
+    _ppo_common_kwargs,
+    _ppo_env_request,
+    _ppo_image_kwargs,
+)
 
 _recurrent_ppo_env_request = _ppo_env_request
 
 
 def build_recurrent_ppo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import RecurrentPPO
+    from rl_garden.training.inspection import construct_agent
 
     image_kwargs = _ppo_image_kwargs(args, env)
-    agent = RecurrentPPO(
+    agent = construct_agent(
+        RecurrentPPO,
         **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
         rnn_type=args.rnn_type,
         rnn_hidden_size=args.rnn_hidden_size,
@@ -38,11 +45,11 @@ def run_recurrent_ppo(args: RecurrentPPOArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionRecurrentPPOTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import VisionRecurrentPPOTrainingArgs
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -54,4 +61,9 @@ class RecurrentPPOArgs(VisionRecurrentPPOTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("recurrent_ppo", RecurrentPPOArgs, run_recurrent_ppo)
+registry.register(
+    "recurrent_ppo",
+    RecurrentPPOArgs,
+    run_recurrent_ppo,
+    target="rl_garden.algorithms.RecurrentPPO",
+)

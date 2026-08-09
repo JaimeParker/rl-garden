@@ -16,6 +16,7 @@ dependencies = [
     "tensorboard",
     "tqdm",
     "h5py",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]

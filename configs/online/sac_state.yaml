@@ -1,0 +1,8 @@
+env_id: PickCube-v1
+obs_mode: state
+num_envs: 16
+capture_video: true
+video_fps: 30
+render_mode: rgb_array
+eval_freq: 10000
+total_timesteps: 1000000

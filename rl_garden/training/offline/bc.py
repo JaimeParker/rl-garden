@@ -35,40 +35,40 @@ def _bc_kwargs(
     from rl_garden.encoders import discover_image_keys
 
     obs_space = env_spec.single_observation_space
-    kwargs = dict(
-        env=env_spec,
-        buffer_size=args.buffer_size,
-        buffer_device=args.buffer_device,
-        batch_size=args.batch_size,
-        offline_sampling=args.offline_sampling,
-        actor_lr=args.actor_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        actor_use_group_norm=args.actor_use_group_norm,
-        num_groups=args.num_groups,
-        actor_dropout_rate=args.actor_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        std_parameterization=args.std_parameterization,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        eval_env=eval_env,
-        eval_freq=args.eval_freq if eval_env is not None else 0,
-        num_eval_steps=args.num_eval_steps,
-        checkpoint_dir=None,
-        checkpoint_freq=0,
-        save_replay_buffer=args.save_replay_buffer,
-        save_final_checkpoint=False,
-    )
+    kwargs = {
+        "env": env_spec,
+        "buffer_size": args.buffer_size,
+        "buffer_device": args.buffer_device,
+        "batch_size": args.batch_size,
+        "offline_sampling": args.offline_sampling,
+        "actor_lr": args.actor_lr,
+        "weight_decay": args.weight_decay,
+        "use_adamw": args.use_adamw,
+        "lr_schedule": args.lr_schedule,
+        "lr_warmup_steps": args.lr_warmup_steps,
+        "lr_decay_steps": args.lr_decay_steps,
+        "lr_min_ratio": args.lr_min_ratio,
+        "grad_clip_norm": args.grad_clip_norm,
+        "actor_use_layer_norm": args.actor_use_layer_norm,
+        "actor_use_group_norm": args.actor_use_group_norm,
+        "num_groups": args.num_groups,
+        "actor_dropout_rate": args.actor_dropout_rate,
+        "kernel_init": args.kernel_init,
+        "backbone_type": args.backbone_type,
+        "std_parameterization": args.std_parameterization,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "eval_env": eval_env,
+        "eval_freq": args.eval_freq if eval_env is not None else 0,
+        "num_eval_steps": args.num_eval_steps,
+        "checkpoint_dir": None,
+        "checkpoint_freq": 0,
+        "save_replay_buffer": args.save_replay_buffer,
+        "save_final_checkpoint": False,
+    }
     if isinstance(obs_space, spaces.Dict):
         image_keys = discover_image_keys(obs_space)
         kwargs.update(
@@ -84,8 +84,9 @@ def _bc_kwargs(
 
 def build_bc(args, env_spec, logger, eval_env=None):
     from rl_garden.algorithms import BC
+    from rl_garden.training.inspection import construct_agent
 
-    return BC(**_bc_kwargs(args, env_spec, logger, eval_env))
+    return construct_agent(BC, **_bc_kwargs(args, env_spec, logger, eval_env))
 
 
 def run_bc(args: BCArgs) -> None:
@@ -94,4 +95,4 @@ def run_bc(args: BCArgs) -> None:
     run_offline(args, build_agent=build_bc)
 
 
-registry.register("bc", BCArgs, run_bc)
+registry.register("bc", BCArgs, run_bc, target="rl_garden.algorithms.BC")

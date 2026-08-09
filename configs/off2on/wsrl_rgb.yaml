@@ -1,0 +1,13 @@
+env_id: PickCube-v1
+obs_mode: rgb
+encoder: plain_conv
+num_envs: 16
+num_offline_steps: 0
+num_online_steps: 1000000
+n_critics: 10
+critic_subsample_size: 2
+use_calql: true
+capture_video: true
+video_fps: 30
+render_mode: rgb_array
+eval_freq: 10000

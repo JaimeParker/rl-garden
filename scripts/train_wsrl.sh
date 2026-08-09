@@ -55,22 +55,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_off2on.py" wsrl \
-    --env_id PickCube-v1 \
-    --num_envs 16 \
-    --num_offline_steps 0 \
-    --num_online_steps 1000000 \
-    --gamma 0.8 \
-    --tau 0.01 \
-    --utd 4.0 \
-    --warmup_steps 5000 \
-    --online_replay_mode empty \
-    --no-online_use_cql_loss \
-    --n_critics 10 \
-    --critic_subsample_size 2 \
-    --use_calql \
-    --capture_video \
-    --video_fps 30 \
-    --render_mode rgb_array \
-    --eval_freq 10000 \
+exec env RLG_LAUNCHER="${BASH_SOURCE[0]}" RLG_LAUNCHER_PRESET="$REPO_DIR/configs/off2on/wsrl.yaml" RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_off2on.py" wsrl \
+    --config "$REPO_DIR/configs/off2on/wsrl.yaml" \
     "${FORWARD_ARGS[@]}"

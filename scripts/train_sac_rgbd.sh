@@ -59,7 +59,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 ENCODER="plain_conv"
-HAS_Q_LR=0
 for ((i = 0; i < ${#FORWARD_ARGS[@]}; i++)); do
     arg="${FORWARD_ARGS[$i]}"
     case "$arg" in
@@ -71,23 +70,13 @@ for ((i = 0; i < ${#FORWARD_ARGS[@]}; i++)); do
         --encoder=*)
             ENCODER="${arg#*=}"
             ;;
-        --q_lr|--q-lr|--q_lr=*|--q-lr=*)
-            HAS_Q_LR=1
-            ;;
     esac
 done
-if [[ "$ENCODER" == resnet* && "$HAS_Q_LR" -eq 0 ]]; then
-    FORWARD_ARGS+=(--q_lr 1e-4)
+PRESET="$REPO_DIR/configs/online/sac_rgb.yaml"
+if [[ "$ENCODER" == resnet* ]]; then
+    PRESET="$REPO_DIR/configs/online/sac_rgb_resnet.yaml"
 fi
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" sac \
-    --env_id PickCube-v1 \
-    --obs_mode rgb \
-    --num_envs 16 \
-    --camera_width 64 --camera_height 64 \
-    --capture_video \
-    --video_fps 30 \
-    --render_mode rgb_array \
-    --eval_freq 10000 \
-    --total_timesteps 1000000 \
+exec env RLG_LAUNCHER="${BASH_SOURCE[0]}" RLG_LAUNCHER_PRESET="$PRESET" RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" sac \
+    --config "$PRESET" \
     "${FORWARD_ARGS[@]}"

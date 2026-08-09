@@ -8,8 +8,9 @@ keeps the CQL/Cal-QL regularizer online — matching Nakamoto et al. 2023
 (Cal-QL) instead of the WSRL paper's warmup-then-discard preset used by the
 `wsrl` entrypoint.
 """
+
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
@@ -42,16 +43,17 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     hidden_dim: int = 256
     actor_hidden_layers: int = 2
     critic_hidden_layers: int = 2
-    policy_log_std_multiplier: Optional[float] = None
-    policy_log_std_offset: Optional[float] = None
+    policy_log_std_multiplier: float | None = None
+    policy_log_std_offset: float | None = None
     bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
-    online_episodes_per_iteration: Optional[int] = None
-    stats_window_size: Optional[int] = None
-    num_eval_episodes: Optional[int] = None
+    online_episodes_per_iteration: int | None = None
+    stats_window_size: int | None = None
+    num_eval_episodes: int | None = None
 
 
 def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnCalQL
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -70,7 +72,8 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
 
-    agent = Off2OnCalQL(
+    agent = construct_agent(
+        Off2OnCalQL,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -163,4 +166,9 @@ def run_calql(args: CalQLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_calql, algorithm="calql")
 
 
-registry.register("calql", CalQLOff2OnArgs, run_calql)
+registry.register(
+    "calql",
+    CalQLOff2OnArgs,
+    run_calql,
+    target="rl_garden.algorithms.Off2OnCalQL",
+)

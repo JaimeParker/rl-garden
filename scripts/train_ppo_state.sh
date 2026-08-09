@@ -54,15 +54,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" ppo \
-    --obs_mode state \
-    --env_id PickCube-v1 \
-    --num_envs 512 \
-    --num_steps 50 \
-    --capture_video \
-    --video_fps 30 \
-    --render_mode rgb_array \
-    --eval_freq 25 \
-    --total_timesteps 10000000 \
+exec env RLG_LAUNCHER="${BASH_SOURCE[0]}" RLG_LAUNCHER_PRESET="$REPO_DIR/configs/online/ppo_state.yaml" RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" ppo \
+    --config "$REPO_DIR/configs/online/ppo_state.yaml" \
     "${FORWARD_ARGS[@]}"
-

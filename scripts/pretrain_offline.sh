@@ -55,5 +55,5 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/pretrain_offline.py" \
+exec env RLG_LAUNCHER="${BASH_SOURCE[0]}" RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" "$PYTHON_BIN" -u "$REPO_DIR/examples/pretrain_offline.py" \
     "${FORWARD_ARGS[@]}"

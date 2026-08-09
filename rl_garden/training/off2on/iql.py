@@ -6,6 +6,7 @@ implementation: IQL needs no online-switch override, so this preset mirrors
 ``Off2OnCalQL``'s (no warmup, mixed replay retained by default) rather than
 WSRL's warmup-then-discard preset.
 """
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,6 +37,7 @@ class IQLOff2OnArgs(VisionIQLOff2OnTrainingArgs, EnvBackendArgs):
 
 def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnIQL
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -49,7 +51,8 @@ def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = Off2OnIQL(
+    agent = construct_agent(
+        Off2OnIQL,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -117,4 +120,6 @@ def run_iql(args: IQLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_iql, algorithm="iql")
 
 
-registry.register("iql", IQLOff2OnArgs, run_iql)
+registry.register(
+    "iql", IQLOff2OnArgs, run_iql, target="rl_garden.algorithms.Off2OnIQL"
+)

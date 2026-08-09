@@ -54,14 +54,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec env RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" residual_sac \
-    --env-id PickCube-v1 \
-    --obs-mode rgb \
-    --num-envs 16 \
-    --camera-width 64 --camera-height 64 \
-    --capture-video \
-    --video-fps 30 \
-    --render-mode rgb_array \
-    --eval-freq 10000 \
-    --total-timesteps 1000000 \
+exec env RLG_LAUNCHER="${BASH_SOURCE[0]}" RLG_LAUNCHER_PRESET="$REPO_DIR/configs/online/residual_sac_rgb.yaml" RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" residual_sac \
+    --config "$REPO_DIR/configs/online/residual_sac_rgb.yaml" \
     "${FORWARD_ARGS[@]}"

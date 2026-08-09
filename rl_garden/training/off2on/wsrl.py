@@ -1,4 +1,5 @@
 """WSRL offline-to-online training registration."""
+
 from dataclasses import dataclass
 
 from rl_garden.common.cli_args import (
@@ -21,6 +22,7 @@ class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
 
 def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import WSRL
+    from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
@@ -34,7 +36,8 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             **vit_sac_kwargs_from_args(args, image_keys),
         )
 
-    agent = WSRL(
+    agent = construct_agent(
+        WSRL,
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -120,4 +123,4 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_wsrl, algorithm="wsrl")
 
 
-registry.register("wsrl", WSRLOff2OnArgs, run_wsrl)
+registry.register("wsrl", WSRLOff2OnArgs, run_wsrl, target="rl_garden.algorithms.WSRL")

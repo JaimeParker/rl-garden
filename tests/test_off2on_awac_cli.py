@@ -1,9 +1,10 @@
 """CLI-level smoke test for the AWAC off2on entrypoint."""
+
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_awac_print_config_matches_corl_aligned_defaults(tmp_path):
@@ -30,12 +31,11 @@ def test_awac_print_config_matches_corl_aligned_defaults(tmp_path):
     )
 
     config = json.loads(result.stdout)
-    assert config["training_phase"] == "off2on"
-    assert config["algorithm"] == "awac"
-    assert config["args"]["warmup_steps"] == 0
-    assert config["args"]["online_replay_mode"] == "mixed"
-    assert config["args"]["offline_data_ratio"] == "auto"
-    assert config["args"]["awac_lambda"] == 1.0
-    assert config["args"]["exp_adv_max"] == 100.0
+    assert config["selection"] == {"training_phase": "off2on", "algorithm": "awac"}
+    assert config["inputs"]["warmup_steps"] == 0
+    assert config["inputs"]["online_replay_mode"] == "mixed"
+    assert config["inputs"]["offline_data_ratio"] == "auto"
+    assert config["inputs"]["awac_lambda"] == 1.0
+    assert config["inputs"]["exp_adv_max"] == 100.0
     assert list(tmp_path.iterdir()) == []
     assert "mani_skill" not in result.stderr

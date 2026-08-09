@@ -31,8 +31,10 @@ def _wsrl_kwargs(
 
 def build_wsrl(args, env_spec, logger, eval_env=None):
     from rl_garden.algorithms import WSRL
+    from rl_garden.training.inspection import construct_agent
 
-    return WSRL(
+    return construct_agent(
+        WSRL,
         **_wsrl_kwargs(args, env_spec, logger, eval_env),
         use_calql=args.use_calql,
         calql_bound_random_actions=args.calql_bound_random_actions,
@@ -48,4 +50,4 @@ def run_wsrl(args: WSRLOfflineArgs) -> None:
     run_offline(args, build_agent=build_wsrl)
 
 
-registry.register("wsrl", WSRLOfflineArgs, run_wsrl)
+registry.register("wsrl", WSRLOfflineArgs, run_wsrl, target="rl_garden.algorithms.WSRL")

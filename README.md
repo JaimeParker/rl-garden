@@ -78,14 +78,16 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `residual_sac` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl` |
-| Offline-to-online | `examples/train_off2on.py` | `wsrl` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `residual_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, recurrent and transformer SAC/PPO |
+| Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac` |
 
-All registry-managed entrypoints accept `--print-config`. It prints the fully
-resolved recursive JSON configuration and exits before creating environments,
-loggers, or agents. Normal runs save the same configuration under
-`{log_dir}/{run_name}/config.json`.
+All registry-managed entrypoints accept `--config PRESET.yaml`, `--print-config`,
+`--dry-run`, and `--explain-param FIELD`. Static printing does not load a
+simulator; dry-run materializes the selected environment and agent but never
+trains. Normal runs atomically save the same versioned effective configuration
+under `{log_dir}/{run_name}/config.json`. See the
+[configuration guide](docs/guides/configuration.md).
 
 ### Online Training
 

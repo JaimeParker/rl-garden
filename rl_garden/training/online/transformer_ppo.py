@@ -1,16 +1,23 @@
 """TransformerPPO run function."""
+
 from __future__ import annotations
 
-from rl_garden.training.online.ppo import _ppo_common_kwargs, _ppo_env_request, _ppo_image_kwargs
+from rl_garden.training.online.ppo import (
+    _ppo_common_kwargs,
+    _ppo_env_request,
+    _ppo_image_kwargs,
+)
 
 _transformer_ppo_env_request = _ppo_env_request
 
 
 def build_transformer_ppo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import TransformerPPO
+    from rl_garden.training.inspection import construct_agent
 
     image_kwargs = _ppo_image_kwargs(args, env)
-    agent = TransformerPPO(
+    agent = construct_agent(
+        TransformerPPO,
         **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
         embed_dim=args.embed_dim,
         head_dim=args.head_dim,
@@ -43,11 +50,13 @@ def run_transformer_ppo(args: TransformerPPOArgs) -> None:
 # Args + registration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.training.online._args import VisionTransformerPPOTrainingArgs  # noqa: E402
-from rl_garden.training.online._registry import registry  # noqa: E402
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online._args import (
+    VisionTransformerPPOTrainingArgs,
+)
+from rl_garden.training.online._registry import registry
 
 
 @dataclass
@@ -59,4 +68,9 @@ class TransformerPPOArgs(VisionTransformerPPOTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("transformer_ppo", TransformerPPOArgs, run_transformer_ppo)
+registry.register(
+    "transformer_ppo",
+    TransformerPPOArgs,
+    run_transformer_ppo,
+    target="rl_garden.algorithms.TransformerPPO",
+)

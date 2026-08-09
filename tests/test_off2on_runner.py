@@ -1,4 +1,5 @@
 """Tests for off2on/_runner.py's Minari wiring helpers."""
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -19,13 +20,22 @@ from rl_garden.training.off2on.calql import CalQLOff2OnArgs
 from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
 
-def _args(**overrides):
-    defaults = dict(
-        dataset_source="maniskill_h5",
-        env_id="PickCube-v1",
-        offline_dataset_path=None,
-        env_backend="maniskill",
+@pytest.fixture(autouse=True)
+def _disable_contract_validation_for_runner_test_doubles(monkeypatch):
+    from rl_garden.training import inspection
+
+    monkeypatch.setattr(
+        inspection, "validate_constructor_coverage", lambda *args, **kwargs: None
     )
+
+
+def _args(**overrides):
+    defaults = {
+        "dataset_source": "maniskill_h5",
+        "env_id": "PickCube-v1",
+        "offline_dataset_path": None,
+        "env_backend": "maniskill",
+    }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
@@ -75,7 +85,9 @@ def _run_off2on_and_capture_create_eval_env(monkeypatch, tmp_path, **arg_overrid
         del backend_name
         captured["create_eval_env"] = req.create_eval_env
         env = SimpleNamespace(
-            single_action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+            single_action_space=spaces.Box(
+                low=-1, high=1, shape=(2,), dtype=np.float32
+            ),
             close=lambda: None,
         )
         eval_env = SimpleNamespace(close=lambda: None) if req.create_eval_env else None
@@ -84,8 +96,10 @@ def _run_off2on_and_capture_create_eval_env(monkeypatch, tmp_path, **arg_overrid
     monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
 
     def build_agent(args, env, eval_env, logger, checkpoint_dir):
+        from rl_garden.training.inspection import construct_agent
+
         del args, env, eval_env, logger, checkpoint_dir
-        agent = MagicMock()
+        agent = construct_agent(MagicMock)
         agent.checkpoint_dir = None
         agent.save_final_checkpoint = False
         return agent
@@ -116,7 +130,9 @@ def test_run_off2on_builds_eval_env_when_eval_freq_positive(monkeypatch, tmp_pat
     assert created is True
 
 
-def test_run_off2on_builds_eval_env_when_only_offline_eval_freq_set(monkeypatch, tmp_path):
+def test_run_off2on_builds_eval_env_when_only_offline_eval_freq_set(
+    monkeypatch, tmp_path
+):
     """Regression for the codex review's claim #5: eval_freq=0 with a
     phase-specific frequency set must still build an eval env -- previously
     should_create_eval_env() only checked eval_freq, silently disabling both
@@ -128,21 +144,65 @@ def test_run_off2on_builds_eval_env_when_only_offline_eval_freq_set(monkeypatch,
     assert created is True
 
 
-def test_run_off2on_builds_eval_env_when_only_online_eval_freq_set(monkeypatch, tmp_path):
+def test_run_off2on_builds_eval_env_when_only_online_eval_freq_set(
+    monkeypatch, tmp_path
+):
     created = _run_off2on_and_capture_create_eval_env(
         monkeypatch, tmp_path, eval_freq=0, online_eval_freq=2000, num_eval_envs=4
     )
     assert created is True
 
 
-def _run_off2on_and_capture_num_eval_steps(monkeypatch, tmp_path, args_cls, **arg_overrides):
+def test_run_off2on_closes_envs_when_builder_fails(monkeypatch, tmp_path):
+    closed = {"train": False, "eval": False}
+
+    def fake_make_training_envs(backend_name, req):
+        del backend_name, req
+        train_env = SimpleNamespace(
+            single_action_space=spaces.Box(-1, 1, shape=(2,), dtype=np.float32),
+            close=lambda: closed.__setitem__("train", True),
+        )
+        eval_env = SimpleNamespace(
+            close=lambda: closed.__setitem__("eval", True),
+        )
+        return train_env, eval_env
+
+    monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
+    args = WSRLOff2OnArgs(
+        log_type="none",
+        log_dir=str(tmp_path),
+        num_offline_steps=0,
+        num_online_steps=0,
+        save_final_checkpoint=False,
+        eval_freq=1,
+        num_eval_envs=1,
+    )
+
+    def failing_builder(*unused):
+        raise RuntimeError("builder failed")
+
+    with pytest.raises(RuntimeError, match="builder failed"):
+        _runner.run_off2on(
+            args,
+            build_agent=failing_builder,
+            algorithm="wsrl",
+        )
+
+    assert closed == {"train": True, "eval": True}
+
+
+def _run_off2on_and_capture_num_eval_steps(
+    monkeypatch, tmp_path, args_cls, **arg_overrides
+):
     captured = {}
 
     def fake_make_training_envs(backend_name, req):
         del backend_name
         captured["num_eval_steps"] = req.num_eval_steps
         env = SimpleNamespace(
-            single_action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+            single_action_space=spaces.Box(
+                low=-1, high=1, shape=(2,), dtype=np.float32
+            ),
             close=lambda: None,
         )
         eval_env = SimpleNamespace(close=lambda: None) if req.create_eval_env else None
@@ -151,8 +211,10 @@ def _run_off2on_and_capture_num_eval_steps(monkeypatch, tmp_path, args_cls, **ar
     monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
 
     def build_agent(args, env, eval_env, logger, checkpoint_dir):
+        from rl_garden.training.inspection import construct_agent
+
         del args, env, eval_env, logger, checkpoint_dir
-        agent = MagicMock()
+        agent = construct_agent(MagicMock)
         agent.checkpoint_dir = None
         agent.save_final_checkpoint = False
         return agent
@@ -238,7 +300,9 @@ class _FakeOfflineEvalAgent:
         self.checkpoint_freq = 0
         self.eval_calls: list[int] = []
 
-    def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
+    def train(
+        self, gradient_steps: int, compute_info: bool = False
+    ) -> dict[str, float]:
         return {}
 
     def _evaluate(self) -> dict[str, float]:
@@ -256,8 +320,12 @@ def test_offline_update_loop_uses_explicit_eval_freq_over_agent_eval_freq():
     # offline_eval_freq=2 (gradient-update units) should fire twice.
     agent = _FakeOfflineEvalAgent(eval_freq=1000)
     _offline_update_loop(
-        agent, steps=4, logger=Logger(log_type="none"),
-        log_freq=0, std_log=False, eval_freq=2,
+        agent,
+        steps=4,
+        logger=Logger(log_type="none"),
+        log_freq=0,
+        std_log=False,
+        eval_freq=2,
     )
     assert len(agent.eval_calls) == 2
 
@@ -267,8 +335,12 @@ def test_offline_update_loop_falls_back_to_agent_eval_freq_when_none():
 
     agent = _FakeOfflineEvalAgent(eval_freq=2)
     _offline_update_loop(
-        agent, steps=4, logger=Logger(log_type="none"),
-        log_freq=0, std_log=False, eval_freq=None,
+        agent,
+        steps=4,
+        logger=Logger(log_type="none"),
+        log_freq=0,
+        std_log=False,
+        eval_freq=None,
     )
     assert len(agent.eval_calls) == 2
 
@@ -289,8 +361,12 @@ def test_set_offline_probe_uses_sampleable_size_not_len():
     # Two complete episodes, then one still-open trailing step.
     for is_last in (True, True, False):
         buffer.add(
-            torch.zeros(1, 3), torch.zeros(1, 3), torch.zeros(1, 1),
-            torch.ones(1), torch.zeros(1), episode_end=torch.tensor([is_last]),
+            torch.zeros(1, 3),
+            torch.zeros(1, 3),
+            torch.zeros(1, 1),
+            torch.ones(1),
+            torch.zeros(1),
+            episode_end=torch.tensor([is_last]),
         )
     assert buffer.sampleable_size == 2
     assert len(buffer) == 3

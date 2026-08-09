@@ -1,16 +1,26 @@
 """Shared online training lifecycle (mirrors offline/_runner.py)."""
+
 from __future__ import annotations
 
 import os
 import time
-import warnings
-from typing import Any, Callable
-
-import torch
+from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
 from rl_garden.common import Logger, seed_everything
-from rl_garden.common.resolved_config import persist_resolved_config
+from rl_garden.common.effective_config import json_value, persist_effective_config
 from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
+from rl_garden.training.inspection import (
+    config_session,
+    emit_materialized_config,
+    has_config_session,
+    is_dry_run,
+    materialize_config,
+    prepare_standalone,
+    run_preflight,
+)
 
 
 def run_online(
@@ -23,17 +33,32 @@ def run_online(
 ) -> None:
     from rl_garden.training.online._registry import registry
 
-    algorithm, _ = registry.entry_for_args(args)
+    algorithm, entry = registry.entry_for_args(args)
+    if not has_config_session():
+        normalized_args, preflight = prepare_standalone(
+            args,
+            registry=registry,
+            training_phase="online",
+            algorithm=algorithm,
+            contract=entry.contract,
+        )
+        with config_session(preflight, dry_run=False, contract=entry.contract):
+            return run_online(
+                normalized_args,
+                obs_tag=obs_tag,
+                make_env_request=make_env_request,
+                build_agent=build_agent,
+                post_learn=post_learn,
+            )
 
     seed_everything(args.seed)
 
-    if getattr(args, "buffer_device", None) == "cuda" and not torch.cuda.is_available():
-        warnings.warn("CUDA not available; falling back to CPU buffer.", stacklevel=2)
-        args.buffer_device = "cpu"
-
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     tag = f"_{obs_tag}" if obs_tag else ""
-    run_name = args.exp_name or f"{args.env_id}__{algorithm}{tag}__{args.seed}__{int(time.time())}"
+    run_name = (
+        args.exp_name
+        or f"{args.env_id}__{algorithm}{tag}__{args.seed}__{int(time.time())}"
+    )
 
     _chkpt_override = getattr(args, "checkpoint_dir", None)
     if _chkpt_override is not None:
@@ -43,24 +68,27 @@ def run_online(
     else:
         checkpoint_dir = os.path.join(args.log_dir, run_name, "checkpoints")
 
-    resolved_config = persist_resolved_config(
-        args,
-        training_phase="online",
-        algorithm=algorithm,
-        run_name=run_name,
-        log_dir=args.log_dir,
-    )
-    logger = Logger.create(
-        log_type=args.log_type,
-        log_dir=args.log_dir,
-        run_name=run_name,
-        config=resolved_config,
-        start_time=start_time,
-        log_keywords=args.log_keywords,
-        wandb_project=args.wandb_project,
-        wandb_entity=args.wandb_entity,
-        wandb_group=args.wandb_group or args.env_id,
-    )
+    dry_run = is_dry_run()
+    if dry_run:
+        logger = Logger(log_type="none")
+    else:
+        config_path = Path(args.log_dir) / run_name / "config.json"
+        preflight_config = run_preflight(
+            {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
+        )
+        persist_effective_config(preflight_config, config_path)
+        resolved_config = json_value(preflight_config)
+        logger = Logger.create(
+            log_type=args.log_type,
+            log_dir=args.log_dir,
+            run_name=run_name,
+            config=resolved_config,
+            start_time=start_time,
+            log_keywords=args.log_keywords,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            wandb_group=args.wandb_group or args.env_id,
+        )
     logger.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n"
@@ -68,14 +96,50 @@ def run_online(
     )
 
     req = make_env_request(args, run_name)
-    env, eval_env = make_training_envs(args.env_backend, req)
-
-    agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
-    agent.learn(total_timesteps=args.total_timesteps)
-    if post_learn is not None:
-        post_learn(agent)
-
-    logger.close()
-    env.close()
-    if eval_env is not None:
-        eval_env.close()
+    if dry_run:
+        req = replace(req, capture_video=False, eval_record_dir=None)
+    env = None
+    eval_env = None
+    try:
+        env, eval_env = make_training_envs(args.env_backend, req)
+        agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
+        materialized_derived = {
+            "run_name": run_name,
+            "checkpoint_dir": checkpoint_dir,
+            "steps_per_env": getattr(agent, "steps_per_env", None),
+            "grad_steps_per_iteration": getattr(
+                agent, "grad_steps_per_iteration", None
+            ),
+        }
+        if dry_run:
+            materialized_derived["dry_run_resource_overrides"] = {
+                "capture_video": False,
+                "eval_record_dir": None,
+            }
+        if dry_run:
+            emit_materialized_config(
+                env_request=req,
+                env=env,
+                eval_env=eval_env,
+                agent=agent,
+                derived=materialized_derived,
+            )
+            return
+        materialized = materialize_config(
+            env_request=req,
+            env=env,
+            eval_env=eval_env,
+            agent=agent,
+            derived=materialized_derived,
+        )
+        persist_effective_config(materialized, config_path)
+        logger.update_config(json_value(materialized))
+        agent.learn(total_timesteps=args.total_timesteps)
+        if post_learn is not None:
+            post_learn(agent)
+    finally:
+        logger.close()
+        if env is not None:
+            env.close()
+        if eval_env is not None:
+            eval_env.close()

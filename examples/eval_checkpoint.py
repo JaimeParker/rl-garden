@@ -16,13 +16,14 @@ Example:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, is_dataclass
 import importlib
 import json
-from pathlib import Path
 import re
 import time
-from typing import Any, Literal, Mapping, Optional
+from collections.abc import Mapping
+from dataclasses import dataclass, field, is_dataclass
+from pathlib import Path
+from typing import Any, Literal
 
 import torch
 import tyro
@@ -54,7 +55,7 @@ class EvalCheckpointArgs(EnvBackendArgs):
     checkpoint_path: str = ""
     phase: Phase = "auto"
     algorithm: str = "auto"
-    config_path: Optional[str] = None
+    config_path: str | None = None
 
     env_id: str = "PickCube-v1"
     obs_mode: str = "state"
@@ -62,14 +63,14 @@ class EvalCheckpointArgs(EnvBackendArgs):
     render_mode: str = "rgb_array"
     num_eval_envs: int = 16
     num_eval_episodes: int = 50
-    max_eval_steps: Optional[int] = None
+    max_eval_steps: int | None = None
     seed: int = 1
     device: str = "auto"
     buffer_device: str = "cpu"
 
     include_state: bool = True
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
+    camera_width: int | None = 64
+    camera_height: int | None = 64
     per_camera_rgbd: bool = False
     frame_stack: int = 1
     reward_scale: float = 1.0
@@ -77,8 +78,8 @@ class EvalCheckpointArgs(EnvBackendArgs):
 
     capture_video: bool = False
     video_fps: int = 30
-    eval_output_dir: Optional[str] = None
-    output_json: Optional[str] = None
+    eval_output_dir: str | None = None
+    output_json: str | None = None
     strict: bool = True
 
     log_type: str = "none"
@@ -140,7 +141,9 @@ def _resolve_phase_and_algorithm(
 ) -> tuple[str, str]:
     metadata = checkpoint.get("metadata", {})
     inferred_algorithm = _algorithm_from_class(metadata.get("algorithm_class"))
-    algorithm = requested_algorithm if requested_algorithm != "auto" else inferred_algorithm
+    algorithm = (
+        requested_algorithm if requested_algorithm != "auto" else inferred_algorithm
+    )
     if algorithm is None:
         raise SystemExit(
             "Could not infer algorithm from checkpoint metadata; pass --algorithm."
@@ -155,8 +158,7 @@ def _resolve_phase_and_algorithm(
 
     if not matches:
         raise SystemExit(
-            f"Algorithm {algorithm!r} is not registered for phase "
-            f"{requested_phase!r}."
+            f"Algorithm {algorithm!r} is not registered for phase {requested_phase!r}."
         )
     if requested_phase == "auto" and len(matches) > 1:
         choices = ", ".join(f"{phase}:{alg}" for phase, alg in matches)
@@ -184,7 +186,7 @@ def _apply_mapping_to_args(args: Any, values: Mapping[str, Any]) -> None:
 
 def _config_args(config_path: Path) -> Mapping[str, Any]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    args = config.get("args", config)
+    args = config.get("inputs", config.get("args", config))
     if not isinstance(args, Mapping):
         raise SystemExit(f"Config {config_path} does not contain an args mapping.")
     return args
@@ -360,10 +362,12 @@ def _to_cpu_1d(value: Any) -> torch.Tensor:
     return torch.as_tensor(value).detach().cpu().reshape(-1)
 
 
-def _done_mask(infos: Mapping[str, Any], terminations: Any, truncations: Any) -> torch.Tensor:
+def _done_mask(
+    infos: Mapping[str, Any], terminations: Any, truncations: Any
+) -> torch.Tensor:
     if "_final_info" in infos:
         return _to_cpu_1d(infos["_final_info"]).bool()
-    return (_to_cpu_1d(terminations).bool() | _to_cpu_1d(truncations).bool())
+    return _to_cpu_1d(terminations).bool() | _to_cpu_1d(truncations).bool()
 
 
 def _append_metric_values(
@@ -374,7 +378,11 @@ def _append_metric_values(
 ) -> int:
     appended = 0
     for raw_key, value in episode.items():
-        if raw_key.startswith("_") or raw_key in EVAL_METRIC_DROP or isinstance(value, Mapping):
+        if (
+            raw_key.startswith("_")
+            or raw_key in EVAL_METRIC_DROP
+            or isinstance(value, Mapping)
+        ):
             continue
         key = EVAL_METRIC_ALIASES.get(raw_key, raw_key)
         values = _to_cpu_1d(value)
@@ -413,7 +421,9 @@ def evaluate_agent(
             with torch.no_grad():
                 env_action, critic_action = agent._eval_action_and_critic_action(obs)
                 obs_before = obs
-                obs, rewards, terminations, truncations, infos = eval_env.step(env_action)
+                obs, rewards, terminations, truncations, infos = eval_env.step(
+                    env_action
+                )
                 agent._eval_step_hook(
                     obs_before,
                     critic_action,
@@ -515,7 +525,9 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
             load_replay_buffer=False,
             load_optimizers=False,
         )
-        max_eval_steps = eval_args.max_eval_steps or max(eval_args.num_eval_episodes * 1000, 1)
+        max_eval_steps = eval_args.max_eval_steps or max(
+            eval_args.num_eval_episodes * 1000, 1
+        )
         metrics = evaluate_agent(
             agent,
             eval_env,

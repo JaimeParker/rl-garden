@@ -1,8 +1,9 @@
 """Unified logger backend for TensorBoard / W&B / stdout-only modes."""
+
 from __future__ import annotations
 
 import os
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -28,9 +29,18 @@ def _flatten_wandb_config(config: dict[str, Any], sep: str = ".") -> dict[str, A
         else:
             flat[prefix] = value
 
+    is_effective_v2 = config.get("schema_version") == 2 and isinstance(
+        config.get("inputs"), dict
+    )
     for key, value in config.items():
-        if key == "args" and isinstance(value, dict):
+        if key in {"args", "inputs"} and isinstance(value, dict):
             _add("", value)
+        elif is_effective_v2 and key == "selection":
+            _add("selection", value)
+        elif is_effective_v2 and config.get("status") == "preflight":
+            continue
+        elif is_effective_v2:
+            _add(f"effective{sep}{key}", value)
         else:
             _add(str(key), value)
     return flat
@@ -39,8 +49,8 @@ def _flatten_wandb_config(config: dict[str, Any], sep: str = ".") -> dict[str, A
 class Logger:
     def __init__(
         self,
-        tensorboard: Optional[SummaryWriter] = None,
-        wandb_run: Optional[Any] = None,
+        tensorboard: SummaryWriter | None = None,
+        wandb_run: Any | None = None,
         log_type: LogType = "none",
     ) -> None:
         self.writer = tensorboard
@@ -48,7 +58,7 @@ class Logger:
         self.log_type = log_type
 
     @staticmethod
-    def _parse_keywords(log_keywords: Optional[str]) -> list[str]:
+    def _parse_keywords(log_keywords: str | None) -> list[str]:
         if log_keywords is None:
             return []
         tags: list[str] = []
@@ -65,13 +75,13 @@ class Logger:
         log_type: str,
         log_dir: str,
         run_name: str,
-        config: Optional[dict[str, Any]] = None,
-        start_time: Optional[str] = None,
-        log_keywords: Optional[str] = None,
+        config: dict[str, Any] | None = None,
+        start_time: str | None = None,
+        log_keywords: str | None = None,
         wandb_project: str = "rl-garden",
-        wandb_entity: Optional[str] = None,
-        wandb_group: Optional[str] = None,
-    ) -> "Logger":
+        wandb_entity: str | None = None,
+        wandb_group: str | None = None,
+    ) -> Logger:
         normalized = log_type.lower()
         if normalized == "tensorboard":
             writer = SummaryWriter(os.path.join(log_dir, run_name))
@@ -91,7 +101,9 @@ class Logger:
                 "Install with: pip install -e '.[wandb]'"
             ) from exc
 
-        api_key = os.getenv("WANDB_API_KEY") or getattr(getattr(wandb, "api", None), "api_key", None)
+        api_key = os.getenv("WANDB_API_KEY") or getattr(
+            getattr(wandb, "api", None), "api_key", None
+        )
         if not api_key:
             raise RuntimeError(
                 "log_type=wandb requires wandb authentication. "
@@ -119,7 +131,9 @@ class Logger:
 
         run = wandb.init(**init_kwargs)
         if run is None:
-            raise RuntimeError("wandb.init() returned None; failed to initialize wandb run.")
+            raise RuntimeError(
+                "wandb.init() returned None; failed to initialize wandb run."
+            )
         return cls(wandb_run=run, log_type="wandb")
 
     def add_scalar(self, tag: str, value: Any, step: int) -> None:
@@ -141,10 +155,20 @@ class Logger:
         elif self.writer is not None:
             self.writer.add_text(tag, str(value))
 
+    def update_config(self, config: dict[str, Any]) -> None:
+        """Replace run metadata after runtime configuration is materialized."""
+        flat = _flatten_wandb_config(config)
+        if self.wandb_run is not None:
+            self.wandb_run.config.update(flat, allow_val_change=True)
+        if self.writer is not None:
+            import json
+
+            self.writer.add_text("effective_config", json.dumps(config, sort_keys=True))
+
     # --- RL metric logging utilities ---
 
     # Explicit namespace mapping for RL training metrics (shared by online and offline)
-    METRIC_NAMESPACES = {
+    METRIC_NAMESPACES: ClassVar[dict[str, str]] = {
         # Q-value metrics
         "predicted_q": "q/predicted",
         "target_q": "q/target",

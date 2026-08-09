@@ -79,26 +79,11 @@ exec env \
     RLG_STD_LOG="$STD_LOG" \
     RLG_LOG_TYPE="$LOG_TYPE" \
     RLG_LOG_KEYWORDS="$LOG_KEYWORDS" \
+    RLG_LAUNCHER="${BASH_SOURCE[0]}" \
+    RLG_LAUNCHER_PRESET="$REPO_DIR/configs/online/ppo_robotwin_place_empty_cup_rgb.yaml" \
     ROBOT_PLATFORM="${ROBOT_PLATFORM:-ALOHA}" \
     "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" ppo \
-    --env-backend robotwin \
-    --obs-mode rgb \
-    --env-id place_empty_cup \
+    --config "$REPO_DIR/configs/online/ppo_robotwin_place_empty_cup_rgb.yaml" \
     --robotwin.robotwin-root "$ROBOTWIN_ROOT" \
     --robotwin.assets-path "$ASSETS_PATH_ARG" \
-    --robotwin.head-camera-type Train_D435_128x96 \
-    --camera-width 64 \
-    --camera-height 64 \
-    --num-envs 4 \
-    --num-eval-envs 2 \
-    --total-timesteps 1000000 \
-    --num-steps 16 \
-    --robotwin.step-lim 200 \
-    --robotwin.embodiment piper piper 0.6 \
-    --robotwin.no-include-wrist-cameras \
-    --encoder plain_conv \
-    --image-fusion-mode per_key \
-    --robotwin.reward-mode dense \
-    --control-mode delta_joint_pos \
-    --robotwin.control-step-cap 16 \
     "${FORWARD_ARGS[@]}"
