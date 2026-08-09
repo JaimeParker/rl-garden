@@ -1,9 +1,10 @@
 # Configuration System
 
 rl-garden keeps its dataclass + [Tyro](https://brentyi.github.io/tyro/) + registry
-architecture. A single effective-config pipeline now resolves presets, CLI values,
-backend configuration, runtime-derived values, and provenance for both inspection
-and normal training.
+architecture. A single effective-config pipeline resolves presets, CLI values,
+the selected backend, and runtime-derived values for both inspection and normal
+training. It reports facts from parsing and materialization rather than trying to
+infer a static graph of every parameter consumer.
 
 ## Resolution order
 
@@ -11,12 +12,12 @@ Values are resolved from lowest to highest priority:
 
 1. Dataclass defaults and subclass overrides.
 2. One strict YAML preset passed with `--config`.
-3. Supported `RLG_*` logging environment variables.
-4. Explicit CLI flags.
+3. Explicit CLI flags.
 
 A launcher in `scripts/` is a thin wrapper around a checked-in preset. Its preset
-fields are identified as `launcher` in provenance; flags appended to the launcher
-remain explicit CLI overrides.
+fields are identified as `preset` in `sources`; flags appended to the launcher
+remain explicit CLI overrides. To choose a different preset, invoke the Python
+entrypoint directly instead of passing a second `--config` to a launcher.
 
 ```bash
 python examples/train_online.py sac \
@@ -46,14 +47,17 @@ maniskill:
   reward_mode: normalized_dense
 ```
 
-Only the selected backend is included in the effective configuration. Explicitly
+Backend dataclasses are omitted from `inputs`; the selected backend appears once
+under `active_environment`. Explicitly
 setting an inactive field is also an error—for example, setting `robotwin.step_lim`
 while `env_backend` is `maniskill`, or setting `encoder` with `obs_mode: state`.
 This catches overrides that would otherwise look valid but have no effect.
 
-The supported environment variables are `RLG_STD_LOG`, `RLG_LOG_TYPE`,
-`RLG_LOG_KEYWORDS`, `RLG_WANDB_PROJECT`, `RLG_WANDB_ENTITY`, and
-`RLG_WANDB_GROUP`.
+Training and logging values are configured only through YAML and CLI. Environment
+variables are reserved for third-party runtime requirements such as renderer,
+cache, or external simulator paths. The removed logging variables map directly to
+`--std-log`/`--no-std-log`, `--log-type`, `--log-keywords`, `--wandb-project`,
+`--wandb-entity`, and `--wandb-group`.
 
 ## Inspect before training
 
@@ -79,7 +83,7 @@ python examples/train_online.py sac \
   --dry-run | python -m json.tool
 ```
 
-Use `--explain-param` to locate one field and its consumer:
+Use `--explain-param` to inspect one field's resolved value and source:
 
 ```bash
 python examples/train_online.py sac \
@@ -88,45 +92,49 @@ python examples/train_online.py sac \
   --explain-param gamma
 ```
 
-The JSON reports its value, type-defining location, owner, active condition,
-mapped destination, current source, and override history. These commands are
-machine-readable interfaces intended equally for humans, scripts, and coding
-agents.
+The JSON contains exactly `path`, `value`, `type`, and `source`. A field that was
+not overridden reports `source.kind: default`; preset, CLI, and runtime-derived
+values report their final source.
+Inactive fields fail instead of returning a misleading value. These commands are
+machine-readable interfaces intended equally for humans, scripts, and coding agents.
 
 The three inspection actions are mutually exclusive.
 
-## EffectiveConfig v2
+## EffectiveConfig v3
 
 Inspection and persisted `config.json` files use the same schema:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "status": "preflight",
   "selection": {"training_phase": "online", "algorithm": "sac"},
   "inputs": {},
   "active_environment": {},
   "algorithm": {},
   "derived": {},
-  "provenance": {},
+  "sources": {},
   "runtime": {}
 }
 ```
 
-`inputs` contains the final values consumed by the runner after runtime
-normalization. `derived` records every changed value as
-`before`/`after`/`reason`, while provenance marks its source as
-`runtime-derived`; this currently covers CUDA buffer fallback, evaluation-budget
-resolution, and Minari live-environment selection.
+`inputs` contains the active Args values consumed by the runner after runtime
+normalization, excluding backend dataclasses. `sources` is intentionally sparse:
+it contains only fields actually overridden by a preset, CLI, or runtime
+normalization. An absent path means the dataclass default won. `derived` records
+changed runtime values as
+`before`/`after`/`reason`; this currently covers CUDA buffer fallback,
+evaluation-budget resolution, and Minari live-environment selection.
 Normal runs atomically write a `preflight` snapshot to
 `{log_dir}/{run_name}/config.json`, then replace it with a `materialized` snapshot
-after environment and agent construction. Evaluation accepts both v2 `inputs` and
+after environment and agent construction. Evaluation accepts v3 `inputs` and
 the legacy v1 `args` section.
 
 The completeness boundary is rl-garden: the snapshot contains the selected
 backend's concrete configuration, environment request and spaces, the exact
-captured agent constructor kwargs, explicit Args-to-constructor mappings, truly
-unused implicit constructor defaults, plus runner-derived values. It
+captured agent constructor kwargs, plus runner-derived values. Preflight leaves
+`algorithm` empty because no agent has been constructed; materialization fills only
+`algorithm.target` and `algorithm.constructor_kwargs`. It
 does not recursively serialize arbitrary third-party simulator internals.
 
 ## Adding or changing parameters
@@ -137,29 +145,22 @@ fields in the public algorithm Args subclass. Environment fields belong in
 `rl_garden/common/env_args.py`, and shared logging/checkpoint fields belong in
 `rl_garden/common/cli_args.py`.
 
-Every registered public algorithm has a `ConfigContract`. The contract assigns
-each Args field to environment, agent, runner, logging, or checkpoint ownership,
-and records its mapped consumer. Agent builders call `construct_agent()` so the
-materialized snapshot records the actual constructor call rather than inferring
-consumption from object attributes. Contract tests require every field to be covered
-and reject important required constructor parameters that are neither mapped nor
-explicitly declared runtime-derived. Strict contracts also compare active agent
-fields with the exact captured constructor kwargs during materialization, so a
-builder that forgets to forward a field fails before training starts.
-
-Registering with `registry.register(..., contract_mode="passthrough")` skips this
-completeness check instead of enforcing it -- use it only for entrypoints that don't
-have a full contract yet (currently the `real_world` `serl`/`hil_serl` algorithms).
-The active mode is always visible under `algorithm.mode` in `--print-config` and
-`--dry-run` output.
+Agent builders call `construct_agent()` so the materialized snapshot records the
+actual constructor call. There is no parallel owner/mapping/consumption schema to
+keep synchronized with Python code. When a field must reach a builder or multiple
+consumers, add an algorithm-near test that asserts the exact resulting kwargs or
+runner behavior; this is more reliable than a global name-based inference table.
 
 Experiment-specific values belong in one `configs/<phase>/*.yaml` file. Launcher
-scripts should only select a preset, forward logging environment values, and append
-user CLI flags. Do not duplicate a preset's hyperparameters in shell code.
+scripts should only select a fixed algorithm and preset, then append user CLI flags
+unchanged. Do not duplicate or interpret training parameters in shell code. New
+presets do not need a matching launcher. Keep shell scripts for third-party runtime
+setup or release-time reproduction workflows that coordinate more than one command.
 
 Before committing a new field:
 
 1. Add focused parsing and invalid-input tests.
-2. Confirm its contract owner and mapped destination.
+2. Add a builder/runner assertion when the field must be forwarded or transformed.
 3. Run `--print-config` and `--explain-param <field>`.
-4. Run `--dry-run` when the relevant optional backend is available.
+4. Run `--dry-run` when the relevant optional backend is available and inspect the
+   captured constructor kwargs.

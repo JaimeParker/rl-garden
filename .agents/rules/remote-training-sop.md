@@ -93,14 +93,14 @@ Examples:
 ssh <ssh-alias> "docker exec <container-name> bash -lc '
   cd <container-workspace-path> &&
   export PATH=<python-env-bin-path>:\$PATH &&
-  MPLCONFIGDIR=/tmp scripts/train_sac_state.sh --env_id PickCube-v1
+  MPLCONFIGDIR=/tmp python examples/train_online.py sac --config configs/online/sac_state.yaml
 '"
 
 # Generic RGB SAC
 ssh <ssh-alias> "docker exec <container-name> bash -lc '
   cd <container-workspace-path> &&
   export PATH=<python-env-bin-path>:\$PATH &&
-  MPLCONFIGDIR=/tmp scripts/train_sac_rgbd.sh --encoder plain_conv
+  MPLCONFIGDIR=/tmp python examples/train_online.py sac --config configs/online/sac_rgb.yaml
 '"
 
 # Peg-only RGB SAC

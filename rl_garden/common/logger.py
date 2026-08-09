@@ -29,17 +29,17 @@ def _flatten_wandb_config(config: dict[str, Any], sep: str = ".") -> dict[str, A
         else:
             flat[prefix] = value
 
-    is_effective_v2 = config.get("schema_version") == 2 and isinstance(
+    is_effective_config = config.get("schema_version") == 3 and isinstance(
         config.get("inputs"), dict
     )
     for key, value in config.items():
         if key in {"args", "inputs"} and isinstance(value, dict):
             _add("", value)
-        elif is_effective_v2 and key == "selection":
+        elif is_effective_config and key == "selection":
             _add("selection", value)
-        elif is_effective_v2 and config.get("status") == "preflight":
+        elif is_effective_config and config.get("status") == "preflight":
             continue
-        elif is_effective_v2:
+        elif is_effective_config:
             _add(f"effective{sep}{key}", value)
         else:
             _add(str(key), value)

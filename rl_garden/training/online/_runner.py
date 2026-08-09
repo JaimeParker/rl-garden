@@ -33,16 +33,15 @@ def run_online(
 ) -> None:
     from rl_garden.training.online._registry import registry
 
-    algorithm, entry = registry.entry_for_args(args)
+    algorithm, _ = registry.entry_for_args(args)
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
             args,
             registry=registry,
             training_phase="online",
             algorithm=algorithm,
-            contract=entry.contract,
         )
-        with config_session(preflight, dry_run=False, contract=entry.contract):
+        with config_session(preflight, dry_run=False):
             return run_online(
                 normalized_args,
                 obs_tag=obs_tag,

@@ -224,4 +224,4 @@ class TD3Args(EnvBackendArgs):
     replay_pin_sampled_batch: bool = False
 
 
-registry.register("td3", TD3Args, run_td3, target="rl_garden.algorithms.td3.TD3")
+registry.register("td3", TD3Args, run_td3)

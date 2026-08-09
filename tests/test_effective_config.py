@@ -9,11 +9,11 @@ import pytest
 from rl_garden.common.effective_config import (
     ConfigError,
     EffectiveConfig,
+    FieldSource,
     apply_strict_mapping,
-    default_provenance,
     effective_config_json,
     load_preset,
-    override_provenance,
+    override_sources,
     persist_effective_config,
 )
 
@@ -39,14 +39,14 @@ class _Args(_BaseArgs):
 
 def _config(status="preflight") -> EffectiveConfig:
     return EffectiveConfig(
-        schema_version=2,
+        schema_version=3,
         status=status,
         selection={"training_phase": "online", "algorithm": "sac"},
         inputs={"gamma": 0.9},
         active_environment={},
         algorithm={},
         derived={},
-        provenance={},
+        sources={},
         runtime={},
     )
 
@@ -94,25 +94,20 @@ def test_load_preset_rejects_duplicate_keys(tmp_path):
         load_preset(path)
 
 
-def test_provenance_tracks_subclass_and_override():
-    provenance = default_provenance(_Args())
-    assert provenance["gamma"].source.kind == "subclass"
-
-    override_provenance(
-        provenance,
+def test_sources_only_track_the_last_explicit_override():
+    sources: dict[str, FieldSource] = {}
+    override_sources(
+        sources,
         {"gamma"},
         kind="preset",
         detail="preset.yaml",
     )
+    override_sources(sources, {"gamma"}, kind="CLI", detail="argv")
 
-    assert provenance["gamma"].source.kind == "preset"
-    assert [record.kind for record in provenance["gamma"].history] == [
-        "subclass",
-        "preset",
-    ]
+    assert sources == {"gamma": FieldSource(kind="CLI", detail="argv")}
 
 
-def test_effective_config_v2_serializes_and_atomically_replaces(tmp_path):
+def test_effective_config_v3_serializes_and_atomically_replaces(tmp_path):
     path = tmp_path / "run" / "config.json"
     persist_effective_config(_config(), path)
     persist_effective_config(
@@ -126,7 +121,7 @@ def test_effective_config_v2_serializes_and_atomically_replaces(tmp_path):
     )
 
     payload = json.loads(path.read_text())
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["status"] == "materialized"
     assert "args" not in payload
     assert payload["runtime"]["device"] == "cpu"
@@ -150,7 +145,7 @@ def test_json_value_uses_stable_type_for_runtime_objects():
     }
 
 
-def test_wandb_v2_keeps_inputs_flat_and_materialized_details_namespaced():
+def test_wandb_v3_keeps_inputs_flat_and_materialized_details_namespaced():
     from rl_garden.common.logger import _flatten_wandb_config
 
     preflight = json.loads(effective_config_json(_config()))

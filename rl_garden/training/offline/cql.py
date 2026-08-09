@@ -144,4 +144,4 @@ def run_cql(args: CQLArgs) -> None:
     run_offline(args, build_agent=build_cql)
 
 
-registry.register("cql", CQLArgs, run_cql, target="rl_garden.algorithms.CQL")
+registry.register("cql", CQLArgs, run_cql)

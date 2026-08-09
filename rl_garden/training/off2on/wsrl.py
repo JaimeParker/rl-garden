@@ -123,4 +123,4 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_wsrl, algorithm="wsrl")
 
 
-registry.register("wsrl", WSRLOff2OnArgs, run_wsrl, target="rl_garden.algorithms.WSRL")
+registry.register("wsrl", WSRLOff2OnArgs, run_wsrl)

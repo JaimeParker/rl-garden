@@ -9,51 +9,6 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 1
 fi
 
-STD_LOG="${RLG_STD_LOG:-1}"
-LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
-LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
-FORWARD_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --std_log|--std-log)
-            STD_LOG=1
-            shift
-            ;;
-        --no_std_log|--no-std-log)
-            STD_LOG=0
-            shift
-            ;;
-        --log_type|--log-type)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: $1 requires a value." >&2
-                exit 1
-            fi
-            LOG_TYPE="$2"
-            shift 2
-            ;;
-        --log_type=*|--log-type=*)
-            LOG_TYPE="${1#*=}"
-            shift
-            ;;
-        --log_keywords|--log-keywords)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: $1 requires a value." >&2
-                exit 1
-            fi
-            LOG_KEYWORDS="$2"
-            shift 2
-            ;;
-        --log_keywords=*|--log-keywords=*)
-            LOG_KEYWORDS="${1#*=}"
-            shift
-            ;;
-        *)
-            FORWARD_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
-
-exec env RLG_LAUNCHER="${BASH_SOURCE[0]}" RLG_LAUNCHER_PRESET="$REPO_DIR/configs/online/residual_sac_rgb.yaml" RLG_STD_LOG="$STD_LOG" RLG_LOG_TYPE="$LOG_TYPE" RLG_LOG_KEYWORDS="$LOG_KEYWORDS" PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" residual_sac \
+exec env PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" residual_sac \
     --config "$REPO_DIR/configs/online/residual_sac_rgb.yaml" \
-    "${FORWARD_ARGS[@]}"
+    "$@"

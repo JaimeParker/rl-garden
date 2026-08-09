@@ -264,15 +264,14 @@ def _run_off2on(
     if not has_config_session():
         from rl_garden.training.off2on._registry import registry
 
-        _, entry = registry.entry_for_args(args)
+        registry.entry_for_args(args)
         normalized_args, preflight = prepare_standalone(
             args,
             registry=registry,
             training_phase="off2on",
             algorithm=algorithm,
-            contract=entry.contract,
         )
-        with config_session(preflight, dry_run=False, contract=entry.contract):
+        with config_session(preflight, dry_run=False):
             return _run_off2on(
                 normalized_args,
                 build_agent=build_agent,

@@ -50,4 +50,4 @@ def run_wsrl(args: WSRLOfflineArgs) -> None:
     run_offline(args, build_agent=build_wsrl)
 
 
-registry.register("wsrl", WSRLOfflineArgs, run_wsrl, target="rl_garden.algorithms.WSRL")
+registry.register("wsrl", WSRLOfflineArgs, run_wsrl)

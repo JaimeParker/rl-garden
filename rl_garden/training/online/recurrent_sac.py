@@ -85,5 +85,4 @@ registry.register(
     "recurrent_sac",
     RecurrentSACArgs,
     run_recurrent_sac,
-    target="rl_garden.algorithms.RecurrentSAC",
 )

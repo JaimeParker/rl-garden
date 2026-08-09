@@ -20,15 +20,6 @@ from rl_garden.training.off2on.calql import CalQLOff2OnArgs
 from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
 
-@pytest.fixture(autouse=True)
-def _disable_contract_validation_for_runner_test_doubles(monkeypatch):
-    from rl_garden.training import inspection
-
-    monkeypatch.setattr(
-        inspection, "validate_constructor_coverage", lambda *args, **kwargs: None
-    )
-
-
 def _args(**overrides):
     defaults = {
         "dataset_source": "maniskill_h5",

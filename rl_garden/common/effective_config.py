@@ -1,13 +1,11 @@
-"""Typed, provenance-aware training configuration snapshots."""
+"""Typed training configuration snapshots with sparse override sources."""
 
 from __future__ import annotations
 
 import inspect
 import json
 import math
-import os
 import platform
-import re
 import subprocess
 import sys
 from collections.abc import Mapping, MutableMapping
@@ -29,11 +27,7 @@ import yaml
 ConfigStatus = Literal["preflight", "materialized"]
 _SOURCE_ROOT = Path(__file__).resolve().parents[2]
 SourceKind = Literal[
-    "dataclass",
-    "subclass",
     "preset",
-    "RLG_*",
-    "launcher",
     "CLI",
     "runtime-derived",
 ]
@@ -71,20 +65,9 @@ _UniqueKeyLoader.add_constructor(
 
 
 @dataclass(frozen=True)
-class SourceRecord:
+class FieldSource:
     kind: SourceKind
     detail: str
-
-
-@dataclass(frozen=True)
-class FieldProvenance:
-    defined_at: str
-    owner: str
-    source: SourceRecord
-    history: tuple[SourceRecord, ...]
-    active: bool = True
-    active_when: str = "always"
-    mapped_to: str = ""
 
 
 @dataclass(frozen=True)
@@ -98,7 +81,7 @@ class EffectiveConfig:
     active_environment: Mapping[str, Any]
     algorithm: Mapping[str, Any]
     derived: Mapping[str, Any]
-    provenance: Mapping[str, FieldProvenance | Mapping[str, Any]]
+    sources: Mapping[str, FieldSource | Mapping[str, Any]]
     runtime: Mapping[str, Any]
 
     def __post_init__(self) -> None:
@@ -108,7 +91,7 @@ class EffectiveConfig:
             "active_environment",
             "algorithm",
             "derived",
-            "provenance",
+            "sources",
             "runtime",
         ):
             object.__setattr__(self, name, _freeze(getattr(self, name)))
@@ -195,79 +178,16 @@ def persist_effective_config(config: EffectiveConfig, path: Path) -> None:
     temporary.replace(path)
 
 
-def _field_definition(args_cls: type, name: str) -> tuple[str, SourceKind]:
-    definitions = [
-        cls for cls in args_cls.__mro__ if name in getattr(cls, "__annotations__", {})
-    ]
-    if not definitions:
-        return f"{args_cls.__module__}.{args_cls.__qualname__}", "dataclass"
-    owner = definitions[0]
-    try:
-        source_path = inspect.getsourcefile(owner)
-        if source_path is None:
-            path = owner.__module__
-        else:
-            resolved_path = Path(source_path).resolve()
-            try:
-                path = str(resolved_path.relative_to(_SOURCE_ROOT))
-            except ValueError:
-                path = str(resolved_path)
-        source_lines, class_line = inspect.getsourcelines(owner)
-        field_line = next(
-            (
-                class_line + offset
-                for offset, source_line in enumerate(source_lines)
-                if re.match(rf"\s+{re.escape(name)}\s*:", source_line)
-            ),
-            class_line,
-        )
-        location = f"{path}:{field_line}"
-    except (OSError, TypeError):
-        location = f"{owner.__module__}.{owner.__qualname__}"
-    return location, "subclass" if len(definitions) > 1 else "dataclass"
-
-
-def default_provenance(args: Any) -> dict[str, FieldProvenance]:
-    result: dict[str, FieldProvenance] = {}
-
-    def visit(value: Any, prefix: str, root_cls: type) -> None:
-        for field in fields(value):
-            path = f"{prefix}.{field.name}" if prefix else field.name
-            item = getattr(value, field.name)
-            definition, kind = _field_definition(
-                root_cls if not prefix else type(value), field.name
-            )
-            source = SourceRecord(kind=kind, detail=definition)
-            result[path] = FieldProvenance(
-                defined_at=definition,
-                owner="unclassified",
-                source=source,
-                history=(source,),
-            )
-            if is_dataclass(item) and not isinstance(item, type):
-                visit(item, path, type(item))
-
-    visit(args, "", type(args))
-    return result
-
-
-def override_provenance(
-    provenance: MutableMapping[str, FieldProvenance],
+def override_sources(
+    sources: MutableMapping[str, FieldSource],
     paths: set[str] | frozenset[str],
     *,
     kind: SourceKind,
     detail: str,
 ) -> None:
-    record = SourceRecord(kind=kind, detail=detail)
+    source = FieldSource(kind=kind, detail=detail)
     for path in paths:
-        current = provenance.get(path)
-        if current is None:
-            continue
-        provenance[path] = replace(
-            current,
-            source=record,
-            history=(*current.history, record),
-        )
+        sources[path] = source
 
 
 def _leaf_paths(mapping: Mapping[str, Any], prefix: str = "") -> set[str]:
@@ -397,10 +317,112 @@ def runtime_metadata(*, argv: list[str] | None = None) -> dict[str, Any]:
         commit = None
     return {
         "argv": list(sys.argv if argv is None else argv),
-        "launcher": os.getenv("RLG_LAUNCHER"),
         "git_commit": commit,
         "python": platform.python_version(),
     }
+
+
+def _dataclass_leaf_paths(value: Any, prefix: str) -> set[str]:
+    result: set[str] = set()
+    for field in fields(value):
+        path = f"{prefix}.{field.name}"
+        item = getattr(value, field.name)
+        if is_dataclass(item) and not isinstance(item, type):
+            result.update(_dataclass_leaf_paths(item, path))
+        else:
+            result.add(path)
+    return result
+
+
+def inactive_config_paths(args: Any) -> dict[str, str]:
+    """Return inactive Args leaf paths and concise reasons."""
+    from rl_garden.common.cli_args import VisionArgs
+    from rl_garden.common.env_args import EnvBackendArgs
+
+    inactive: dict[str, str] = {}
+    backend_names = {
+        field.name for field in fields(EnvBackendArgs) if field.name != "env_backend"
+    }
+    selected_backend = getattr(args, "env_backend", None)
+    for backend_name in backend_names:
+        backend = getattr(args, backend_name, None)
+        if backend_name != selected_backend and is_dataclass(backend):
+            for path in _dataclass_leaf_paths(backend, backend_name):
+                inactive[path] = f"environment backend is {selected_backend!r}"
+
+    visual_names = {field.name for field in fields(VisionArgs)} - {"obs_mode"}
+    obs_mode = getattr(args, "obs_mode", None)
+    encoder = getattr(args, "encoder", None)
+    if obs_mode == "state":
+        for name in visual_names:
+            inactive[name] = "obs_mode is 'state'"
+        return inactive
+
+    if encoder is not None and not str(encoder).startswith("resnet"):
+        for name in (
+            "pretrained_weights",
+            "freeze_resnet_encoder",
+            "freeze_resnet_backbone",
+        ):
+            inactive[name] = f"encoder is {encoder!r}"
+    if encoder is not None and encoder != "plain_conv":
+        for name in (
+            "plain_conv_weight_init",
+            "plain_conv_last_act",
+            "plain_conv_pooling",
+        ):
+            inactive[name] = f"encoder is {encoder!r}"
+    if encoder is not None and encoder != "vit":
+        for name in visual_names:
+            if name.startswith("vit_"):
+                inactive[name] = f"encoder is {encoder!r}"
+    return inactive
+
+
+def resolve_active_environment(args: Any) -> dict[str, Any]:
+    """Serialize and statically validate the selected environment backend."""
+    backend_name = getattr(args, "env_backend", None)
+    if backend_name is None:
+        return {}
+    try:
+        backend_config = getattr(args, backend_name)
+    except AttributeError as exc:
+        from rl_garden.common.env_args import EnvBackendArgs
+
+        available = sorted(
+            field.name
+            for field in fields(EnvBackendArgs)
+            if field.name != "env_backend"
+        )
+        raise ConfigError(
+            f"Unknown env backend {backend_name!r}. Available: {available}."
+        ) from exc
+    backend_values = json_value(backend_config)
+    if isinstance(backend_values, dict):
+        for key, value in backend_values.items():
+            if key.endswith("_kwargs_json") and value:
+                try:
+                    parsed_json = json.loads(value)
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise ConfigError(
+                        f"Invalid {backend_name}.{key}: expected a JSON object."
+                    ) from exc
+                if not isinstance(parsed_json, dict):
+                    raise ConfigError(
+                        f"Invalid {backend_name}.{key}: expected a JSON object."
+                    )
+    return {"backend": backend_name, "config": backend_values}
+
+
+def _remove_path(mapping: dict[str, Any], path: str) -> None:
+    parts = path.split(".")
+    current = mapping
+    for part in parts[:-1]:
+        nested = current.get(part)
+        if not isinstance(nested, dict):
+            return
+        current = nested
+    current.pop(parts[-1], None)
 
 
 def resolve_effective_config(
@@ -408,7 +430,7 @@ def resolve_effective_config(
     *,
     training_phase: str,
     algorithm: str,
-    provenance: Mapping[str, FieldProvenance],
+    sources: Mapping[str, FieldSource | Mapping[str, Any]],
     active_environment: Mapping[str, Any],
     algorithm_config: Mapping[str, Any] | None = None,
     derived: Mapping[str, Any] | None = None,
@@ -418,38 +440,30 @@ def resolve_effective_config(
     inputs = json_value(args)
     if not isinstance(inputs, dict):
         raise TypeError("Training args must serialize to a mapping.")
-    selected_backend = getattr(args, "env_backend", None)
-    if selected_backend is not None:
-        backend_names = {
-            field.name
-            for field in fields(args)
-            if is_dataclass(getattr(args, field.name, None)) and field.name != "logging"
-        }
-        for backend_name in backend_names:
-            if backend_name != selected_backend:
-                inputs.pop(backend_name, None)
+    inactive = inactive_config_paths(args)
+    overridden_inactive = sorted(path for path in sources if path in inactive)
+    if overridden_inactive:
+        details = "; ".join(
+            f"{path!r} is inactive because {inactive[path]}"
+            for path in overridden_inactive
+        )
+        raise ConfigError(f"Explicit override {details}.")
+    for path in inactive:
+        _remove_path(inputs, path)
 
-    def remove_path(mapping: dict[str, Any], path: str) -> None:
-        parts = path.split(".")
-        current = mapping
-        for part in parts[:-1]:
-            nested = current.get(part)
-            if not isinstance(nested, dict):
-                return
-            current = nested
-        current.pop(parts[-1], None)
+    from rl_garden.common.env_args import EnvBackendArgs
 
-    for path, field in provenance.items():
-        if not field.active:
-            remove_path(inputs, path)
+    for field in fields(EnvBackendArgs):
+        if field.name != "env_backend":
+            inputs.pop(field.name, None)
     return EffectiveConfig(
-        schema_version=2,
+        schema_version=3,
         status="preflight",
         selection={"training_phase": training_phase, "algorithm": algorithm},
         inputs=inputs,
         active_environment=dict(active_environment),
         algorithm=dict(algorithm_config or {}),
         derived=dict(derived or {}),
-        provenance=dict(provenance),
+        sources=dict(sources),
         runtime=dict(runtime or runtime_metadata()),
     )

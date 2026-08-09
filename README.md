@@ -91,14 +91,11 @@ under `{log_dir}/{run_name}/config.json`. See the
 
 ### Online Training
 
-State SAC:
+State SAC with a reusable preset:
 
 ```bash
 python examples/train_online.py sac \
-  --env-id PickCube-v1 --obs-mode state --num-envs 16
-
-# Launcher with experiment defaults
-scripts/train_sac_state.sh
+  --config configs/online/sac_state.yaml
 ```
 
 Visual SAC and PPO:
@@ -129,13 +126,17 @@ base-SAC reconstruction options, and residual demo loading via
 `--offline-dataset-path` / `--offline-data-ratio`. Demo loading is currently
 supported only by `residual_sac`.
 
-Additional launchers include:
+Additional preset-backed entrypoints include:
 
 ```bash
-scripts/train_sac_rgbd.sh --encoder resnet10
-scripts/train_ppo_state.sh
-scripts/train_ppo_rgbd.sh --encoder plain_conv
-scripts/train_drqv2_rgb.sh
+python examples/train_online.py sac \
+  --config configs/online/sac_rgb_resnet.yaml
+python examples/train_online.py ppo \
+  --config configs/online/ppo_state.yaml
+python examples/train_online.py ppo \
+  --config configs/online/ppo_rgb.yaml
+python examples/train_online.py drqv2 \
+  --config configs/online/drqv2_rgb.yaml
 scripts/train_residual_rgbd.sh
 scripts/train_residual_state.sh
 ```
@@ -150,7 +151,7 @@ python examples/pretrain_offline.py calql \
   --offline_dataset_path demos/pickcube.h5 \
   --num_offline_steps 700000
 
-scripts/pretrain_offline.sh iql \
+python examples/pretrain_offline.py iql \
   --offline_dataset_path demos/pickcube.h5
 ```
 
@@ -165,8 +166,10 @@ python examples/train_off2on.py wsrl \
   --env_id PickCube-v1 \
   --offline_dataset_path demos/pickcube.h5
 
-scripts/train_wsrl.sh
-scripts/train_wsrl_rgbd.sh
+python examples/train_off2on.py wsrl \
+  --config configs/off2on/wsrl.yaml
+python examples/train_off2on.py wsrl \
+  --config configs/off2on/wsrl_rgb.yaml
 ```
 
 See [Reproducing WSRL](docs/guides/wsrl-reproduction.md) for the complete checkpoint,

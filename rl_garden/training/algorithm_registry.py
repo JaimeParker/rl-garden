@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import pkgutil
 import sys
 import warnings
@@ -12,36 +11,29 @@ from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import tyro
 
-from rl_garden.common.cli_args import (
-    apply_log_env_defaults,
-    logging_args_from,
-    resolve_num_eval_steps,
-)
+from rl_garden.common.cli_args import resolve_num_eval_steps
 from rl_garden.common.effective_config import (
     ConfigError,
-    FieldProvenance,
+    FieldSource,
     apply_strict_mapping,
-    default_provenance,
     effective_config_json,
+    inactive_config_paths,
     json_value,
     load_preset,
-    override_provenance,
+    override_sources,
+    resolve_active_environment,
     resolve_effective_config,
     runtime_metadata,
 )
-from rl_garden.training.config_contract import ConfigContract
 
 
 @dataclass(frozen=True)
 class AlgorithmEntry:
     args_cls: type
     run_fn: Callable
-    contract: ConfigContract
-    validate_config: Callable[[object], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,7 +42,7 @@ class ParsedCommand:
     algorithm: str
     action: str
     explain_param: str | None
-    provenance: dict[str, FieldProvenance]
+    sources: dict[str, FieldSource]
     argv: tuple[str, ...]
     derived: dict[str, object]
 
@@ -71,28 +63,12 @@ class BaseAlgorithmRegistry:
         name: str,
         args_cls: type,
         run_fn: Callable,
-        *,
-        target: str | None = None,
-        derived_parameters: frozenset[str] = frozenset(),
-        validate_config: Callable[[object], None] | None = None,
-        contract_mode: Literal["strict", "passthrough"] = "strict",
     ) -> None:
         if name in self._entries:
             raise ValueError(f"Algorithm {name!r} already registered")
         if any(entry.args_cls is args_cls for entry in self._entries.values()):
             raise ValueError(f"Args type {args_cls.__name__!r} already registered")
-        contract_target = target or f"{run_fn.__module__}.{run_fn.__qualname__}"
-        self._entries[name] = AlgorithmEntry(
-            args_cls,
-            run_fn,
-            ConfigContract.for_args(
-                args_cls,
-                target=contract_target,
-                derived_parameters=derived_parameters,
-                mode=contract_mode,
-            ),
-            validate_config,
-        )
+        self._entries[name] = AlgorithmEntry(args_cls, run_fn)
 
     def entries(self) -> dict[str, AlgorithmEntry]:
         return dict(self._entries)
@@ -106,17 +82,13 @@ class BaseAlgorithmRegistry:
                 importlib.import_module(f"{self.package_name}.{info.name}")
         self._discovered = True
 
-    def _defaults(self, *, apply_logging_env: bool = True) -> dict[str, object]:
+    def _defaults(self) -> dict[str, object]:
         self.discover()
         if not self._entries:
             raise RuntimeError(f"No algorithms registered in {self.package_name!r}")
         defaults: dict[str, object] = {}
         for name, entry in self._entries.items():
-            default = entry.args_cls()
-            logging_args = logging_args_from(default)
-            if apply_logging_env and logging_args is not None:
-                apply_log_env_defaults(logging_args)
-            defaults[name] = default
+            defaults[name] = entry.args_cls()
         return defaults
 
     def parse_args(self, args: Sequence[str] | None = None):
@@ -139,13 +111,6 @@ class BaseAlgorithmRegistry:
         def select_preset(candidate: str) -> None:
             nonlocal preset_path
             if preset_path is None:
-                preset_path = candidate
-                return
-            launcher_default = os.getenv("RLG_LAUNCHER_PRESET")
-            if (
-                launcher_default
-                and Path(preset_path).resolve() == Path(launcher_default).resolve()
-            ):
                 preset_path = candidate
                 return
             raise ConfigError("Only one --config preset may be supplied.")
@@ -221,63 +186,36 @@ class BaseAlgorithmRegistry:
         original_argv = tuple(cli_args)
         cli_args, action, preset_path, explain_param = self._pop_control_args(cli_args)
         algorithm = self._algorithm_token(cli_args)
-        defaults = self._defaults(apply_logging_env=False)
+        defaults = self._defaults()
         if algorithm not in defaults:
             raise ConfigError(
                 f"Unknown algorithm {algorithm!r}. Available: {sorted(defaults)}."
             )
-        provenance = default_provenance(defaults[algorithm])
+        sources: dict[str, FieldSource] = {}
         if preset_path is not None:
             preset = load_preset(preset_path)
             apply_strict_mapping(defaults[algorithm], preset.values)
-            launcher = os.getenv("RLG_LAUNCHER")
-            launcher_preset = os.getenv("RLG_LAUNCHER_PRESET")
-            is_launcher_default = bool(
-                launcher
-                and launcher_preset
-                and Path(launcher_preset).resolve() == Path(preset.path).resolve()
-            )
-            override_provenance(
-                provenance,
+            override_sources(
+                sources,
                 preset.paths,
-                kind="launcher" if is_launcher_default else "preset",
-                detail=launcher if is_launcher_default else preset.path,
+                kind="preset",
+                detail=preset.path,
             )
-        for default in defaults.values():
-            logging_args = logging_args_from(default)
-            if logging_args is not None:
-                apply_log_env_defaults(logging_args)
-        logging_env = {
-            "std_log": "RLG_STD_LOG",
-            "log_type": "RLG_LOG_TYPE",
-            "log_keywords": "RLG_LOG_KEYWORDS",
-            "wandb_project": "RLG_WANDB_PROJECT",
-            "wandb_entity": "RLG_WANDB_ENTITY",
-            "wandb_group": "RLG_WANDB_GROUP",
-        }
-        for field_name, env_name in logging_env.items():
-            if os.getenv(env_name) is not None:
-                override_provenance(
-                    provenance,
-                    {field_name},
-                    kind="RLG_*",
-                    detail=env_name,
-                )
         cli_type = tyro.extras.subcommand_type_from_defaults(defaults)
         parsed = tyro.cli(cli_type, args=cli_args)
-        override_provenance(
-            provenance,
+        override_sources(
+            sources,
             self._cli_override_paths(cli_args),
             kind="CLI",
             detail="argv",
         )
-        normalized, runtime_derived = self._normalize_runtime(parsed, provenance)
+        normalized, runtime_derived = self._normalize_runtime(parsed, sources)
         return ParsedCommand(
             normalized,
             algorithm,
             action,
             explain_param,
-            provenance,
+            sources,
             original_argv,
             runtime_derived,
         )
@@ -285,7 +223,7 @@ class BaseAlgorithmRegistry:
     def _normalize_runtime(
         self,
         parsed: object,
-        provenance: dict[str, FieldProvenance],
+        sources: dict[str, FieldSource],
     ) -> tuple[object, dict[str, object]]:
         """Return the exact Args object consumed by the runner."""
         normalized = deepcopy(parsed)
@@ -301,8 +239,8 @@ class BaseAlgorithmRegistry:
                 "after": json_value(value),
                 "reason": reason,
             }
-            override_provenance(
-                provenance,
+            override_sources(
+                sources,
                 {path},
                 kind="runtime-derived",
                 detail=reason,
@@ -370,74 +308,16 @@ class BaseAlgorithmRegistry:
         load_checkpoint = getattr(args, "load_checkpoint", None)
         if load_checkpoint is not None and not Path(load_checkpoint).is_file():
             raise ConfigError(f"Checkpoint does not exist: {load_checkpoint}")
-        entry = self._entries[command.algorithm]
-        if entry.validate_config is not None:
-            entry.validate_config(args)
 
     def _preflight_config(self, command: ParsedCommand):
         args = command.args
-        entry = self._entries[command.algorithm]
-        applied_provenance = entry.contract.apply(command.provenance)
-        command.provenance.clear()
-        command.provenance.update(
-            entry.contract.validate_active(args, applied_provenance)
-        )
-        active_paths = {
-            path for path, field in command.provenance.items() if field.active
-        }
-        active_environment: dict[str, object] = {}
-        if hasattr(args, "env_backend"):
-            backend_name = args.env_backend
-            try:
-                backend_config = getattr(args, backend_name)
-            except AttributeError as exc:
-                available = sorted(
-                    field
-                    for field in vars(args)
-                    if hasattr(getattr(args, field), "__dataclass_fields__")
-                )
-                raise ConfigError(
-                    f"Unknown env backend {backend_name!r}. Available: {available}."
-                ) from exc
-            backend_values = json_value(backend_config)
-            if isinstance(backend_values, dict):
-                for key, value in backend_values.items():
-                    if key.endswith("_kwargs_json") and value:
-                        try:
-                            parsed_json = json.loads(value)
-                        except (TypeError, json.JSONDecodeError) as exc:
-                            raise ConfigError(
-                                f"Invalid {backend_name}.{key}: expected a JSON object."
-                            ) from exc
-                        if not isinstance(parsed_json, dict):
-                            raise ConfigError(
-                                f"Invalid {backend_name}.{key}: expected a JSON object."
-                            )
-            active_environment = {
-                "backend": backend_name,
-                "config": backend_values,
-            }
-        try:
-            implicit_defaults = (
-                entry.contract.constructor_defaults()
-                if entry.contract.mode == "strict"
-                else {}
-            )
-        except (ImportError, AttributeError, TypeError, ValueError) as exc:
-            raise ConfigError(f"Invalid config contract: {exc}") from exc
         return resolve_effective_config(
             args,
             training_phase=self.phase_name,
             algorithm=command.algorithm,
-            provenance=command.provenance,
-            active_environment=active_environment,
-            algorithm_config={
-                "target": entry.contract.target,
-                "mode": entry.contract.mode,
-                "constructor_kwargs": {},
-                "field_mappings": entry.contract.field_mappings(active_paths),
-                "implicit_defaults": implicit_defaults,
-            },
+            sources=command.sources,
+            active_environment=resolve_active_environment(args),
+            algorithm_config={},
             derived=command.derived,
             runtime=runtime_metadata(argv=[sys.argv[0], *command.argv]),
         )
@@ -463,7 +343,7 @@ class BaseAlgorithmRegistry:
                     "  --config PATH          Load a strict YAML preset.\n"
                     "  --print-config         Validate and print preflight config.\n"
                     "  --dry-run              Materialize env and agent without training.\n"
-                    "  --explain-param PATH   Explain one parameter's value and provenance.\n"
+                    "  --explain-param PATH   Explain one parameter's value and source.\n"
                 )
                 remaining, _, _, _ = self._pop_control_args(cli_args)
                 if not any(not token.startswith("-") for token in remaining):
@@ -484,18 +364,23 @@ class BaseAlgorithmRegistry:
             assert command.explain_param is not None
             self._preflight_config(command)
             field_path = command.explain_param.replace("-", "_")
-            try:
-                field = command.provenance[field_path]
-            except KeyError as exc:
-                raise ConfigError(
-                    f"Unknown configuration field {field_path!r}."
-                ) from exc
             value = self._value_at_path(command.args, field_path)
+            inactive = inactive_config_paths(command.args)
+            if field_path in inactive:
+                raise ConfigError(
+                    f"Configuration field {field_path!r} is inactive: "
+                    f"{inactive[field_path]}."
+                )
+            source = command.sources.get(field_path)
             payload = {
                 "path": field_path,
                 "value": json_value(value),
                 "type": type(value).__name__,
-                **json_value(field),
+                "source": (
+                    json_value(source)
+                    if source is not None
+                    else {"kind": "default", "detail": None}
+                ),
             }
             print(json.dumps(payload, indent=2, sort_keys=True))
             return
@@ -511,7 +396,6 @@ class BaseAlgorithmRegistry:
             with config_session(
                 self._preflight_config(command),
                 dry_run=True,
-                contract=self._entries[command.algorithm].contract,
             ):
                 self.dispatch(command.args)
             return
@@ -520,6 +404,5 @@ class BaseAlgorithmRegistry:
         with config_session(
             self._preflight_config(command),
             dry_run=False,
-            contract=self._entries[command.algorithm].contract,
         ):
             self.dispatch(command.args)

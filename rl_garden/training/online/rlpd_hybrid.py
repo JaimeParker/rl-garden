@@ -192,5 +192,4 @@ registry.register(
     "rlpd_hybrid",
     RLPDHybridArgs,
     run_rlpd_hybrid,
-    target="rl_garden.algorithms.RLPDHybrid",
 )

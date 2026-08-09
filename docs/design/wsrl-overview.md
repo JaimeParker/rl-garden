@@ -67,7 +67,9 @@ python examples/train_off2on.py wsrl \
     --use_calql
 
 # Use shell launcher
-./scripts/train_wsrl.sh --env_id PickCube-v1
+python examples/train_off2on.py wsrl \
+  --config configs/off2on/wsrl.yaml \
+  --env_id PickCube-v1
 ```
 
 ### Vision-Based Training
@@ -86,7 +88,10 @@ python examples/train_off2on.py wsrl \
     --encoder resnet10
 
 # Use shell launcher
-./scripts/train_wsrl_rgbd.sh --env_id PickCube-v1 --encoder resnet10
+python examples/train_off2on.py wsrl \
+  --config configs/off2on/wsrl_rgb.yaml \
+  --env_id PickCube-v1 \
+  --encoder resnet10
 ```
 
 ### Offline-Only Pretraining (No Sim Env)
@@ -117,8 +122,8 @@ python examples/pretrain_offline.py calql \
     --use_calql --cql_alpha 5.0
 
 # Equivalent shell launchers
-scripts/pretrain_offline.sh cql --offline_dataset_path /path/to/real_robot.h5
-scripts/pretrain_offline.sh calql --offline_dataset_path /path/to/real_robot.h5
+python examples/pretrain_offline.py cql --offline_dataset_path /path/to/real_robot.h5
+python examples/pretrain_offline.py calql --offline_dataset_path /path/to/real_robot.h5
 ```
 
 These write `cql_offline_pretrained.pt` or `calql_offline_pretrained.pt` by

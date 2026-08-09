@@ -21,17 +21,17 @@ python examples/pretrain_offline.py calql \
 python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode state
 ```
 
-Use the scripts when their experiment defaults are wanted:
+Use checked-in presets for repeatable experiment defaults:
 
 ```bash
-scripts/train_sac_state.sh
-scripts/train_sac_rgbd.sh --encoder resnet10
-scripts/train_ppo_state.sh
-scripts/train_ppo_rgbd.sh --encoder plain_conv
-scripts/train_drqv2_rgb.sh
-scripts/train_wsrl.sh
-scripts/train_wsrl_rgbd.sh
-scripts/pretrain_offline.sh calql --offline_dataset_path demos/pickcube.h5
+python examples/train_online.py sac --config configs/online/sac_state.yaml
+python examples/train_online.py sac --config configs/online/sac_rgb_resnet.yaml
+python examples/train_online.py ppo --config configs/online/ppo_state.yaml
+python examples/train_online.py ppo --config configs/online/ppo_rgb.yaml
+python examples/train_online.py drqv2 --config configs/online/drqv2_rgb.yaml
+python examples/train_off2on.py wsrl --config configs/off2on/wsrl.yaml
+python examples/train_off2on.py wsrl --config configs/off2on/wsrl_rgb.yaml
+python examples/pretrain_offline.py calql --offline_dataset_path demos/pickcube.h5
 ```
 
 ## Configuration Inspection

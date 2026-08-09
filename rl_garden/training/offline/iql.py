@@ -121,4 +121,4 @@ def run_iql(args: IQLArgs) -> None:
     run_offline(args, build_agent=build_iql)
 
 
-registry.register("iql", IQLArgs, run_iql, target="rl_garden.algorithms.IQL")
+registry.register("iql", IQLArgs, run_iql)

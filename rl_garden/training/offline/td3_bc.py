@@ -90,4 +90,4 @@ def run_td3_bc(args: TD3BCArgs) -> None:
     run_offline(args, build_agent=build_td3_bc)
 
 
-registry.register("td3_bc", TD3BCArgs, run_td3_bc, target="rl_garden.algorithms.TD3BC")
+registry.register("td3_bc", TD3BCArgs, run_td3_bc)

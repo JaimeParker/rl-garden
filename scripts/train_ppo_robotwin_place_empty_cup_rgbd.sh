@@ -15,75 +15,14 @@ if [[ -z "$ROBOTWIN_ROOT" ]]; then
     exit 1
 fi
 ASSETS_PATH_ARG="${RLG_ROBOTWIN_ASSETS_PATH:-$ROBOTWIN_ROOT}"
-STD_LOG="${RLG_STD_LOG:-1}"
-LOG_TYPE="${RLG_LOG_TYPE:-wandb}"
-LOG_KEYWORDS="${RLG_LOG_KEYWORDS:-}"
-FORWARD_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --std_log|--std-log)
-            STD_LOG=1
-            shift
-            ;;
-        --no_std_log|--no-std-log)
-            STD_LOG=0
-            shift
-            ;;
-        --log_type|--log-type)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: $1 requires a value." >&2
-                exit 1
-            fi
-            LOG_TYPE="$2"
-            shift 2
-            ;;
-        --log_type=*|--log-type=*)
-            LOG_TYPE="${1#*=}"
-            shift
-            ;;
-        --log_keywords|--log-keywords)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: $1 requires a value." >&2
-                exit 1
-            fi
-            LOG_KEYWORDS="$2"
-            shift 2
-            ;;
-        --log_keywords=*|--log-keywords=*)
-            LOG_KEYWORDS="${1#*=}"
-            shift
-            ;;
-        --assets_path|--assets-path)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: $1 requires a value." >&2
-                exit 1
-            fi
-            ASSETS_PATH_ARG="$2"
-            shift 2
-            ;;
-        --assets_path=*|--assets-path=*)
-            ASSETS_PATH_ARG="${1#*=}"
-            shift
-            ;;
-        *)
-            FORWARD_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
 
 exec env \
     HOME="${HOME:-/tmp}" \
     XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp}" \
     MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp}" \
-    RLG_STD_LOG="$STD_LOG" \
-    RLG_LOG_TYPE="$LOG_TYPE" \
-    RLG_LOG_KEYWORDS="$LOG_KEYWORDS" \
-    RLG_LAUNCHER="${BASH_SOURCE[0]}" \
-    RLG_LAUNCHER_PRESET="$REPO_DIR/configs/online/ppo_robotwin_place_empty_cup_rgb.yaml" \
     ROBOT_PLATFORM="${ROBOT_PLATFORM:-ALOHA}" \
     "$PYTHON_BIN" -u "$REPO_DIR/examples/train_online.py" ppo \
     --config "$REPO_DIR/configs/online/ppo_robotwin_place_empty_cup_rgb.yaml" \
     --robotwin.robotwin-root "$ROBOTWIN_ROOT" \
     --robotwin.assets-path "$ASSETS_PATH_ARG" \
-    "${FORWARD_ARGS[@]}"
+    "$@"

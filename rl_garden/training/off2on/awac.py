@@ -91,6 +91,4 @@ def run_awac(args: AWACOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_awac, algorithm="awac")
 
 
-registry.register(
-    "awac", AWACOff2OnArgs, run_awac, target="rl_garden.algorithms.Off2OnAWAC"
-)
+registry.register("awac", AWACOff2OnArgs, run_awac)

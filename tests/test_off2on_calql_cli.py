@@ -9,7 +9,7 @@ from pathlib import Path
 
 def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"RLG_LOG_TYPE": "wandb", "MPLCONFIGDIR": "/tmp"}
+    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
     result = subprocess.run(
         [
             sys.executable,
@@ -42,7 +42,7 @@ def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):
 
 def test_wsrl_print_config_unaffected_by_calql_defaults(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"RLG_LOG_TYPE": "wandb", "MPLCONFIGDIR": "/tmp"}
+    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
     result = subprocess.run(
         [
             sys.executable,

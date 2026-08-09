@@ -76,42 +76,6 @@ class VisionArgs:
     per_camera_rgbd: bool = False
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _env_str(name: str, default: Optional[str]) -> Optional[str]:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    return raw if raw else None
-
-
-def apply_log_env_defaults(args: LoggingArgs) -> None:
-    """Apply RLG_* values to a default config before explicit CLI parsing."""
-    args.std_log = _env_bool("RLG_STD_LOG", args.std_log)
-    args.log_type = _env_str("RLG_LOG_TYPE", args.log_type) or args.log_type
-    args.log_keywords = _env_str("RLG_LOG_KEYWORDS", args.log_keywords)
-    args.wandb_project = (
-        _env_str("RLG_WANDB_PROJECT", args.wandb_project) or args.wandb_project
-    )
-    args.wandb_entity = _env_str("RLG_WANDB_ENTITY", args.wandb_entity)
-    args.wandb_group = _env_str("RLG_WANDB_GROUP", args.wandb_group)
-
-
-apply_log_env_overrides = apply_log_env_defaults
-
-
-def logging_args_from(args: Any) -> Optional[LoggingArgs]:
-    """Return flat or nested logging arguments from a training config."""
-    logging_args = getattr(args, "logging", args)
-    return logging_args if hasattr(logging_args, "std_log") else None
-
-
 def resolve_checkpoint_dir(args: Any, run_name: str) -> Optional[str]:
     if args.checkpoint_dir is not None:
         return args.checkpoint_dir

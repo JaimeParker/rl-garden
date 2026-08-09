@@ -92,5 +92,4 @@ registry.register(
     "transformer_sac",
     TransformerSACArgs,
     run_transformer_sac,
-    target="rl_garden.algorithms.TransformerSAC",
 )

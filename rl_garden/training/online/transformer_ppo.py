@@ -72,5 +72,4 @@ registry.register(
     "transformer_ppo",
     TransformerPPOArgs,
     run_transformer_ppo,
-    target="rl_garden.algorithms.TransformerPPO",
 )

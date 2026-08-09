@@ -147,4 +147,4 @@ class PPOArgs(VisionPPOTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("ppo", PPOArgs, run_ppo, target="rl_garden.algorithms.PPO")
+registry.register("ppo", PPOArgs, run_ppo)

@@ -128,6 +128,4 @@ class SerlArgs(RealWorldFrankaArgs, RLPDArgs):
     franka_real: FrankaRealConfig = field(default_factory=FrankaRealConfig)
 
 
-# No ConfigContract coverage yet for the real-world args surface; passthrough
-# skips field-ownership/completeness checks instead of silently degrading them.
-registry.register("serl", SerlArgs, run_serl, contract_mode="passthrough")
+registry.register("serl", SerlArgs, run_serl)

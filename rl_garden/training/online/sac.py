@@ -158,4 +158,4 @@ class SACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("sac", SACArgs, run_sac, target="rl_garden.algorithms.SAC")
+registry.register("sac", SACArgs, run_sac)

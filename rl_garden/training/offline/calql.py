@@ -31,4 +31,4 @@ def run_calql(args: CalQLArgs) -> None:
     run_offline(args, build_agent=build_calql)
 
 
-registry.register("calql", CalQLArgs, run_calql, target="rl_garden.algorithms.CalQL")
+registry.register("calql", CalQLArgs, run_calql)

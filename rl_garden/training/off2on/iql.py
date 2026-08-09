@@ -120,6 +120,4 @@ def run_iql(args: IQLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_iql, algorithm="iql")
 
 
-registry.register(
-    "iql", IQLOff2OnArgs, run_iql, target="rl_garden.algorithms.Off2OnIQL"
-)
+registry.register("iql", IQLOff2OnArgs, run_iql)

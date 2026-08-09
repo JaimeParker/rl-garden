@@ -155,6 +155,4 @@ class TDMPC2Args(VisionTDMPC2TrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register(
-    "tdmpc2", TDMPC2Args, run_tdmpc2, target="rl_garden.algorithms.tdmpc2.TDMPC2"
-)
+registry.register("tdmpc2", TDMPC2Args, run_tdmpc2)

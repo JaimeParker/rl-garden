@@ -8,9 +8,7 @@ import pytest
 
 from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
-    LoggingArgs,
     VisionArgs,
-    apply_log_env_overrides,
     image_encoder_factory_from_args,
     image_keys_from_env,
     image_keys_from_obs_mode,
@@ -1016,25 +1014,6 @@ def test_image_keys_from_env_rejects_missing_explicit_key() -> None:
 
     with pytest.raises(ValueError, match="rgb_missing"):
         image_keys_from_env(_Env(), args)
-
-
-def test_log_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    args = LoggingArgs()
-    monkeypatch.setenv("RLG_STD_LOG", "0")
-    monkeypatch.setenv("RLG_LOG_TYPE", "none")
-    monkeypatch.setenv("RLG_LOG_KEYWORDS", "train,fps")
-    monkeypatch.setenv("RLG_WANDB_PROJECT", "custom-project")
-    monkeypatch.setenv("RLG_WANDB_ENTITY", "custom-entity")
-    monkeypatch.setenv("RLG_WANDB_GROUP", "custom-group")
-
-    apply_log_env_overrides(args)
-
-    assert args.std_log is False
-    assert args.log_type == "none"
-    assert args.log_keywords == "train,fps"
-    assert args.wandb_project == "custom-project"
-    assert args.wandb_entity == "custom-entity"
-    assert args.wandb_group == "custom-group"
 
 
 def test_resolve_num_eval_steps_falls_back_to_default_when_unset() -> None:

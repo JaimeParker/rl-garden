@@ -91,16 +91,15 @@ def _run_offline(
 ) -> None:
     from rl_garden.training.offline._registry import registry
 
-    algorithm, entry = registry.entry_for_args(args)
+    algorithm, _ = registry.entry_for_args(args)
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
             args,
             registry=registry,
             training_phase="offline",
             algorithm=algorithm,
-            contract=entry.contract,
         )
-        with config_session(preflight, dry_run=False, contract=entry.contract):
+        with config_session(preflight, dry_run=False):
             return _run_offline(
                 normalized_args, build_agent=build_agent, resources=resources
             )
@@ -209,9 +208,7 @@ def _run_offline(
     if args.load_checkpoint is not None:
         # Loaded last so a resumed checkpoint's buffer/normalizer state is
         # authoritative over the freshly re-populated offline dataset above.
-        agent.load(
-            args.load_checkpoint, load_replay_buffer=args.load_replay_buffer
-        )
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
         if args.std_log:
             print(f"[pretrain] resumed_from={args.load_checkpoint}", flush=True)
 

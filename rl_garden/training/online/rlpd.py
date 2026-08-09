@@ -220,4 +220,4 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     success_key: str | None = None
 
 
-registry.register("rlpd", RLPDArgs, run_rlpd, target="rl_garden.algorithms.RLPD")
+registry.register("rlpd", RLPDArgs, run_rlpd)

@@ -122,5 +122,4 @@ registry.register(
     "flash_sac",
     FlashSACArgs,
     run_flash_sac,
-    target="rl_garden.algorithms.flash_sac.FlashSAC",
 )

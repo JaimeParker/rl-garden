@@ -9,11 +9,10 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from rl_garden.common.effective_config import (
-    ConfigError,
     EffectiveConfig,
-    default_provenance,
     effective_config_json,
     json_value,
+    resolve_active_environment,
     resolve_effective_config,
     runtime_metadata,
 )
@@ -23,7 +22,6 @@ from rl_garden.common.effective_config import (
 class InspectionSession:
     preflight: EffectiveConfig
     dry_run: bool
-    contract: Any | None
 
 
 _SESSION: ContextVar[InspectionSession | None] = ContextVar(
@@ -35,10 +33,8 @@ _AGENT_BUILD: ContextVar[dict[str, Any] | None] = ContextVar(
 
 
 @contextmanager
-def config_session(
-    preflight: EffectiveConfig, *, dry_run: bool, contract: Any | None = None
-) -> Iterator[None]:
-    token = _SESSION.set(InspectionSession(preflight, dry_run, contract))
+def config_session(preflight: EffectiveConfig, *, dry_run: bool) -> Iterator[None]:
+    token = _SESSION.set(InspectionSession(preflight, dry_run))
     build_token = _AGENT_BUILD.set(None)
     try:
         yield
@@ -61,46 +57,16 @@ def standalone_preflight(
     *,
     training_phase: str,
     algorithm: str,
-    contract: Any | None = None,
-    provenance: Mapping[str, Any] | None = None,
+    sources: Mapping[str, Any] | None = None,
     derived: Mapping[str, Any] | None = None,
 ) -> EffectiveConfig:
-    active_environment: dict[str, Any] = {}
-    backend_name = getattr(args, "env_backend", None)
-    if backend_name is not None and hasattr(args, backend_name):
-        active_environment = {
-            "backend": backend_name,
-            "config": json_value(getattr(args, backend_name)),
-        }
-    resolved_provenance = dict(provenance or default_provenance(args))
-    algorithm_config: dict[str, Any] = {}
-    if contract is not None:
-        resolved_provenance = contract.validate_active(
-            args, contract.apply(resolved_provenance)
-        )
-        active_paths = {
-            path for path, field in resolved_provenance.items() if field.active
-        }
-        try:
-            implicit_defaults = (
-                contract.constructor_defaults() if contract.mode == "strict" else {}
-            )
-        except (ImportError, AttributeError, TypeError, ValueError) as exc:
-            raise ConfigError(f"Invalid config contract: {exc}") from exc
-        algorithm_config = {
-            "target": contract.target,
-            "mode": contract.mode,
-            "constructor_kwargs": {},
-            "field_mappings": contract.field_mappings(active_paths),
-            "implicit_defaults": implicit_defaults,
-        }
     return resolve_effective_config(
         args,
         training_phase=training_phase,
         algorithm=algorithm,
-        provenance=resolved_provenance,
-        active_environment=active_environment,
-        algorithm_config=algorithm_config,
+        sources=dict(sources or {}),
+        active_environment=resolve_active_environment(args),
+        algorithm_config={},
         derived=derived,
         runtime=runtime_metadata(),
     )
@@ -112,17 +78,15 @@ def prepare_standalone(
     registry: Any,
     training_phase: str,
     algorithm: str,
-    contract: Any,
 ) -> tuple[Any, EffectiveConfig]:
     """Apply the same normalization pipeline used by registry CLI dispatch."""
-    provenance = default_provenance(args)
-    normalized, derived = registry._normalize_runtime(args, provenance)
+    sources = {}
+    normalized, derived = registry._normalize_runtime(args, sources)
     return normalized, standalone_preflight(
         normalized,
         training_phase=training_phase,
         algorithm=algorithm,
-        contract=contract,
-        provenance=provenance,
+        sources=sources,
         derived=derived,
     )
 
@@ -165,52 +129,13 @@ def construct_agent(target: Any, /, **kwargs: Any) -> Any:
         )
         for name, value in kwargs.items()
     }
-    env = kwargs.get("env")
-    observation_space = getattr(env, "single_observation_space", None)
     _AGENT_BUILD.set(
         {
             "target": f"{target.__module__}.{target.__qualname__}",
-            "target_type": target,
             "constructor_kwargs": serialized,
-            "visual_observation": isinstance(
-                getattr(observation_space, "spaces", None), Mapping
-            ),
         }
     )
     return target(**kwargs)
-
-
-def validate_constructor_coverage(
-    consumption_by_path: Mapping[str, Any],
-    constructor_kwargs: Mapping[str, Any],
-    *,
-    declared_target: type,
-    constructed_target: type,
-    visual_observation: bool,
-) -> None:
-    """Reject a constructed agent that does not satisfy its strict contract."""
-    if constructed_target is not declared_target:
-        raise ConfigError(
-            "Config contract target mismatch: declared "
-            f"{declared_target.__module__}.{declared_target.__qualname__}, constructed "
-            f"{constructed_target.__module__}.{constructed_target.__qualname__}"
-        )
-    if not consumption_by_path:
-        return
-    from rl_garden.training.config_contract import check_constructor_coverage
-
-    inactive_clusters = (
-        frozenset() if visual_observation else frozenset({"visual_encoder"})
-    )
-    violations = check_constructor_coverage(
-        consumption_by_path,
-        constructor_kwargs,
-        inactive_clusters=inactive_clusters,
-    )
-    if violations:
-        raise ConfigError(
-            "Config contract / constructor mismatch:\n" + "\n".join(violations)
-        )
 
 
 def _algorithm_summary() -> dict[str, Any]:
@@ -219,41 +144,9 @@ def _algorithm_summary() -> dict[str, Any]:
         raise RuntimeError(
             "Registered builders must construct agents through construct_agent()."
         )
-    preflight = current_preflight()
-    session = _SESSION.get()
-    assert session is not None
-    target = record["target_type"]
-    passed = set(record["constructor_kwargs"])
-    implicit_defaults: dict[str, Any] = {}
-    from rl_garden.training._constructor_introspection import (
-        inspect_constructor_parameters,
-    )
-
-    for name, parameter in inspect_constructor_parameters(target).items():
-        if name not in passed and parameter.default is not parameter.empty:
-            implicit_defaults[name] = json_value(parameter.default)
-    if session.contract is not None and session.contract.mode == "strict":
-        active_paths = {
-            path
-            for path, field in preflight.provenance.items()
-            if getattr(field, "active", True)
-        }
-        validate_constructor_coverage(
-            session.contract.consumption_map(active_paths),
-            record["constructor_kwargs"],
-            declared_target=session.contract.target_type(),
-            constructed_target=record["target_type"],
-            visual_observation=record["visual_observation"],
-        )
     return {
         "target": record["target"],
-        "mode": preflight.algorithm.get("mode", "strict"),
         "constructor_kwargs": record["constructor_kwargs"],
-        "field_mappings": preflight.algorithm.get("field_mappings", {}),
-        "implicit_defaults": implicit_defaults,
-        # Reserved for future composite agents; retained for config JSON
-        # compatibility even though current contracts do not populate it.
-        "components": preflight.algorithm.get("components", {}),
     }
 
 

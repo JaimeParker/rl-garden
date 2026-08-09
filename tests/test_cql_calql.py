@@ -536,7 +536,7 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
         expected = f"{algorithm}_offline_pretrained.pt"
         assert (checkpoint_dir / expected).exists()
         config = json.loads((tmp_path / "logs" / algorithm / "config.json").read_text())
-        assert config["schema_version"] == 2
+        assert config["schema_version"] == 3
         assert config["status"] == "materialized"
         assert config["runtime"]["dry_run"] is False
         assert config["selection"] == {

@@ -236,6 +236,4 @@ registry.register(
     "residual_sac",
     ResidualSACArgs,
     run_residual_sac,
-    target="rl_garden.algorithms.ResidualSAC",
-    derived_parameters=frozenset({"base_action_provider"}),
 )

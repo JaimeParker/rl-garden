@@ -9,7 +9,7 @@ from pathlib import Path
 
 def test_awac_print_config_matches_corl_aligned_defaults(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"RLG_LOG_TYPE": "wandb", "MPLCONFIGDIR": "/tmp"}
+    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
     result = subprocess.run(
         [
             sys.executable,

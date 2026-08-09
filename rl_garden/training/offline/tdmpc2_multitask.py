@@ -53,15 +53,13 @@ def _run_tdmpc2_multitask(
     from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
-        contract = registry.entries()["tdmpc2_multitask"].contract
         normalized_args, preflight = prepare_standalone(
             args,
             registry=registry,
             training_phase="offline",
             algorithm="tdmpc2_multitask",
-            contract=contract,
         )
-        with config_session(preflight, dry_run=False, contract=contract):
+        with config_session(preflight, dry_run=False):
             return _run_tdmpc2_multitask(normalized_args, cleanup)
 
     if not args.dataset_dir:
@@ -236,8 +234,4 @@ registry.register(
     "tdmpc2_multitask",
     TDMPC2MultitaskArgs,
     run_tdmpc2_multitask,
-    target="rl_garden.algorithms.tdmpc2.multitask.TDMPC2Multitask",
-    derived_parameters=frozenset(
-        {"tasks", "obs_dims", "action_dims", "episode_lengths"}
-    ),
 )

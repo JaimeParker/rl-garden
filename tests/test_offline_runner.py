@@ -9,15 +9,6 @@ from rl_garden.training.offline import _runner
 from rl_garden.training.offline.bc import BCArgs
 
 
-@pytest.fixture(autouse=True)
-def _disable_contract_validation_for_runner_test_doubles(monkeypatch):
-    from rl_garden.training import inspection
-
-    monkeypatch.setattr(
-        inspection, "validate_constructor_coverage", lambda *args, **kwargs: None
-    )
-
-
 def test_run_offline_closes_resources_when_builder_fails(monkeypatch, tmp_path):
     closed = {"eval_env": False}
 
@@ -145,9 +136,7 @@ def test_run_offline_respects_load_replay_buffer_false(monkeypatch, tmp_path):
             spaces.Box(-1, 1, shape=(2,), dtype="float32"),
         ),
     )
-    monkeypatch.setattr(
-        _runner, "load_offline_dataset", lambda replay_buffer, args: 0
-    )
+    monkeypatch.setattr(_runner, "load_offline_dataset", lambda replay_buffer, args: 0)
     monkeypatch.setattr(
         _runner, "run_offline_pretraining", lambda *unused, **unused_kw: None
     )

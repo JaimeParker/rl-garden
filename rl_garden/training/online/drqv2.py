@@ -216,6 +216,4 @@ class DrQv2Args(EnvBackendArgs):
     replay_pin_sampled_batch: bool = False
 
 
-registry.register(
-    "drqv2", DrQv2Args, run_drqv2, target="rl_garden.algorithms.ddpg.DDPG"
-)
+registry.register("drqv2", DrQv2Args, run_drqv2)

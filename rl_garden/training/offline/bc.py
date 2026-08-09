@@ -95,4 +95,4 @@ def run_bc(args: BCArgs) -> None:
     run_offline(args, build_agent=build_bc)
 
 
-registry.register("bc", BCArgs, run_bc, target="rl_garden.algorithms.BC")
+registry.register("bc", BCArgs, run_bc)

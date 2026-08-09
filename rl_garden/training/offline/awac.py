@@ -88,4 +88,4 @@ def run_awac(args: AWACArgs) -> None:
     run_offline(args, build_agent=build_awac)
 
 
-registry.register("awac", AWACArgs, run_awac, target="rl_garden.algorithms.AWAC")
+registry.register("awac", AWACArgs, run_awac)

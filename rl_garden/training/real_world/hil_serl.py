@@ -323,6 +323,4 @@ class HilSerlArgs(RealWorldFrankaArgs, RLPDHybridArgs):
     pooling_method: PoolingMethod = "spatial_learned_embeddings"
 
 
-# No ConfigContract coverage yet for the real-world args surface; passthrough
-# skips field-ownership/completeness checks instead of silently degrading them.
-registry.register("hil_serl", HilSerlArgs, run_hil_serl, contract_mode="passthrough")
+registry.register("hil_serl", HilSerlArgs, run_hil_serl)

@@ -65,5 +65,4 @@ registry.register(
     "recurrent_ppo",
     RecurrentPPOArgs,
     run_recurrent_ppo,
-    target="rl_garden.algorithms.RecurrentPPO",
 )

@@ -170,5 +170,4 @@ registry.register(
     "calql",
     CalQLOff2OnArgs,
     run_calql,
-    target="rl_garden.algorithms.Off2OnCalQL",
 )
