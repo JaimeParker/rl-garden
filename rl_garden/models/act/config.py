@@ -47,13 +47,14 @@ def act_pretrained_dir() -> Path:
     Resolution order follows the ResNet encoder convention:
 
     1. ``$RL_GARDEN_PRETRAINED_DIR`` if set.
-    2. ``pretrained_models/`` at the repository root.
+    2. ``pretrained/act/`` at the repo root.
     """
 
     env = os.environ.get("RL_GARDEN_PRETRAINED_DIR")
     if env:
         return Path(env).expanduser().resolve()
-    return Path(__file__).resolve().parents[3] / "pretrained_models"
+    # rl_garden/models/act/config.py -> repo root is 3 parents up.
+    return Path(__file__).resolve().parents[3] / "pretrained" / "act"
 
 
 def resolve_act_checkpoint_path(ckpt_path: str | os.PathLike[str] | None) -> Path:

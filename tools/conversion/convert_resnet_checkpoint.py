@@ -3,8 +3,8 @@
 
 Example:
     python tools/conversion/convert_resnet_checkpoint.py \
-        --input pretrained_models/resnet10_pretrained.pt \
-        --output pretrained_models/resnet10_pretrained_converted.pt \
+        --input pretrained/resnet/resnet10_pretrained.pt \
+        --output pretrained/resnet/resnet10_pretrained_converted.pt \
         --arch resnet10
 """
 from __future__ import annotations

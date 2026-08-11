@@ -43,10 +43,11 @@ data/
 3rd_party/RoboTwin
 3rd_party/Cal-QL/
 3rd_party/wsrl/
-pretrained_models/*
 prompts/
 demos/
 docs/superpowers/
+pretrained/*
+!pretrained/README.md
 
 # 默认忽略模型权重文件
 *.pt

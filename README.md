@@ -12,7 +12,7 @@ platforms can be integrated without creating platform-specific training entrypoi
 
 ## Capabilities
 
-- **Online RL:** SAC, PPO, DrQ-v2, FlashSAC, and ResidualSAC.
+- **Online RL:** SAC, PPO, DrQ-v2, and FlashSAC.
 - **Offline RL and imitation:** BC, IQL, CQL, Cal-QL, and offline SAC-family
   pretraining.
 - **Offline-to-online:** WSRL pretraining, warm start, and online fine-tuning.
@@ -20,18 +20,18 @@ platforms can be integrated without creating platform-specific training entrypoi
   proprioception, or mixed vector inputs.
 - **Visual encoders:** PlainConv, ResNet, and ViT backbones with configurable image-key
   fusion, pooling, augmentation, and proprioception fusion.
-- **Replay:** tensor, dict, Monte-Carlo return, residual-action, and PPO rollout
-  buffers with explicit storage and sample devices.
+- **Replay:** tensor, dict, Monte-Carlo return, and PPO rollout buffers with
+  explicit storage and sample devices.
 - **Environment backends:** a registry-based interface with current ManiSkill and
   RoboTwin implementations and support for adding further platforms.
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration
-  recording, ACT base policies, and learned reward classifiers.
+  recording, and learned reward classifiers.
 
 ## Project Layout
 
 ```text
 rl_garden/
-├── algorithms/    # Online, offline, off-to-online, and residual algorithms
+├── algorithms/    # Online, offline, and off-to-online algorithms
 ├── buffers/       # Replay and rollout buffers
 ├── common/        # Logging, CLI/env args, checkpoints, optimizers, utilities
 ├── datasets/      # Offline and WSRL dataset workflows
@@ -78,7 +78,7 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `residual_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, recurrent and transformer SAC/PPO |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, recurrent and transformer SAC/PPO |
 | Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac` |
 
@@ -108,24 +108,6 @@ python examples/train_online.py ppo \
   --env-id PickCube-v1 --obs-mode rgb --encoder plain_conv
 ```
 
-ResidualSAC:
-
-```bash
-python examples/train_online.py residual_sac \
-  --env-id PickCube-v1 \
-  --obs-mode rgb \
-  --control-mode pd_ee_twist \
-  --base-policy act \
-  --base-ckpt-path act-peg-only \
-  --residual-action-scale 0.1
-```
-
-ResidualSAC-specific options include `--base-policy {act,sac,zero}`,
-`--base-ckpt-path`, `--residual-action-scale`, ACT temporal aggregation controls,
-base-SAC reconstruction options, and residual demo loading via
-`--offline-dataset-path` / `--offline-data-ratio`. Demo loading is currently
-supported only by `residual_sac`.
-
 Additional preset-backed entrypoints include:
 
 ```bash
@@ -137,8 +119,6 @@ python examples/train_online.py ppo \
   --config configs/online/ppo_rgb.yaml
 python examples/train_online.py drqv2 \
   --config configs/online/drqv2_rgb.yaml
-scripts/train_residual_rgbd.sh
-scripts/train_residual_state.sh
 ```
 
 ### Offline Pretraining
@@ -205,9 +185,6 @@ python examples/train_online.py sac \
   --image-fusion-mode per_key
 ```
 
-Residual peg experiments use the same env flags with `residual_sac` through
-`scripts/train_residual_rgbd.sh` or `scripts/train_residual_state.sh`.
-
 ## Visual Training
 
 Use `--encoder plain_conv` for the lightweight CNN path, a ResNet name such as
@@ -234,15 +211,13 @@ python examples/train_online.py sac \
 ViT example:
 
 ```bash
-python examples/train_online.py residual_sac \
+python examples/train_online.py sac \
   --env-id PegInsertionSidePegOnly-v1 \
   --obs-mode rgb \
   --include-state \
   --per-camera-rgbd \
   --image-fusion-mode per_key \
-  --encoder vit \
-  --base-policy act \
-  --base-ckpt-path act-peg-only
+  --encoder vit
 ```
 
 `--freeze-resnet-backbone` keeps the stem and residual blocks fixed while leaving
@@ -254,8 +229,8 @@ Torchvision-style ResNet checkpoints must be converted to rl-garden parameter na
 
 ```bash
 python tools/conversion/convert_resnet_checkpoint.py \
-  --input pretrained_models/resnet10_pretrained.pt \
-  --output pretrained_models/resnet10_pretrained_converted.pt \
+  --input pretrained/resnet/resnet10_pretrained.pt \
+  --output pretrained/resnet/resnet10_pretrained_converted.pt \
   --arch resnet10
 ```
 
@@ -355,7 +330,6 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [Teleoperation and Recording](docs/guides/teleop.md)
 - [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
 - [WSRL Overview](docs/design/wsrl-overview.md)
-- [Residual SAC](docs/design/residual-sac.md)
 - [RNG and Numerical Determinism](docs/design/rng-numerical-determinism.md)
 
 ## Research Influences

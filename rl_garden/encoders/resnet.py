@@ -193,13 +193,13 @@ class ResNetEncoder(BaseFeaturesExtractor):
 
         Resolution order:
           1. ``$RL_GARDEN_PRETRAINED_DIR`` (if set)
-          2. ``pretrained_models/`` at the repo root.
+          2. ``pretrained/resnet/`` at the repo root.
         """
         env = os.environ.get("RL_GARDEN_PRETRAINED_DIR")
         if env:
             return Path(env).expanduser().resolve()
-        # rl_garden/encoders/resnet.py -> repo root is 3 parents up.
-        return Path(__file__).resolve().parents[2] / "pretrained_models"
+        # rl_garden/encoders/resnet.py -> repo root is 2 parents up.
+        return Path(__file__).resolve().parents[2] / "pretrained" / "resnet"
 
     def load_pretrained(self, name: str, strict: bool = False) -> list[str]:
         """Look up ``<name>.pt`` under :meth:`pretrained_dir` and load it.
@@ -323,7 +323,7 @@ def resnet_encoder_factory(
 
     ``pretrained_weights`` (optional): checkpoint name looked up via
     :py:meth:`ResNetEncoder.pretrained_dir`. E.g. ``"resnet10-imagenet"``
-    loads ``pretrained_models/resnet10-imagenet.pt``.
+    loads ``pretrained/resnet/resnet10-imagenet.pt``.
 
     ``freeze_resnet_encoder``: when True and ``pretrained_weights`` is
     provided, freeze the full ResNet encoder after loading.
