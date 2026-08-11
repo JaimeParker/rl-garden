@@ -20,6 +20,8 @@ for user-facing installation, features, and quick-start documentation.
   [`.agents/rules/remote-training-sop.md`](.agents/rules/remote-training-sop.md).
 - Before changing or repairing Mutagen sync, read
   [`.agents/rules/mutagen-sync-sop.md`](.agents/rules/mutagen-sync-sop.md).
+- Before navigating an unfamiliar area of the codebase, read
+  [`.agents/rules/repository-map.md`](.agents/rules/repository-map.md).
 
 Machine-specific server, Docker, path, Python environment, and Mutagen bindings
 belong in ignored `.agents/local/personal_config.md`. Before any remote command,
@@ -45,30 +47,8 @@ entrypoints to a specific simulator.
 - Keep optional environment and hardware dependencies lazy so core package imports,
   registry discovery, and configuration inspection work without every backend
   installed.
-
-## Repository Map
-
-- `rl_garden/algorithms/` — online, offline, off-to-online, and residual algorithms.
-- `rl_garden/policies/` — policy composition and actor/critic modules.
-- `rl_garden/buffers/` — tensor, dict, Monte-Carlo, residual, and rollout buffers.
-- `rl_garden/encoders/` — state, CNN, RGBD/proprio, pooling, FiLM, and ResNet encoders.
-- `rl_garden/networks/` — actor, critic, value, and MLP backbone builders.
-- `rl_garden/common/` — logging, shared CLI arguments, environment arguments,
-  checkpoint I/O, optimization, types, and utilities.
-- `rl_garden/envs/` — backend registry and implementations, environment factories,
-  wrappers, and custom environments.
-- `rl_garden/training/` — registry base and independent `online/`, `offline/`, and
-  `off2on/` packages. Each phase owns shared parameters in `_args.py`; public
-  algorithm modules provide final Args composition, run function, and registration.
-- `robot_infra/` — controllers, teleoperation, and real-robot support.
-- `examples/` — thin training dispatchers and specialized experiment entrypoints.
-- `scripts/` — launchers with experiment defaults.
-- `tests/` — unit tests and accelerator/backend integration smoke tests.
-- `docs/` — public documentation, split into `guides/` (operational how-to),
-  `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
-  notes).
-- `3rd_party/` — reference submodules and external clones; do not edit unless the
-  user explicitly requests it.
+- `3rd_party/` holds reference submodules and external clones; do not edit unless
+  the user explicitly requests it.
 
 ## Development Rules
 
@@ -89,7 +69,7 @@ entrypoints to a specific simulator.
 
 Before finishing code changes:
 
-1. Run the smallest relevant test set first.
+1. Run the smallest relevant test set first, prefer to run tests on remote.
 2. For environment or training changes, run a tiny smoke test where dependencies
    and hardware permit it.
 3. Report exact commands and results.
