@@ -1,0 +1,104 @@
+diff --git a/train_finetune.py b/train_finetune.py
+index 62dedc8..b3e3df7 100644
+--- a/train_finetune.py
++++ b/train_finetune.py
+@@ -31,6 +31,10 @@ flags.DEFINE_integer('replay_buffer_size', 2000000,
+                      'Replay buffer size (=max_steps if unspecified).')
+ flags.DEFINE_integer('init_dataset_size', None,
+                      'Offline data size (uses all data if unspecified).')
++flags.DEFINE_float('fixed_mixing_ratio', None,
++                   'If set, sample this fraction from the offline dataset during online finetuning.')
++flags.DEFINE_boolean('save_models', True,
++                     'Save actor/critic/value/target critic params at eval and final.')
+ flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
+ config_flags.DEFINE_config_file(
+     'config',
+@@ -84,6 +88,22 @@ def make_env_and_dataset(env_name: str,
+     return env, dataset
+ 
+ 
++def concat_batches(*batches: Batch) -> Batch:
++    return Batch(observations=np.concatenate([b.observations for b in batches], axis=0),
++                 actions=np.concatenate([b.actions for b in batches], axis=0),
++                 rewards=np.concatenate([b.rewards for b in batches], axis=0),
++                 masks=np.concatenate([b.masks for b in batches], axis=0),
++                 next_observations=np.concatenate([b.next_observations for b in batches], axis=0))
++
++
++def save_agent_models(agent: Learner, save_dir: str, step: int) -> None:
++    model_dir = os.path.join(save_dir, 'models', str(step))
++    agent.actor.save(os.path.join(model_dir, 'actor.msgpack'))
++    agent.critic.save(os.path.join(model_dir, 'critic.msgpack'))
++    agent.value.save(os.path.join(model_dir, 'value.msgpack'))
++    agent.target_critic.save(os.path.join(model_dir, 'target_critic.msgpack'))
++
++
+ def main(_):
+     summary_writer = SummaryWriter(os.path.join(FLAGS.save_dir, 'tb',
+                                                 str(FLAGS.seed)),
+@@ -96,6 +116,16 @@ def main(_):
+     replay_buffer = ReplayBuffer(env.observation_space, action_dim,
+                                  FLAGS.replay_buffer_size or FLAGS.max_steps)
+     replay_buffer.initialize_with_dataset(dataset, FLAGS.init_dataset_size)
++    offline_replay_buffer = replay_buffer
++    online_replay_buffer = None
++    fixed_offline_batch = None
++    fixed_online_batch = None
++    if FLAGS.fixed_mixing_ratio is not None:
++        assert 0.0 <= FLAGS.fixed_mixing_ratio <= 1.0
++        fixed_offline_batch = int(FLAGS.batch_size * FLAGS.fixed_mixing_ratio)
++        fixed_online_batch = FLAGS.batch_size - fixed_offline_batch
++        online_replay_buffer = ReplayBuffer(env.observation_space, action_dim,
++                                           FLAGS.replay_buffer_size or FLAGS.max_steps)
+ 
+     kwargs = dict(FLAGS.config)
+     agent = Learner(FLAGS.seed,
+@@ -120,8 +150,9 @@ def main(_):
+             else:
+                 mask = 0.0
+ 
+-            replay_buffer.insert(observation, action, reward, mask,
+-                                 float(done), next_observation)
++            target_replay_buffer = online_replay_buffer or replay_buffer
++            target_replay_buffer.insert(observation, action, reward, mask,
++                                        float(done), next_observation)
+             observation = next_observation
+ 
+             if done:
+@@ -133,14 +164,22 @@ def main(_):
+             info = {}
+             info['total'] = {'timesteps': i}
+ 
+-        batch = replay_buffer.sample(FLAGS.batch_size)
++        if i >= 1 and online_replay_buffer is not None:
++            batch = concat_batches(
++                offline_replay_buffer.sample(fixed_offline_batch),
++                online_replay_buffer.sample(fixed_online_batch))
++            update_info = {'replay/offline_batch': np.asarray(fixed_offline_batch),
++                           'replay/online_batch': np.asarray(fixed_online_batch)}
++        else:
++            batch = replay_buffer.sample(FLAGS.batch_size)
++            update_info = {}
+         if 'antmaze' in FLAGS.env_name:
+             batch = Batch(observations=batch.observations,
+                           actions=batch.actions,
+                           rewards=batch.rewards - 1,
+                           masks=batch.masks,
+                           next_observations=batch.next_observations)
+-        update_info = agent.update(batch)
++        update_info = {**update_info, **agent.update(batch)}
+ 
+         if i % FLAGS.log_interval == 0:
+             for k, v in update_info.items():
+@@ -161,6 +200,11 @@ def main(_):
+             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),
+                        eval_returns,
+                        fmt=['%d', '%.1f'])
++            if FLAGS.save_models:
++                save_agent_models(agent, FLAGS.save_dir, i)
++
++    if FLAGS.save_models:
++        save_agent_models(agent, FLAGS.save_dir, FLAGS.max_steps)
+ 
+ 
+ if __name__ == '__main__':

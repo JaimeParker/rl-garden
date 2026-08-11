@@ -96,6 +96,7 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
         log_freq: int = 1_000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
+        num_eval_episodes: Optional[int] = None,
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
@@ -172,4 +173,16 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
+        )
+        self.num_eval_episodes = num_eval_episodes
+
+    def _evaluate(self) -> dict[str, float]:
+        if self.num_eval_episodes is None:
+            return super()._evaluate()
+        from rl_garden.algorithms.offline import run_exact_episode_eval
+
+        return run_exact_episode_eval(
+            self,
+            num_eval_episodes=self.num_eval_episodes,
+            num_eval_steps=self.num_eval_steps,
         )

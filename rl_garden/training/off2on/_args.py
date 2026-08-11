@@ -81,6 +81,10 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     success_key: Optional[str] = None
     reward_scale: float = 1.0
     reward_bias: float = 0.0
+    # Phase-specific eval cadences. Offline uses gradient-update units in the
+    # manual offline loop; online uses env-step units through OffPolicyAlgorithm.
+    offline_eval_freq: Optional[int] = None
+    online_eval_freq: Optional[int] = None
 
 
 @dataclass
@@ -118,10 +122,6 @@ class CQLOff2OnArgs:
     sparse_reward_mc: bool = False
     sparse_negative_reward: float = 0.0
     success_threshold: float = 0.5
-    # Phase-specific eval cadences: generic across CQL/Cal-QL/WSRL off2on --
-    # _runner.py applies these regardless of which algorithm is running.
-    offline_eval_freq: Optional[int] = None
-    online_eval_freq: Optional[int] = None
 
 
 @dataclass

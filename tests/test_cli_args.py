@@ -840,12 +840,16 @@ def test_build_iql_off2on_forwards_actor_distribution_and_actor_lr_schedule_from
         actor_distribution="unsquashed",
         actor_lr_schedule="warmup_cosine",
         actor_lr_decay_steps=10,
+        bootstrap_at_done="truncated",
+        num_eval_episodes=100,
     )
     agent = build_iql(args, env, None, None, None)
 
     assert agent.actor_distribution == "unsquashed"
     assert agent.actor_lr_schedule == "warmup_cosine"
     assert agent.actor_lr_decay_steps == 10
+    assert agent.bootstrap_at_done == "truncated"
+    assert agent.num_eval_episodes == 100
 
 
 @dataclass

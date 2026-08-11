@@ -162,6 +162,7 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
             "The official Cal-QL d4rl_legacy loader currently supports AntMaze only."
         )
 
+    gamma = float(getattr(buffer, "gamma", 0.99))
     env = _make_legacy_env(env_id)
     try:
         dataset = _official_calql_antmaze_dataset(
@@ -169,7 +170,7 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
             reward_scale=reward_scale,
             reward_bias=reward_bias,
             clip_action=0.99999,
-            gamma=float(buffer.gamma),
+            gamma=gamma,
             num_episodes=num_episodes,
         )
     finally:
@@ -177,7 +178,7 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
 
     device = buffer.storage_device
     rewards = torch.as_tensor(dataset["rewards"], device=device)
-    successes = (rewards > reward_bias).float()
+    successes = (rewards > reward_bias).float() if hasattr(buffer, "_step_success") else None
     return _add_flat_transitions(
         buffer,
         torch.as_tensor(dataset["observations"], device=device),
