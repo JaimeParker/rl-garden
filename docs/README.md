@@ -17,7 +17,6 @@ Architecture and rationale behind specific subsystems.
 
 - [WSRL Overview](design/wsrl-overview.md)
 - [IQL Overview](design/iql-overview.md)
-- [Residual SAC](design/residual-sac.md)
 - [RNG and Numerical Determinism](design/rng-numerical-determinism.md)
 
 ## Roadmaps

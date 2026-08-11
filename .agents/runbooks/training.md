@@ -10,7 +10,7 @@ The first positional argument selects the registered algorithm:
 
 ```bash
 # Online: sac, ppo, recurrent/transformer variants, drqv2, flash_sac,
-# residual_sac, td3, rlpd, rlpd_hybrid, tdmpc2
+# td3, rlpd, rlpd_hybrid, tdmpc2
 python examples/train_online.py sac --env_id PickCube-v1 --obs_mode state
 
 # Offline: bc, iql, cql, calql, wsrl, awac, td3_bc, tdmpc2_multitask

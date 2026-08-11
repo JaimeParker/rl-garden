@@ -3,12 +3,11 @@ that samples every training batch as a ratio mix of a fixed offline dataset
 and an online replay buffer, from the first gradient step (no offline-only
 pretraining phase, no explicit online-switch event).
 
-Written fresh rather than imported from ``ResidualSAC`` (residual-specific
-buffer/action fields) or ``Off2OnReplayMixin`` (built around an offline
-pretrain phase + explicit ``switch_to_online_mode()``, which doesn't apply
-here). Both of those already implement closely related mixing logic; this
-mixin is the generic version, intended for any future algorithm that needs
-the same "static prior data mixed at a fixed ratio from step 0" shape.
+Written fresh rather than imported from ``Off2OnReplayMixin`` (built around
+an offline pretrain phase + explicit ``switch_to_online_mode()``, which
+doesn't apply here), which already implements closely related mixing logic;
+this mixin is the generic version, intended for any future algorithm that
+needs the same "static prior data mixed at a fixed ratio from step 0" shape.
 """
 from __future__ import annotations
 
@@ -174,9 +173,8 @@ class PriorDataReplayMixin:
     @staticmethod
     def _concat_replay_samples(a, b):
         # TODO: duplicated from Off2OnReplayMixin._concat_replay_samples
-        # (off2on.py) / ResidualSAC._concat_replay_samples (residual.py) --
-        # consider extracting a single shared helper once a third caller
-        # shows up.
+        # (off2on.py) -- consider extracting a single shared helper once a
+        # third caller shows up.
         def _cat(x, y):
             if isinstance(x, dict):
                 return {k: torch.cat([x[k], y[k]], dim=0) for k in x}

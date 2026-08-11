@@ -11,7 +11,7 @@ from gymnasium import spaces
 from rl_garden.common.cli_args import vit_sac_kwargs_from_args
 from rl_garden.encoders import RandomShiftsAug, ViTTokenAndPropExtractor, ViTImageEncoder
 from rl_garden.encoders.base import TokenAndPropFeatureConfig
-from rl_garden.policies import ResidualSACPolicy, SACPolicy
+from rl_garden.policies import SACPolicy
 
 
 def test_random_shifts_aug_shape_and_dtype():
@@ -216,42 +216,6 @@ def test_sac_policy_actor_feature_dim_without_structured_config_raises():
         assert False, "Expected ValueError"
     except ValueError:
         pass
-
-
-def test_residual_sac_policy_with_vit_uses_adapter():
-    obs_space = spaces.Dict(
-        {
-            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
-            "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
-        }
-    )
-    action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
-    extractor = ViTTokenAndPropExtractor(
-        obs_space,
-        image_keys=("rgb",),
-        embed_dim=16,
-        num_heads=4,
-        augmentation="none",
-    )
-    policy = ResidualSACPolicy(
-        obs_space,
-        action_space,
-        extractor,
-        net_arch={"pi": [32], "qf": [32]},
-        n_critics=2,
-        actor_feature_dim=8,
-        critic_spatial_emb_dim=32,
-    )
-    obs = {
-        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
-        "state": torch.randn(2, 4),
-    }
-    base_actions = torch.zeros(2, 3)
-    extractor.prepare_batch(obs)
-    action, log_prob, features = policy.actor_action_log_prob(obs, base_actions)
-    assert action.shape == (2, 3)
-    assert log_prob.shape == (2, 1)
-    assert policy.q_values_all(features, action).shape == (2, 2, 1)
 
 
 def test_vit_sac_kwargs_from_args_defaults_to_per_key():

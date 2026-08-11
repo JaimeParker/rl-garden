@@ -1,4 +1,4 @@
-"""Online RL entry point: sac / drqv2 / flash_sac / ppo / residual_sac.
+"""Online RL entry point: sac / drqv2 / flash_sac / ppo.
 
 To add a new algorithm: create ``rl_garden/training/online/<name>.py`` with an Args
 dataclass, a run function, and a package-local ``registry.register`` call.
@@ -26,9 +26,6 @@ Usage:
 
     # FlashSAC
     python examples/train_online.py flash_sac --env_id PickCube-v1
-
-    # ResidualSAC with a zero base policy for debugging
-    python examples/train_online.py residual_sac --debug --env_id PickCube-v1
 
     # PPO – visual obs
     python examples/train_online.py ppo --env_id PickCube-v1 --obs_mode rgb

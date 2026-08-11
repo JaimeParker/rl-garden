@@ -5,7 +5,6 @@ from rl_garden.policies.iql_policy import IQLPolicy
 from rl_garden.policies.ppo_policy import PPOPolicy
 from rl_garden.policies.recurrent_ppo_policy import RecurrentPPOPolicy
 from rl_garden.policies.recurrent_sac_policy import RecurrentSACPolicy
-from rl_garden.policies.residual_policy import ResidualSACPolicy
 from rl_garden.policies.sac_policy import Actor, ContinuousCritic, SACPolicy
 from rl_garden.policies.wsrl_policy import WSRLPolicy
 
@@ -19,7 +18,6 @@ __all__ = [
     "PPOPolicy",
     "RecurrentPPOPolicy",
     "RecurrentSACPolicy",
-    "ResidualSACPolicy",
     "SACPolicy",
     "WSRLPolicy",
 ]

@@ -1,8 +1,8 @@
 """RLPD policy: SACPolicy with an optional pnorm ablation on actor/critic.
 
-Mirrors ``ResidualSACPolicy``'s pattern (build via ``super().__init__()``,
-then replace the modules that need algorithm-specific construction) rather
-than adding ``use_pnorm`` params to ``SACPolicy.__init__`` itself --
+Builds via ``super().__init__()``, then replaces the modules that need
+algorithm-specific construction, rather than adding ``use_pnorm`` params to
+``SACPolicy.__init__`` itself --
 ``use_pnorm`` is an RLPD-specific ablation knob with no other caller, unlike
 ``dropout_rate``/``kernel_init``/``backbone_type`` which were already
 generic ``SACPolicy`` capabilities before RLPD existed.

@@ -92,7 +92,6 @@ def test_phase_registries_discover_expected_algorithms():
         "transformer_sac",
         "drqv2",
         "flash_sac",
-        "residual_sac",
         "td3",
         "rlpd",
         "rlpd_hybrid",
@@ -167,43 +166,6 @@ def test_print_config_is_recursive_and_does_not_create_run_dir(tmp_path):
     assert "mani_skill" not in result.stderr
 
 
-def test_residual_sac_print_config_does_not_create_training_resources(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"RLG_LOG_TYPE": "wandb", "MPLCONFIGDIR": "/tmp"}
-    result = subprocess.run(
-        [
-            sys.executable,
-            "examples/train_online.py",
-            "residual_sac",
-            "--print-config",
-            "--debug",
-            "--log-type",
-            "none",
-            "--log-dir",
-            str(tmp_path),
-            "--maniskill.env-kwargs-json",
-            '{"robot_uids": "panda_wristcam_gripper_closed", "fix_box": true}',
-        ],
-        cwd=repo_root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    config = json.loads(result.stdout)
-    assert config["selection"] == {
-        "training_phase": "online",
-        "algorithm": "residual_sac",
-    }
-    assert config["inputs"]["debug"] is True
-    assert config["active_environment"]["config"]["env_kwargs_json"] == (
-        '{"robot_uids": "panda_wristcam_gripper_closed", "fix_box": true}'
-    )
-    assert list(tmp_path.iterdir()) == []
-    assert "mani_skill" not in result.stderr
-
-
 def test_preset_and_cli_precedence(tmp_path):
     from rl_garden.training.online import registry
 
@@ -247,8 +209,6 @@ def test_checked_in_presets_pass_static_preflight():
         (online, "ppo", "configs/online/ppo_rgb.yaml"),
         (online, "ppo", "configs/online/ppo_robotwin_place_empty_cup_rgb.yaml"),
         (online, "drqv2", "configs/online/drqv2_rgb.yaml"),
-        (online, "residual_sac", "configs/online/residual_sac_state.yaml"),
-        (online, "residual_sac", "configs/online/residual_sac_rgb.yaml"),
         (off2on, "wsrl", "configs/off2on/wsrl.yaml"),
         (off2on, "wsrl", "configs/off2on/wsrl_rgb.yaml"),
     ]

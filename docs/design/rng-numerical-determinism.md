@@ -33,10 +33,8 @@ dropout 等的取值。这个副作用极其隐蔽：训练仍然能跑、loss �
   `policy.actor_diagnostics(obs)`，未做任何 RNG 隔离。
 - `ef7b58a hotfix: isolate actor diagnostics RNG`——发现诊断采样会扰动
   训练 RNG，用 `torch.random.fork_rng` 紧急修复。
-- `f504a07 fix(residual): fix log entropy/alpha diagnostics for residual policy; open use-critic-layer-norm`——
-  为 residual 策略的诊断（需要额外传入 `base_actions`）补齐相同的隔离。
-- `fb14e5b fix(sac): preserve diagnostics rng for residual sac`——把隔离
-  逻辑收敛为一个统一的 sealed wrapper，子类不再需要各自处理 `fork_rng`。
+- `fb14e5b fix(sac): preserve diagnostics rng`——把隔离逻辑收敛为一个
+  统一的 sealed wrapper，子类不再需要各自处理 `fork_rng`。
 
 ### 当前实现
 
@@ -48,10 +46,7 @@ dropout 等的取值。这个副作用极其隐蔽：训练仍然能跑、loss �
   调用前后 CPU/CUDA RNG 状态完全一致，无论诊断内部做了多少次
   `rsample()`。
 - `_compute_actor_diagnostics(data)`：子类应该 override 的 hook，默认
-  实现是 `self.policy.actor_diagnostics(data.obs)`。`ResidualSAC`
-  （`rl_garden/algorithms/residual.py`）override 为
-  `self.policy.actor_diagnostics(data.obs, data.base_actions)`，因为
-  residual 策略的诊断需要额外的 base action 输入。
+  实现是 `self.policy.actor_diagnostics(data.obs)`。
 
 `tests/test_sac_core.py` 中的 `test_actor_diagnostics_preserves_cpu_rng_state`
 和 `test_actor_diagnostics_preserves_cuda_rng_state` 是这个不变量的回归
@@ -66,9 +61,9 @@ dropout 等的取值。这个副作用极其隐蔽：训练仍然能跑、loss �
 - **只 override `_compute_actor_diagnostics`**，不要直接修改
   `_actor_diagnostics`——否则会丢失隔离保证，且容易在不同子类间重复
   实现 `fork_rng` 样板代码。
-- 如果新增的诊断需要额外的 batch 字段（例如 residual 的
-  `base_actions`），通过 override `_compute_actor_diagnostics` 从
-  `data` 中读取，而不是改变 `_actor_diagnostics(data)` 的签名。
+- 如果新增的诊断需要额外的 batch 字段，通过 override
+  `_compute_actor_diagnostics` 从 `data` 中读取，而不是改变
+  `_actor_diagnostics(data)` 的签名。
 
 ---
 

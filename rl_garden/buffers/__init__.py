@@ -14,17 +14,9 @@ from rl_garden.buffers.maniskill_h5 import (
     infer_specs_from_h5,
     load_maniskill_h5_to_replay_buffer,
 )
-from rl_garden.buffers.residual_h5 import (
-    count_residual_h5_transitions,
-    load_residual_h5_to_replay_buffer,
-)
 from rl_garden.buffers.minari_dataset import (
     infer_specs_from_minari,
     load_minari_dataset_to_replay_buffer,
-)
-from rl_garden.buffers.residual_buffer import (
-    ResidualDictReplayBuffer,
-    ResidualTensorReplayBuffer,
 )
 from rl_garden.buffers.rollout_buffer import (
     DictRolloutBuffer,
@@ -63,14 +55,11 @@ __all__ = [
     "RecurrentReplayBufferSample",
     "RecurrentRolloutBuffer",
     "RecurrentRolloutBufferSample",
-    "ResidualDictReplayBuffer",
-    "ResidualTensorReplayBuffer",
     "RolloutBuffer",
     "RolloutBufferSample",
     "TensorReplayBuffer",
     "TransformerReplayBuffer",
     "TransformerReplayBufferSample",
-    "count_residual_h5_transitions",
     "infer_box_specs_from_h5",
     "infer_specs_from_d4rl_legacy",
     "infer_specs_from_h5",
@@ -78,5 +67,4 @@ __all__ = [
     "load_maniskill_h5_to_replay_buffer",
     "load_d4rl_legacy_dataset_to_replay_buffer",
     "load_minari_dataset_to_replay_buffer",
-    "load_residual_h5_to_replay_buffer",
 ]

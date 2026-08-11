@@ -92,9 +92,8 @@ class BaseAlgorithm(ABC):
     def _eval_action_and_critic_action(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         """Returns (action actually executed, action the critic evaluated).
 
-        Equal by default; off-policy/residual algorithms that execute a
-        different action than the one their critic scores (e.g. residual RL)
-        override this to report both.
+        Equal by default; off-policy algorithms that execute a different
+        action than the one their critic scores override this to report both.
         """
         action = self._eval_action(obs)
         return action, action

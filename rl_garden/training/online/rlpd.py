@@ -129,8 +129,8 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
         if args.offline_buffer_size is None:
             raise ValueError(
                 "--offline_buffer_size is required when --offline_dataset_path is set "
-                "(RLPD's prior-data buffer, unlike ResidualSAC's H5 loader, has no "
-                "cheap way to count maniskill_h5/minari transitions ahead of time)."
+                "(RLPD's prior-data buffer has no cheap way to count "
+                "maniskill_h5/minari transitions ahead of time)."
             )
         loaded = agent.load_offline_replay_buffer(
             args.offline_dataset_path,

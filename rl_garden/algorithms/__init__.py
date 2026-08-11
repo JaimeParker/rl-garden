@@ -23,7 +23,6 @@ from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.algorithms.recurrent_ppo import RecurrentPPO
 from rl_garden.algorithms.recurrent_sac import RecurrentSAC
-from rl_garden.algorithms.residual import ResidualSAC
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
 from rl_garden.algorithms.sac import SAC
@@ -58,7 +57,6 @@ __all__ = [
     "PPO",
     "RecurrentPPO",
     "RecurrentSAC",
-    "ResidualSAC",
     "RLPD",
     "RLPDHybrid",
     "SAC",

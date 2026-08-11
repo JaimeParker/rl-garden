@@ -167,29 +167,6 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.q_landscape_diagnostics is False
 
 
-def test_residual_sac_defaults_match_existing_cli() -> None:
-    from rl_garden.training.online.residual_sac import ResidualSACArgs
-
-    args = ResidualSACArgs()
-
-    assert args.env_id == "PickCube-v1"
-    assert args.obs_mode == "rgb"
-    assert args.residual_action_scale == 0.1
-    assert args.debug is False
-    assert args.base_policy == "act"
-    assert args.base_ckpt_path == "act-peg-only"
-    assert args.base_act_temporal_agg is True
-    assert args.base_act_temporal_agg_k == 0.01
-    assert args.base_sac_encoder == "plain_conv"
-    assert args.base_sac_encoder_features_dim == 256
-    assert args.base_sac_image_fusion_mode is None
-    assert args.base_sac_deterministic is True
-    assert args.offline_dataset_path is None
-    assert args.offline_num_traj is None
-    assert args.offline_buffer_size is None
-    assert args.offline_data_ratio == 0.5
-
-
 def test_online_specialized_args_keep_existing_defaults() -> None:
     drq = DrQv2TrainingArgs()
     flash = FlashSACTrainingArgs()
@@ -721,7 +698,7 @@ def test_peg_defaults_require_no_backend_config_overrides() -> None:
     assert cfg.env_kwargs == {}
     # robot_uids/fix_peg_pose/fix_box/fixed_peg_xy/fixed_peg_z_rot_deg are left
     # None here on purpose: PegInsertionSidePegOnly-v1's own constructor defaults
-    # already reproduce the deleted residual peg scripts' behavior.
+    # already reproduce the deleted peg-training scripts' behavior.
     assert cfg.robot_uids is None
     assert cfg.fix_peg_pose is None
     assert cfg.fix_box is None
