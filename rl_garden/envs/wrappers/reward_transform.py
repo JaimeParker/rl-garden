@@ -4,7 +4,7 @@ Applies ``reward = scale * raw_reward + bias`` on each ``step()``. Mirrors
 ``ScaledRewardWrapper`` from the WSRL JAX reference; needed when reproducing
 D4RL antmaze results where rewards are 0/1 but Cal-QL expects ``-r_neg`` style
 returns. The same transform must be applied consistently to online env rewards
-and offline H5-loaded rewards via ``load_maniskill_h5_to_replay_buffer``.
+and offline H5-loaded rewards via ``load_h5_dataset_to_replay_buffer``.
 """
 from __future__ import annotations
 

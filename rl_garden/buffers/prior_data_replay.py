@@ -19,13 +19,13 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.maniskill_h5 import load_maniskill_h5_to_replay_buffer
+from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 from rl_garden.buffers.minari_dataset import load_minari_dataset_to_replay_buffer
 from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
-DatasetSource = Literal["maniskill_h5", "minari"]
+DatasetBackend = Literal["h5", "minari"]
 
 
 class PriorDataReplayMixin:
@@ -88,7 +88,7 @@ class PriorDataReplayMixin:
         path: str | Path,
         *,
         buffer_size: int,
-        source: DatasetSource = "maniskill_h5",
+        backend: DatasetBackend = "h5",
         num_traj: Optional[int] = None,
         offline_data_ratio: float = 0.5,
         reward_scale: float = 1.0,
@@ -100,8 +100,8 @@ class PriorDataReplayMixin:
                 f"offline_data_ratio must be in [0, 1], got {offline_data_ratio}."
             )
         self.offline_replay_buffer = self._build_prior_data_buffer(int(buffer_size))
-        if source == "maniskill_h5":
-            loaded = load_maniskill_h5_to_replay_buffer(
+        if backend == "h5":
+            loaded = load_h5_dataset_to_replay_buffer(
                 self.offline_replay_buffer,
                 path,
                 num_traj=num_traj,
@@ -109,7 +109,7 @@ class PriorDataReplayMixin:
                 reward_bias=reward_bias,
                 success_key=success_key,
             )
-        elif source == "minari":
+        elif backend == "minari":
             loaded = load_minari_dataset_to_replay_buffer(
                 self.offline_replay_buffer,
                 str(path),
@@ -119,7 +119,7 @@ class PriorDataReplayMixin:
                 success_key=success_key,
             )
         else:
-            raise ValueError(f"Unknown dataset source: {source!r}")
+            raise ValueError(f"Unknown dataset backend: {backend!r}")
 
         self.offline_data_ratio = float(offline_data_ratio)
         if self.logger is not None:

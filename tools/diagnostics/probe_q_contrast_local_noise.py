@@ -341,10 +341,10 @@ def _args_for_algorithm(args: Args) -> Any:
     algo_args = CalQLArgs() if args.algorithm == "calql" else IQLArgs()
     for key, value in asdict(args).items():
         if key == "dataset_path":
-            setattr(algo_args, "offline_dataset_path", value)
+            setattr(algo_args, "offline_dataset", value)
         elif hasattr(algo_args, key):
             setattr(algo_args, key, value)
-    setattr(algo_args, "dataset_source", "maniskill_h5")
+    setattr(algo_args, "dataset_backend", "h5")
     setattr(algo_args, "buffer_device", "cpu")
     setattr(algo_args, "batch_size", max(1, min(args.batch_size, 256)))
     setattr(algo_args, "save_replay_buffer", False)

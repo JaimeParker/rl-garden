@@ -115,7 +115,7 @@ def _rebuild_scratch_agent_for_env(args, env):
     from rl_garden.training.online.rlpd_hybrid import build_rlpd_hybrid
 
     scratch_args = dataclasses.replace(
-        args, buffer_size=8, load_checkpoint=None, offline_dataset_path=None
+        args, buffer_size=8, load_checkpoint=None, offline_dataset=None
     )
     return build_rlpd_hybrid(scratch_args, env, None, logger=None, checkpoint_dir=None)
 
@@ -209,7 +209,7 @@ def _run_eval(args) -> None:
     env_request = _hil_serl_env_request(args, run_name="real_world_eval")
     env = _build_env(args, env_request)
 
-    eval_args = dataclasses.replace(args, buffer_size=8, offline_dataset_path=None)
+    eval_args = dataclasses.replace(args, buffer_size=8, offline_dataset=None)
     agent = build_rlpd_hybrid(eval_args, env, None, logger=None, checkpoint_dir=None)
     agent.policy.eval()
 
@@ -292,7 +292,7 @@ class HilSerlArgs(RealWorldFrankaArgs, RLPDHybridArgs):
     # Growing human-intervention demo buffer (DemoInterventionMixin), mixed
     # into training via RLPD's existing offline_replay_buffer/
     # offline_data_ratio slot -- see rl_garden/buffers/demo_intervention.py.
-    # Not supported together with --offline_dataset_path (RLPD's static prior
+    # Not supported together with --offline_dataset (RLPD's static prior
     # dataset) in this round; both use the same slot.
     demo_buffer_size: int = 100_000
     demo_data_ratio: float = 0.5

@@ -60,7 +60,7 @@ python examples/train_off2on.py wsrl --env_id PickCube-v1 --num_offline_steps 0
 # Offline→online training
 python examples/train_off2on.py wsrl \
     --env_id PickCube-v1 \
-    --offline_dataset_path demos/pickcube_state.h5 \
+    --offline_dataset demos/pickcube_state.h5 \
     --num_offline_steps 100000 \
     --num_online_steps 50000 \
     --n_critics 10 \
@@ -107,7 +107,7 @@ subcommand:
 # Pure offline CQL
 python examples/pretrain_offline.py cql \
 
-    --offline_dataset_path /path/to/real_robot.h5 \
+    --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/cql_pretrain \
     --buffer_device cuda
@@ -115,15 +115,15 @@ python examples/pretrain_offline.py cql \
 # Pure offline Cal-QL
 python examples/pretrain_offline.py calql \
 
-    --offline_dataset_path /path/to/real_robot.h5 \
+    --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/calql_pretrain \
     --buffer_device cuda \
     --use_calql --cql_alpha 5.0
 
 # Equivalent shell launchers
-python examples/pretrain_offline.py cql --offline_dataset_path /path/to/real_robot.h5
-python examples/pretrain_offline.py calql --offline_dataset_path /path/to/real_robot.h5
+python examples/pretrain_offline.py cql --offline_dataset /path/to/real_robot.h5
+python examples/pretrain_offline.py calql --offline_dataset /path/to/real_robot.h5
 ```
 
 These write `cql_offline_pretrained.pt` or `calql_offline_pretrained.pt` by
@@ -138,7 +138,7 @@ will be resumed by WSRL's offline→online flow:
 ```bash
 python examples/pretrain_offline.py wsrl \
 
-    --offline_dataset_path /path/to/real_robot.h5 \
+    --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/robot_pretrain \
     --buffer_device cuda \
@@ -223,7 +223,7 @@ host needs no sim, and the deployment host runs only online fine-tuning.
 
 ### Offline→Online Control
 - `--num_offline_steps 100000`: Number of offline training steps
-- `--offline_dataset_path demos/foo.h5`: ManiSkill trajectory H5 path for offline pre-training
+- `--offline_dataset demos/foo.h5`: ManiSkill trajectory H5 path for offline pre-training
 - `--offline_num_traj`: Optional number of trajectories to load from the H5
 - `--num_online_steps 50000`: Number of online training steps
 - `--warmup_steps 5000`: Frozen-policy rollout steps before online updates begin (paper default)
@@ -240,11 +240,11 @@ retention, override:
 
 ```bash
 # WSRL paper recipe (default — no flags needed)
-python examples/train_off2on.py wsrl --env_id <id> --offline_dataset_path <h5> \
+python examples/train_off2on.py wsrl --env_id <id> --offline_dataset <h5> \
     --num_offline_steps 200000 --num_online_steps 200000
 
 # Cal-QL retention recipe
-python examples/train_off2on.py wsrl --env_id <id> --offline_dataset_path <h5> \
+python examples/train_off2on.py wsrl --env_id <id> --offline_dataset <h5> \
     --num_offline_steps 200000 --num_online_steps 200000 \
     --online_use_cql_loss True --online_cql_alpha 5.0 \
     --online_replay_mode mixed --offline_data_ratio 0.5
@@ -315,14 +315,14 @@ AntMaze environment, not the Minari-recovered one: install the
 | Online CQL | stays active, same `cql_alpha=5.0` | stays active, same `cql_alpha=5.0` | `--online_use_cql_loss True --online_cql_alpha 5.0` |
 | Online Cal-QL calibration (`max(Q, mc_return)` bound) | **stays active** — `enable_calql` is one static flag never toggled at the online switch, and online MC returns are computed per-trajectory, not placeholders | **disabled** at the online switch via `switch_calibration()` | rl-garden's `use_calql` is one static value for the whole run — matches JAX as-is; **cannot reproduce CORL's online-off behavior** (Gap 3 below) |
 | Eval episodes | script uses 20; use 100 to reduce sparse-success-rate noise | 100 | `--num_eval_episodes 100 --eval_episode_horizon 1000` for both — AntMaze episodes need up to 1000 steps to finish; without `--eval_episode_horizon` the eval step budget silently defaults to 50 and no episode ever completes (`eval/episodes_completed` stays 0) |
-| Env / dataset | legacy D4RL | legacy D4RL | `--env_backend d4rl_legacy --dataset_source d4rl_legacy` |
+| Env / dataset | legacy D4RL | legacy D4RL | `--env_backend d4rl_legacy --dataset_backend d4rl_legacy` |
 
 ##### Official Cal-QL JAX — offline pretrain
 
 ```bash
 python examples/pretrain_offline.py calql \
-    --env_backend d4rl_legacy --dataset_source d4rl_legacy \
-    --env_id antmaze-medium-play-v2 --offline_dataset_path antmaze-medium-play-v2 \
+    --env_backend d4rl_legacy --dataset_backend d4rl_legacy \
+    --env_id antmaze-medium-play-v2 --offline_dataset antmaze-medium-play-v2 \
     --use_calql --reward_scale 10 --reward_bias -5 \
     --gamma 0.99 --tau 0.005 \
     --cql_alpha 5.0 --cql_target_action_gap 0.8 \
@@ -359,7 +359,7 @@ fine-tuning would be:
 ```bash
 python examples/train_off2on.py calql \
     --load_checkpoint <offline_checkpoint.pt> \
-    --env_backend d4rl_legacy --dataset_source d4rl_legacy \
+    --env_backend d4rl_legacy --dataset_backend d4rl_legacy \
     --online_replay_mode mixed --offline_data_ratio 0.5 \
     --online_use_cql_loss True --online_cql_alpha 5.0 \
     --num_online_steps 1000000 \
@@ -435,7 +435,7 @@ and `_target_q` with `torch.compile(mode="default")`. First step pays a
 # Enable compile-based acceleration
 python examples/pretrain_offline.py wsrl \
 
-    --offline_dataset_path real_robot.h5 \
+    --offline_dataset real_robot.h5 \
     --num_offline_steps 100000 \
     --batch_size 1024 \
     --use_compile
@@ -470,7 +470,7 @@ Notes:
 
 ```python
 from rl_garden.algorithms import WSRL
-from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
+from rl_garden.buffers import load_h5_dataset_to_replay_buffer
 from rl_garden.envs import make_maniskill_env, ManiSkillEnvConfig
 
 # Create environment
@@ -490,7 +490,7 @@ agent = WSRL(
 )
 
 # Offline training
-load_maniskill_h5_to_replay_buffer(agent.replay_buffer, "demos/pickcube_state.h5")
+load_h5_dataset_to_replay_buffer(agent.replay_buffer, "demos/pickcube_state.h5")
 for _ in range(100_000):
     agent.train(gradient_steps=1)
 
@@ -508,7 +508,7 @@ import numpy as np
 from gymnasium import spaces
 
 from rl_garden.algorithms import CalQL, OfflineEnvSpec
-from rl_garden.buffers import load_maniskill_h5_to_replay_buffer
+from rl_garden.buffers import load_h5_dataset_to_replay_buffer
 
 
 obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(OBS_DIM,), dtype=np.float32)
@@ -524,7 +524,7 @@ agent = CalQL(
     checkpoint_dir="runs/calql_pretrain/checkpoints",
 )
 
-load_maniskill_h5_to_replay_buffer(agent.replay_buffer, "real_robot.h5")
+load_h5_dataset_to_replay_buffer(agent.replay_buffer, "real_robot.h5")
 agent.learn_offline(num_steps=200_000, save_filename="calql_offline_pretrained.pt")
 ```
 
@@ -616,7 +616,7 @@ OfflineRLAlgorithm
    - Circular-buffer wraparound handling
    - Support for both Tensor and Dict observations
 
-5. **ManiSkill H5 Loader** (`rl_garden/buffers/maniskill_h5.py`)
+5. **Trajectory H5 Loader** (`rl_garden/buffers/h5_dataset.py`)
    - Loads `traj_*` H5 groups into existing MC replay buffers
    - Supports flat state observations and dict/RGBD observation groups
 

@@ -125,16 +125,16 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
-    if args.offline_dataset_path is not None:
+    if args.offline_dataset is not None:
         if args.offline_buffer_size is None:
             raise ValueError(
-                "--offline_buffer_size is required when --offline_dataset_path is set "
+                "--offline_buffer_size is required when --offline_dataset is set "
                 "(RLPD's prior-data buffer has no cheap way to count "
-                "maniskill_h5/minari transitions ahead of time)."
+                "h5/minari transitions ahead of time)."
             )
         loaded = agent.load_offline_replay_buffer(
-            args.offline_dataset_path,
-            source=args.dataset_source,
+            args.offline_dataset,
+            backend=args.dataset_backend,
             num_traj=args.offline_num_traj,
             buffer_size=args.offline_buffer_size,
             offline_data_ratio=args.offline_data_ratio,
@@ -145,8 +145,8 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
         if args.std_log:
             print(
                 "[rlpd] "
-                f"offline_dataset={args.offline_dataset_path} "
-                f"source={args.dataset_source} "
+                f"offline_dataset={args.offline_dataset} "
+                f"backend={args.dataset_backend} "
                 f"loaded_transitions={loaded} "
                 f"offline_data_ratio={args.offline_data_ratio}",
                 flush=True,
@@ -207,8 +207,8 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     lr_min_ratio: float = 0.0
     grad_clip_norm: float | None = None
 
-    dataset_source: Literal["maniskill_h5", "minari"] = "maniskill_h5"
-    offline_dataset_path: str | None = None
+    dataset_backend: Literal["h5", "minari"] = "h5"
+    offline_dataset: str | None = None
     offline_num_traj: int | None = None
     offline_buffer_size: int | None = None
     offline_data_ratio: float = 0.5

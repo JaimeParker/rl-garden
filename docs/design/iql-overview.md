@@ -57,7 +57,7 @@ the same way `docs/design/wsrl-overview.md`'s Cal-QL section does for CQL/Cal-QL
 
 ```bash
 python examples/pretrain_offline.py iql \
-    --env_backend d4rl_legacy --dataset_source d4rl_legacy \
+    --env_backend d4rl_legacy --dataset_backend d4rl_legacy \
     --expectile 0.9 --temperature 10.0 \
     --actor_distribution unsquashed --std_parameterization uniform \
     --actor_lr_schedule warmup_cosine --actor_lr_decay_steps 1000000 \
@@ -79,7 +79,7 @@ ensemble default:
 
 ```bash
 python examples/pretrain_offline.py iql \
-    --env_backend d4rl_legacy --dataset_source d4rl_legacy \
+    --env_backend d4rl_legacy --dataset_backend d4rl_legacy \
     --expectile 0.9 --temperature 10.0 \
     --n_critics 2 \
     --reward_scale 10.0 --reward_bias -5.0 \

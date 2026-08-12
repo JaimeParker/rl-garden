@@ -128,11 +128,11 @@ simulator unless `--env_id` is supplied for evaluation:
 
 ```bash
 python examples/pretrain_offline.py calql \
-  --offline_dataset_path demos/pickcube.h5 \
+  --offline_dataset demos/pickcube.h5 \
   --num_offline_steps 700000
 
 python examples/pretrain_offline.py iql \
-  --offline_dataset_path demos/pickcube.h5
+  --offline_dataset demos/pickcube.h5
 ```
 
 BC and IQL support dict observations containing image and state inputs. CQL,
@@ -144,7 +144,7 @@ workflow.
 ```bash
 python examples/train_off2on.py wsrl \
   --env_id PickCube-v1 \
-  --offline_dataset_path demos/pickcube.h5
+  --offline_dataset demos/pickcube.h5
 
 python examples/train_off2on.py wsrl \
   --config configs/off2on/wsrl.yaml

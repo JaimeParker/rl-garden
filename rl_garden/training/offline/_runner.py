@@ -107,8 +107,8 @@ def _run_offline(
     seed_everything(args.seed)
     enable_fast_math()
 
-    if not args.offline_dataset_path:
-        raise SystemExit("--offline_dataset_path is required for offline pretraining.")
+    if not args.offline_dataset:
+        raise SystemExit("--offline_dataset is required for offline pretraining.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
     warn_if_eval_budget_undersized(

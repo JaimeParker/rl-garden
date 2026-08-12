@@ -28,6 +28,19 @@ d4rl-legacy = [
     "mujoco-py==2.1.2.14",
     "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f",
 ]
+d4rl-legacy-manip = [
+    "gym==0.23.1",
+    "numpy==1.23.5",
+    "scipy==1.10.1",
+    "Cython==0.29.37",
+    "mujoco-py==2.1.2.14",
+    "dm-control==1.0.14",
+    "mujoco==2.3.7",
+    "six==1.17.0",
+    "termcolor==2.5.0",
+    "mjrl @ git+https://github.com/aravindr93/mjrl.git@3871d93763d3b49c4741e6daeaebbc605fe140dc",
+    "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f",
+]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
 # Real-world RL (rl_garden/real_world/, rl_garden/envs/franka_real/,

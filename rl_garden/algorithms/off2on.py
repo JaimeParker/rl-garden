@@ -248,7 +248,7 @@ class Off2OnReplayMixin:
     def canonical_eval_metrics(metrics: dict[str, float]) -> dict[str, float]:
         out = dict(metrics)
         success = metrics.get("success_at_end", metrics.get("success_once"))
-        if success is not None:
+        if success is not None and "normalized_score" not in out:
             out["normalized_score"] = float(success) * 100.0
         return out
 

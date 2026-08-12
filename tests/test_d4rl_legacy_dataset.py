@@ -6,6 +6,8 @@ from gymnasium import spaces
 
 from rl_garden.buffers.d4rl_legacy_dataset import (
     _official_calql_antmaze_dataset,
+    _official_calql_kitchen_dataset,
+    _standard_d4rl_dataset,
     infer_specs_from_d4rl_legacy,
     load_d4rl_legacy_dataset_to_replay_buffer,
 )
@@ -144,3 +146,84 @@ def test_infer_specs_canonicalizes_observations_to_float32(monkeypatch):
     assert obs_space.dtype == np.float32
     assert action_space.shape == (2,)
     assert env.closed
+
+
+class _FakeDenseD4RLEnv(_FakeD4RLEnv):
+    def __init__(self, name):
+        super().__init__()
+        self.spec = SimpleNamespace(name=name, max_episode_steps=3)
+
+    def get_dataset(self):
+        observations = np.arange(24, dtype=np.float32).reshape(6, 4)
+        return {
+            "observations": observations,
+            "next_observations": observations + 0.5,
+            "actions": np.full((6, 2), 1.5, dtype=np.float32),
+            "rewards": np.array([1, 2, 99, 3, 4, 99], dtype=np.float32),
+            "terminals": np.zeros(6, dtype=np.float32),
+            "timeouts": np.array([0, 0, 1, 0, 0, 1], dtype=np.float32),
+        }
+
+
+def test_standard_adroit_uses_finite_episode_returns():
+    dataset = _standard_d4rl_dataset(
+        _FakeDenseD4RLEnv("pen-human-v1"),
+        reward_scale=1.0,
+        reward_bias=0.0,
+        clip_action=0.99999,
+        gamma=0.5,
+    )
+
+    assert dataset["rewards"].tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert dataset["episode_end"].tolist() == [0.0, 1.0, 0.0, 1.0]
+    np.testing.assert_allclose(dataset["mc_returns"], [2.0, 2.0, 5.0, 4.0])
+    assert np.max(np.abs(dataset["actions"])) <= 0.99999
+
+
+def test_kitchen_uses_infinite_horizon_tail_returns():
+    dataset = _official_calql_kitchen_dataset(
+        _FakeDenseD4RLEnv("kitchen-partial-v0"),
+        reward_scale=1.0,
+        reward_bias=0.0,
+        clip_action=0.99999,
+        gamma=0.5,
+    )
+
+    assert dataset["episode_end"].tolist() == [0.0, 1.0, 0.0, 1.0]
+    np.testing.assert_allclose(dataset["mc_returns"], [3.0, 4.0, 7.0, 8.0])
+
+
+def test_legacy_loader_dispatches_supported_task_families(monkeypatch):
+    env = _FakeDenseD4RLEnv("pen-human-v1")
+    monkeypatch.setattr(
+        "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
+    )
+    buffer = MCTensorReplayBuffer(
+        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+        action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=10,
+        gamma=0.5,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    assert load_d4rl_legacy_dataset_to_replay_buffer(buffer, "pen-human-v1") == 4
+
+
+def test_legacy_loader_rejects_unknown_family(monkeypatch):
+    env = _FakeDenseD4RLEnv("halfcheetah-medium-v2")
+    monkeypatch.setattr(
+        "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
+    )
+    buffer = TensorReplayBuffer(
+        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+        action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=10,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    with np.testing.assert_raises_regex(NotImplementedError, "AntMaze, Adroit, and Kitchen"):
+        load_d4rl_legacy_dataset_to_replay_buffer(buffer, "halfcheetah-medium-v2")

@@ -1,7 +1,7 @@
 """Buffer-format-agnostic helpers shared by offline dataset loaders.
 
 These operate on already-parsed tensors/dicts and know nothing about the
-source format (ManiSkill H5, Minari, ...); see ``maniskill_h5.py`` and
+source format (trajectory H5, Minari, ...); see ``h5_dataset.py`` and
 ``minari_dataset.py`` for the format-specific parsing that feeds into them.
 """
 

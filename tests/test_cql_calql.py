@@ -175,7 +175,7 @@ def test_cql_accepts_and_wires_eval_env_constructor_args():
 
 def test_offline_cql_cli_network_args_build_net_arch():
     args = CQLArgs(
-        offline_dataset_path="demo.h5",
+        offline_dataset="demo.h5",
         hidden_dim=17,
         actor_hidden_layers=2,
         critic_hidden_layers=4,
@@ -187,7 +187,7 @@ def test_offline_cql_cli_network_args_build_net_arch():
 
 
 def test_offline_cql_cli_wires_cql_alpha_param():
-    args = CQLArgs(offline_dataset_path="demo.h5", cql_alpha_param="exp_clip")
+    args = CQLArgs(offline_dataset="demo.h5", cql_alpha_param="exp_clip")
 
     kwargs = _cql_kwargs(args, _offline_env(), Logger(log_type="none"))
 
@@ -487,7 +487,7 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
             sys.executable,
             "examples/pretrain_offline.py",
             algorithm,
-            "--offline_dataset_path",
+            "--offline_dataset",
             str(dataset),
             "--num_offline_steps",
             "2",
@@ -568,4 +568,4 @@ def test_pretrain_cql_offline_cli_requires_dataset():
     ]
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert result.returncode != 0
-    assert "--offline_dataset_path is required" in result.stderr
+    assert "--offline_dataset is required" in result.stderr

@@ -357,7 +357,7 @@ class RgbDemosArgs:
 
     The oracle policy (a Box(state_dim,) checkpoint, e.g. trained with
     obs_mode="state") drives rollouts in a obs_mode="rgb+state" env. The
-    resulting H5 can be consumed via train_off2on.py wsrl --offline_dataset_path.
+    resulting H5 can be consumed via train_off2on.py wsrl --offline_dataset.
     """
 
     checkpoint_path: str

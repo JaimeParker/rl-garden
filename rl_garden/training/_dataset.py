@@ -10,36 +10,36 @@ from typing import Any
 
 from gymnasium import spaces
 
-from rl_garden.algorithms import infer_specs_from_h5
 from rl_garden.buffers import (
+    infer_specs_from_h5,
     infer_specs_from_d4rl_legacy,
     infer_specs_from_minari,
     load_d4rl_legacy_dataset_to_replay_buffer,
-    load_maniskill_h5_to_replay_buffer,
+    load_h5_dataset_to_replay_buffer,
     load_minari_dataset_to_replay_buffer,
 )
 
 
 def infer_offline_dataset_specs(args: Any) -> tuple[spaces.Space, spaces.Box]:
-    """Infer observation and action spaces for the configured dataset source."""
-    if args.dataset_source == "d4rl_legacy":
-        return infer_specs_from_d4rl_legacy(args.offline_dataset_path)
-    if args.dataset_source == "minari":
-        obs_space, action_space = infer_specs_from_minari(args.offline_dataset_path)
+    """Infer observation and action spaces for the configured dataset backend."""
+    if args.dataset_backend == "d4rl_legacy":
+        return infer_specs_from_d4rl_legacy(args.offline_dataset)
+    if args.dataset_backend == "minari":
+        obs_space, action_space = infer_specs_from_minari(args.offline_dataset)
         if not isinstance(action_space, spaces.Box):
             raise ValueError(
-                f"Minari dataset {args.offline_dataset_path!r} has a "
+                f"Minari dataset {args.offline_dataset!r} has a "
                 f"{type(action_space).__name__} action space; only continuous "
                 "(Box) actions are supported."
             )
         return obs_space, action_space
-    if args.dataset_source == "maniskill_h5":
+    if args.dataset_backend == "h5":
         return infer_specs_from_h5(
-            args.offline_dataset_path,
+            args.offline_dataset,
             action_low=args.action_low,
             action_high=args.action_high,
         )
-    raise ValueError(f"Unsupported offline dataset source: {args.dataset_source!r}")
+    raise ValueError(f"Unsupported offline dataset backend: {args.dataset_backend!r}")
 
 
 def load_offline_dataset(replay_buffer: Any, args: Any) -> int:
@@ -49,25 +49,25 @@ def load_offline_dataset(replay_buffer: Any, args: Any) -> int:
         "reward_bias": args.reward_bias,
         "success_key": args.success_key,
     }
-    if args.dataset_source == "d4rl_legacy":
+    if args.dataset_backend == "d4rl_legacy":
         return load_d4rl_legacy_dataset_to_replay_buffer(
             replay_buffer,
-            args.offline_dataset_path,
+            args.offline_dataset,
             num_episodes=args.offline_num_traj,
             **common_kwargs,
         )
-    if args.dataset_source == "minari":
+    if args.dataset_backend == "minari":
         return load_minari_dataset_to_replay_buffer(
             replay_buffer,
-            args.offline_dataset_path,
+            args.offline_dataset,
             num_episodes=args.offline_num_traj,
             **common_kwargs,
         )
-    if args.dataset_source == "maniskill_h5":
-        return load_maniskill_h5_to_replay_buffer(
+    if args.dataset_backend == "h5":
+        return load_h5_dataset_to_replay_buffer(
             replay_buffer,
-            args.offline_dataset_path,
+            args.offline_dataset,
             num_traj=args.offline_num_traj,
             **common_kwargs,
         )
-    raise ValueError(f"Unsupported offline dataset source: {args.dataset_source!r}")
+    raise ValueError(f"Unsupported offline dataset backend: {args.dataset_backend!r}")

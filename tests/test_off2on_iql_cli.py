@@ -64,9 +64,9 @@ def test_iql_antmaze_paper_preset_resolves_key_values(tmp_path):
     inputs = config["inputs"]
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "iql"}
     assert inputs["env_backend"] == "d4rl_legacy"
-    assert inputs["dataset_source"] == "d4rl_legacy"
+    assert inputs["dataset_backend"] == "d4rl_legacy"
     assert inputs["env_id"] == "antmaze-medium-play-v2"
-    assert inputs["offline_dataset_path"] == "antmaze-medium-play-v2"
+    assert inputs["offline_dataset"] == "antmaze-medium-play-v2"
     assert inputs["obs_mode"] == "state"
     assert inputs["seed"] == 0
     assert inputs["actor_lr"] == 0.0001

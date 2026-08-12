@@ -1,7 +1,7 @@
 env_backend: d4rl_legacy
-dataset_source: d4rl_legacy
+dataset_backend: d4rl_legacy
 env_id: antmaze-medium-play-v2
-offline_dataset_path: antmaze-medium-play-v2
+offline_dataset: antmaze-medium-play-v2
 obs_mode: state
 num_envs: 1
 num_eval_envs: 1

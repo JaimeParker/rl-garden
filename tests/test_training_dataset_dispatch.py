@@ -10,8 +10,8 @@ from rl_garden.training._dataset import infer_offline_dataset_specs, load_offlin
 
 def _args(**overrides):
     defaults = dict(
-        dataset_source="maniskill_h5",
-        offline_dataset_path="demos/pickcube.h5",
+        dataset_backend="h5",
+        offline_dataset="demos/pickcube.h5",
         offline_num_traj=None,
         action_low=-1.0,
         action_high=1.0,
@@ -44,7 +44,7 @@ def test_infer_specs_routes_to_h5(monkeypatch):
         "rl_garden.training._dataset.infer_specs_from_h5", _fake_infer_specs_from_h5
     )
 
-    result = infer_offline_dataset_specs(_args(dataset_source="maniskill_h5"))
+    result = infer_offline_dataset_specs(_args(dataset_backend="h5"))
     assert result == (obs_space, action_space)
     assert called == {"path": "demos/pickcube.h5", "action_low": -1.0, "action_high": 1.0}
 
@@ -62,7 +62,7 @@ def test_infer_specs_routes_to_minari(monkeypatch):
         _fake_infer_specs_from_minari,
     )
 
-    args = _args(dataset_source="minari", offline_dataset_path="D4RL/halfcheetah/medium-v0")
+    args = _args(dataset_backend="minari", offline_dataset="D4RL/halfcheetah/medium-v0")
     result = infer_offline_dataset_specs(args)
     assert result == (obs_space, action_space)
     assert called == {"dataset_id": "D4RL/halfcheetah/medium-v0"}
@@ -76,7 +76,7 @@ def test_infer_specs_routes_to_d4rl_legacy(monkeypatch):
     )
 
     result = infer_offline_dataset_specs(
-        _args(dataset_source="d4rl_legacy", offline_dataset_path="antmaze-test-v2")
+        _args(dataset_backend="d4rl_legacy", offline_dataset="antmaze-test-v2")
     )
 
     assert result == (obs_space, action_space)
@@ -91,20 +91,20 @@ def test_infer_specs_rejects_discrete_minari_action_space(monkeypatch):
         lambda dataset_id: (obs_space, discrete_action_space),
     )
 
-    args = _args(dataset_source="minari", offline_dataset_path="atari/pong/expert-v0")
+    args = _args(dataset_backend="minari", offline_dataset="atari/pong/expert-v0")
     with pytest.raises(ValueError, match="Discrete"):
         infer_offline_dataset_specs(args)
 
 
-def test_infer_specs_unsupported_source_raises():
-    with pytest.raises(ValueError, match="Unsupported offline dataset source"):
-        infer_offline_dataset_specs(_args(dataset_source="bogus"))
+def test_infer_specs_unsupported_backend_raises():
+    with pytest.raises(ValueError, match="Unsupported offline dataset backend"):
+        infer_offline_dataset_specs(_args(dataset_backend="bogus"))
 
 
 def test_load_offline_dataset_routes_to_h5(monkeypatch):
     called = {}
 
-    def _fake_load_maniskill_h5(replay_buffer, path, *, num_traj, reward_scale, reward_bias, success_key):
+    def _fake_load_h5(replay_buffer, path, *, num_traj, reward_scale, reward_bias, success_key):
         called.update(
             replay_buffer=replay_buffer,
             path=path,
@@ -116,12 +116,12 @@ def test_load_offline_dataset_routes_to_h5(monkeypatch):
         return 42
 
     monkeypatch.setattr(
-        "rl_garden.training._dataset.load_maniskill_h5_to_replay_buffer",
-        _fake_load_maniskill_h5,
+        "rl_garden.training._dataset.load_h5_dataset_to_replay_buffer",
+        _fake_load_h5,
     )
 
     buffer = object()
-    loaded = load_offline_dataset(buffer, _args(dataset_source="maniskill_h5"))
+    loaded = load_offline_dataset(buffer, _args(dataset_backend="h5"))
     assert loaded == 42
     assert called["replay_buffer"] is buffer
     assert called["path"] == "demos/pickcube.h5"
@@ -148,8 +148,8 @@ def test_load_offline_dataset_routes_to_minari(monkeypatch):
 
     buffer = object()
     args = _args(
-        dataset_source="minari",
-        offline_dataset_path="D4RL/halfcheetah/medium-v0",
+        dataset_backend="minari",
+        offline_dataset="D4RL/halfcheetah/medium-v0",
         offline_num_traj=10,
     )
     loaded = load_offline_dataset(buffer, args)
@@ -173,8 +173,8 @@ def test_load_offline_dataset_routes_to_d4rl_legacy(monkeypatch):
     loaded = load_offline_dataset(
         buffer,
         _args(
-            dataset_source="d4rl_legacy",
-            offline_dataset_path="antmaze-test-v2",
+            dataset_backend="d4rl_legacy",
+            offline_dataset="antmaze-test-v2",
             offline_num_traj=12,
         ),
     )
@@ -185,6 +185,6 @@ def test_load_offline_dataset_routes_to_d4rl_legacy(monkeypatch):
     assert called["num_episodes"] == 12
 
 
-def test_load_offline_dataset_unsupported_source_raises():
-    with pytest.raises(ValueError, match="Unsupported offline dataset source"):
-        load_offline_dataset(object(), _args(dataset_source="bogus"))
+def test_load_offline_dataset_unsupported_backend_raises():
+    with pytest.raises(ValueError, match="Unsupported offline dataset backend"):
+        load_offline_dataset(object(), _args(dataset_backend="bogus"))

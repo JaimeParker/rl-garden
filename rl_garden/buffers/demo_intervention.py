@@ -10,7 +10,7 @@ step 0" machinery (``_sample_train_batch``/``_concat_replay_samples``/
 a file. Reuses that machinery unchanged via the same
 ``offline_replay_buffer``/``offline_data_ratio`` slot rather than adding a
 third buffer -- a real-world run with a growing demo buffer doesn't also load
-a static ``offline_dataset_path`` prior dataset in this round, so the two
+a static ``offline_dataset`` prior dataset in this round, so the two
 never need to coexist independently.
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ class DemoInterventionMixin(PriorDataReplayMixin):
         if self.offline_replay_buffer is not None:
             raise RuntimeError(
                 "offline_replay_buffer is already populated (e.g. via "
-                "load_offline_replay_buffer/--offline_dataset_path) -- "
+                "load_offline_replay_buffer/--offline_dataset) -- "
                 "init_demo_buffer() would silently discard it. RLPD's static "
                 "offline dataset and HIL-SERL's demo buffer share this one "
                 "slot and can't both be used on the same instance."

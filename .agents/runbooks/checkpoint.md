@@ -38,7 +38,7 @@ Example offline load:
 
 ```bash
 python examples/pretrain_offline.py calql \
-  --offline_dataset_path demos/pickcube.h5 \
+  --offline_dataset demos/pickcube.h5 \
   --load_checkpoint runs/<run_name>/checkpoints/calql_offline_pretrained.pt
 ```
 

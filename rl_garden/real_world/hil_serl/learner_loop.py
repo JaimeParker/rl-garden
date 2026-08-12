@@ -1,6 +1,6 @@
 """HIL-SERL's LearnerLoop -- this migration targets HIL-SERL's ``train_rlpd.py``
 capability set (online RLPD + demo mixing + HITL + reward classifier), which
-uses RLPD's existing static ``offline_dataset_path`` loading, not a
+uses RLPD's existing static ``offline_dataset`` loading, not a
 continuously growing on-disk dataset. So ``_refresh_offline_data()`` stays
 the base class's no-op default here too; HG-DAgger's growing-dataset problem
 is out of scope for this round (see docs/roadmaps/robot-infra-roadmap.md).

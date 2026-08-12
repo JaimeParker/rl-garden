@@ -130,7 +130,7 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
     # the scaled rewards.
     h5py = pytest.importorskip("h5py")
     from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
-    from rl_garden.buffers.maniskill_h5 import load_maniskill_h5_to_replay_buffer
+    from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 
     path = tmp_path / "tiny.h5"
     obs = np.zeros((4, 3), dtype=np.float32)  # 3 transitions, 4 obs frames
@@ -155,7 +155,7 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
         storage_device="cpu",
         sample_device="cpu",
     )
-    n = load_maniskill_h5_to_replay_buffer(
+    n = load_h5_dataset_to_replay_buffer(
         buf, path, reward_scale=2.0, reward_bias=-0.5
     )
     assert n == 3
@@ -166,7 +166,7 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
 def test_h5_loader_sparse_mc_uses_success_key_not_standard_table(tmp_path: Path):
     h5py = pytest.importorskip("h5py")
     from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
-    from rl_garden.buffers.maniskill_h5 import load_maniskill_h5_to_replay_buffer
+    from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 
     path = tmp_path / "sparse.h5"
     obs = np.zeros((4, 3), dtype=np.float32)
@@ -193,7 +193,7 @@ def test_h5_loader_sparse_mc_uses_success_key_not_standard_table(tmp_path: Path)
         sparse_reward_mc=True,
         sparse_negative_reward=-1.0,
     )
-    load_maniskill_h5_to_replay_buffer(buf, path, success_key="success")
+    load_h5_dataset_to_replay_buffer(buf, path, success_key="success")
     assert buf._mc_table is None
     table = buf._build_mc_table()
     torch.testing.assert_close(table[:3, 0], torch.full((3,), -10.0))

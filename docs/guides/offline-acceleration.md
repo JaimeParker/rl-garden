@@ -50,7 +50,7 @@ reasons (see `3rd_party/wsrl/wsrl/agents/continuous/cql.py:342` and
 
 The rl-garden codebase already had #2–#4 (`networks/actor_critic.py:338-349`
 for vmapped critics, `algorithms/cql.py:542-555` for batched CQL actions,
-`buffers/maniskill_h5.py:194-226` for precomputed MC returns). The
+`buffers/h5_dataset.py` for precomputed MC returns). The
 remaining gap was #1: `torch.compile` was disabled by default, and the
 hot path had ~9 `.item()` calls per training step that each forced a
 GPU→CPU sync and acted as a graph break for `torch.compile`.
