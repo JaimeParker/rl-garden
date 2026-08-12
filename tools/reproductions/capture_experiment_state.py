@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Capture local source state for experiment reproducibility."""
+"""Capture git state and file hashes for experiment reproducibility.
+
+Generic reproducibility snapshot: git status/diff/HEAD plus sha256 hashes of
+caller-specified files, written as plain text and JSON under an output
+directory. Pass ``--hash-path`` (repeatable, relative to the repo root) for
+whichever files matter to the run being captured; this tool has no built-in
+notion of which files those are.
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,16 +16,7 @@ from pathlib import Path
 import subprocess
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_HASH_PATHS = [
-    "rl_garden/algorithms/iql.py",
-    "rl_garden/algorithms/off2on_iql.py",
-    "rl_garden/training/off2on/iql.py",
-    "rl_garden/training/off2on/_args.py",
-    "rl_garden/training/off2on/_runner.py",
-    "scripts/run_iql_fixed_mixing.py",
-    "tools/reproductions/iql_fixed_mixing.patch",
-]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_git(args: list[str]) -> str | None:
@@ -42,9 +40,14 @@ def _sha256(path: Path) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--hash-path", action="append", default=[])
+    parser.add_argument(
+        "--hash-path",
+        action="append",
+        default=[],
+        help="Repo-relative file to sha256-hash; repeatable.",
+    )
     return parser.parse_args()
 
 
@@ -65,9 +68,8 @@ def main() -> None:
         (output_dir / "git_unavailable.txt").write_text(
             f"No git metadata available under {REPO_ROOT}.\n"
         )
-    hash_paths = [*DEFAULT_HASH_PATHS, *args.hash_path]
     hashes = {}
-    for rel in hash_paths:
+    for rel in args.hash_path:
         path = REPO_ROOT / rel
         if path.is_file():
             hashes[rel] = _sha256(path)

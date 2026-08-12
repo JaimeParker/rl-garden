@@ -23,6 +23,7 @@ mutagen.yml.lock
 mutagen.yml
 .agents/local/personal_config.md
 .agents/local/
+.tmp/
 .codex
 .pytest_cache
 .github

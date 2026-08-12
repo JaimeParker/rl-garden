@@ -18,10 +18,19 @@ import subprocess
 import sys
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE = REPO_ROOT / "3rd_party" / "implicit_q_learning"
 DEFAULT_PATCH = REPO_ROOT / "tools" / "reproductions" / "iql_fixed_mixing.patch"
-STATE_CAPTURE_SCRIPT = REPO_ROOT / "scripts" / "capture_experiment_state.py"
+STATE_CAPTURE_SCRIPT = REPO_ROOT / "tools" / "reproductions" / "capture_experiment_state.py"
+STATE_HASH_PATHS = [
+    "rl_garden/algorithms/iql.py",
+    "rl_garden/algorithms/off2on_iql.py",
+    "rl_garden/training/off2on/iql.py",
+    "rl_garden/training/off2on/_args.py",
+    "rl_garden/training/off2on/_runner.py",
+    "tools/reproductions/run_iql_fixed_mixing.py",
+    "tools/reproductions/iql_fixed_mixing.patch",
+]
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -102,14 +111,15 @@ def main() -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    _run(
-        [
-            sys.executable,
-            str(STATE_CAPTURE_SCRIPT),
-            "--output-dir",
-            str(save_dir / "repro_state"),
-        ]
-    )
+    state_capture_cmd = [
+        sys.executable,
+        str(STATE_CAPTURE_SCRIPT),
+        "--output-dir",
+        str(save_dir / "repro_state"),
+    ]
+    for hash_path in STATE_HASH_PATHS:
+        state_capture_cmd += ["--hash-path", hash_path]
+    _run(state_capture_cmd)
     _copy_source(source, source_copy, overwrite=args.overwrite)
     _run(["git", "apply", str(patch)], cwd=source_copy)
 
