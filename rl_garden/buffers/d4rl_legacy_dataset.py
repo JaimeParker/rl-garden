@@ -1,8 +1,8 @@
-"""Official Cal-QL dataset semantics for legacy D4RL AntMaze."""
+"""Cal-QL dataset semantics for supported legacy D4RL task families."""
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -63,6 +63,141 @@ def _mc_returns(
     return returns
 
 
+def _finite_returns(rewards: np.ndarray, terminals: np.ndarray, gamma: float) -> np.ndarray:
+    returns = np.zeros_like(rewards, dtype=np.float32)
+    running = 0.0
+    for index in range(len(rewards) - 1, -1, -1):
+        running = float(rewards[index]) + gamma * running * (1.0 - terminals[index])
+        returns[index] = running
+    return returns
+
+
+def _infinite_tail_returns(rewards: np.ndarray, gamma: float) -> np.ndarray:
+    returns = np.zeros_like(rewards, dtype=np.float32)
+    running = float(rewards[-1]) / (1.0 - gamma)
+    returns[-1] = running
+    for index in range(len(rewards) - 2, -1, -1):
+        running = float(rewards[index]) + gamma * running
+        returns[index] = running
+    return returns
+
+
+def _qlearning_episodes(
+    env: Any,
+    *,
+    reward_scale: float,
+    reward_bias: float,
+    clip_action: float,
+    num_episodes: int | None,
+) -> list[dict[str, np.ndarray]]:
+    raw = env.get_dataset()
+    current: defaultdict[str, list[Any]] = defaultdict(list)
+    episodes: list[dict[str, np.ndarray]] = []
+    episode_step = 0
+    use_timeouts = "timeouts" in raw
+
+    for index in range(raw["rewards"].shape[0]):
+        done = bool(raw["terminals"][index])
+        final_timestep = (
+            bool(raw["timeouts"][index])
+            if use_timeouts
+            else episode_step == env._max_episode_steps - 1
+        )
+
+        if not (final_timestep or index == raw["rewards"].shape[0] - 1):
+            for key in ("actions", "observations", "rewards", "terminals"):
+                current[key].append(raw[key][index])
+            if "next_observations" in raw:
+                current["next_observations"].append(raw["next_observations"][index])
+            else:
+                current["next_observations"].append(raw["observations"][index + 1])
+            episode_step += 1
+
+        if (done or final_timestep) and episode_step > 0:
+            episode = {key: np.asarray(value) for key, value in current.items()}
+            episode["rewards"] = (
+                episode["rewards"] * reward_scale + reward_bias
+            ).astype(np.float32)
+            episode["terminals"] = episode["terminals"].astype(np.float32)
+            episode["actions"] = np.clip(
+                episode["actions"], -clip_action, clip_action
+            )
+            episode_end = np.zeros_like(episode["terminals"], dtype=np.float32)
+            episode_end[-1] = 1.0
+            episode["episode_end"] = episode_end
+            episodes.append(episode)
+            current = defaultdict(list)
+            episode_step = 0
+            if num_episodes is not None and len(episodes) >= num_episodes:
+                break
+
+    if not episodes:
+        raise ValueError("No complete trajectories found in legacy D4RL dataset.")
+    return episodes
+
+
+def _concatenate_episodes(episodes: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    keys = (
+        "observations",
+        "actions",
+        "next_observations",
+        "rewards",
+        "terminals",
+        "mc_returns",
+        "episode_end",
+    )
+    return {
+        key: np.concatenate([episode[key] for episode in episodes], axis=0).astype(
+            np.float32
+        )
+        for key in keys
+    }
+
+
+def _standard_d4rl_dataset(
+    env: Any,
+    *,
+    reward_scale: float,
+    reward_bias: float,
+    clip_action: float,
+    gamma: float,
+    num_episodes: int | None = None,
+) -> dict[str, np.ndarray]:
+    episodes = _qlearning_episodes(
+        env,
+        reward_scale=reward_scale,
+        reward_bias=reward_bias,
+        clip_action=clip_action,
+        num_episodes=num_episodes,
+    )
+    for episode in episodes:
+        episode["mc_returns"] = _finite_returns(
+            episode["rewards"], episode["terminals"], gamma
+        )
+    return _concatenate_episodes(episodes)
+
+
+def _official_calql_kitchen_dataset(
+    env: Any,
+    *,
+    reward_scale: float,
+    reward_bias: float,
+    clip_action: float,
+    gamma: float,
+    num_episodes: int | None = None,
+) -> dict[str, np.ndarray]:
+    episodes = _qlearning_episodes(
+        env,
+        reward_scale=reward_scale,
+        reward_bias=reward_bias,
+        clip_action=clip_action,
+        num_episodes=num_episodes,
+    )
+    for episode in episodes:
+        episode["mc_returns"] = _infinite_tail_returns(episode["rewards"], gamma)
+    return _concatenate_episodes(episodes)
+
+
 def _official_calql_antmaze_dataset(
     env: Any,
     *,
@@ -70,7 +205,7 @@ def _official_calql_antmaze_dataset(
     reward_bias: float,
     clip_action: float,
     gamma: float,
-    num_episodes: Optional[int] = None,
+    num_episodes: int | None = None,
 ) -> dict[str, np.ndarray]:
     raw = env.get_dataset()
     current: defaultdict[str, list[Any]] = defaultdict(list)
@@ -151,25 +286,38 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
     buffer: BaseReplayBuffer,
     env_id: str,
     *,
-    num_episodes: Optional[int] = None,
+    num_episodes: int | None = None,
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
     success_key: str | None = None,
 ) -> int:
     del success_key
-    if "antmaze" not in env_id.lower():
+    env_name = env_id.lower()
+    if "antmaze" in env_name:
+        family = "antmaze"
+    elif "kitchen" in env_name:
+        family = "kitchen"
+    elif env_name.startswith(("pen-", "door-", "relocate-")) and "binary" not in env_name:
+        family = "adroit"
+    else:
         raise NotImplementedError(
-            "The official Cal-QL d4rl_legacy loader currently supports AntMaze only."
+            "The d4rl_legacy loader supports AntMaze, Adroit, and Kitchen only."
         )
 
+    gamma = float(getattr(buffer, "gamma", 0.99))
     env = _make_legacy_env(env_id)
     try:
-        dataset = _official_calql_antmaze_dataset(
+        loader = {
+            "antmaze": _official_calql_antmaze_dataset,
+            "adroit": _standard_d4rl_dataset,
+            "kitchen": _official_calql_kitchen_dataset,
+        }[family]
+        dataset = loader(
             env,
             reward_scale=reward_scale,
             reward_bias=reward_bias,
             clip_action=0.99999,
-            gamma=float(buffer.gamma),
+            gamma=gamma,
             num_episodes=num_episodes,
         )
     finally:
@@ -177,7 +325,11 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
 
     device = buffer.storage_device
     rewards = torch.as_tensor(dataset["rewards"], device=device)
-    successes = (rewards > reward_bias).float()
+    successes = (
+        (rewards > reward_bias).float()
+        if family == "antmaze" and hasattr(buffer, "_step_success")
+        else None
+    )
     return _add_flat_transitions(
         buffer,
         torch.as_tensor(dataset["observations"], device=device),

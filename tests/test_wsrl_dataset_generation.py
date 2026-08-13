@@ -9,7 +9,7 @@ from gymnasium import spaces
 from rl_garden.buffers import (
     MCDictReplayBuffer,
     MCTensorReplayBuffer,
-    load_maniskill_h5_to_replay_buffer,
+    load_h5_dataset_to_replay_buffer,
 )
 from rl_garden.datasets import (
     CheckpointScore,
@@ -148,7 +148,7 @@ def test_writer_outputs_state_h5_compatible_with_wsrl_loader(tmp_path):
         storage_device="cpu",
         sample_device="cpu",
     )
-    assert load_maniskill_h5_to_replay_buffer(buffer, path) == 2
+    assert load_h5_dataset_to_replay_buffer(buffer, path) == 2
     assert torch.equal(buffer.obs[:2, 0], torch.tensor([[0.0, 0.0], [1.0, 1.0]]))
     assert torch.equal(buffer.next_obs[:2, 0], torch.tensor([[1.0, 1.0], [2.0, 2.0]]))
 
@@ -184,7 +184,7 @@ def test_writer_outputs_dict_h5_compatible_with_wsrl_loader(tmp_path):
         storage_device="cpu",
         sample_device="cpu",
     )
-    assert load_maniskill_h5_to_replay_buffer(buffer, path) == 1
+    assert load_h5_dataset_to_replay_buffer(buffer, path) == 1
     assert buffer.obs["rgb"][0, 0].dtype == torch.uint8
 
 

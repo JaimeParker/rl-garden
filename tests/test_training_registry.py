@@ -330,7 +330,7 @@ def test_off2on_dry_run_validates_dataset_before_creating_resources(monkeypatch)
         lambda *args: (_ for _ in ()).throw(AssertionError("env must not be created")),
     )
 
-    with pytest.raises(SystemExit, match="offline_dataset_path is required"):
+    with pytest.raises(SystemExit, match="offline_dataset is required"):
         registry.run_cli(
             [
                 "wsrl",

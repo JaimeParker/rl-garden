@@ -69,7 +69,7 @@ decided.
 - **Buffer layer**: still open, and still not needed. `hil_serl` (landed --
   see below) targets only HIL-SERL's `train_rlpd.py` capability set (online
   RLPD + demo mixing + HITL + reward classifier), which uses RLPD's existing
-  static `offline_dataset_path` loading, same as SERL. HG-DAgger's
+  static `offline_dataset` loading, same as SERL. HG-DAgger's
   iterative, growing human-correction dataset (which would actually need
   this redesign) was explicitly scoped out of the `hil_serl` migration.
   `LearnerLoop._refresh_offline_data()` (added pre-emptively during the SERL

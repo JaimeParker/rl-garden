@@ -287,7 +287,7 @@ ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
     MPLCONFIGDIR=/tmp python -u examples/train_off2on.py wsrl \
       --env_id PickCube-v1 \
       --num_envs 16 \
-      --offline_dataset_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
+      --offline_dataset /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
       --num_offline_steps 20000 \
       --num_online_steps 50000 \
       --online_replay_mode empty \
@@ -316,7 +316,7 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
   export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
   MPLCONFIGDIR=/tmp python -u examples/pretrain_offline.py cql \
 
-    --offline_dataset_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
+    --offline_dataset /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
     --num_offline_steps 20000 \
     --checkpoint_dir runs/pickcube_cql_state_smoke_20koff_seed1/checkpoints \
     --buffer_device cuda \

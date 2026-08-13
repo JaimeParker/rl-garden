@@ -1,7 +1,7 @@
 """Generate WSRL-compatible offline datasets from trained policies.
 
 The writer intentionally emits the minimal ManiSkill-style H5 shape consumed by
-``load_maniskill_h5_to_replay_buffer``: one ``traj_*`` group per complete
+``load_h5_dataset_to_replay_buffer``: one ``traj_*`` group per complete
 episode, with ``obs`` length ``T + 1`` and transition fields length ``T``.
 """
 from __future__ import annotations

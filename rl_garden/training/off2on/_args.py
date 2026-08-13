@@ -32,12 +32,11 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     # impose a TimeLimit on the eval env itself.
     eval_episode_horizon: Optional[int] = None
     num_offline_steps: int = 0
-    # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
-    # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
-    # instead (e.g. "D4RL/halfcheetah/medium-v2").
+    # The dataset locator is a filesystem path for "h5", a dataset id for
+    # "minari", and a legacy Gym environment id for "d4rl_legacy".
     num_online_steps: int = 1_000_000
-    dataset_source: Literal["maniskill_h5", "minari", "d4rl_legacy"] = "maniskill_h5"
-    offline_dataset_path: Optional[str] = None
+    dataset_backend: Literal["h5", "minari", "d4rl_legacy"] = "h5"
+    offline_dataset: Optional[str] = None
     offline_num_traj: Optional[int] = None
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
     offline_data_ratio: float | str = 0.0
@@ -81,6 +80,10 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     success_key: Optional[str] = None
     reward_scale: float = 1.0
     reward_bias: float = 0.0
+    # Phase-specific eval cadences. Offline uses gradient-update units in the
+    # manual offline loop; online uses env-step units through OffPolicyAlgorithm.
+    offline_eval_freq: Optional[int] = None
+    online_eval_freq: Optional[int] = None
 
 
 @dataclass
@@ -118,10 +121,6 @@ class CQLOff2OnArgs:
     sparse_reward_mc: bool = False
     sparse_negative_reward: float = 0.0
     success_threshold: float = 0.5
-    # Phase-specific eval cadences: generic across CQL/Cal-QL/WSRL off2on --
-    # _runner.py applies these regardless of which algorithm is running.
-    offline_eval_freq: Optional[int] = None
-    online_eval_freq: Optional[int] = None
 
 
 @dataclass

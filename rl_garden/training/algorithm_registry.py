@@ -273,12 +273,12 @@ class BaseAlgorithmRegistry:
 
         if (
             self.phase_name == "off2on"
-            and getattr(normalized, "dataset_source", None) == "minari"
+            and getattr(normalized, "dataset_backend", None) == "minari"
             and getattr(normalized, "env_id", None) == "PickCube-v1"
         ):
             set_derived(
                 "env_id",
-                normalized.offline_dataset_path,
+                normalized.offline_dataset,
                 "derived live environment from Minari dataset id",
             )
         return normalized, derived
@@ -291,19 +291,19 @@ class BaseAlgorithmRegistry:
                     raise ConfigError("--dataset_dir is required for tdmpc2_multitask.")
                 if not getattr(args, "mmap_dir", None):
                     raise ConfigError("--mmap_dir is required for tdmpc2_multitask.")
-            elif not getattr(args, "offline_dataset_path", None):
+            elif not getattr(args, "offline_dataset", None):
                 raise ConfigError(
-                    "--offline_dataset_path is required for offline pretraining."
+                    "--offline_dataset is required for offline pretraining."
                 )
             if getattr(args, "num_offline_steps", 1) <= 0:
                 raise ConfigError("--num_offline_steps must be positive.")
         if (
             self.phase_name == "off2on"
             and getattr(args, "num_offline_steps", 0) > 0
-            and not getattr(args, "offline_dataset_path", None)
+            and not getattr(args, "offline_dataset", None)
         ):
             raise ConfigError(
-                "--offline_dataset_path is required when --num_offline_steps > 0."
+                "--offline_dataset is required when --num_offline_steps > 0."
             )
         load_checkpoint = getattr(args, "load_checkpoint", None)
         if load_checkpoint is not None and not Path(load_checkpoint).is_file():

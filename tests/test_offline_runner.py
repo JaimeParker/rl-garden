@@ -36,7 +36,7 @@ def test_run_offline_closes_resources_when_builder_fails(monkeypatch, tmp_path):
     args = BCArgs(
         log_type="none",
         log_dir=str(tmp_path),
-        offline_dataset_path="dummy_dataset",
+        offline_dataset="dummy_dataset",
         num_offline_steps=1,
         env_id="dummy-env",
     )
@@ -93,7 +93,7 @@ def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
     args = BCArgs(
         log_type="none",
         log_dir=str(tmp_path),
-        offline_dataset_path="dummy_dataset",
+        offline_dataset="dummy_dataset",
         num_offline_steps=1,
         env_id=None,
         load_checkpoint=str(checkpoint_path),
@@ -146,7 +146,7 @@ def test_run_offline_respects_load_replay_buffer_false(monkeypatch, tmp_path):
     args = BCArgs(
         log_type="none",
         log_dir=str(tmp_path),
-        offline_dataset_path="dummy_dataset",
+        offline_dataset="dummy_dataset",
         num_offline_steps=1,
         env_id=None,
         load_checkpoint=str(checkpoint_path),
@@ -201,7 +201,7 @@ def test_run_offline_dry_run_loads_checkpoint_without_replay_buffer(
         [
             "bc",
             "--dry-run",
-            "--offline-dataset-path",
+            "--offline-dataset",
             "dummy_dataset",
             "--num-offline-steps",
             "1",

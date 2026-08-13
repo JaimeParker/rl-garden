@@ -33,6 +33,8 @@ class IQLOff2OnArgs(VisionIQLOff2OnTrainingArgs, EnvBackendArgs):
     warmup_steps: int = 0
     online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
     offline_data_ratio: float | str = "auto"
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    num_eval_episodes: int | None = None
 
 
 def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
@@ -63,6 +65,7 @@ def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         tau=args.tau,
         training_freq=args.training_freq,
         utd=args.utd,
+        bootstrap_at_done=args.bootstrap_at_done,
         offline_sampling=args.offline_sampling,
         actor_lr=args.actor_lr,
         critic_value_lr=args.critic_value_lr,
@@ -103,6 +106,7 @@ def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         log_freq=args.log_freq,
         eval_freq=args.eval_freq,
         num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=args.num_eval_episodes,
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,

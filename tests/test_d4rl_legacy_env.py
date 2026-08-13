@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import ClassVar
 
 import numpy as np
 import torch
@@ -9,7 +10,7 @@ from rl_garden.envs.d4rl_legacy.env import make_d4rl_legacy_env
 
 
 class _FakeLegacyEnv:
-    metadata = {}
+    metadata: ClassVar[dict] = {}
 
     def __init__(self):
         self.observation_space = spaces.Box(-np.inf, np.inf, (3,), dtype=np.float64)
@@ -81,4 +82,80 @@ def test_legacy_train_reward_transform_is_explicit(monkeypatch):
     env.reset()
     _, reward, _, _, _ = env.step(torch.zeros((1, 1)))
     assert reward.tolist() == [-5.0]
+    env.close()
+
+
+class _FakeBinaryEnv(_FakeLegacyEnv):
+    def __init__(self):
+        super().__init__()
+        self.spec = SimpleNamespace(max_episode_steps=3)
+
+    def step(self, action):
+        self.steps += 1
+        success = self.steps == 2
+        return (
+            np.full(3, self.steps, dtype=np.float64),
+            0.0 if success else -1.0,
+            False,
+            {"goal_achieved": success},
+        )
+
+
+def test_binary_goal_achieved_terminates_episode(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeBinaryEnv(),
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="pen-binary-v0", num_envs=1, device="cpu")
+    )
+
+    env.reset()
+    env.step(torch.zeros((1, 1)))
+    _, _, terminated, truncated, info = env.step(torch.zeros((1, 1)))
+
+    assert terminated.tolist() == [True]
+    assert truncated.tolist() == [False]
+    assert info["final_info"]["episode"]["success_at_end"].tolist() == [1.0]
+    env.close()
+
+
+def test_kitchen_reports_completed_stages(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeLegacyEnv(),
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="kitchen-partial-v0", num_envs=1, device="cpu")
+    )
+
+    env.reset()
+    env.step(torch.zeros((1, 1)))
+    _, _, _, _, info = env.step(torch.zeros((1, 1)))
+
+    episode = info["final_info"]["episode"]
+    assert episode["num_stages_solved"].tolist() == [1.0]
+    assert episode["normalized_score"].tolist() == [25.0]
+    env.close()
+
+
+class _FakeStandardAdroitEnv(_FakeLegacyEnv):
+    def get_normalized_score(self, value):
+        return value / 10.0
+
+
+def test_standard_adroit_reports_d4rl_normalized_score(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeStandardAdroitEnv(),
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="door-human-v1", num_envs=1, device="cpu")
+    )
+
+    env.reset()
+    env.step(torch.zeros((1, 1)))
+    _, _, _, _, info = env.step(torch.zeros((1, 1)))
+
+    assert info["final_info"]["episode"]["normalized_score"].tolist() == [10.0]
     env.close()

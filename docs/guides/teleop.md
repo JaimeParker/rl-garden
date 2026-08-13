@@ -156,7 +156,7 @@ truncated
 ```
 
 This file can be passed to WSRL, CQL, or Cal-QL offline training through
-`--offline_dataset_path`.
+`--offline_dataset`.
 
 For real-robot data where you only want to do offline pretraining (no sim
 env, no eval), use `examples/pretrain_offline.py cql` or

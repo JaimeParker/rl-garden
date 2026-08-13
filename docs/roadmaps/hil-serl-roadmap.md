@@ -34,14 +34,14 @@ the default/behavior differs from what HIL-SERL's own real-robot recipes
 actually use" divergences, tracked separately in "Behavioral Divergences
 from HIL-SERL's Real-Robot Defaults" below.
 
-### Item 7 correction: `--offline_dataset_path` silently discarded by `init_demo_buffer`
+### Item 7 correction: `--offline_dataset` silently discarded by `init_demo_buffer`
 
 `DemoInterventionMixin.init_demo_buffer()` (`rl_garden/buffers/
 demo_intervention.py`) unconditionally replaces `self.offline_replay_buffer`
 with a fresh empty buffer. `_run_learner` (`rl_garden/training/real_world/
 hil_serl.py`) calls `build_rlpd_hybrid(args, ...)` (which loads
-`args.offline_dataset_path` into `offline_replay_buffer` if set) and *then*
-`agent.init_demo_buffer(...)` -- so a user who passes `--offline_dataset_path`
+`args.offline_dataset` into `offline_replay_buffer` if set) and *then*
+`agent.init_demo_buffer(...)` -- so a user who passes `--offline_dataset`
 to `hil_serl` doesn't get a "can't use both" error, they get their loaded
 data **silently discarded** with no diagnostic. Item 7's original text framed
 this as an unsupported combination; it's actually a data-loss bug. (Now fixed
@@ -50,7 +50,7 @@ this as an unsupported combination; it's actually a data-loss bug. (Now fixed
 ### 8. Demo-data preloading (`--demo_path` equivalent) -- LANDED
 
 HIL-SERL's own `--demo_path` (`train_rlpd.py:458-466`) is not RLPD's generic
-`--offline_dataset_path` (a structured maniskill_h5/minari dataset loader) --
+`--offline_dataset` (a structured h5/minari dataset loader) --
 it's a list of raw pickled transition dicts, unconditionally loaded into the
 same `demo_buffer` that intervention data grows into, on every process start
 *including restarts* (loaded again each time, then crash-recovery snapshots
@@ -77,7 +77,7 @@ Now built:
 - New `HilSerlArgs` field: `demo_dataset_paths: Sequence[str] = ()`.
 - `DemoInterventionMixin.init_demo_buffer()` now raises if
   `offline_replay_buffer` is already populated (e.g. from
-  `--offline_dataset_path`) instead of silently overwriting it -- turns the
+  `--offline_dataset`) instead of silently overwriting it -- turns the
   item-7-correction bug above into an explicit error. The underlying
   limitation (RLPD's static offline-dataset slot and HIL-SERL's demo-buffer
   slot can't both be used on one `RLPDHybrid` instance) is unchanged, just no
@@ -247,7 +247,7 @@ parameter for it.
 growing, periodically-reloaded on-disk demo/correction dataset -- a
 fundamentally different data path from `LearnerLoop`'s current model (live
 online transitions, or a static offline dataset loaded once via RLPD's
-`offline_dataset_path`). This was flagged early and deliberately scoped out
+`offline_dataset`). This was flagged early and deliberately scoped out
 because it isn't needed for `train_rlpd.py`-style HIL-SERL.
 
 - `LearnerLoop._refresh_offline_data()` (`rl_garden/real_world/learner_loop.py`)
@@ -405,10 +405,10 @@ third mixing mechanism:
   `DemoInterventionMixin(PriorDataReplayMixin)` adds `init_demo_buffer()`/
   `add_demo_transition()`, populating the *same* `offline_replay_buffer`/
   `offline_data_ratio` slot `PriorDataReplayMixin` already uses for RLPD's
-  static `--offline_dataset_path` prior dataset -- just grown incrementally
+  static `--offline_dataset` prior dataset -- just grown incrementally
   instead of loaded once. `_sample_train_batch`/`_concat_replay_samples`/
   `_shuffle_batch` are all inherited unchanged. **Known limitation**:
-  `--offline_dataset_path` and HIL-SERL's live demo buffer share this one
+  `--offline_dataset` and HIL-SERL's live demo buffer share this one
   slot, so this round doesn't support using both at once on the same
   `RLPDHybrid` instance -- see "Item 7 correction" above: this now raises
   instead of silently discarding the loaded offline dataset.

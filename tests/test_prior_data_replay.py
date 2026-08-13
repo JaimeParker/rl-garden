@@ -164,7 +164,7 @@ def test_sample_train_batch_matches_nstep_buffer_shape():
     assert batch.discounts.shape == (8,)
 
 
-def test_load_offline_replay_buffer_maniskill_h5(tmp_path):
+def test_load_offline_replay_buffer_h5(tmp_path):
     path = tmp_path / "demo_state.h5"
     with h5py.File(path, "w") as f:
         for traj_idx in range(2):
@@ -179,7 +179,7 @@ def test_load_offline_replay_buffer_maniskill_h5(tmp_path):
 
     agent = _agent()
     loaded = agent.load_offline_replay_buffer(
-        path, source="maniskill_h5", buffer_size=16, offline_data_ratio=0.5
+        path, backend="h5", buffer_size=16, offline_data_ratio=0.5
     )
 
     assert loaded == 4
@@ -229,7 +229,7 @@ def test_load_offline_replay_buffer_minari(monkeypatch):
 
     agent = _agent()
     loaded = agent.load_offline_replay_buffer(
-        "fake/dataset-v0", source="minari", buffer_size=16, offline_data_ratio=0.3
+        "fake/dataset-v0", backend="minari", buffer_size=16, offline_data_ratio=0.3
     )
 
     assert loaded == 3

@@ -15,7 +15,7 @@ python examples/train_online.py sac --env_id PickCube-v1 --obs_mode state
 
 # Offline: bc, iql, cql, calql, wsrl, awac, td3_bc, tdmpc2_multitask
 python examples/pretrain_offline.py calql \
-  --offline_dataset_path demos/pickcube.h5 --num_offline_steps 700000
+  --offline_dataset demos/pickcube.h5 --num_offline_steps 700000
 
 # Offline-to-online: wsrl, calql, iql, awac
 python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode state
@@ -31,7 +31,7 @@ python examples/train_online.py ppo --config configs/online/ppo_rgb.yaml
 python examples/train_online.py drqv2 --config configs/online/drqv2_rgb.yaml
 python examples/train_off2on.py wsrl --config configs/off2on/wsrl.yaml
 python examples/train_off2on.py wsrl --config configs/off2on/wsrl_rgb.yaml
-python examples/pretrain_offline.py calql --offline_dataset_path demos/pickcube.h5
+python examples/pretrain_offline.py calql --offline_dataset demos/pickcube.h5
 ```
 
 ## Configuration Inspection
@@ -50,7 +50,7 @@ loading a simulator or creating environments, loggers, agents, and run directori
 ```bash
 python examples/train_online.py sac --obs_mode state --print-config
 python examples/pretrain_offline.py calql \
-  --offline_dataset_path demos/pickcube.h5 --print-config
+  --offline_dataset demos/pickcube.h5 --print-config
 python examples/train_off2on.py wsrl --obs_mode rgb --print-config
 ```
 
@@ -81,7 +81,7 @@ environment to enable periodic evaluation:
 
 ```bash
 python examples/pretrain_offline.py iql \
-  --offline_dataset_path demos/pickcube.h5 \
+  --offline_dataset demos/pickcube.h5 \
   --env_id PickCube-v1 --eval_freq 10000 --num_eval_steps 50
 ```
 

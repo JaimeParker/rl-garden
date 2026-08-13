@@ -40,11 +40,10 @@ class OfflineVisionArgs:
 @dataclass
 class OfflineDatasetArgs:
     num_offline_steps: int = 100_000
-    # "maniskill_h5": offline_dataset_path is a filesystem path to a ManiSkill
-    # trajectory H5 file. "minari": offline_dataset_path is a Minari dataset id
-    # instead (e.g. "D4RL/halfcheetah/medium-v2").
-    dataset_source: Literal["maniskill_h5", "minari", "d4rl_legacy"] = "maniskill_h5"
-    offline_dataset_path: Optional[str] = None
+    # The dataset locator is a filesystem path for "h5", a dataset id for
+    # "minari", and a legacy Gym environment id for "d4rl_legacy".
+    dataset_backend: Literal["h5", "minari", "d4rl_legacy"] = "h5"
+    offline_dataset: Optional[str] = None
     offline_num_traj: Optional[int] = None
     save_filename: Optional[str] = None
     reward_scale: float = 1.0
@@ -119,7 +118,7 @@ class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
     and no single homogeneous dataset (``dataset_dir`` points at the
     per-task, differently-shaped output of
     ``tools/conversion/convert_tdmpc2_multitask_dataset.py``, not one
-    ``offline_dataset_path`` file).
+    ``offline_dataset`` file).
     """
 
     dataset_dir: str = ""

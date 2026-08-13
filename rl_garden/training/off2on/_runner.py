@@ -25,11 +25,11 @@ Usage:
 
     # Offline→online from a ManiSkill trajectory H5
     python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
-        --offline_dataset_path demos/pickcube.h5 --num_offline_steps 100000
+        --offline_dataset demos/pickcube.h5 --num_offline_steps 100000
 
     # Minari offline pretrain -> online continuation on the recovered live env
-    python examples/train_off2on.py wsrl --dataset_source minari \\
-        --offline_dataset_path "D4RL/antmaze/umaze-v1" --env_backend minari \\
+    python examples/train_off2on.py wsrl --dataset_backend minari \\
+        --offline_dataset "D4RL/antmaze/umaze-v1" --env_backend minari \\
         --num_offline_steps 100000 --num_online_steps 500000
 """
 
@@ -201,15 +201,15 @@ def _require_continuous_action_space(env, args: Off2OnCommonArgs) -> None:
 
 def _resolve_env_id(args: Off2OnCommonArgs) -> str:
     """Return the live env id implied by a Minari dataset when not overridden."""
-    if args.dataset_source == "minari" and args.env_id == "PickCube-v1":
-        return args.offline_dataset_path
+    if args.dataset_backend == "minari" and args.env_id == "PickCube-v1":
+        return args.offline_dataset
     return args.env_id
 
 
 def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
     if args.num_offline_steps == 0:
         warn_if_off2on_warmup_uses_uninitialized_policy(args)
-        if args.load_checkpoint is not None and args.offline_dataset_path is not None:
+        if args.load_checkpoint is not None and args.offline_dataset is not None:
             loaded = load_offline_dataset(agent.replay_buffer, args)
             logger.add_summary("off2on/offline_loaded_transitions", loaded)
             if hasattr(agent, "fit_obs_normalizer"):
@@ -390,9 +390,9 @@ def _run_off2on(
 
     # Offline training phase
     if args.num_offline_steps > 0:
-        if args.offline_dataset_path is None:
+        if args.offline_dataset is None:
             raise ValueError(
-                "--offline_dataset_path is required when --num_offline_steps > 0."
+                "--offline_dataset is required when --num_offline_steps > 0."
             )
         loaded = load_offline_dataset(agent.replay_buffer, args)
         offline_start_step = agent._global_step

@@ -68,11 +68,11 @@ def load_minari_dataset_to_replay_buffer(
     (timeouts) are intentionally excluded so the Bellman target keeps
     bootstrapping through artificial episode cutoffs, the offline-RL-standard
     convention D4RL's ``timeouts`` field was introduced to support. This
-    differs from ``maniskill_h5.py``'s ``_transition_done``, which ORs every
+    differs from ``h5.py``'s ``_transition_done``, which ORs every
     terminal-like field together.
 
     ``reward_scale``/``reward_bias`` apply ``r := scale * r + bias`` to each
-    loaded reward, matching ``load_maniskill_h5_to_replay_buffer``.
+    loaded reward, matching ``load_h5_dataset_to_replay_buffer``.
     """
     minari = _require_minari()
     storage_device = buffer.storage_device

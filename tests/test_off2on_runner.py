@@ -17,14 +17,15 @@ from rl_garden.training.off2on._runner import (
     _set_offline_probe,
 )
 from rl_garden.training.off2on.calql import CalQLOff2OnArgs
+from rl_garden.training.off2on.iql import IQLOff2OnArgs
 from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
 
 def _args(**overrides):
     defaults = {
-        "dataset_source": "maniskill_h5",
+        "dataset_backend": "h5",
         "env_id": "PickCube-v1",
-        "offline_dataset_path": None,
+        "offline_dataset": None,
         "env_backend": "maniskill",
     }
     defaults.update(overrides)
@@ -33,24 +34,24 @@ def _args(**overrides):
 
 def test_resolve_env_id_binds_to_minari_dataset_when_default(monkeypatch):
     args = _args(
-        dataset_source="minari",
+        dataset_backend="minari",
         env_id="PickCube-v1",
-        offline_dataset_path="D4RL/antmaze/umaze-v1",
+        offline_dataset="D4RL/antmaze/umaze-v1",
     )
     assert _resolve_env_id(args) == "D4RL/antmaze/umaze-v1"
 
 
 def test_resolve_env_id_respects_explicit_override():
     args = _args(
-        dataset_source="minari",
+        dataset_backend="minari",
         env_id="D4RL/antmaze/large-play-v1",
-        offline_dataset_path="D4RL/antmaze/umaze-v1",
+        offline_dataset="D4RL/antmaze/umaze-v1",
     )
     assert _resolve_env_id(args) == "D4RL/antmaze/large-play-v1"
 
 
-def test_resolve_env_id_unaffected_for_maniskill_h5():
-    args = _args(dataset_source="maniskill_h5", env_id="PickCube-v1")
+def test_resolve_env_id_unaffected_for_h5():
+    args = _args(dataset_backend="h5", env_id="PickCube-v1")
     assert _resolve_env_id(args) == "PickCube-v1"
 
 
@@ -183,7 +184,7 @@ def test_run_off2on_closes_envs_when_builder_fails(monkeypatch, tmp_path):
 
 
 def _run_off2on_and_capture_num_eval_steps(
-    monkeypatch, tmp_path, args_cls, **arg_overrides
+    monkeypatch, tmp_path, args_cls, algorithm="calql", **arg_overrides
 ):
     captured = {}
 
@@ -218,7 +219,7 @@ def _run_off2on_and_capture_num_eval_steps(
         save_final_checkpoint=False,
         **arg_overrides,
     )
-    _runner.run_off2on(args, build_agent=build_agent, algorithm="calql")
+    _runner.run_off2on(args, build_agent=build_agent, algorithm=algorithm)
     return captured["num_eval_steps"]
 
 
@@ -233,6 +234,23 @@ def test_run_off2on_eval_step_cap_derived_from_episode_horizon(monkeypatch, tmp_
         eval_episode_horizon=1_000,
     )
     assert num_eval_steps == 10_000
+
+
+def test_run_off2on_iql_eval_step_cap_derived_from_episode_horizon(
+    monkeypatch, tmp_path
+):
+    num_eval_steps = _run_off2on_and_capture_num_eval_steps(
+        monkeypatch,
+        tmp_path,
+        IQLOff2OnArgs,
+        algorithm="iql",
+        eval_freq=0,
+        online_eval_freq=1000,
+        num_eval_envs=1,
+        num_eval_episodes=100,
+        eval_episode_horizon=1_000,
+    )
+    assert num_eval_steps == 100_000
 
 
 def test_run_off2on_eval_step_cap_ignores_horizon_without_episode_target(

@@ -272,7 +272,7 @@ def test_offline_registry_builders_create_wsrl_and_iql():
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=1)
 
     base_kwargs = dict(
-        offline_dataset_path="/tmp/unused.h5",
+        offline_dataset="/tmp/unused.h5",
         num_offline_steps=1,
         buffer_size=64,
         buffer_device="cpu",
@@ -322,7 +322,7 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
     from rl_garden.training.offline.bc import BCArgs
 
     args = BCArgs(
-        offline_dataset_path="/tmp/unused.h5",
+        offline_dataset="/tmp/unused.h5",
         env_id="StackCube-v1",
         num_eval_envs=16,
         obs_mode="rgb",
@@ -354,9 +354,9 @@ def test_offline_eval_step_cap_derives_from_episode_horizon():
     from rl_garden.training.offline.bc import BCArgs
 
     args = BCArgs(
-        dataset_source="maniskill_h5",
+        dataset_backend="h5",
         env_backend="maniskill",
-        offline_dataset_path="demos/pickcube.h5",
+        offline_dataset="demos/pickcube.h5",
         env_id="PickCube-v1",
         num_eval_episodes=7,
         eval_episode_horizon=1_000,
@@ -373,9 +373,9 @@ def test_explicit_num_eval_steps_wins_and_warns_when_below_derived_budget():
     from rl_garden.training.offline.bc import BCArgs
 
     args = BCArgs(
-        dataset_source="maniskill_h5",
+        dataset_backend="h5",
         env_backend="maniskill",
-        offline_dataset_path="demos/pickcube.h5",
+        offline_dataset="demos/pickcube.h5",
         env_id="PickCube-v1",
         num_eval_steps=50,
         num_eval_episodes=7,

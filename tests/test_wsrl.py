@@ -326,6 +326,13 @@ class TestWSRLHelperMethods:
         assert metrics["success_at_end"] == 0.82
         assert metrics["normalized_score"] == pytest.approx(82.0)
 
+    def test_explicit_normalized_score_takes_precedence(self, wsrl_agent):
+        metrics = wsrl_agent.canonical_eval_metrics(
+            {"return": 1.0, "success_at_end": 0.82, "normalized_score": 25.0}
+        )
+
+        assert metrics["normalized_score"] == pytest.approx(25.0)
+
     def test_wsrl_logging_uses_continuous_namespaces(self, wsrl_agent):
         logger = _RecordingLogger()
         wsrl_agent.logger = logger

@@ -1,10 +1,10 @@
-"""Utilities for loading ManiSkill trajectory H5 files into replay buffers."""
+"""Utilities for loading trajectory H5 files into replay buffers."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Optional
 import warnings
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -50,13 +50,13 @@ def infer_specs_from_h5(
             return _box_from_dataset(node)
         if isinstance(node, h5py.Group):
             return spaces.Dict(
-                {key: _space_from_node(node[key]) for key in node.keys()}
+                {key: _space_from_node(node[key]) for key in node}
             )
         raise TypeError(f"Unsupported H5 node type: {type(node)!r}")
 
     path = Path(path)
     with h5py.File(path, "r") as f:
-        traj_keys = sorted([key for key in f.keys() if key.startswith("traj_")])
+        traj_keys = sorted([key for key in f if key.startswith("traj_")])
         if not traj_keys:
             raise ValueError(f"No traj_* groups found in {path}.")
         traj = f[traj_keys[0]]
@@ -109,7 +109,7 @@ def infer_box_specs_from_h5(
 def _load_traj_transitions(
     traj: dict[str, Any],
     device: torch.device,
-) -> tuple[Obs, Obs, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[Obs, Obs, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     actions = _to_tensor(_first_existing(traj, ("actions", "action")), device).float()
     rewards = _to_tensor(_first_existing(traj, ("rewards", "reward")), device).float()
     obs_raw = _first_existing(traj, ("obs", "observations"))
@@ -128,31 +128,38 @@ def _load_traj_transitions(
         next_obs = _to_tensor(_slice(obs_raw, 1, length + 1), device)
     else:
         raise ValueError(
-            "ManiSkill H5 trajectory must contain obs with length actions+1 "
+            "H5 trajectory must contain obs with length actions+1 "
             "or explicit next_obs/next_observations."
         )
 
+    dones = _transition_done(traj, length, device)
+    episode_ends = (
+        _to_tensor(traj["episode_end"], device).bool()[:length]
+        if "episode_end" in traj
+        else dones
+    )
     return (
         obs,
         next_obs,
         actions[:length],
         rewards[:length],
-        _transition_done(traj, length, device),
+        dones,
+        episode_ends,
     )
 
 
-def load_maniskill_h5_to_replay_buffer(
+def load_h5_dataset_to_replay_buffer(
     buffer: BaseReplayBuffer,
     path: str | Path,
     *,
-    num_traj: Optional[int] = None,
+    num_traj: int | None = None,
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
     success_key: str | None = None,
 ) -> int:
-    """Load ManiSkill trajectory H5 transitions into an existing replay buffer.
+    """Load trajectory H5 transitions into an existing replay buffer.
 
-    The loader supports common ManiSkill layouts with top-level ``traj_*`` groups
+    The loader supports layouts with top-level ``traj_*`` groups
     containing ``obs``/``observations``, ``actions``, ``rewards``, and either
     terminal flags or explicit ``next_obs``. Transitions are inserted in
     full ``buffer.num_envs`` chunks to preserve the existing ``(T, N, ...)``
@@ -171,6 +178,7 @@ def load_maniskill_h5_to_replay_buffer(
     action_parts: list[torch.Tensor] = []
     reward_parts: list[torch.Tensor] = []
     done_parts: list[torch.Tensor] = []
+    episode_end_parts: list[torch.Tensor] = []
     mc_parts: list[torch.Tensor] = []
     success_parts: list[torch.Tensor] = []
     sparse_reward_mc = bool(getattr(buffer, "sparse_reward_mc", False))
@@ -187,7 +195,7 @@ def load_maniskill_h5_to_replay_buffer(
             traj = _read_node(f[key])
             if not isinstance(traj, dict):
                 continue
-            obs, next_obs, actions, rewards, dones = _load_traj_transitions(
+            obs, next_obs, actions, rewards, dones, episode_ends = _load_traj_transitions(
                 traj, storage_device
             )
             if reward_scale != 1.0 or reward_bias != 0.0:
@@ -215,6 +223,7 @@ def load_maniskill_h5_to_replay_buffer(
             action_parts.append(actions)
             reward_parts.append(rewards)
             done_parts.append(dones)
+            episode_end_parts.append(episode_ends)
             if (
                 (not sparse_reward_mc)
                 and hasattr(buffer, "_mc_table")
@@ -223,13 +232,14 @@ def load_maniskill_h5_to_replay_buffer(
                 mc_parts.append(_mc_returns(rewards, dones, float(buffer.gamma)))
 
     if not action_parts:
-        raise ValueError(f"No trajectories found in ManiSkill H5 file: {path}")
+        raise ValueError(f"No trajectories found in H5 file: {path}")
 
     obs_all = _concat(obs_parts)
     next_obs_all = _concat(next_obs_parts)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
+    episode_ends_all = torch.cat(episode_end_parts, dim=0)
     mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     success_all = torch.cat(success_parts, dim=0) if success_parts else None
     return _add_flat_transitions(
@@ -241,7 +251,5 @@ def load_maniskill_h5_to_replay_buffer(
         dones_all,
         mc_all,
         success_all,
-        # `_transition_done` already ORs every terminal-like field (or defaults
-        # the last step True), so it already equals the true episode boundary.
-        episode_ends=dones_all.bool(),
+        episode_ends=episode_ends_all.bool(),
     )

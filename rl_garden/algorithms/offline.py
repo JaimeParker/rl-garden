@@ -21,7 +21,7 @@ from gymnasium import spaces
 from tqdm import trange
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
-from rl_garden.buffers.maniskill_h5 import (
+from rl_garden.buffers.h5_dataset import (
     infer_box_specs_from_h5 as _infer_box_specs_from_h5,
     infer_specs_from_h5 as _infer_specs_from_h5,
 )

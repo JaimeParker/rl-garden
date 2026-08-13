@@ -27,7 +27,7 @@ def _run_actor(args) -> None:
     env, _ = make_training_envs(args.env_backend, env_request)
 
     scratch_args = dataclasses.replace(
-        args, buffer_size=8, load_checkpoint=None, offline_dataset_path=None
+        args, buffer_size=8, load_checkpoint=None, offline_dataset=None
     )
     agent = build_rlpd(scratch_args, env, None, logger=None, checkpoint_dir=None)
 

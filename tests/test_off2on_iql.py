@@ -55,6 +55,35 @@ def _fill_buffer(buffer, num_steps: int, marker: float = 0.0) -> None:
         )
 
 
+class _ScriptedEvalVecEnv:
+    def __init__(self, episode_len: int, num_envs: int = 1):
+        self.num_envs = num_envs
+        self.single_observation_space = spaces.Box(
+            low=-1, high=1, shape=(4,), dtype=float
+        )
+        self.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+        self.episode_len = episode_len
+        self.steps = 0
+
+    def reset(self):
+        self.steps = 0
+        return torch.zeros(self.num_envs, 4), {}
+
+    def step(self, actions):
+        del actions
+        self.steps += 1
+        obs = torch.zeros(self.num_envs, 4)
+        rewards = torch.ones(self.num_envs)
+        done = self.steps % self.episode_len == 0
+        terminations = torch.full((self.num_envs,), done, dtype=torch.bool)
+        truncations = torch.zeros(self.num_envs, dtype=torch.bool)
+        infos = {}
+        if done:
+            infos["final_info"] = {"episode": {"r": torch.full((self.num_envs,), 1.0)}}
+            infos["_final_info"] = torch.ones(self.num_envs, dtype=torch.bool)
+        return obs, rewards, terminations, truncations, infos
+
+
 class TestOff2OnIQLDefaults:
     def test_no_warmup_by_default(self, off2on_iql_agent):
         assert off2on_iql_agent.initial_training_phase is None
@@ -69,6 +98,47 @@ class TestOff2OnIQLDefaults:
             "Off2OnIQL",
             "IQL",
         )
+
+
+class TestOff2OnIQLEvalDispatch:
+    def _agent(self, simple_env, **overrides):
+        kwargs = dict(
+            env=simple_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            learning_starts=10,
+            batch_size=8,
+            gamma=0.99,
+            tau=0.005,
+            training_freq=4,
+            utd=1.0,
+            net_arch={"pi": [8], "qf": [8], "vf": [8]},
+            n_critics=2,
+            critic_subsample_size=2,
+            device="cpu",
+            seed=0,
+            num_eval_steps=50,
+        )
+        kwargs.update(overrides)
+        return Off2OnIQL(**kwargs)
+
+    def test_num_eval_episodes_set_uses_exact_episode_count_eval(self, simple_env):
+        eval_env = _ScriptedEvalVecEnv(episode_len=3)
+        agent = self._agent(simple_env, eval_env=eval_env, num_eval_episodes=2)
+        metrics = agent._evaluate()
+        assert metrics["episodes_completed"] == 2
+
+    def test_num_eval_episodes_none_uses_step_capped_default(self, simple_env):
+        eval_env = _ScriptedEvalVecEnv(episode_len=1_000)
+        agent = self._agent(
+            simple_env,
+            eval_env=eval_env,
+            num_eval_episodes=None,
+            num_eval_steps=3,
+        )
+        metrics = agent._evaluate()
+        assert "episodes_completed" not in metrics
+        assert "eval_steps" not in metrics
 
 
 class TestOff2OnIQLMixedBatchSampling:
