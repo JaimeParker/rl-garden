@@ -325,6 +325,8 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 
 - [Checkpoint Save & Load](docs/guides/checkpoint.md)
 - [Configuration System](docs/guides/configuration.md)
+- [IsaacLab Camera Training Stall (known issue)](docs/guides/isaaclab-camera-stall.md)
+- [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)
 - [RoboTwin Integration](docs/guides/robotwin.md)
 - [Teleoperation and Recording](docs/guides/teleop.md)

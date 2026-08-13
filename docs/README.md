@@ -6,6 +6,8 @@ Operational how-to for running and configuring the framework.
 
 - [Checkpoint Save & Load](guides/checkpoint.md)
 - [Configuration System](guides/configuration.md)
+- [IsaacLab Camera Training Stall (known issue)](guides/isaaclab-camera-stall.md)
+- [IsaacLab Custom Tasks](guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](guides/offline-acceleration.md)
 - [RoboTwin Integration](guides/robotwin.md)
 - [Teleoperation and Recording](guides/teleop.md)
