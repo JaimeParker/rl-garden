@@ -9,6 +9,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.buffers.gae import compute_gae
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
 
@@ -163,28 +164,20 @@ class RolloutBuffer:
                 advantages[step] = (
                     reward_term_sum + value_term_sum
                 ) / lam_coef_sum - self.values[step]
+            self.advantages = advantages
+            self.returns = self.advantages + self.values
         else:
-            last_gae_lam = torch.zeros(self.num_envs, device=self.device)
-            for step in reversed(range(self.num_steps)):
-                if step == self.num_steps - 1:
-                    next_not_done = 1.0 - last_dones
-                    next_values = last_values
-                else:
-                    next_not_done = 1.0 - self.dones[step + 1]
-                    next_values = self.values[step + 1]
-                real_next_values = next_not_done * next_values + self.final_values[step]
-                delta = (
-                    self.rewards[step]
-                    + self.gamma * real_next_values
-                    - self.values[step]
-                )
-                last_gae_lam = (
-                    delta + self.gamma * self.gae_lambda * next_not_done * last_gae_lam
-                )
-                advantages[step] = last_gae_lam
+            self.advantages, self.returns = compute_gae(
+                self.rewards,
+                self.dones,
+                self.values,
+                self.final_values,
+                last_values,
+                last_dones,
+                self.gamma,
+                self.gae_lambda,
+            )
 
-        self.advantages = advantages
-        self.returns = self.advantages + self.values
         self.generator_ready = False
 
     def get(self, batch_size: int | None = None) -> Iterator[RolloutBufferSample]:

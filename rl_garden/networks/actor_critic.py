@@ -458,20 +458,30 @@ class DiagGaussianActor(nn.Module):
         return torch.distributions.Normal(mean, log_std.exp())
 
     def action_log_prob(
-        self, features: torch.Tensor, deterministic: bool = False
+        self,
+        features: torch.Tensor,
+        deterministic: bool = False,
+        *,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         dist = self(features)
         action = dist.mean if deterministic else dist.sample()
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
         return action, log_prob, entropy
 
     def evaluate_action_log_prob(
-        self, features: torch.Tensor, actions: torch.Tensor
+        self, features: torch.Tensor, actions: torch.Tensor, *, sum_dims: bool = True
     ) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self(features)
-        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)
+        log_prob = dist.log_prob(actions)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
         return log_prob, entropy
 
     def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:

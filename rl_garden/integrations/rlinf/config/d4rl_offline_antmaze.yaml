@@ -1,0 +1,58 @@
+# Starting point for RLGardenOfflineActor, modeled on RLinf's own
+# 3rd_party/RLinf/examples/embodiment/config/d4rl_iql_antmaze.yaml (read-only
+# reference, not edited). Being verified against a real RLinf install on
+# 9990 (.agents/local/9990.md); adjust `data.task_name` and hyperparameters
+# for your actual run.
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor: 0-0
+
+runner:
+  task_type: "offline"
+  only_eval: false
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "rlgarden_d4rl_offline_antmaze"
+    logger_backends: ["tensorboard"]
+
+  max_epochs: 1000000
+  max_steps: 1000000
+  # eval disabled: no env/rollout worker groups needed (see the "smallest
+  # possible foothold" note in docs/design/rlinf-integration.md).
+  val_check_interval: 0
+
+  save_interval: 100000
+  log_interval: 1000
+  resume_dir: null
+
+data:
+  dataset_type: "d4rl"
+  task_name: "antmaze-large-play-v0"
+  dataset_path: null
+  shuffle: true
+  seed: 42
+  num_workers: 0
+
+actor:
+  group_name: "RLGardenOfflineActorGroup"
+  model:
+    # One of: bc, iql, cql, awac, td3_bc (the offline-uniform contract --
+    # Cal-QL is deliberately unsupported, see resolve_algorithm()).
+    rlgarden_algorithm: "iql"
+    # Passed through as **kwargs to the algorithm's own constructor
+    # (rl_garden.algorithms.IQL, etc.) -- any of its normal keyword
+    # arguments are valid here.
+    rlgarden_algorithm_kwargs:
+      device: "cuda"
+      buffer_device: "cpu"
+      batch_size: 256
+    batch_size: 256
+    gradient_steps_per_call: 1000

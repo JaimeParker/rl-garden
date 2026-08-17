@@ -92,11 +92,12 @@ class PPOPolicy(BasePolicy):
         deterministic: bool = False,
         *,
         stop_gradient_actor: bool = False,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
         value_features = self.extract_features(obs, stop_gradient=False)
         actions, log_prob, entropy = self.actor.action_log_prob(
-            actor_features, deterministic=deterministic
+            actor_features, deterministic=deterministic, sum_dims=sum_dims
         )
         values = self.value_net(value_features)
         return actions, values, log_prob, entropy
@@ -117,12 +118,31 @@ class PPOPolicy(BasePolicy):
         actions: torch.Tensor,
         *,
         stop_gradient_actor: bool = False,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
         value_features = self.extract_features(obs, stop_gradient=False)
-        log_prob, entropy = self.actor.evaluate_action_log_prob(actor_features, actions)
+        log_prob, entropy = self.actor.evaluate_action_log_prob(
+            actor_features, actions, sum_dims=sum_dims
+        )
         values = self.value_net(value_features)
         return values, log_prob, entropy
+
+    def act_with_value_and_logprob(
+        self, obs: Obs, state: object = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, object]:
+        """Single-pass rollout call: action, value, log-prob, entropy, state.
+
+        ``state`` is always ``None`` in and out for plain PPO -- a no-op
+        passthrough. It exists so a future ``SequencePPO``-contract policy
+        (RecurrentPPO/TransformerPPO) can implement the same method name
+        while actually threading hidden state through it, letting an RLinf
+        rollout worker call one method name regardless of which contract the
+        concrete policy implements. See docs/design/rlinf-integration.md,
+        "PPO contract" / "SequencePPO contract".
+        """
+        actions, values, log_prob, entropy = self.forward(obs, deterministic=False)
+        return actions, values, log_prob, entropy, state
 
     def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
         return self.actor.clamp_action(actions)

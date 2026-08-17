@@ -115,6 +115,49 @@ def test_ppo_policy_action_value_log_prob_shapes():
     assert entropy_eval.shape == (5, 1)
 
 
+def test_ppo_policy_sum_dims_false_returns_per_dimension_shapes():
+    obs_space = _state_space()
+    action_space = _action_space()
+    policy = PPOPolicy(
+        obs_space, action_space, FlattenExtractor(obs_space), net_arch=[16]
+    )
+    obs = torch.randn(5, 4)
+    actions, _values, summed_log_prob, summed_entropy = policy(obs, sum_dims=True)
+    _actions2, _values2, unsummed_log_prob, unsummed_entropy = policy(
+        obs, sum_dims=False
+    )
+    assert summed_log_prob.shape == (5, 1)
+    assert unsummed_log_prob.shape == (5, 2)  # action_space has shape (2,)
+    assert summed_entropy.shape == (5, 1)
+    assert unsummed_entropy.shape == (5, 2)
+
+    values_eval, unsummed_eval_log_prob, unsummed_eval_entropy = (
+        policy.evaluate_actions(obs, actions, sum_dims=False)
+    )
+    assert values_eval.shape == (5, 1)
+    assert unsummed_eval_log_prob.shape == (5, 2)
+    assert unsummed_eval_entropy.shape == (5, 2)
+
+
+def test_ppo_policy_act_with_value_and_logprob_matches_forward():
+    obs_space = _state_space()
+    action_space = _action_space()
+    policy = PPOPolicy(
+        obs_space, action_space, FlattenExtractor(obs_space), net_arch=[16]
+    )
+    obs = torch.randn(5, 4)
+    actions, values, log_prob, entropy, state = policy.act_with_value_and_logprob(obs)
+    assert actions.shape == (5, 2)
+    assert values.shape == (5, 1)
+    assert log_prob.shape == (5, 1)
+    assert entropy.shape == (5, 1)
+    assert state is None
+
+    sentinel = object()
+    *_rest, state_out = policy.act_with_value_and_logprob(obs, state=sentinel)
+    assert state_out is sentinel  # no-op passthrough, not silently dropped
+
+
 def test_rollout_buffer_computes_gae_returns():
     buffer = RolloutBuffer(
         _state_space(),
