@@ -26,6 +26,14 @@ def _convert_space(space: Any) -> spaces.Space:
     raise TypeError(f"Unsupported legacy Gym space: {type(space).__name__}")
 
 
+def _convert_action_space(space: Any) -> spaces.Space:
+    """Expose D4RL's policy coordinates, not the raw MuJoCo ctrlrange."""
+    converted = _convert_space(space)
+    if not isinstance(converted, spaces.Box):
+        return converted
+    return spaces.Box(low=-1.0, high=1.0, shape=converted.shape, dtype=converted.dtype)
+
+
 class _GymV21Adapter(gym.Env):
     """Translate an old Gym reset/step API without changing environment logic."""
 
@@ -33,7 +41,7 @@ class _GymV21Adapter(gym.Env):
         super().__init__()
         self.legacy_env = env
         self.observation_space = _convert_space(env.observation_space)
-        self.action_space = _convert_space(env.action_space)
+        self.action_space = _convert_action_space(env.action_space)
         self.metadata = dict(getattr(env, "metadata", {}))
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):

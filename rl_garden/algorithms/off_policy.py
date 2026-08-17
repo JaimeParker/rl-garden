@@ -470,7 +470,11 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 self._post_rollout_step(action_context, terminations, truncations, infos)
                 obs = next_obs
                 if episode_mode:
-                    episodes_completed += (terminations | truncations).long()
+                    episode_done = (terminations | truncations).to(
+                        device=episodes_completed.device,
+                        dtype=episodes_completed.dtype,
+                    )
+                    episodes_completed += episode_done
                     if bool((episodes_completed >= self.online_episodes_per_iteration).all()):
                         break
             self.policy.train()

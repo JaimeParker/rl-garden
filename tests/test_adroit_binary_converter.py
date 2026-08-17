@@ -70,7 +70,7 @@ def test_converter_matches_calql_filtering_and_truncation(tmp_path):
         np.testing.assert_allclose(f["traj_0/actions"][:], 0.99999)
         assert f["traj_0/rewards"][:].tolist() == [-1.0, 0.0, 0.0]
         assert f["traj_0/terminated"][:].tolist() == [False, True, True]
-        assert f["traj_0/episode_end"][:].tolist() == [False, False, True]
+        assert f["traj_0/episode_end"][:].tolist() == [False, True, True]
         assert f["traj_0"].attrs["source_kind"] == "expert"
         assert f["traj_0"].attrs["source_index"] == 0
         assert f["traj_1"].attrs["source_kind"] == "bc"

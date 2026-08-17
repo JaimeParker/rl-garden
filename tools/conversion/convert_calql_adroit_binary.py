@@ -42,8 +42,6 @@ def _convert_trajectory(trajectory: dict[str, Any]) -> dict[str, np.ndarray] | N
     length = int(successes[-1]) + 1
     rewards = rewards[:length]
     success = rewards == 0.0
-    episode_end = np.zeros(length, dtype=np.bool_)
-    episode_end[-1] = True
     return {
         "obs": observations[:length],
         "next_obs": next_observations[:length],
@@ -52,7 +50,7 @@ def _convert_trajectory(trajectory: dict[str, Any]) -> dict[str, np.ndarray] | N
         "terminated": success,
         "truncated": np.zeros(length, dtype=np.bool_),
         "success": success,
-        "episode_end": episode_end,
+        "episode_end": success.copy(),
     }
 
 

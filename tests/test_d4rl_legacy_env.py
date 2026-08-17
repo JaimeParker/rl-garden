@@ -42,6 +42,46 @@ class _FakeLegacyEnv:
         pass
 
 
+class _FakeNormalizedActionEnv(_FakeLegacyEnv):
+    def __init__(self):
+        super().__init__()
+        self.action_space = spaces.Box(
+            low=np.array([-0.3, 0.0], dtype=np.float32),
+            high=np.array([0.5, 1.6], dtype=np.float32),
+            dtype=np.float32,
+        )
+        self.last_action = None
+
+    def step(self, action):
+        self.last_action = np.asarray(action).copy()
+        return super().step(action)
+
+
+def test_legacy_env_exposes_normalized_actions_without_rescaling(monkeypatch):
+    legacy_env = _FakeNormalizedActionEnv()
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: legacy_env,
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="door-binary-v0", num_envs=1, device="cpu")
+    )
+
+    assert np.array_equal(env.single_action_space.low, np.full(2, -1.0))
+    assert np.array_equal(env.single_action_space.high, np.full(2, 1.0))
+    assert env.single_action_space.dtype == np.float32
+    assert np.array_equal(env.action_space.low, np.full((1, 2), -1.0))
+    assert np.array_equal(env.action_space.high, np.full((1, 2), 1.0))
+    assert env.action_space.dtype == np.float32
+
+    env.reset()
+    normalized_action = torch.tensor([[-1.0, 0.75]], dtype=torch.float32)
+    env.step(normalized_action)
+    assert np.array_equal(legacy_env.last_action, normalized_action.numpy()[0])
+    assert legacy_env.last_action.dtype == np.float32
+    env.close()
+
+
 def test_legacy_env_exposes_torch_vector_contract_and_success(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.envs.d4rl_legacy.env._make_legacy_env",

@@ -8,6 +8,7 @@ expose it, but the behavior under test lives entirely in
 """
 import re
 
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -138,6 +139,21 @@ def test_episode_mode_grad_steps_never_below_one(monkeypatch):
 
     assert grad_steps_seen
     assert all(g >= 1 for g in grad_steps_seen)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="requires CUDA to reproduce CPU env done tensors with CUDA training",
+)
+def test_episode_mode_accepts_cpu_done_tensors_with_cuda_agent(monkeypatch):
+    env = _ScriptedVecEnv(episode_len=[1])
+    agent = _agent(env, device="cuda", online_episodes_per_iteration=1)
+    grad_steps_seen = _stub_train(agent, monkeypatch)
+
+    agent.learn(total_timesteps=2)
+
+    assert grad_steps_seen
+    assert agent._global_step >= 1
 
 
 def test_episode_mode_eval_fires_when_boundary_is_outside_a_training_freq_window(monkeypatch):

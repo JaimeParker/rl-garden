@@ -172,3 +172,41 @@ def test_loader_uses_explicit_episode_end_separately_from_terminal(tmp_path):
 
     assert loaded == 3
     assert buffer._episode_end[:3, 0].tolist() == [False, False, True]
+
+
+def test_sparse_binary_mc_stops_at_every_success_boundary(tmp_path):
+    path = tmp_path / "binary_success_boundaries.h5"
+    with h5py.File(path, "w") as f:
+        traj = f.create_group("traj_0")
+        traj.create_dataset("obs", data=np.zeros((3, 2), dtype=np.float32))
+        traj.create_dataset("next_obs", data=np.ones((3, 2), dtype=np.float32))
+        traj.create_dataset("actions", data=np.zeros((3, 1), dtype=np.float32))
+        traj.create_dataset("rewards", data=np.array([-1, 0, 0], dtype=np.float32))
+        traj.create_dataset("terminated", data=np.array([0, 1, 1], dtype=np.bool_))
+        traj.create_dataset("success", data=np.array([0, 1, 1], dtype=np.bool_))
+        traj.create_dataset("episode_end", data=np.array([0, 1, 1], dtype=np.bool_))
+
+    buffer = MCTensorReplayBuffer(
+        observation_space=spaces.Box(low=-10, high=10, shape=(2,), dtype=np.float32),
+        action_space=spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=4,
+        gamma=0.99,
+        storage_device="cpu",
+        sample_device="cpu",
+        sparse_reward_mc=True,
+        sparse_negative_reward=-5.0,
+        success_threshold=0.5,
+    )
+    loaded = load_h5_dataset_to_replay_buffer(
+        buffer,
+        path,
+        reward_scale=10.0,
+        reward_bias=5.0,
+    )
+
+    assert loaded == 3
+    assert torch.allclose(
+        buffer._build_mc_table()[:3, 0],
+        torch.tensor([-0.05, 5.0, 5.0]),
+    )
