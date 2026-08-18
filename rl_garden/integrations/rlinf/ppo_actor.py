@@ -1,7 +1,7 @@
 """RLinf sync PPO actor adapter.
 
 Drives training via RLinf's own ``EmbodiedRunner`` (sync, collect-then-update
--- ``3rd_party/RLinf/rlinf/runners/embodied_runner.py``), not the async
+-- ``RLinf/rlinf/runners/embodied_runner.py``), not the async
 ``AsyncEmbodiedRunner``/``AsyncPPOEmbodiedRunner`` paths. See
 ``docs/design/rlinf-integration.md``, "PPO contract".
 

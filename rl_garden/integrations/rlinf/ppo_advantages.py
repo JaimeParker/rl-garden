@@ -25,7 +25,7 @@ def compute_advantages_from_rollout_batch(
 
     Batch shapes, verified directly against ``EmbodiedFSDPActor
     ._process_received_rollout_batch``/``process_nested_dict_for_train``
-    (``3rd_party/RLinf/rlinf/workers/actor/fsdp_actor_worker.py``): after
+    (``RLinf/rlinf/workers/actor/fsdp_actor_worker.py``): after
     ``recv_rollout_trajectories``, ``rollout_batch["rewards"]`` is
     ``[T, B, num_action_chunks]``, while ``["terminations"]``/
     ``["prev_values"]`` carry one extra *trailing* bootstrap-step entry,

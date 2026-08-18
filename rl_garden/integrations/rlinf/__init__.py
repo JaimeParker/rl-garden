@@ -1,8 +1,8 @@
 """rl-garden <-> RLinf integration.
 
-RLinf (https://github.com/RLinf/RLinf, vendored read-only at
-``3rd_party/RLinf``) is a Ray-based framework for distributed RL/VLA
-training. This package hosts rl-garden-side adapter classes that let
+RLinf (https://github.com/RLinf/RLinf) is a Ray-based framework for
+distributed RL/VLA training. This package hosts rl-garden-side adapter
+classes that let
 rl-garden algorithms run as RLinf workers, per
 ``docs/design/rlinf-integration.md``.
 
@@ -26,6 +26,6 @@ def require_rlinf() -> None:
         raise ImportError(
             "rl_garden.integrations.rlinf requires RLinf to be installed. "
             "See https://github.com/RLinf/RLinf for install instructions "
-            "(the vendored reference copy at 3rd_party/RLinf is read-only "
-            "and not itself an installed package)."
+            "(a local RLinf clone used only as a read-only reference is "
+            "not itself an installed package)."
         ) from exc

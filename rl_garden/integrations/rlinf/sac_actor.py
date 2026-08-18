@@ -1,7 +1,7 @@
 """RLinf async SAC actor adapter.
 
 Drives rl-garden's SAC/RLPD algorithms inside RLinf's ``AsyncEmbodiedRunner``
-(``3rd_party/RLinf/rlinf/runners/async_embodied_runner.py``). See
+(``RLinf/rlinf/runners/async_embodied_runner.py``). See
 ``docs/design/rlinf-integration.md``, "SACCore contract (SAC, RLPD)".
 
 Subclasses RLinf's plain ``Worker`` rather than ``EmbodiedSACFSDPPolicy``:

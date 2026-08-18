@@ -5,7 +5,7 @@ entirely, overriding ``init_worker``/``predict`` to build and call an
 rl-garden policy directly), this adapter's model is registered with RLinf's
 own ``get_model()`` dispatch (``ppo_model.register_rl_garden_ppo_model``) --
 so ``MultiStepRolloutWorker.init_worker``
-(``3rd_party/RLinf/rlinf/workers/rollout/hf/huggingface_worker.py``, calls
+(``RLinf/rlinf/workers/rollout/hf/huggingface_worker.py``, calls
 ``get_model(rollout_model_config)``) needs **no override at all**. This is a
 direct consequence of going through RLinf's FSDP/model-registry machinery
 (``ppo_actor.py``'s ``RLGardenPPOFSDPActor``) instead of bypassing it.

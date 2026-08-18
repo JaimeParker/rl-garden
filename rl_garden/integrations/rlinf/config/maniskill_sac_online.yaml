@@ -1,5 +1,5 @@
 # Starting point for RLGardenSACActor/RLGardenSACRollout, trimmed from
-# RLinf's own 3rd_party/RLinf/examples/embodiment/config/
+# RLinf's own examples/embodiment/config/
 # maniskill_sac_mlp_async.yaml (read-only reference, not edited).
 #
 # Reuses env/maniskill_pick_cube@env.train unmodified for wrap_obs_mode:

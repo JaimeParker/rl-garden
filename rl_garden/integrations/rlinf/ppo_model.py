@@ -1,11 +1,11 @@
 """Wraps an rl-garden policy to satisfy RLinf's embodied model protocol.
 
 Registers a new RLinf model type (``"rl_garden_ppo"``) via ``register_model``
-(``3rd_party/RLinf/rlinf/models/__init__.py`` -- a real, public, mutation-
+(``RLinf/rlinf/models/__init__.py`` -- a real, public, mutation-
 based extension point, not a source edit) so ``EmbodiedFSDPActor`` and
 ``MultiStepRolloutWorker`` can build this model through RLinf's own
 ``get_model()`` dispatch, exactly like RLinf's own ``MLPPolicy``
-(``3rd_party/RLinf/rlinf/models/embodiment/mlp_policy/mlp_policy.py``, the
+(``RLinf/rlinf/models/embodiment/mlp_policy/mlp_policy.py``, the
 concrete reference this wrapper's ``default_forward``/``predict_action_batch``
 shape was built against).
 
@@ -122,7 +122,7 @@ class RLGardenPPOModel(nn.Module, RLinfBasePolicy):
     """Adapts a PPO-contract rl-garden policy to RLinf's embodied model protocol.
 
     ``BasePolicy``'s abstract methods are ``default_forward`` and
-    ``predict_action_batch`` (``3rd_party/RLinf/rlinf/models/embodiment/
+    ``predict_action_batch`` (``RLinf/rlinf/models/embodiment/
     base_policy.py``); everything else (``enable_torch_compile``,
     ``capture_cuda_graph``) keeps ``BasePolicy``'s default
     ``NotImplementedError`` stubs -- out of scope for this pilot (see

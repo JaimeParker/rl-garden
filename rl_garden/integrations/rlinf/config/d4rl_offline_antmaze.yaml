@@ -1,5 +1,5 @@
 # Starting point for RLGardenOfflineActor, modeled on RLinf's own
-# 3rd_party/RLinf/examples/embodiment/config/d4rl_iql_antmaze.yaml (read-only
+# RLinf/examples/embodiment/config/d4rl_iql_antmaze.yaml (read-only
 # reference, not edited). Being verified against a real RLinf install on
 # 9990 (.agents/local/9990.md); adjust `data.task_name` and hyperparameters
 # for your actual run.

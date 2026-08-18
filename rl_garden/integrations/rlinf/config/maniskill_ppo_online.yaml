@@ -1,5 +1,5 @@
 # Starting point for RLGardenPPOFSDPActor/RLGardenPPORollout, trimmed from
-# RLinf's own 3rd_party/RLinf/examples/embodiment/config/maniskill_ppo_mlp.yaml
+# RLinf's own examples/embodiment/config/maniskill_ppo_mlp.yaml
 # (read-only reference, not edited). Unlike maniskill_sac_online.yaml, this
 # adapter goes through RLinf's own model registry/FSDP machinery
 # (docs/design/rlinf-integration.md, Phase 3) -- reuses

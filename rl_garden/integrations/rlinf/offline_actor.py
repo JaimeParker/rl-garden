@@ -1,7 +1,7 @@
 """RLinf offline actor adapter.
 
 Drives rl-garden's offline algorithms inside RLinf's ``OfflineRunner``
-(``3rd_party/RLinf/rlinf/runners/offline_runner.py``). See
+(``RLinf/rlinf/runners/offline_runner.py``). See
 ``docs/design/rlinf-integration.md``, "Offline-uniform contract
 (BC, IQL, CQL, AWAC, TD3+BC)" and "Design principle: adapters target the
 hook contract".
@@ -92,7 +92,7 @@ def resolve_algorithm(name: str) -> type[OfflineRLAlgorithm]:
 def _dataset_batch_to_sample(batch: dict[str, torch.Tensor]) -> ReplayBufferSample:
     """Convert one RLinf D4RL ``DataLoader`` batch into rl-garden's batch shape.
 
-    RLinf's ``D4RLDataset`` (``3rd_party/RLinf/rlinf/data/datasets/d4rl.py``)
+    RLinf's ``D4RLDataset`` (``RLinf/rlinf/data/datasets/d4rl.py``)
     yields ``masks`` = 1 - terminals (the not-done convention); rl-garden's
     ``ReplayBufferSample.dones`` is the terminal flag itself.
     """

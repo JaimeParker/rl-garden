@@ -1,7 +1,7 @@
 """Entry script that launches ``RLGardenOfflineActor`` under RLinf.
 
 Modeled on RLinf's own
-``3rd_party/RLinf/examples/embodiment/train_offline_rl.py`` (read-only
+``RLinf/examples/embodiment/train_offline_rl.py`` (read-only
 reference, not edited), but does not call RLinf's ``validate_cfg`` -- that
 function rejects any ``cfg.actor.model.model_type`` outside RLinf's own
 ``SupportedModel`` enum, and this adapter is not one of RLinf's own models

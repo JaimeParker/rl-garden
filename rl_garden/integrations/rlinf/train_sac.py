@@ -1,7 +1,7 @@
 """Entry script that launches the RLinf async SAC/RLPD adapter.
 
 Modeled on RLinf's own
-``3rd_party/RLinf/examples/embodiment/train_async.py`` (read-only reference,
+``RLinf/examples/embodiment/train_async.py`` (read-only reference,
 not edited), but does not call RLinf's ``validate_cfg`` -- same reason as
 ``rl_garden/integrations/rlinf/train_offline.py``: our adapter classes
 aren't RLinf's own registered model/env types, and `validate_cfg` is only
