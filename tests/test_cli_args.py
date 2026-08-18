@@ -304,7 +304,7 @@ def _make_ms_req(ms):
     from rl_garden.envs.backend_registry import EnvRequest
 
     return EnvRequest(
-        env_id="PegInsertionSidePegOnly-v1",
+        env_id="PickCube-v1",
         num_envs=2,
         num_eval_envs=3,
         obs_mode="rgb",
@@ -764,32 +764,6 @@ def test_robotwin_backend_disable_topp() -> None:
 
     assert cfg.task_config["need_topp"] is False
 
-
-def test_peg_defaults_require_no_backend_config_overrides() -> None:
-    """Peg's known-good config matches the vendored task class's own defaults,
-    so a zero-override ManiSkillConfig must already produce them."""
-    from rl_garden.common.env_args import ManiSkillConfig
-    from rl_garden.envs.backends.maniskill import ManiSkillBackend
-
-    ms = ManiSkillConfig(sim_backend="gpu", render_backend="gpu", reward_mode="normalized_dense")
-    req = _make_ms_req(ms)
-
-    cfg = ManiSkillBackend._make_cfg(req, is_eval=False)
-
-    assert cfg.env_id == "PegInsertionSidePegOnly-v1"
-    assert cfg.control_mode == "pd_ee_delta_pose"
-    assert cfg.sim_backend == "gpu"
-    assert cfg.render_backend == "gpu"
-    assert cfg.reward_mode == "normalized_dense"
-    assert cfg.env_kwargs == {}
-    # robot_uids/fix_peg_pose/fix_box/fixed_peg_xy/fixed_peg_z_rot_deg are left
-    # None here on purpose: PegInsertionSidePegOnly-v1's own constructor defaults
-    # already reproduce the deleted peg-training scripts' behavior.
-    assert cfg.robot_uids is None
-    assert cfg.fix_peg_pose is None
-    assert cfg.fix_box is None
-    assert cfg.fixed_peg_xy is None
-    assert cfg.fixed_peg_z_rot_deg is None
 
 
 def test_state_wsrl_defaults_match_existing_cli() -> None:

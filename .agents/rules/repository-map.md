@@ -13,11 +13,16 @@ agent rules; this file is a plain orientation reference, not a rules doc.
 - `rl_garden/envs/` — backend registry and implementations, environment factories,
   wrappers, and custom environments.
 - `rl_garden/models/` — ACT and reward models.
-- `rl_garden/real_world/` — real-robot actor/learner loops and HIL-SERL/SERL
-  integration.
 - `rl_garden/training/` — registry base and independent `online/`, `offline/`, and
   `off2on/` packages.
-- `robot_infra/` — controllers, teleoperation, and real-robot support.
+- `robot_infra/` — optional submodule ([rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra)):
+  controllers, teleoperation, real-robot support. No dependency on `rl_garden`.
+- Real-robot actor/learner loops, the `franka_real` env backend, and
+  HIL-SERL/SERL integration live in a separate repo,
+  [rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world) —
+  not under `rl_garden/` at all. It imports `rl_garden` as a library and
+  registers `franka_real` through the `rlgarden.env_backends` entry-point
+  group (`rl_garden/envs/backend_registry.py`).
 - `examples/` — thin training dispatchers and specialized experiment entrypoints.
 - `configs/` — reusable preset configs for training.
 - `scripts/` — shell launchers with experiment defaults.

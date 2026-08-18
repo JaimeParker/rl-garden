@@ -99,8 +99,13 @@ register_env_backend("my_backend", MyBackend)   # ← fires on import
 ## Step 2 — Backend implementation package (`rl_garden/envs/my_backend/`)
 
 Create a sub-package that holds the config dataclass and the env factory. The
-maniskill package (`rl_garden/envs/maniskill/`) is the minimal reference; robotwin
-(`rl_garden/envs/robotwin/`) is a heavier example with a threading executor.
+maniskill package (`rl_garden/envs/maniskill/`) is the minimal reference wrapping
+an existing simulator; robotwin (`rl_garden/envs/robotwin/`) is a heavier example
+with a threading executor. If you're authoring a brand-new environment that
+doesn't wrap any existing simulator, copy `rl_garden/envs/custom/` instead — a
+runnable, fully-wired template (`--env_backend custom --env_id PointReach-v0`)
+showing the standard-gymnasium-authoring-then-vectorize-with-`TorchVectorEnvAdapter`
+shape end to end (see that package's `__init__.py` docstring).
 
 ### `rl_garden/envs/my_backend/__init__.py`
 

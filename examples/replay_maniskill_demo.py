@@ -22,8 +22,6 @@ from mani_skill.trajectory import utils as trajectory_utils
 from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
 from mani_skill.utils.wrappers.record import RecordEpisode
 
-from rl_garden.envs import register_custom_envs
-
 
 @dataclass
 class Args:
@@ -132,7 +130,6 @@ def _traj_dataset_success(traj: Any) -> Optional[bool]:
 
 
 def _build_env(metadata: dict[str, Any], output_dir: Path, args: Args):
-    register_custom_envs()
     env_info = metadata["env_info"]
     env_id = env_info["env_id"]
     env_kwargs = dict(env_info.get("env_kwargs") or {})

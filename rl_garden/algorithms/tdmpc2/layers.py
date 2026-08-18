@@ -4,9 +4,9 @@
 ``Ensemble`` in the upstream code uses ``torch.vmap`` over
 ``tensordict.nn.TensorDictParams`` for a single fused forward pass across the
 Q-ensemble. That pulls in ``tensordict``/functorch machinery this port
-deliberately avoids (see the "no new dependencies" decision in
-``docs/roadmaps/hil-serl-roadmap.md``-style scoping notes for this port). ``QEnsemble``
-here is a plain ``nn.ModuleList`` looped in Python instead -- slower per step,
+deliberately avoids (a "no new dependencies" scoping decision for this
+port). ``QEnsemble`` here is a plain ``nn.ModuleList`` looped in Python
+instead -- slower per step,
 but a plain ``nn.Module`` that round-trips through ``state_dict()`` with zero
 special-casing, which is what the checkpoint design in this port relies on.
 """

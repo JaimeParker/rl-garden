@@ -20,16 +20,32 @@ To add a new backend::
 
     register_env_backend("my_backend", MyBackend)
 
-Backends are discovered automatically on first use.
+Backends are discovered automatically on first use: every module under
+``rl_garden.envs.backends`` is imported (each is expected to call
+``register_env_backend`` as an import-time side effect), plus every module
+advertised via the ``rlgarden.env_backends`` entry point group. The entry
+point form lets an externally pip-installed package (e.g. a real-robot
+backend living in its own repo) register a backend without any file inside
+``rl_garden`` itself — declare it in the external package's own
+``pyproject.toml``::
+
+    [project.entry-points."rlgarden.env_backends"]
+    my_backend = "my_package.backend_module"
+
+and have ``my_package.backend_module`` call ``register_env_backend(...)`` at
+import time, same as an in-tree backend module does.
 """
 
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import pkgutil
 import threading
 from dataclasses import dataclass
 from typing import Any
+
+_ENV_BACKEND_ENTRY_POINT_GROUP = "rlgarden.env_backends"
 
 
 @dataclass
@@ -126,6 +142,10 @@ def discover_env_backends() -> None:
         for info in pkgutil.iter_modules(package.__path__):
             if not info.name.startswith("_"):
                 importlib.import_module(f"rl_garden.envs.backends.{info.name}")
+        for entry_point in importlib.metadata.entry_points(
+            group=_ENV_BACKEND_ENTRY_POINT_GROUP
+        ):
+            entry_point.load()
         _DISCOVERED = True
 
 

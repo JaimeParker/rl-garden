@@ -116,7 +116,7 @@ MLP encoder 的优化景观低维且平滑，微小的 critic 数值差异在梯
 
 - `critic_impl` 开关已存在于 `rl_garden/networks/actor_critic.py` 和
   `SACTrainingArgs`（CLI: `--critic_impl {vmap,legacy}`）。
-- RGB ResNet 训练（如 PegInsertionSidePegOnly、PickCube RGB）建议显式
+- RGB ResNet 训练（如 PickCube RGB）建议显式
   设置 `--critic_impl legacy`，避免上述长程发散。
 - state-only SAC 不受此问题影响，`vmap`（默认值）即可。
 - vmap 仍然是一个合法、性能更好的实现，只是与 legacy 不 bit-identical；

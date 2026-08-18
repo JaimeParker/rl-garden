@@ -107,7 +107,7 @@ class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
     rollout is not supported in this port (see ``rl_garden.algorithms.tdmpc2.
     agent`` module docstring). ``episode_length`` has no single upstream
     default (it's task-specific in the original Hydra configs); 100 matches
-    this repo's own ManiSkill custom tasks (e.g. ``PegInsertionSideNew-v1``).
+    the ManiSkill task horizon this port was originally tuned against.
     """
 
     num_envs: int = 1

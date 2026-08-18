@@ -1,1 +1,0 @@
-"""Custom ManiSkill robot registrations."""

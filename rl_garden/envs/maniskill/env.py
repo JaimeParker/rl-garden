@@ -31,7 +31,6 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
 
     # Lazy imports so the package doesn't hard-depend on mani_skill being installed.
     import mani_skill.envs  # noqa: F401  (registers envs)
-    from rl_garden.envs import register_custom_envs
     from mani_skill.utils.wrappers.flatten import (
         FlattenActionSpaceWrapper,
         FlattenRGBDObservationWrapper,
@@ -46,7 +45,6 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
         render_backend=cfg.render_backend,
         sensor_configs=dict(),
     )
-    register_custom_envs()
     if cfg.control_mode is not None:
         env_kwargs["control_mode"] = cfg.control_mode
     if cfg.reward_mode is not None:

@@ -29,8 +29,6 @@ algorithm registration, environment backends, or replay/device behavior.
   `EnvRequest.backend_config`; they must not call `make_maniskill_env()` directly.
 - Extend `ManiSkillEnvConfig` and `make_maniskill_env()` for shared ManiSkill
   behavior instead of duplicating wrappers in examples.
-- Register custom ManiSkill environments lazily through
-  `rl_garden.envs.register_custom_envs()`.
 
 ## Algorithms, Policies, and Encoders
 

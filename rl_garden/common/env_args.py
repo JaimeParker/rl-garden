@@ -131,6 +131,13 @@ class IsaacLabConfig:
 
 
 @dataclass
+class CustomConfig:
+    """``custom`` (PointReach template) env settings. CLI prefix: ``--custom.<field>``"""
+
+    device: str = "cpu"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -146,6 +153,7 @@ class EnvBackendArgs:
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
     isaaclab: IsaacLabConfig = field(default_factory=IsaacLabConfig)
+    custom: CustomConfig = field(default_factory=CustomConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

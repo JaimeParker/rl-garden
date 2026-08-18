@@ -41,7 +41,7 @@ rl_garden/
 ├── networks/      # Actor, critic, value, and backbone modules
 ├── policies/      # Algorithm policy composition
 └── training/      # Registered online, offline, and off2on training packages
-robot_infra/       # Controllers, teleoperation, and real-robot utilities
+robot_infra/       # Optional submodule (rlgarden-robot-infra): controllers, teleoperation
 examples/          # Thin dispatchers and specialized experiment entrypoints
 scripts/           # Launchers with experiment defaults
 tests/             # Unit and backend/accelerator integration tests
@@ -171,19 +171,10 @@ python examples/train_online.py ppo \
 See [RoboTwin Integration](docs/guides/robotwin.md) for installation, assets, observation
 mapping, rewards, and performance controls.
 
-The peg-insertion environment has dedicated camera, controller, and robot defaults
-that can be passed through the unified training entrypoint:
-
-```bash
-python examples/train_online.py sac \
-  --env-id PegInsertionSidePegOnly-v1 \
-  --obs-mode rgb \
-  --control-mode pd_ee_delta_pose \
-  --maniskill.reward-mode normalized_dense \
-  --maniskill.robot-uids panda_wristcam_gripper_closed_wo_norm \
-  --per-camera-rgbd \
-  --image-fusion-mode per_key
-```
+`rl_garden/envs/custom/` is a runnable template for authoring a brand-new
+environment that isn't wrapping an existing simulator (`--env-backend custom
+--env-id PointReach-v0`). Copy it to start your own backend; see
+`.agents/rules/adding-env-backend.md` for the full contract.
 
 ## Visual Training
 
@@ -212,10 +203,8 @@ ViT example:
 
 ```bash
 python examples/train_online.py sac \
-  --env-id PegInsertionSidePegOnly-v1 \
+  --env-id PickCube-v1 \
   --obs-mode rgb \
-  --include-state \
-  --per-camera-rgbd \
   --image-fusion-mode per_key \
   --encoder vit
 ```
@@ -283,11 +272,18 @@ combined extractor and dict replay path.
 
 ## Robot Infrastructure and Reward Models
 
-`robot_infra/` contains EE twist and impedance controllers, teleoperation, and
-demonstration-recording utilities. See:
+Robot hardware/communication/control and real-world RL orchestration live in
+two separate repos, added back as optional git submodules:
 
-- [Controller setup](robot_infra/controller/README.md)
-- [Teleoperation and recording](docs/guides/teleop.md)
+- [rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra) --
+  EE twist and impedance controllers, the Franka bridge, teleop devices.
+- [rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world) --
+  `ActorLoop`/`LearnerLoop`, the `franka_real` env backend, SERL/HIL-SERL
+  training loops, teleoperation demo/recording scripts, and the [teleop
+  guide](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md).
+
+Neither is required for simulation-only use; `git submodule update --init` to
+pull them in.
 
 Learned reward utilities live under `rl_garden/models/reward/`. Typical entrypoints
 include:
@@ -329,7 +325,7 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)
 - [RoboTwin Integration](docs/guides/robotwin.md)
-- [Teleoperation and Recording](docs/guides/teleop.md)
+- [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
 - [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
 - [WSRL Overview](docs/design/wsrl-overview.md)
 - [RNG and Numerical Determinism](docs/design/rng-numerical-determinism.md)

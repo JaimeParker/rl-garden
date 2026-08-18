@@ -3,9 +3,9 @@ architecture-matched to HIL-SERL's own reward classifier (frozen pretrained
 ResNet encoder + small MLP head, image-only input -- no proprio/state).
 
 Training entrypoint: :mod:`rl_garden.models.reward.success.train`. Data
-collection: :mod:`rl_garden.models.reward.success.collect_data`. Both agree
-with this module on the checkpoint format (a plain ``state_dict()`` for
-:class:`SuccessClassifier`).
+collection: ``rl_garden_real_world.reward.collect_data`` (separate
+``rlgarden-real-world`` repo). Both agree with this module on the
+checkpoint format (a plain ``state_dict()`` for :class:`SuccessClassifier`).
 """
 from __future__ import annotations
 

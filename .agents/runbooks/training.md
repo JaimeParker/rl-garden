@@ -85,18 +85,6 @@ python examples/pretrain_offline.py iql \
   --env_id PickCube-v1 --eval_freq 10000 --num_eval_steps 50
 ```
 
-## Peg Training
-
-Use the dedicated entrypoint or launcher for `PegInsertionSidePegOnly-v1`:
-
-```bash
-scripts/train_sac_rgbd_peg.sh
-# or
-python examples/train_sac_rgbd_peg.py
-```
-
-It owns the peg-specific robot, controller, camera, and per-key image defaults. Do
-not copy those defaults into `train_online.py`.
 
 For a short local CPU simulator compatibility smoke test:
 
