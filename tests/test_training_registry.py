@@ -85,6 +85,7 @@ def test_phase_registries_discover_expected_algorithms():
 
     assert set(online.entries()) == {
         "sac",
+        "sac_flow",
         "ppo",
         "recurrent_ppo",
         "recurrent_sac",

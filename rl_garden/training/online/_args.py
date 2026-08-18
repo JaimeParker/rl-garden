@@ -98,6 +98,17 @@ class VisionTransformerSACTrainingArgs(TransformerSACTrainingArgs, VisionArgs):
 
 
 @dataclass
+class SACFlowTrainingArgs(SACTrainingArgs):
+    """SACFlow -- flow-matching actor. State-obs only in this version."""
+
+    denoising_steps: int = 4
+    noise_std: float = 0.3
+    flow_hidden_dim: int = 256
+    flow_hidden_layers: int = 3
+    flow_use_layer_norm: bool = False
+
+
+@dataclass
 class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
     """State-obs defaults, values matching
     ``3rd_party/tdmpc2/tdmpc2/config.yaml`` where an upstream default exists.

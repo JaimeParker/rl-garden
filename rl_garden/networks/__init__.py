@@ -22,6 +22,7 @@ from rl_garden.networks.flash_sac_layers import (
     UnitLinear,
     UnitRMSNorm,
 )
+from rl_garden.networks.flow_actor import FlowMatchingActor
 from rl_garden.networks.gtrxl import GTrXLLatentEncoder, GTrXLState
 from rl_garden.networks.mlp import KernelInit, MLPResNet, create_mlp
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
@@ -43,6 +44,7 @@ __all__ = [
     "EnsembleQCritic",
     "FlashSACBlock",
     "FlashSACEmbedder",
+    "FlowMatchingActor",
     "GTrXLLatentEncoder",
     "GTrXLState",
     "KernelInit",

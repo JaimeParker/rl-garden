@@ -26,6 +26,7 @@ from rl_garden.algorithms.recurrent_sac import RecurrentSAC
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
 from rl_garden.algorithms.sac import SAC
+from rl_garden.algorithms.sac_flow import SACFlow
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
 from rl_garden.algorithms.td3 import TD3
@@ -60,6 +61,7 @@ __all__ = [
     "RLPD",
     "RLPDHybrid",
     "SAC",
+    "SACFlow",
     "SequencePPO",
     "SequenceSAC",
     "TD3",
