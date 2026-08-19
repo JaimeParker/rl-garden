@@ -291,6 +291,9 @@ class BaseAlgorithmRegistry:
                     raise ConfigError("--dataset_dir is required for tdmpc2_multitask.")
                 if not getattr(args, "mmap_dir", None):
                     raise ConfigError("--mmap_dir is required for tdmpc2_multitask.")
+            elif command.algorithm == "diffusion_bc":
+                if not getattr(args, "dataset_path", None):
+                    raise ConfigError("--dataset_path is required for diffusion_bc.")
             elif not getattr(args, "offline_dataset", None):
                 raise ConfigError(
                     "--offline_dataset is required for offline pretraining."

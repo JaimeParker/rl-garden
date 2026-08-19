@@ -9,6 +9,7 @@ from rl_garden.networks.actor_critic import (
     get_actor_critic_arch,
 )
 from rl_garden.networks.actor_vector_field import ActorVectorField
+from rl_garden.networks.diffusion_mlp import DiffusionMLP, build_diffusion_mlp_head
 from rl_garden.networks.flash_sac_layers import (
     EnsembleCategoricalValue,
     EnsembleFlashSACBlock,
@@ -38,6 +39,7 @@ __all__ = [
     "CriticImpl",
     "DeterministicTanhActor",
     "DiagGaussianActor",
+    "DiffusionMLP",
     "EnsembleCategoricalValue",
     "EnsembleFlashSACBlock",
     "EnsembleFlashSACEmbedder",
@@ -66,6 +68,7 @@ __all__ = [
     "UnitLinear",
     "UnitRMSNorm",
     "ValueNetwork",
+    "build_diffusion_mlp_head",
     "create_mlp",
     "get_actor_critic_arch",
 ]

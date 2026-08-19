@@ -6,6 +6,8 @@ from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.ddpg import DDPG
+from rl_garden.algorithms.diffusion_bc import DiffusionBC
+from rl_garden.algorithms.dppo import DPPO
 from rl_garden.algorithms.iql import IQL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
@@ -47,6 +49,8 @@ __all__ = [
     "FQL",
     "CQL",
     "DDPG",
+    "DiffusionBC",
+    "DPPO",
     "IQL",
     "OfflineEnvSpec",
     "OfflinePretrainResult",

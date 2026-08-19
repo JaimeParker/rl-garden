@@ -240,6 +240,67 @@ class TransformerPPOTrainingArgs(PPOTrainingArgs):
 
 
 @dataclass
+class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
+    """DPPO (Diffusion PPO) fine-tuning. Deliberately does NOT inherit
+    ``PPOTrainingArgs``: DPPO's hyperparameters (denoising-chain schedule,
+    dual actor/actor_ft learning rates, DPPO's own clip/discount schedule)
+    are a different set from standard PPO's, not a superset -- same
+    sibling-dataclass reasoning as ``RecurrentPPOTrainingArgs``/
+    ``TransformerPPOTrainingArgs``, just with no shared base beyond
+    ``EnvRunArgs``/``CheckpointArgs``. State-only (Box observations); no
+    ``VisionArgs``. ``bc_checkpoint`` (required) is the ``DiffusionBC``
+    checkpoint DPPO loads its ``actor``/``actor_ft`` weights from."""
+
+    total_timesteps: int = 3_000_000
+    bc_checkpoint: str = ""
+    num_steps: int = 50
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    horizon_steps: int = 4
+    act_steps: int = 4
+    denoising_steps: int = 20
+    ft_denoising_steps: int = 10
+    actor_activation_fn: Literal["relu", "gelu", "mish"] = "relu"
+    actor_residual_style: bool = True
+    critic_activation_fn: Literal["relu", "gelu", "mish"] = "mish"
+    critic_residual_style: bool = True
+    time_dim: int = 16
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    denoised_clip_value: Optional[float] = 1.0
+    randn_clip_value: float = 3.0
+    final_action_clip_value: Optional[float] = None
+    min_sampling_denoising_std: float = 0.1
+    min_logprob_denoising_std: float = 0.1
+    actor_lr: float = 1e-4
+    critic_lr: float = 1e-3
+    weight_decay: float = 0.0
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
+    grad_clip_norm: Optional[float] = None
+    critic_warmup_updates: int = 0
+    update_epochs: int = 5
+    update_batch_size: int = 50_000
+    norm_adv: bool = True
+    gamma_denoising: float = 0.99
+    clip_ploss_coef: float = 0.01
+    clip_ploss_coef_base: float = 0.01
+    clip_ploss_coef_rate: float = 3.0
+    clip_vloss_coef: Optional[float] = None
+    clip_advantage_lower_quantile: float = 0.0
+    clip_advantage_upper_quantile: float = 1.0
+    vf_coef: float = 0.5
+    target_kl: Optional[float] = 1.0
+    reward_horizon: Optional[int] = None
+    finite_horizon_gae: bool = False
+    eval_freq: int = 25
+    num_eval_steps: int = 50
+
+
+@dataclass
 class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, VisionArgs):
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64

@@ -87,6 +87,7 @@ def test_phase_registries_discover_expected_algorithms():
         "sac",
         "sac_flow",
         "ppo",
+        "dppo",
         "recurrent_ppo",
         "recurrent_sac",
         "transformer_ppo",
@@ -100,6 +101,7 @@ def test_phase_registries_discover_expected_algorithms():
     }
     assert set(offline.entries()) == {
         "bc",
+        "diffusion_bc",
         "fql",
         "iql",
         "cql",

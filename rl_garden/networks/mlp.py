@@ -15,11 +15,12 @@ KernelInit = Literal[
     "orthogonal_near_zero_output",
 ]
 
-Activation = Literal["relu", "gelu"]
+Activation = Literal["relu", "gelu", "mish"]
 
 _ACTIVATIONS: dict[str, type[nn.Module]] = {
     "relu": nn.ReLU,
     "gelu": nn.GELU,
+    "mish": nn.Mish,
 }
 
 
