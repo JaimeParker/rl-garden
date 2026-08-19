@@ -9,7 +9,14 @@ import torch
 import torch.nn as nn
 from gymnasium import spaces
 
-from rl_garden.networks.mlp import KernelInit, MLPResNet, create_mlp
+from rl_garden.networks.mlp import (
+    Activation,
+    KernelInit,
+    MLPResNet,
+    _apply_kernel_init,
+    create_mlp,
+    resolve_activation,
+)
 
 BackboneType = Literal["mlp", "mlp_resnet"]
 CriticImpl = Literal["vmap", "legacy"]
@@ -43,6 +50,7 @@ def _build_trunk(
     dropout_rate: Optional[float],
     kernel_init: Optional[KernelInit],
     use_pnorm: bool = False,
+    activation_fn: Optional[Activation] = None,
 ) -> tuple[nn.Module, int]:
     """Build a feature trunk and return (module, output_dim).
 
@@ -50,12 +58,15 @@ def _build_trunk(
     For ``backbone_type='mlp_resnet'``, ``hidden_dims`` must be a list of identical
     widths; ``hidden_dim`` is taken from the first entry and ``num_blocks`` from len.
     ``use_pnorm`` L2-normalizes the trunk's final hidden features (RLPD/WSRL ablation).
+    ``activation_fn`` defaults to each backbone's own pre-existing activation
+    (ReLU for ``'mlp'``, SiLU for ``'mlp_resnet'``) when unset.
     """
     if backbone_type == "mlp":
         trunk = create_mlp(
             input_dim=input_dim,
             output_dim=-1,
             net_arch=hidden_dims,
+            activation_fn=resolve_activation(activation_fn, default=nn.ReLU),
             use_layer_norm=use_layer_norm,
             use_group_norm=use_group_norm,
             num_groups=num_groups,
@@ -79,6 +90,7 @@ def _build_trunk(
             output_dim=-1,
             hidden_dim=hidden_dims[0],
             num_blocks=len(hidden_dims),
+            activation_fn=resolve_activation(activation_fn, default=nn.SiLU),
             use_layer_norm=use_layer_norm,
             use_group_norm=use_group_norm,
             num_groups=num_groups,
@@ -507,6 +519,7 @@ class _QHead(nn.Module):
         dropout_rate: Optional[float],
         kernel_init: Optional[KernelInit],
         use_pnorm: bool = False,
+        activation_fn: Optional[Activation] = None,
     ) -> None:
         super().__init__()
         self.trunk, trunk_dim = _build_trunk(
@@ -519,6 +532,7 @@ class _QHead(nn.Module):
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
             use_pnorm=use_pnorm,
+            activation_fn=activation_fn,
         )
         self.head = nn.Linear(trunk_dim, 1)
 
@@ -537,6 +551,10 @@ class _QHead(nn.Module):
             nn.init.orthogonal_(self.head.weight, gain=1e-2)
             if self.head.bias is not None:
                 nn.init.zeros_(self.head.bias)
+        elif kernel_init is not None:
+            # Same gap as above for every other kernel_init: _apply_kernel_init
+            # (called inside _build_trunk) never sees self.head.
+            _apply_kernel_init(self.head, kernel_init)
 
     def forward(self, features: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         x = torch.cat([features, actions], dim=-1)
@@ -598,6 +616,7 @@ class EnsembleQCritic(nn.Module):
         backbone_type: BackboneType = "mlp",
         use_pnorm: bool = False,
         critic_impl: CriticImpl = "vmap",
+        activation_fn: Optional[Activation] = None,
     ) -> None:
         super().__init__()
         if n_critics < 1:
@@ -621,6 +640,7 @@ class EnsembleQCritic(nn.Module):
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
             use_pnorm=use_pnorm,
+            activation_fn=activation_fn,
         )
 
         if critic_impl == "legacy":

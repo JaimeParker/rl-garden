@@ -317,3 +317,32 @@ class OfflineAWACArgs(OfflineDeterministicActorCriticArgs):
     critic_lr: float = 3e-4
     awac_lambda: float = 1.0
     exp_adv_max: float = 100.0
+
+
+@dataclass
+class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
+    """FQL hyperparameters. Defaults match FQL's ``get_config``."""
+
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    critic_use_layer_norm: bool = True
+    alpha: float = 10.0
+    flow_steps: int = 10
+    q_agg: Literal["mean", "min"] = "mean"
+    normalize_q_loss: bool = False
+    # FQL's reference applies its default_init() (Xavier-uniform, zero bias)
+    # unconditionally to every nn.Dense -- overrides
+    # OfflineDeterministicActorCriticArgs's None default (TD3-BC/AWAC's
+    # PyTorch-native references have no such fixed-init convention).
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = "xavier_uniform"
+    # FQL's reference hardcodes nn.gelu unconditionally in every MLP --
+    # overrides OfflineDeterministicActorCriticArgs's implicit ReLU default
+    # (no field there today; every other algorithm in the codebase has none).
+    activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
+    # "shared": one encoder (AGENTS.md's project convention, matches SACPolicy).
+    # "separate": three independent encoder instances, matching FQL's own
+    # JAX reference. Only meaningful for Dict (vision) observation spaces --
+    # Box observations use a parameterless FlattenExtractor either way.
+    encoder_sharing: Literal["shared", "separate"] = "shared"

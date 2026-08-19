@@ -5,7 +5,7 @@ RLinf's own default -- see
 ``RLinf/rlinf/models/embodiment/modules/flow_actor.py``), swapping
 its transformer-decoder backbone for a plain MLP vector field conditioned on
 ``(features, x_t, t)``, the same conditioning FQL's ``ActorVectorField`` uses
-(``3rd_party/fql/utils/networks.py``). Everything else -- the Euler sampling
+(``utils/networks.py``). Everything else -- the Euler sampling
 loop, the per-step Gaussian log-prob accumulation, and the tanh-Jacobian
 correction at the end -- follows RLinf's math directly.
 

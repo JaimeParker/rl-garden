@@ -100,6 +100,7 @@ def test_phase_registries_discover_expected_algorithms():
     }
     assert set(offline.entries()) == {
         "bc",
+        "fql",
         "iql",
         "cql",
         "calql",

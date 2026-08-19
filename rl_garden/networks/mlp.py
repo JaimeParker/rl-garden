@@ -15,6 +15,26 @@ KernelInit = Literal[
     "orthogonal_near_zero_output",
 ]
 
+Activation = Literal["relu", "gelu"]
+
+_ACTIVATIONS: dict[str, type[nn.Module]] = {
+    "relu": nn.ReLU,
+    "gelu": nn.GELU,
+}
+
+
+def resolve_activation(
+    activation_fn: Optional[Activation], default: type[nn.Module]
+) -> type[nn.Module]:
+    """Map an ``Activation`` literal to its ``nn.Module`` class, falling back
+    to ``default`` (each backbone's own pre-existing hardcoded choice) when
+    unset -- preserves every existing algorithm's behavior unchanged."""
+    if activation_fn is None:
+        return default
+    if activation_fn not in _ACTIVATIONS:
+        raise ValueError(f"Unknown activation_fn: {activation_fn!r}")
+    return _ACTIVATIONS[activation_fn]
+
 
 class _L2Normalize(nn.Module):
     """L2-normalize features along the last dim (RLPD/WSRL ``use_pnorm`` ablation)."""
