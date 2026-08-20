@@ -97,6 +97,7 @@ def test_phase_registries_discover_expected_algorithms():
         "td3",
         "rlpd",
         "rlpd_hybrid",
+        "acrlpd",
         "tdmpc2",
     }
     assert set(offline.entries()) == {
@@ -111,7 +112,7 @@ def test_phase_registries_discover_expected_algorithms():
         "td3_bc",
         "awac",
     }
-    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac"}
+    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql"}
 
 
 def test_logging_environment_variables_are_not_configuration(monkeypatch):

@@ -1,3 +1,5 @@
+from rl_garden.algorithms.acfql import ACFQL
+from rl_garden.algorithms.acrlpd import ACRLPD
 from rl_garden.algorithms.awac import AWAC
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.bc import BC
@@ -41,6 +43,8 @@ from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
+    "ACFQL",
+    "ACRLPD",
     "AWAC",
     "BaseAlgorithm",
     "BC",

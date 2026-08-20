@@ -325,6 +325,21 @@ class SACPolicy(BasePolicy):
         action, log_prob = self.actor.action_log_prob(actor_input)
         return action, log_prob, features
 
+    def evaluate_action_log_prob(
+        self,
+        obs: Obs,
+        actions: torch.Tensor,
+        stop_gradient: bool = False,
+    ) -> torch.Tensor:
+        """Log-probability of an externally supplied action (e.g. an offline
+        dataset action), for BC-style actor regularizers. Complements
+        ``actor_action_log_prob`` the same way
+        ``SquashedGaussianActor.evaluate_action_log_prob`` complements
+        ``action_log_prob``."""
+        features = self.extract_features(obs, stop_gradient=stop_gradient)
+        actor_input = self._transform_features_for_actor(features)
+        return self.actor.evaluate_action_log_prob(actor_input, actions)
+
     def actor_diagnostics(self, obs: Obs) -> dict[str, torch.Tensor]:
         """Diagnostic-only actor stats: entropy decomposition and saturation.
 

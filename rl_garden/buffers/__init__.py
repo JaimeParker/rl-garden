@@ -36,12 +36,14 @@ from rl_garden.buffers.transformer_replay_buffer import (
     TransformerReplayBuffer,
     TransformerReplayBufferSample,
 )
+from rl_garden.buffers.chunked_replay_buffer import ChunkedTensorReplayBuffer
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
 __all__ = [
     "BaseReplayBuffer",
+    "ChunkedTensorReplayBuffer",
     "DictArray",
     "DictRolloutBuffer",
     "DictReplayBuffer",

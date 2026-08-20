@@ -39,3 +39,21 @@ class MCReplayBufferSample(ReplayBufferSample):
     """Replay buffer sample with Monte Carlo returns for Cal-QL."""
 
     mc_returns: Optional[torch.Tensor] = None
+
+
+@dataclass
+class ChunkedReplayBufferSample(NStepReplayBufferSample):
+    """Action-chunked (Q-chunking) replay sample.
+
+    ``actions`` here is the full, uncollapsed ``(B, horizon_length,
+    action_dim)`` window (not the ``(B, action_dim)`` shape the base class
+    docstring implies) -- chunked algorithms flatten it to
+    ``(B, horizon_length * action_dim)`` at the loss call site. ``rewards``/
+    ``discounts``/``dones`` are the collapsed H-step discounted return, same
+    convention as ``NStepReplayBufferSample``. ``valid`` is a ``(B,
+    horizon_length)`` per-position mask (1 up to and including the position
+    of a true in-window terminal, 0 after) for chunked BC-style losses that
+    need per-position masking within a kept window.
+    """
+
+    valid: torch.Tensor
