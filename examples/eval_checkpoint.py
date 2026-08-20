@@ -85,6 +85,17 @@ class EvalCheckpointArgs(EnvBackendArgs):
     log_type: str = "none"
     std_log: bool = True
 
+    # QGF-only: sweep the test-time guidance weight without retraining
+    # (the paper's entire premise -- train once, sweep this at eval).
+    # None leaves whatever the checkpoint's own training run used.
+    # No-op for every other algorithm (_set_existing_attr no-ops via hasattr).
+    # TODO: EvalCheckpointArgs is accreting algorithm-specific fields like
+    # this one directly onto one flat dataclass (already true of several
+    # fields above it too). Once enough algorithms need their own eval-time
+    # knobs, split this into a shared base + per-algorithm/per-env eval
+    # extensions instead of growing this dataclass indefinitely.
+    guidance_weight: float | None = None
+
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
     minari: MinariConfig = field(default_factory=MinariConfig)
@@ -252,6 +263,8 @@ def _load_training_args(
         "save_replay_buffer": False,
         "save_final_checkpoint": False,
     }
+    if eval_args.guidance_weight is not None:
+        overrides["guidance_weight"] = eval_args.guidance_weight
     _apply_mapping_to_args(args, overrides)
     _apply_mapping_to_args(
         args,

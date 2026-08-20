@@ -111,6 +111,7 @@ def test_phase_registries_discover_expected_algorithms():
         "tdmpc2_multitask",
         "td3_bc",
         "awac",
+        "qgf",
     }
     assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql"}
 

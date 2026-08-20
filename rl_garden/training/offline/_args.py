@@ -386,3 +386,37 @@ class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
     # JAX reference. Only meaningful for Dict (vision) observation spaces --
     # Box observations use a parameterless FlattenExtractor either way.
     encoder_sharing: Literal["shared", "separate"] = "shared"
+
+
+@dataclass
+class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
+    """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
+    State-only (Box observations) -- no vision support in v1."""
+
+    horizon_length: int = 1
+    actor_lr: float = 3e-4
+    critic_value_lr: float = 3e-4
+    # QGF's reference applies use_layer_norm=1 to every network.
+    actor_use_layer_norm: bool = True
+    critic_use_layer_norm: bool = True
+    value_use_layer_norm: bool = True
+    expectile: float = 0.9
+    q_agg: Literal["mean", "min"] = "min"
+    denoise_steps: int = 10
+    # "grid" matches QGF's own policy_loss (qgf.py:69-74, discrete-grid t);
+    # "uniform" reproduces IFQL's own actor loss (ifql.py:72) instead.
+    t_sampling: Literal["grid", "uniform"] = "grid"
+    sampling_mode: Literal["guided", "grad_step", "best_of_n"] = "guided"
+    guidance_weight: float = 1.0
+    denoised_action_approx: Literal["one_euler_step_approx", "noisy"] = (
+        "one_euler_step_approx"
+    )
+    qgrad_step_size: float = 0.1
+    qgrad_steps: int = 1
+    use_sign_gradient: bool = False
+    actor_num_samples: int = 32
+    # QGF's reference applies default_init() (Xavier-uniform-like) unconditionally.
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = "xavier_uniform"
+    activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"

@@ -26,6 +26,7 @@ from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.ppo import PPO
+from rl_garden.algorithms.qgf import QGF
 from rl_garden.algorithms.recurrent_ppo import RecurrentPPO
 from rl_garden.algorithms.recurrent_sac import RecurrentSAC
 from rl_garden.algorithms.rlpd import RLPD
@@ -66,6 +67,7 @@ __all__ = [
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
     "PPO",
+    "QGF",
     "RecurrentPPO",
     "RecurrentSAC",
     "RLPD",
