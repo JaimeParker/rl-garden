@@ -350,6 +350,28 @@ class OfflineTD3BCArgs(OfflineDeterministicActorCriticArgs):
 
 
 @dataclass
+class OfflineReBRACArgs(OfflineDeterministicActorCriticArgs):
+    """ReBRAC hyperparameters. Defaults match CORL's ``rebrac.py::Config``."""
+
+    actor_lr: float = 1e-3
+    critic_lr: float = 1e-3
+    tau: float = 5e-3
+    # CORL's actor_n_hiddens/critic_n_hiddens=3 (hidden_dim=256 each) --
+    # TD3BC's own CLI args have no net_arch field at all (never wired
+    # through, letting ReBRAC.__init__'s own None -> [256,256] default
+    # apply); ReBRAC needs the 3-layer width explicitly.
+    net_arch: tuple[int, ...] = (256, 256, 256)
+    policy_noise: float = 0.2
+    noise_clip: float = 0.5
+    policy_freq: int = 2
+    actor_bc_coef: float = 1.0
+    critic_bc_coef: float = 1.0
+    normalize_q: bool = True
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = True
+
+
+@dataclass
 class OfflineAWACArgs(OfflineDeterministicActorCriticArgs):
     """AWAC hyperparameters. Defaults match CORL's ``TrainConfig``."""
 
@@ -465,3 +487,30 @@ class OfflineQAMArgs(OfflineDeterministicActorCriticArgs):
         Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
     ] = "xavier_uniform"
     activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
+
+
+@dataclass
+class OfflineEDACArgs:
+    """EDAC hyperparameters. Defaults match CORL's ``edac.py::TrainConfig``.
+    Field names follow ``OfflineSAC``'s own convention (``policy_lr``/
+    ``q_lr``/``alpha_lr``, not TD3-BC-family's ``actor_lr``/``critic_lr``),
+    since ``EDAC`` subclasses ``OfflineSAC`` directly."""
+
+    tau: float = 5e-3
+    eta: float = 1.0
+    policy_lr: float = 3e-4
+    q_lr: float = 3e-4
+    alpha_lr: Optional[float] = 3e-4
+    weight_decay: float = 0.0
+    use_adamw: bool = False
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
+    grad_clip_norm: Optional[float] = None
+    ent_coef: str = "auto"
+    target_entropy: str = "auto"
+    # CORL's Actor/VectorizedCritic both use 3 hidden layers of width 256.
+    net_arch: tuple[int, ...] = (256, 256, 256)
+    n_critics: int = 10
+    critic_subsample_size: Optional[int] = None

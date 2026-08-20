@@ -10,6 +10,7 @@ from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.ddpg import DDPG
 from rl_garden.algorithms.diffusion_bc import DiffusionBC
 from rl_garden.algorithms.dppo import DPPO
+from rl_garden.algorithms.edac import EDAC
 from rl_garden.algorithms.iql import IQL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
@@ -28,6 +29,7 @@ from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.algorithms.qam import QAM
 from rl_garden.algorithms.qgf import QGF
+from rl_garden.algorithms.rebrac import ReBRAC
 from rl_garden.algorithms.recurrent_ppo import RecurrentPPO
 from rl_garden.algorithms.recurrent_sac import RecurrentSAC
 from rl_garden.algorithms.rlpd import RLPD
@@ -57,6 +59,7 @@ __all__ = [
     "DDPG",
     "DiffusionBC",
     "DPPO",
+    "EDAC",
     "IQL",
     "OfflineEnvSpec",
     "OfflinePretrainResult",
@@ -70,6 +73,7 @@ __all__ = [
     "PPO",
     "QAM",
     "QGF",
+    "ReBRAC",
     "RecurrentPPO",
     "RecurrentSAC",
     "RLPD",

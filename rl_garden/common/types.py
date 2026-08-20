@@ -42,6 +42,22 @@ class MCReplayBufferSample(ReplayBufferSample):
 
 
 @dataclass
+class ReBRACReplayBufferSample(ReplayBufferSample):
+    """Replay buffer sample with the dataset's next-step action, for
+    ReBRAC's critic-side BC penalty (``rebrac.py:498``, ``next_actions``).
+
+    ``next_actions[i]`` is the action *actually taken* at ``next_obs[i]`` in
+    the offline trajectory, not the current sample's own ``actions[i]``.
+    Read via a plain index-shift on the underlying buffer -- can land in the
+    following episode at a true terminal, matching CORL's own reference
+    (``qlearning_dataset()``), which reads ``dataset["actions"][i+1]``
+    unconditionally with no terminal check either.
+    """
+
+    next_actions: torch.Tensor
+
+
+@dataclass
 class ChunkedReplayBufferSample(NStepReplayBufferSample):
     """Action-chunked (Q-chunking) replay sample.
 
