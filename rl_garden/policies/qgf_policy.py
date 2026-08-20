@@ -1,4 +1,4 @@
-"""QGF policy: BC flow-matching actor + IQL-style critic/value, with three
+"""QGF policy: BC flow-matching actor + IQL-style critic/value, with five
 inference-time action-selection modes (``sampling_mode``).
 
 Unlike FQL/ACFQL, QGF's actor is never trained with an RL objective -- it is
@@ -16,6 +16,15 @@ at inference time in ``predict()``:
 - ``"best_of_n"`` (IFQL baseline, ``agents/ifql.py``): draw
   ``actor_num_samples`` independent plain-BC denoising trajectories and keep
   the one with the highest critic Q -- no gradient guidance at all.
+- ``"bptt"`` (BPTT baseline, ``agents/bptt.py``, **reconstructed** -- see
+  below): at each Euler denoising step, runs the *full remaining-steps* BC
+  rollout to a clean action, then backprops the Q-gradient through that
+  *entire* rollout back to the current noisy point -- true backprop-through-
+  time, no Jacobian approximation. O(``denoise_steps``²) network calls.
+- ``"robust_q"`` (RobustQ baseline, ``agents/robust_q.py``): guidance from a
+  separate, *noise-conditioned* critic ``Q_robust(s, a_t, t)`` trained to
+  regress onto the clean target-critic Q -- evaluated directly at the noisy
+  point (no approximation needed, since it's trained to live there).
 
 ``sampling_mode``/``guidance_weight``/``denoised_action_approx``/
 ``qgrad_step_size``/``qgrad_steps``/``use_sign_gradient``/``actor_num_samples``
@@ -35,7 +44,16 @@ Q-gradient computation locally re-enables autograd via
 computed with ``torch.autograd.grad(q.sum(), a_leaf)``, never
 ``q.sum().backward()`` -- the latter would accumulate into
 ``critic.weight.grad``, silently corrupting the next training step whenever
-guided sampling runs during periodic eval inside a training run.
+guided sampling runs during periodic eval inside a training run. ``"bptt"``'s
+gradient follows the exact same rule, just with a more expensive forward
+pass (a multi-step rollout) inside the ``enable_grad()`` block.
+
+``"bptt"`` and ``"robust_q"`` are **best-effort reconstructions** of code
+broken in the upstream reference (``agents/bptt.py:48`` calls a
+``self._bc_flow_from`` that does not exist anywhere in the tree;
+``agents/robust_q.py:148`` references an undefined ``cfg``), not faithful
+ports -- see each mode's own docstring below for exactly what was
+reconstructed and why.
 """
 from __future__ import annotations
 
@@ -55,9 +73,10 @@ from rl_garden.networks import (
     KernelInit,
     ValueNetwork,
 )
+from rl_garden.networks.diffusion_mlp import _SinusoidalPosEmb
 from rl_garden.policies.base import BasePolicy
 
-SamplingMode = Literal["guided", "grad_step", "best_of_n"]
+SamplingMode = Literal["guided", "grad_step", "best_of_n", "bptt", "robust_q"]
 DenoisedActionApprox = Literal["one_euler_step_approx", "noisy"]
 
 
@@ -85,12 +104,14 @@ class QGFPolicy(BasePolicy):
         qgrad_steps: int = 1,
         use_sign_gradient: bool = False,
         actor_num_samples: int = 32,
+        robust_critic_lr: float = 3e-4,
+        robust_critic_t_emb_size: int = 16,
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "QGF requires a Box action space."
         if q_agg not in ("mean", "min"):
             raise ValueError(f"q_agg must be 'mean' or 'min', got {q_agg!r}.")
-        if sampling_mode not in ("guided", "grad_step", "best_of_n"):
+        if sampling_mode not in ("guided", "grad_step", "best_of_n", "bptt", "robust_q"):
             raise ValueError(f"Unknown sampling_mode: {sampling_mode!r}.")
         if denoised_action_approx not in ("one_euler_step_approx", "noisy"):
             raise ValueError(
@@ -146,6 +167,33 @@ class QGFPolicy(BasePolicy):
             backbone_type=backbone_type,
         )
 
+        # RobustQ mode only (reconstructed -- see _robust_q_denoise's
+        # docstring): a noise-conditioned critic Q_robust(s, a_t, t),
+        # implemented by reusing EnsembleQCritic(n_critics=1) with its
+        # "actions" argument set to concat([a_t, timestep_embedding(t)]) --
+        # the same "treat a concatenated extra input as an expanded action"
+        # trick this codebase already uses for chunked action spaces.
+        self.robust_critic: Optional[EnsembleQCritic] = None
+        self.robust_time_embed: Optional[_SinusoidalPosEmb] = None
+        if sampling_mode == "robust_q":
+            self.robust_time_embed = _SinusoidalPosEmb(robust_critic_t_emb_size)
+            robust_action_space = spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(action_dim + robust_critic_t_emb_size,),
+                dtype=np.float32,
+            )
+            self.robust_critic = EnsembleQCritic(
+                fd,
+                robust_action_space,
+                hidden_dims=net_arch,
+                n_critics=1,
+                use_layer_norm=critic_use_layer_norm,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+                activation_fn=activation_fn,
+            )
+
         high = torch.as_tensor(action_space.high, dtype=torch.float32)
         low = torch.as_tensor(action_space.low, dtype=torch.float32)
         self.register_buffer("action_low", low)
@@ -163,6 +211,7 @@ class QGFPolicy(BasePolicy):
         self.qgrad_steps = qgrad_steps
         self.use_sign_gradient = use_sign_gradient
         self.actor_num_samples = actor_num_samples
+        self.robust_critic_t_emb_size = robust_critic_t_emb_size
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
         return self._extract_features(obs, stop_gradient=stop_gradient)
@@ -186,6 +235,10 @@ class QGFPolicy(BasePolicy):
     def actor_parameters(self):
         yield from self.actor.parameters()
 
+    def robust_critic_parameters(self):
+        assert self.robust_critic is not None
+        yield from self.robust_critic.parameters()
+
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
@@ -203,6 +256,10 @@ class QGFPolicy(BasePolicy):
                 return self._guided_denoise(features, batch_size, device, dtype)
             if self.sampling_mode == "grad_step":
                 return self._grad_step_denoise(features, batch_size, device, dtype)
+            if self.sampling_mode == "bptt":
+                return self._bptt_denoise(features, batch_size, device, dtype)
+            if self.sampling_mode == "robust_q":
+                return self._robust_q_denoise(features, batch_size, device, dtype)
             return self._best_of_n_denoise(features, batch_size, device, dtype)
 
     def _bc_denoise(self, features: torch.Tensor, x_0: torch.Tensor) -> torch.Tensor:
@@ -271,5 +328,101 @@ class QGFPolicy(BasePolicy):
             else:  # "noisy"
                 a_approx = a
             qgrad = self._q_grad(features, a_approx)
+            a = a + (v_bc + self.guidance_weight * qgrad) * dt
+        return a.clamp(self.action_low, self.action_high)
+
+    # ------------------------------------------------------------------
+    # BPTT (reconstructed: agents/bptt.py:48 calls a self._bc_flow_from that
+    # does not exist anywhere in 3rd_party/qgf -- reconstructed here from
+    # the class's own docstring, "runs the full BC denoising process from
+    # a_t to get a_clean = ODE(a_t)": Euler-integrate from `start_step` to
+    # `denoise_steps` through the already-trained base flow. Structurally
+    # identical to `_bc_denoise`, just starting partway through instead of
+    # at t=0 from pure noise.)
+    # ------------------------------------------------------------------
+
+    def _bc_denoise_from(
+        self, features: torch.Tensor, a_t: torch.Tensor, start_step: int
+    ) -> torch.Tensor:
+        x = a_t
+        for step in range(start_step, self.denoise_steps):
+            t = torch.full(
+                (a_t.shape[0], 1),
+                step / self.denoise_steps,
+                device=a_t.device,
+                dtype=a_t.dtype,
+            )
+            x = x + self.actor(features, x, t) / self.denoise_steps
+        return x.clamp(self.action_low, self.action_high)
+
+    def _bptt_grad(
+        self, features: torch.Tensor, a_t: torch.Tensor, start_step: int
+    ) -> torch.Tensor:
+        """True backprop-through-time: differentiates through the *entire*
+        remaining-steps rollout (``_bc_denoise_from``), unlike ``_q_grad``'s
+        single-forward-pass gradient. Still never calls ``.backward()`` --
+        only ``torch.autograd.grad``, so nothing leaks into any network
+        parameter's ``.grad`` even though the forward pass inside
+        ``enable_grad()`` is now a multi-step rollout instead of one call."""
+        with torch.enable_grad():
+            a_leaf = a_t.detach().requires_grad_(True)
+            a_clean = self._bc_denoise_from(features, a_leaf, start_step)
+            q = self._aggregate_q(self.q_values_all(features, a_clean, target=True)).sum()
+            (grad,) = torch.autograd.grad(q, a_leaf)
+        return grad
+
+    def _bptt_denoise(
+        self, features: torch.Tensor, batch_size: int, device, dtype
+    ) -> torch.Tensor:
+        action_dim = self.actor.action_dim
+        a = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
+        dt = 1.0 / self.denoise_steps
+        for step in range(self.denoise_steps):
+            t = torch.full(
+                (batch_size, 1), step / self.denoise_steps, device=device, dtype=dtype
+            )
+            v_bc = self.actor(features, a, t)
+            qgrad = self._bptt_grad(features, a, step)
+            a = a + (v_bc + self.guidance_weight * qgrad) * dt
+        return a.clamp(self.action_low, self.action_high)
+
+    # ------------------------------------------------------------------
+    # RobustQ (agents/robust_q.py -- network construction is complete
+    # upstream; the only bug is `sample_actions`'s undefined `cfg`, which
+    # every sibling agent's `sample_actions` receives as `guidance_weight`.
+    # Reconstructed by wiring `guidance_weight` into the signature, matching
+    # every other mode in this file.)
+    # ------------------------------------------------------------------
+
+    def _robust_q_value(self, features: torch.Tensor, a_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        assert self.robust_critic is not None and self.robust_time_embed is not None
+        t_emb = self.robust_time_embed(t.squeeze(-1))
+        return self.robust_critic.forward_all(features, torch.cat([a_t, t_emb], dim=-1))
+
+    def _robust_q_grad(
+        self, features: torch.Tensor, a_t: torch.Tensor, t: torch.Tensor
+    ) -> torch.Tensor:
+        """Guidance from the noise-conditioned critic, evaluated directly at
+        the noisy point -- no Jacobian/one-euler-step-approx machinery
+        needed (unlike ``"guided"`` mode), since ``robust_critic`` is
+        trained specifically to be queried at noisy actions."""
+        with torch.enable_grad():
+            a_leaf = a_t.detach().requires_grad_(True)
+            q = self._aggregate_q(self._robust_q_value(features, a_leaf, t)).sum()
+            (grad,) = torch.autograd.grad(q, a_leaf)
+        return grad
+
+    def _robust_q_denoise(
+        self, features: torch.Tensor, batch_size: int, device, dtype
+    ) -> torch.Tensor:
+        action_dim = self.actor.action_dim
+        a = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
+        dt = 1.0 / self.denoise_steps
+        for step in range(self.denoise_steps):
+            t = torch.full(
+                (batch_size, 1), step / self.denoise_steps, device=device, dtype=dtype
+            )
+            v_bc = self.actor(features, a, t)
+            qgrad = self._robust_q_grad(features, a, t)
             a = a + (v_bc + self.guidance_weight * qgrad) * dt
         return a.clamp(self.action_low, self.action_high)

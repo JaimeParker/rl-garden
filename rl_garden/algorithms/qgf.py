@@ -6,17 +6,18 @@ is pure BC flow matching, and the critic/value are trained IQL-style
 (expectile-regression ``ValueNetwork`` bootstrap, no actor sampling needed
 for the critic's TD target) -- fully decoupled from the actor. All "policy
 improvement" happens at inference time via ``QGFPolicy``'s guided denoising
-(see that module's docstring). ``QGFPolicy.sampling_mode`` also covers two
-baselines from the same reference repo that share this exact training setup
-and only differ in ``sample_actions``: GradStep (post-hoc gradient ascent in
-clean action space) and IFQL (best-of-N rejection sampling, no gradient at
-all) -- one algorithm, one settable mode, rather than three separate
-registrations, mirroring ``ACFQLPolicy``'s existing ``best-of-n`` vs
-``distill-ddpg`` precedent. RobustQ and BPTT (the other two test-time-
-guidance baselines in ``3rd_party/qgf``) are broken in the reference itself
-(``agents/robust_q.py:148`` references an undefined ``cfg``;
-``agents/bptt.py:48`` calls a ``self._bc_flow_from`` that does not exist
-anywhere in the tree) and are out of scope here pending an upstream fix.
+(see that module's docstring). ``QGFPolicy.sampling_mode`` also covers all
+four other test-time-guidance baselines from the same reference repo: GradStep
+(post-hoc gradient ascent in clean action space), IFQL (best-of-N rejection
+sampling, no gradient at all), BPTT (full backprop through a remaining-steps
+rollout at every denoising step), and RobustQ (guidance from a separate
+noise-conditioned critic) -- one algorithm, one settable mode, rather than
+five separate registrations, mirroring ``ACFQLPolicy``'s existing
+``best-of-n`` vs ``distill-ddpg`` precedent. BPTT and RobustQ are
+**reconstructions** of code broken in the reference itself
+(``agents/bptt.py:48`` calls a ``self._bc_flow_from`` that does not exist
+anywhere in the tree; ``agents/robust_q.py:148`` references an undefined
+``cfg``) -- see ``QGFPolicy``'s docstring for exactly what was reconstructed.
 
 Built directly on ``OfflineRLAlgorithm`` (no rollout shell at all, following
 ``FQL``'s own precedent) since QGF's training never touches an env, even
@@ -129,6 +130,8 @@ class QGFCore:
         qgrad_steps: int = 1,
         use_sign_gradient: bool = False,
         actor_num_samples: int = 32,
+        robust_critic_lr: float = 3e-4,
+        robust_critic_t_emb_size: int = 16,
         net_arch: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -177,6 +180,8 @@ class QGFCore:
         self.qgrad_steps = qgrad_steps
         self.use_sign_gradient = use_sign_gradient
         self.actor_num_samples = actor_num_samples
+        self.robust_critic_lr = robust_critic_lr
+        self.robust_critic_t_emb_size = robust_critic_t_emb_size
         self.net_arch: list[int] = (
             list(net_arch) if net_arch is not None else [512, 512, 512, 512]
         )
@@ -188,7 +193,10 @@ class QGFCore:
         self.activation_fn = activation_fn
 
     def _optimizer_names(self) -> tuple[str, ...]:
-        return ("critic_value_optimizer", "actor_optimizer")
+        names = ("critic_value_optimizer", "actor_optimizer")
+        if self.sampling_mode == "robust_q":
+            names = names + ("robust_critic_optimizer",)
+        return names
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
@@ -216,6 +224,8 @@ class QGFCore:
             "qgrad_steps": self.qgrad_steps,
             "use_sign_gradient": self.use_sign_gradient,
             "actor_num_samples": self.actor_num_samples,
+            "robust_critic_lr": self.robust_critic_lr,
+            "robust_critic_t_emb_size": self.robust_critic_t_emb_size,
             "net_arch": self.net_arch,
             "activation_fn": self.activation_fn,
         }
@@ -283,6 +293,8 @@ class QGFCore:
             qgrad_steps=self.qgrad_steps,
             use_sign_gradient=self.use_sign_gradient,
             actor_num_samples=self.actor_num_samples,
+            robust_critic_lr=self.robust_critic_lr,
+            robust_critic_t_emb_size=self.robust_critic_t_emb_size,
         ).to(self.device)
 
         self.critic_value_optimizer = make_optimizer(
@@ -297,6 +309,13 @@ class QGFCore:
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
         )
+        if self.policy.robust_critic is not None:
+            self.robust_critic_optimizer = make_optimizer(
+                list(self.policy.robust_critic_parameters()),
+                lr=self.robust_critic_lr,
+                weight_decay=self.weight_decay,
+                use_adamw=self.use_adamw,
+            )
         self.replay_buffer = self._build_replay_buffer()
         self._lr_schedulers = [
             make_lr_scheduler(
@@ -380,6 +399,30 @@ class QGFCore:
         }
         return total_loss, metrics
 
+    def _robust_critic_loss(self, data) -> tuple[torch.Tensor, dict[str, float]]:
+        """RobustQ's noise-conditioned critic loss (``robust_q.py:30-62``):
+        regress ``Q_robust(s, a_t, t)`` onto the *clean* target-critic Q,
+        for ``a_t`` noised along the flow path at a **continuous-uniform**
+        ``t`` -- always continuous, independent of ``t_sampling`` (RobustQ's
+        own reference never references that knob, it's a QGF-policy-loss-
+        only setting; matches IFQL's own convention of always using
+        ``jax.random.uniform`` too)."""
+        flat_actions = data.actions.reshape(data.actions.shape[0], -1)
+        features = self.policy.extract_features(data.obs, stop_gradient=False)
+        with torch.no_grad():
+            target_qs = self.policy.q_values_all(features.detach(), flat_actions, target=True)
+            target_q = self.policy._aggregate_q(target_qs)
+
+        x0 = torch.randn_like(flat_actions)
+        t = torch.rand(flat_actions.shape[0], 1, device=flat_actions.device, dtype=flat_actions.dtype)
+        a_t = x0 * (1 - t) + flat_actions * t
+        robust_q = self.policy._robust_q_value(features.detach(), a_t, t)
+        robust_critic_loss = F.mse_loss(robust_q, target_q.unsqueeze(0).expand_as(robust_q))
+        return robust_critic_loss, {
+            "robust_critic_loss": float(robust_critic_loss.detach().item()),
+            "robust_q_mean": float(robust_q.detach().mean().item()),
+        }
+
     def _step_schedulers(self) -> None:
         for sched in self._lr_schedulers:
             if sched is not None:
@@ -414,6 +457,13 @@ class QGFCore:
             polyak_update(
                 self.policy.critic.parameters(), self.policy.critic_target.parameters(), self.tau
             )
+
+            if self.sampling_mode == "robust_q":
+                robust_loss, robust_info = self._robust_critic_loss(data)
+                self.robust_critic_optimizer.zero_grad(set_to_none=True)
+                robust_loss.backward()
+                self.robust_critic_optimizer.step()
+                metrics.update(robust_info)
 
             for key, value in metrics.items():
                 metrics_sum[key] = metrics_sum.get(key, 0.0) + value
@@ -461,6 +511,8 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         qgrad_steps: int = 1,
         use_sign_gradient: bool = False,
         actor_num_samples: int = 32,
+        robust_critic_lr: float = 3e-4,
+        robust_critic_t_emb_size: int = 16,
         net_arch: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -525,6 +577,8 @@ class QGF(QGFCore, OfflineRLAlgorithm):
             qgrad_steps=qgrad_steps,
             use_sign_gradient=use_sign_gradient,
             actor_num_samples=actor_num_samples,
+            robust_critic_lr=robust_critic_lr,
+            robust_critic_t_emb_size=robust_critic_t_emb_size,
             net_arch=net_arch,
             actor_use_layer_norm=actor_use_layer_norm,
             critic_use_layer_norm=critic_use_layer_norm,

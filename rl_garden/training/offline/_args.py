@@ -406,7 +406,7 @@ class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     # "grid" matches QGF's own policy_loss (qgf.py:69-74, discrete-grid t);
     # "uniform" reproduces IFQL's own actor loss (ifql.py:72) instead.
     t_sampling: Literal["grid", "uniform"] = "grid"
-    sampling_mode: Literal["guided", "grad_step", "best_of_n"] = "guided"
+    sampling_mode: Literal["guided", "grad_step", "best_of_n", "bptt", "robust_q"] = "guided"
     guidance_weight: float = 1.0
     denoised_action_approx: Literal["one_euler_step_approx", "noisy"] = (
         "one_euler_step_approx"
@@ -415,6 +415,10 @@ class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     qgrad_steps: int = 1
     use_sign_gradient: bool = False
     actor_num_samples: int = 32
+    # RobustQ (sampling_mode="robust_q") only -- both reconstructed from
+    # upstream-broken code, see qgf_policy.py's docstring.
+    robust_critic_lr: float = 3e-4
+    robust_critic_t_emb_size: int = 16
     # QGF's reference applies default_init() (Xavier-uniform-like) unconditionally.
     kernel_init: Optional[
         Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]

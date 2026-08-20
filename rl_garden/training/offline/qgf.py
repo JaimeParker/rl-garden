@@ -61,6 +61,8 @@ def _qgf_kwargs(
         "qgrad_steps": args.qgrad_steps,
         "use_sign_gradient": args.use_sign_gradient,
         "actor_num_samples": args.actor_num_samples,
+        "robust_critic_lr": args.robust_critic_lr,
+        "robust_critic_t_emb_size": args.robust_critic_t_emb_size,
         "actor_use_layer_norm": args.actor_use_layer_norm,
         "critic_use_layer_norm": args.critic_use_layer_norm,
         "value_use_layer_norm": args.value_use_layer_norm,
