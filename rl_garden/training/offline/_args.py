@@ -420,3 +420,44 @@ class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
         Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
     ] = "xavier_uniform"
     activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
+
+
+@dataclass
+class OfflineQAMArgs(OfflineDeterministicActorCriticArgs):
+    """QAM (Q-learning with Adjoint Matching) hyperparameters. Defaults
+    match qam's get_config(). State-only (Box observations) -- no vision
+    support in v1. `edit_scale`'s network construction is a best-effort
+    reconstruction of upstream-missing code (see rl_garden/policies/
+    qam_policy.py's docstring)."""
+
+    horizon_length: int = 1
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    grad_clip_norm: Optional[float] = 1.0
+    # QAM's reference has one value_layer_norm=True knob shared by both
+    # critic and value nets, and actor_layer_norm=False -- matches here via
+    # separate critic_use_layer_norm/value_use_layer_norm set to the same
+    # value.
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = True
+    value_use_layer_norm: bool = True
+    critic_loss_type: Literal["ddpg", "iql"] = "ddpg"
+    rho: float = 0.0
+    expectile: float = 0.9
+    flow_steps: int = 10
+    best_of_n: int = 1
+    inv_temp: float = 0.3
+    residual: bool = False
+    target_actor: bool = True
+    clip_adj: bool = True
+    use_target_grad: bool = True
+    fql_alpha: float = 0.0
+    edit_scale: float = 0.0
+    edit_target_entropy: Optional[float] = None
+    edit_target_entropy_multiplier: float = 0.5
+    edit_alpha_lr: float = 3e-4
+    # QAM's reference applies default_init() (Xavier-uniform-like) unconditionally.
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = "xavier_uniform"
+    activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"

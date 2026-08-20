@@ -112,6 +112,7 @@ def test_phase_registries_discover_expected_algorithms():
         "td3_bc",
         "awac",
         "qgf",
+        "qam",
     }
     assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql"}
 
