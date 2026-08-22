@@ -2,7 +2,7 @@
 # Selectively install one runnable JAX baseline (submodule + optional venv).
 #
 # Usage: scripts/install_baseline.sh <cal_ql|wsrl|iql_jax> [options]
-#   --source-only     Only run `git submodule update --init`; skip venv
+#   --source-only     Only materialize the submodule source; skip venv
 #                      creation entirely (for a local read-only checkout).
 #   --python PATH      Interpreter to build the venv with. Default:
 #                      `python<python_version>` from the manifest, resolved
@@ -11,6 +11,12 @@
 #   --venv-dir PATH     Full override of the venv's location. Default:
 #                      `${RL_GARDEN_BASELINE_VENV_ROOT:-$HOME/.venvs/rl-garden-baselines}/<venv_name>`.
 #   --force            Recreate the venv from scratch if it already exists.
+#   --pinned-commit SHA  Required when REPO_ROOT has no `.git` (e.g. a Mutagen
+#                      one-way-mirrored remote checkout -- `.git` is never
+#                      synced, see .agents/rules/mutagen-sync-sop.md). Falls
+#                      back to `git clone <remote_url>` + `git checkout SHA`
+#                      instead of `git submodule update --init`. Get SHA from
+#                      `git ls-tree HEAD <path>` on a real checkout.
 #
 # See .agents/runbooks/baseline-install.md and baselines/baselines.yaml.
 set -euo pipefail
@@ -19,7 +25,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 NAME="${1:-}"
 if [[ -z "${NAME}" ]]; then
-    echo "usage: scripts/install_baseline.sh <cal_ql|wsrl|iql_jax> [--source-only] [--python PATH] [--venv-dir PATH] [--force]" >&2
+    echo "usage: scripts/install_baseline.sh <cal_ql|wsrl|iql_jax> [--source-only] [--python PATH] [--venv-dir PATH] [--force] [--pinned-commit SHA]" >&2
     exit 1
 fi
 shift
@@ -28,12 +34,14 @@ SOURCE_ONLY=0
 PYTHON_OVERRIDE=""
 VENV_DIR_OVERRIDE=""
 FORCE=0
+PINNED_COMMIT_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --source-only) SOURCE_ONLY=1; shift ;;
         --python) PYTHON_OVERRIDE="$2"; shift 2 ;;
         --venv-dir) VENV_DIR_OVERRIDE="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
+        --pinned-commit) PINNED_COMMIT_OVERRIDE="$2"; shift 2 ;;
         *) echo "[install-baseline] unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -50,14 +58,39 @@ field() {
 }
 
 REL_PATH="$(field path)"
+REMOTE_URL="$(field remote_url)"
 PYTHON_VERSION="$(field python_version)"
 VENV_NAME="$(field venv_name)"
 D4RL_FORK="$(field d4rl_fork)"
 
-echo "[install-baseline] submodule: ${REL_PATH}"
-git -C "${REPO_ROOT}" submodule update --init "${REL_PATH}"
+SUBMODULE_DIR="${REPO_ROOT}/${REL_PATH}"
 
-PINNED_COMMIT="$(git -C "${REPO_ROOT}/${REL_PATH}" rev-parse HEAD)"
+if git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "[install-baseline] submodule: ${REL_PATH}"
+    git -C "${REPO_ROOT}" submodule update --init "${REL_PATH}"
+else
+    # No parent .git -- e.g. a Mutagen one-way-mirrored remote checkout, which
+    # never syncs .git (see .agents/rules/mutagen-sync-sop.md). git-submodule
+    # tooling cannot run here, so clone the submodule directly instead.
+    echo "[install-baseline] ${REPO_ROOT} has no .git -- git-submodule tooling unavailable, falling back to direct clone"
+    if [[ -z "${PINNED_COMMIT_OVERRIDE}" ]]; then
+        echo "[install-baseline] pass --pinned-commit SHA (from 'git ls-tree HEAD ${REL_PATH}' on a real checkout)" >&2
+        exit 1
+    fi
+    if [[ -e "${SUBMODULE_DIR}" && ! -d "${SUBMODULE_DIR}/.git" ]]; then
+        echo "[install-baseline] ${SUBMODULE_DIR} already exists and is not a git checkout -- refusing to overwrite." >&2
+        echo "[install-baseline] move it aside first; it may be pre-existing reference content." >&2
+        exit 1
+    fi
+    if [[ ! -d "${SUBMODULE_DIR}" ]]; then
+        echo "[install-baseline] cloning ${REMOTE_URL} into ${REL_PATH}"
+        git clone --quiet "${REMOTE_URL}" "${SUBMODULE_DIR}"
+    fi
+    echo "[install-baseline] checking out ${PINNED_COMMIT_OVERRIDE}"
+    git -C "${SUBMODULE_DIR}" checkout --quiet "${PINNED_COMMIT_OVERRIDE}"
+fi
+
+PINNED_COMMIT="$(git -C "${SUBMODULE_DIR}" rev-parse HEAD)"
 echo "[install-baseline] pinned commit: ${PINNED_COMMIT}"
 
 if [[ "${SOURCE_ONLY}" -eq 1 ]]; then

@@ -42,6 +42,26 @@ MuJoCo 2.1 must already be installed (`$HOME/.mujoco/mujoco210` or
 `MUJOCO_PY_MUJOCO_PATH`) before a full install — the script checks and exits
 with a pointer to setup steps rather than auto-downloading binaries.
 
+### On a Mutagen-mirrored remote host (no `.git`)
+
+`git submodule update --init` requires a parent `.git`, but a Mutagen
+one-way-mirrored checkout never has one (`.git` is a required sync ignore —
+see [`mutagen-sync-sop.md`](../rules/mutagen-sync-sop.md)). On such a host the
+script detects the missing `.git` and falls back to `git clone <remote_url>`
++ `git checkout`, which needs the pinned commit passed explicitly:
+
+```bash
+# Get the pinned commit from a real (git) checkout first:
+git ls-tree HEAD 3rd_party/cal_ql   # -> 160000 commit <sha> 3rd_party/Cal-QL
+
+scripts/install_baseline.sh cal_ql --source-only --pinned-commit <sha>
+```
+
+If the target directory already has non-git content there (e.g. an old ad
+hoc reference copy), the script refuses to overwrite it — move it aside
+first. This fallback only materializes the submodule *source*; it does not
+change how the venv step works.
+
 ## Running an orchestrator
 
 Orchestrators are always invoked as modules, from the repo root, with the
