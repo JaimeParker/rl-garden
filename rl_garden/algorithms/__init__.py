@@ -23,6 +23,7 @@ from rl_garden.algorithms.offline import (
 from rl_garden.algorithms.off2on_awac import Off2OnAWAC
 from rl_garden.algorithms.off2on_calql import Off2OnCalQL
 from rl_garden.algorithms.off2on_iql import Off2OnIQL
+from rl_garden.algorithms.off2on_spot import Off2OnSPOT
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
@@ -38,6 +39,7 @@ from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sac_flow import SACFlow
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
+from rl_garden.algorithms.spot import SPOT
 from rl_garden.algorithms.td3 import TD3
 from rl_garden.algorithms.td3_bc import TD3BC
 from rl_garden.algorithms.tdmpc2 import TDMPC2
@@ -68,6 +70,7 @@ __all__ = [
     "Off2OnAWAC",
     "Off2OnCalQL",
     "Off2OnIQL",
+    "Off2OnSPOT",
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
     "PPO",
@@ -82,6 +85,7 @@ __all__ = [
     "SACFlow",
     "SequencePPO",
     "SequenceSAC",
+    "SPOT",
     "TD3",
     "TD3BC",
     "TDMPC2",

@@ -115,8 +115,9 @@ def test_phase_registries_discover_expected_algorithms():
         "qam",
         "rebrac",
         "edac",
+        "spot",
     }
-    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql"}
+    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot"}
 
 
 def test_logging_environment_variables_are_not_configuration(monkeypatch):

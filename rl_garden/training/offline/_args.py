@@ -514,3 +514,24 @@ class OfflineEDACArgs:
     net_arch: tuple[int, ...] = (256, 256, 256)
     n_critics: int = 10
     critic_subsample_size: Optional[int] = None
+
+
+@dataclass
+class OfflineSPOTArgs(OfflineDeterministicActorCriticArgs):
+    """SPOT hyperparameters. Defaults match CORL's ``spot.py::TrainConfig``."""
+
+    actor_lr: float = 1e-4
+    critic_lr: float = 3e-4
+    policy_noise: float = 0.2
+    noise_clip: float = 0.5
+    policy_freq: int = 2
+    vae_lr: float = 1e-3
+    vae_hidden_dim: int = 750
+    vae_latent_dim: Optional[int] = None
+    vae_iterations: int = 100_000
+    beta: float = 0.5
+    lambd: float = 1.0
+    num_samples: int = 1
+    iwae: bool = False
+    lambd_cool: bool = False
+    lambd_end: float = 0.2

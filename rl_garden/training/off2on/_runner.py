@@ -214,6 +214,8 @@ def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -
             logger.add_summary("off2on/offline_loaded_transitions", loaded)
             if hasattr(agent, "fit_obs_normalizer"):
                 agent.fit_obs_normalizer()
+            if hasattr(agent, "pretrain_vae"):
+                agent.pretrain_vae()
             _set_offline_probe(agent, logger, args.std_log)
     agent.switch_to_online_mode(
         online_replay_mode=args.online_replay_mode,
@@ -400,6 +402,8 @@ def _run_off2on(
         logger.add_summary("off2on/offline_start_step", offline_start_step)
         if hasattr(agent, "fit_obs_normalizer"):
             agent.fit_obs_normalizer()
+        if hasattr(agent, "pretrain_vae"):
+            agent.pretrain_vae()
         _offline_update_loop(
             agent,
             args.num_offline_steps,

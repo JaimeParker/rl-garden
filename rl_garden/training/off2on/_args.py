@@ -171,6 +171,38 @@ class AWACOff2OnTrainingArgs(Off2OnCommonArgs, AWACOff2OnHyperparamArgs):
     """
 
 
+@dataclass
+class SPOTOff2OnHyperparamArgs:
+    """SPOT-only off2on hyperparameters (not shared with IQL/CQL/AWAC off2on)."""
+
+    actor_lr: float = 1e-4
+    critic_lr: float = 3e-4
+    policy_noise: float = 0.2
+    noise_clip: float = 0.5
+    policy_freq: int = 2
+    vae_lr: float = 1e-3
+    vae_hidden_dim: int = 750
+    vae_latent_dim: Optional[int] = None
+    vae_iterations: int = 100_000
+    beta: float = 0.5
+    lambd: float = 1.0
+    num_samples: int = 1
+    iwae: bool = False
+    lambd_cool: bool = False
+    lambd_end: float = 0.2
+    expl_noise: float = 0.1
+    online_discount: float = 0.995
+
+
+@dataclass
+class SPOTOff2OnTrainingArgs(Off2OnCommonArgs, SPOTOff2OnHyperparamArgs):
+    """SPOT off2on args: ``Off2OnCommonArgs`` + SPOT-specific hyperparameters.
+
+    SPOT is Box-observation only (no vision variant); pass ``--obs_mode state``
+    (the ``EnvRunArgs`` default is ``rgb``).
+    """
+
+
 def initial_training_phase_from_args(
     args: Off2OnCommonArgs,
 ) -> Optional[InitialTrainingPhase]:

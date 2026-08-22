@@ -205,6 +205,8 @@ def _run_offline(
         print(f"[pretrain] loaded_transitions={loaded}", flush=True)
     if hasattr(agent, "fit_obs_normalizer"):
         agent.fit_obs_normalizer()
+    if hasattr(agent, "pretrain_vae"):
+        agent.pretrain_vae()
     if args.load_checkpoint is not None:
         # Loaded last so a resumed checkpoint's buffer/normalizer state is
         # authoritative over the freshly re-populated offline dataset above.

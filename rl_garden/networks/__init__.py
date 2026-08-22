@@ -9,6 +9,8 @@ from rl_garden.networks.actor_critic import (
     get_actor_critic_arch,
 )
 from rl_garden.networks.actor_vector_field import ActorVectorField
+from rl_garden.networks.behavior_vae import BehaviorVAE
+from rl_garden.networks.conditional_vae import ConditionalVAE
 from rl_garden.networks.diffusion_mlp import DiffusionMLP, build_diffusion_mlp_head
 from rl_garden.networks.flash_sac_layers import (
     EnsembleCategoricalValue,
@@ -36,6 +38,8 @@ __all__ = [
     "ActorVectorField",
     "Activation",
     "BackboneType",
+    "BehaviorVAE",
+    "ConditionalVAE",
     "CriticImpl",
     "DeterministicTanhActor",
     "DiagGaussianActor",
