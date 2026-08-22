@@ -1,0 +1,87 @@
+schema_version: 1
+
+# Runnable official-JAX baselines, registered as git submodules under
+# 3rd_party/ and installable via scripts/install_baseline.sh <name>.
+# See .agents/runbooks/baseline-install.md for the full workflow.
+runnable:
+  cal_ql:
+    path: 3rd_party/Cal-QL
+    remote_url: https://github.com/nakamotoo/Cal-QL.git
+    python_version: "3.8"
+    venv_name: baseline-calql
+    requirements_files: [requirements.txt]
+    extra_pip: []
+    d4rl_fork: "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f"
+    integration_module: baselines.cal_ql.run_offline
+    invocation:
+      cwd: null
+      sys_path_insert: true
+    notes: >
+      JaxCQL/ is imported via sys.path insertion (see
+      baselines/cal_ql/run_offline.py), never pip-installed. Shares
+      rl-garden's own pyproject.toml [d4rl-legacy] extra's exact D4RL
+      fork/commit.
+
+  wsrl:
+    path: 3rd_party/wsrl
+    remote_url: https://github.com/zhouzypaul/wsrl.git
+    python_version: "3.10"
+    venv_name: baseline-wsrl
+    requirements_files: [requirements.txt]
+    extra_pip: ["jax[cuda11_pip]==0.4.20"]
+    d4rl_fork: "d4rl @ git+https://github.com/zhouzypaul/D4RL.git"
+    integration_module: baselines.wsrl.run_offline_to_online
+    invocation:
+      cwd: 3rd_party/wsrl
+      sys_path_insert: false
+    notes: >
+      finetune.py imports wsrl.* relative to its own directory; run with
+      cwd=3rd_party/wsrl, never pip install -e (keeps the submodule gitlink
+      clean). Uses its own D4RL fork (zhouzypaul/D4RL), DIFFERENT from
+      cal_ql's/rl-garden's nakamotoo fork -- each baseline's venv is fully
+      isolated so this is not a conflict. Online phase steps rl-garden's
+      canonical env via the bridge on every training step, not just eval --
+      expect IPC overhead; orchestrator not yet implemented (stub package).
+
+  iql_jax:
+    path: 3rd_party/implicit_q_learning
+    remote_url: https://github.com/ikostrikov/implicit_q_learning.git
+    python_version: "3.10"
+    venv_name: baseline-iql-jax
+    requirements_files: [requirements.txt]
+    extra_pip: []
+    d4rl_fork: null  # requirements.txt points at rail-berkeley/d4rl@master
+                      # (unpinned); pinning this is follow-up work.
+    integration_module: baselines.iql_jax.run_offline
+    invocation:
+      cwd: 3rd_party/implicit_q_learning
+      sys_path_insert: false
+    notes: >
+      train_offline.py imports "wrappers"/"dataset_utils" relative to its
+      own directory; run with cwd=3rd_party/implicit_q_learning. Env is only
+      exercised for periodic evaluate() (offline training samples only from
+      the in-memory D4RLDataset), same low-frequency cadence as cal_ql's
+      eval, not wsrl's every-step online cadence. Orchestrator not yet
+      implemented (stub package).
+
+# Read-only reference clones under 3rd_party/ -- not part of the runnable
+# baseline system, no install tooling. Do not edit unless explicitly asked.
+reference:
+  - path: 3rd_party/CORL
+    reason: >
+      Read-for-porting reference library (mostly PyTorch, one JAX
+      algorithm); never run standalone for numeric comparison.
+  - path: 3rd_party/qgf
+    reason: >
+      Uses OGBench, not D4RL, and pins CUDA12 jax==0.4.30 -- incompatible
+      with wsrl's CUDA11 jax==0.4.20 in any shared dependency graph.
+      Explicitly excluded from the runnable-baseline system for now.
+  - path: 3rd_party/NexRL
+  - path: 3rd_party/RL-100
+  - path: 3rd_party/RLinf
+  - path: 3rd_party/dppo
+  - path: 3rd_party/fql
+  - path: 3rd_party/hil-serl
+  - path: 3rd_party/qam
+  - path: 3rd_party/qc
+  - path: 3rd_party/stable-baselines3

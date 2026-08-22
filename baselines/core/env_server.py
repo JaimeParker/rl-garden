@@ -9,36 +9,23 @@ import traceback
 
 import numpy as np
 
-try:
-    from .calql_minari_protocol import (
-        HANDSHAKE,
-        MAGIC,
-        OP_CLOSE,
-        OP_RESET,
-        OP_STEP,
-        RESET_REQUEST,
-        STATUS,
-        STATUS_OK,
-        STEP_REQUEST,
-        STEP_RESULT,
-        read_exact,
-        write_error,
-    )
-except ImportError:  # Direct script execution.
-    from calql_minari_protocol import (
-        HANDSHAKE,
-        MAGIC,
-        OP_CLOSE,
-        OP_RESET,
-        OP_STEP,
-        RESET_REQUEST,
-        STATUS,
-        STATUS_OK,
-        STEP_REQUEST,
-        STEP_RESULT,
-        read_exact,
-        write_error,
-    )
+# Invoked as `python -m baselines.core.env_server` with the repo root on
+# PYTHONPATH (see GymnasiumEnvBridge and .agents/runbooks/baseline-install.md)
+# -- always a real package import, no bare-script fallback needed.
+from baselines.core.wire_protocol import (
+    HANDSHAKE,
+    MAGIC,
+    OP_CLOSE,
+    OP_RESET,
+    OP_STEP,
+    RESET_REQUEST,
+    STATUS,
+    STATUS_OK,
+    STEP_REQUEST,
+    STEP_RESULT,
+    read_exact,
+    write_error,
+)
 
 
 def flatten_observation(observation, keys):

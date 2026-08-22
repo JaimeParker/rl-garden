@@ -4,3 +4,12 @@
 [submodule "robot_infra"]
 	path = robot_infra
 	url = https://github.com/JaimeParker/rlgarden-robot-infra.git
+[submodule "3rd_party/Cal-QL"]
+	path = 3rd_party/Cal-QL
+	url = https://github.com/nakamotoo/Cal-QL.git
+[submodule "3rd_party/wsrl"]
+	path = 3rd_party/wsrl
+	url = https://github.com/zhouzypaul/wsrl.git
+[submodule "3rd_party/implicit_q_learning"]
+	path = 3rd_party/implicit_q_learning
+	url = https://github.com/ikostrikov/implicit_q_learning.git

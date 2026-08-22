@@ -12,13 +12,14 @@ from tools.conversion.export_calql_minari_dataset import (
     array_sha256,
     flatten_buffer_observations,
 )
-from tools.diagnostics.calql_minari_protocol import read_status, write_error
-from tools.diagnostics.minari_env_server import flatten_observation
-from tools.diagnostics.run_calql_jax_minari import (
+from baselines.core.wire_protocol import read_status, write_error
+from baselines.core.env_server import flatten_observation
+from baselines.core.dataset import load_npz_dataset
+from baselines.core.evaluation import summarize_episodes
+from baselines.cal_ql.run_offline import (
     DATASET_KEYS,
     _load_dataset,
     flatten_legacy_observation,
-    summarize_episodes,
 )
 
 
@@ -130,3 +131,36 @@ def test_jax_loader_rejects_array_that_does_not_match_manifest(tmp_path):
 
     with pytest.raises(ValueError, match="hash mismatch for actions"):
         _load_dataset(path)
+
+
+def test_load_npz_dataset_skips_optional_validation_when_unset(tmp_path):
+    """Regression guard for the generalization out of Cal-QL's _load_dataset:
+    a baseline that doesn't share Cal-QL's AntMaze observation-key order or
+    sparse {-5, 5} reward assumption can omit those checks entirely."""
+    arrays = {
+        "observations": np.zeros((2, 4), dtype=np.float32),
+        "actions": np.zeros((2, 2), dtype=np.float32),
+        "next_observations": np.zeros((2, 4), dtype=np.float32),
+        "rewards": np.array([0.1, 0.2], dtype=np.float32),
+        "dones": np.array([0.0, 1.0], dtype=np.float32),
+        "mc_returns": np.array([0.1, 0.2], dtype=np.float32),
+    }
+    path = tmp_path / "dataset.npz"
+    np.savez(path, **arrays)
+    manifest = {
+        "observation_keys": ["some", "other", "order"],
+        "arrays": {
+            key: {
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+                "sha256": array_sha256(value),
+            }
+            for key, value in arrays.items()
+        },
+    }
+    path.with_suffix(".manifest.json").write_text(json.dumps(manifest))
+
+    dataset, loaded_manifest = load_npz_dataset(path, keys=DATASET_KEYS)
+
+    np.testing.assert_array_equal(dataset["rewards"], arrays["rewards"])
+    assert loaded_manifest["observation_keys"] == ["some", "other", "order"]

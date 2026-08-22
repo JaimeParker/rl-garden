@@ -40,6 +40,15 @@ Keep these categories out of Mutagen sync:
 
 Only copy selected artifacts back manually when needed.
 
+The three git-submodule baselines under `3rd_party/` (`Cal-QL`, `wsrl`,
+`implicit_q_learning`, see `baselines/baselines.yaml`) are also covered by
+the plain `3rd_party/` ignore pattern above — their content should be
+materialized per host via `scripts/install_baseline.sh`, not synced. After
+registering a new submodule there, verify with
+`ssh <ssh-alias> "ls <remote-project-path>/3rd_party"` that it stays
+absent/empty on a remote host until that host runs the install script
+itself (see [the baseline runbook](../runbooks/baseline-install.md)).
+
 ## Start And Verify
 
 Start or repair the configured project sync:

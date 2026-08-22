@@ -20,3 +20,9 @@ Use these local bindings with those SOPs:
 - Python environment bin path: `<python-env-bin-path>`
 - Container RoboTwin root path: `<container-robotwin-root-path>`
 - Mutagen session name: `<mutagen-session-name>`
+- Baseline venv root: `<baseline-venv-root>` (e.g. `/opt/venv` on remote hosts,
+  `$HOME/.venvs/rl-garden-baselines` locally) — used by
+  `scripts/install_baseline.sh` via `RL_GARDEN_BASELINE_VENV_ROOT`.
+- Cal-QL baseline venv: `<baseline-venv-root>/baseline-calql`
+- wsrl baseline venv: `<baseline-venv-root>/baseline-wsrl`
+- IQL-jax baseline venv: `<baseline-venv-root>/baseline-iql-jax`

@@ -22,6 +22,9 @@ for user-facing installation, features, and quick-start documentation.
   [`.agents/rules/mutagen-sync-sop.md`](.agents/rules/mutagen-sync-sop.md).
 - Before navigating an unfamiliar area of the codebase, read
   [`.agents/rules/repository-map.md`](.agents/rules/repository-map.md).
+- Before installing or running an official JAX baseline (Cal-QL, wsrl,
+  IQL-jax) for numeric comparison against rl-garden, read
+  [`.agents/runbooks/baseline-install.md`](.agents/runbooks/baseline-install.md).
 
 Machine-specific server, Docker, path, Python environment, and Mutagen bindings
 belong in ignored `.agents/local/personal_config.md`. Before any remote command,
@@ -48,7 +51,11 @@ entrypoints to a specific simulator.
   registry discovery, and configuration inspection work without every backend
   installed.
 - `3rd_party/` holds reference submodules and external clones; do not edit unless
-  the user explicitly requests it.
+  the user explicitly requests it. Three entries (`Cal-QL`, `wsrl`,
+  `implicit_q_learning`) are registered as real git submodules with install
+  tooling (`scripts/install_baseline.sh`, `baselines/baselines.yaml`) --
+  see [`.agents/runbooks/baseline-install.md`](.agents/runbooks/baseline-install.md).
+  The rest remain untracked read-only reference clones.
 
 ## Development Rules
 

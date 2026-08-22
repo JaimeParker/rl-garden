@@ -28,7 +28,16 @@ agent rules; this file is a plain orientation reference, not a rules doc.
 - `scripts/` — shell launchers with experiment defaults.
 - `tools/` — standalone utilities: `conversion/` (checkpoint/dataset format
   conversion), `diagnostics/` (Q-value and parity probes), `reproductions/`
-  (third-party baseline reproduction runners).
+  (third-party baseline reproduction runners that *patch* a specific idea into
+  a copied source tree, e.g. `run_iql_fixed_mixing.py` — different purpose
+  from `baselines/`, see below).
+- `baselines/` — top-level package for running *unmodified* official JAX
+  baseline repos (Cal-QL, wsrl, IQL-jax) against rl-garden's canonical
+  environments, for pure numeric comparison. See
+  [`.agents/runbooks/baseline-install.md`](.agents/runbooks/baseline-install.md).
+  Not to be confused with `rl_garden/integrations/rlinf/`, which is the
+  opposite direction — rl-garden's own algorithms running as workers under
+  RLinf.
 - `pretrained/` — externally pretrained weights (ResNet, ACT), outside the
   importable package tree.
 - `tests/` — unit tests and accelerator/backend integration smoke tests.
@@ -36,4 +45,6 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
   notes).
 - `3rd_party/` — vendored reference submodules and external clones; read-only,
-  do not edit unless explicitly requested.
+  do not edit unless explicitly requested. `Cal-QL`, `wsrl`, and
+  `implicit_q_learning` are registered as real git submodules (see
+  `baselines/baselines.yaml`); the rest are untracked reference clones.

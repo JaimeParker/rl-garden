@@ -1,4 +1,7 @@
-"""Binary protocol shared by the Cal-QL JAX client and Minari env server."""
+"""Binary protocol shared by a baseline orchestrator's JAX client process and
+the ``baselines.core.env_server`` subprocess that steps rl-garden's
+canonical Minari-derived envs on its behalf.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,7 @@ import struct
 from typing import BinaryIO
 
 
-MAGIC = b"CQM1"
+MAGIC = b"RLGB"  # rl-garden bridge; must stay 4 bytes (HANDSHAKE packs it as "4s")
 OP_RESET = 1
 OP_STEP = 2
 OP_CLOSE = 3
