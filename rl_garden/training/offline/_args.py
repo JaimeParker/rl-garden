@@ -517,6 +517,66 @@ class OfflineEDACArgs:
 
 
 @dataclass
+class OfflineBCQArgs:
+    """BCQ hyperparameters. Defaults match ``sfujim/BCQ``'s official reference
+    (``continuous_BCQ/BCQ.py``/``main.py``). No ``n_critics`` field: BCQ's
+    soft double-Q target formula is defined for exactly 2 critics, hardcoded
+    in ``BCQPolicy`` rather than exposed as a config knob."""
+
+    actor_lr: float = 1e-3
+    critic_lr: float = 1e-3
+    vae_lr: float = 1e-3
+    net_arch: tuple[int, ...] = (400, 300)
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = False
+    actor_use_group_norm: bool = False
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    critic_dropout_rate: Optional[float] = None
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
+    phi: float = 0.05
+    vae_hidden_dim: int = 750
+    vae_latent_dim: Optional[int] = None
+    beta: float = 0.5
+    soft_q_lambda: float = 0.75
+
+
+@dataclass
+class OfflinePLASArgs:
+    """PLAS hyperparameters. Defaults match ``Wenxuan-Zhou/PLAS``'s official
+    reference (``algos.py``/``main.py``). No ``n_critics`` field, same
+    reasoning as ``OfflineBCQArgs``."""
+
+    actor_lr: float = 1e-4
+    critic_lr: float = 1e-3
+    net_arch: tuple[int, ...] = (400, 300)
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = False
+    actor_use_group_norm: bool = False
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    critic_dropout_rate: Optional[float] = None
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
+    max_latent_action: float = 2.0
+    use_perturbation: bool = False
+    phi: float = 0.05
+    vae_lr: float = 1e-4
+    vae_hidden_dim: int = 750
+    vae_latent_dim: Optional[int] = None
+    vae_iterations: int = 500_000
+    beta: float = 0.5
+    soft_q_lambda: float = 0.75
+
+
+@dataclass
 class OfflineSPOTArgs(OfflineDeterministicActorCriticArgs):
     """SPOT hyperparameters. Defaults match CORL's ``spot.py::TrainConfig``."""
 

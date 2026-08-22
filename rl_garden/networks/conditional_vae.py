@@ -1,7 +1,7 @@
 """State-conditioned action VAE: the shared network shape behind BCQ/PLAS/SPOT.
 
-Cross-checked directly against the two original-author reference implementations
-(not just CORL's port):
+Verified against full clones of the two original-author reference
+implementations (not just CORL's port, and not just fetched raw files):
 
 - `sfujim/BCQ <https://github.com/sfujim/BCQ/blob/master/continuous_BCQ/BCQ.py>`_
   (Fujimoto's official BCQ) -- ``VAE`` class.
@@ -15,8 +15,9 @@ CORL's SPOT port): a 750-hidden 2-layer encoder producing ``mean``/``log_std``
 (clamped ``[-4, 15]``) heads, a 2-layer decoder ending in a squashed,
 action-bound-rescaled output, and the same pretraining objective
 (``recon_loss + beta * KL_loss``). This class hosts exactly that shared
-"vanilla VAE" surface so BCQ/PLAS (not yet implemented) and SPOT's
-``BehaviorVAE`` can both subclass it instead of duplicating the network.
+"vanilla VAE" surface so ``rl_garden.algorithms.bcq``/``rl_garden.algorithms.plas``
+and SPOT's ``BehaviorVAE`` can all subclass it instead of duplicating the
+network.
 
 One capability that BCQ/PLAS need but SPOT never calls: ``decode(z=None)``,
 sampling a candidate action from the latent prior. Both BCQ's actor

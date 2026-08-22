@@ -116,6 +116,8 @@ def test_phase_registries_discover_expected_algorithms():
         "rebrac",
         "edac",
         "spot",
+        "bcq",
+        "plas",
     }
     assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot"}
 

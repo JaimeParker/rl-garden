@@ -28,7 +28,9 @@ from rl_garden.networks.flash_sac_layers import (
 )
 from rl_garden.networks.flow_actor import FlowMatchingActor
 from rl_garden.networks.gtrxl import GTrXLLatentEncoder, GTrXLState
+from rl_garden.networks.latent_actor import LatentActor
 from rl_garden.networks.mlp import Activation, KernelInit, MLPResNet, create_mlp
+from rl_garden.networks.perturbation_actor import PerturbationActor
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder, SequenceState
 from rl_garden.networks.spatial_critic import SpatialEmbQEnsemble, SpatialEmbQHead
@@ -57,8 +59,10 @@ __all__ = [
     "GTrXLLatentEncoder",
     "GTrXLState",
     "KernelInit",
+    "LatentActor",
     "MLPResNet",
     "NormalTanhPolicy",
+    "PerturbationActor",
     "RecurrentLatentEncoder",
     "RecurrentState",
     "RNNType",

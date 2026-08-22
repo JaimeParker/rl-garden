@@ -3,6 +3,7 @@ from rl_garden.algorithms.acrlpd import ACRLPD
 from rl_garden.algorithms.awac import AWAC
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.bc import BC
+from rl_garden.algorithms.bcq import BCQ
 from rl_garden.algorithms.flash_sac import FlashSAC
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
@@ -27,6 +28,7 @@ from rl_garden.algorithms.off2on_spot import Off2OnSPOT
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
+from rl_garden.algorithms.plas import PLAS
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.algorithms.qam import QAM
 from rl_garden.algorithms.qgf import QGF
@@ -54,6 +56,7 @@ __all__ = [
     "AWAC",
     "BaseAlgorithm",
     "BC",
+    "BCQ",
     "CalQL",
     "FlashSAC",
     "FQL",
@@ -73,6 +76,7 @@ __all__ = [
     "Off2OnSPOT",
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
+    "PLAS",
     "PPO",
     "QAM",
     "QGF",
