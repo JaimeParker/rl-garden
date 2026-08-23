@@ -35,6 +35,14 @@ class NStepReplayBufferSample(ReplayBufferSample):
 
 
 @dataclass
+class GraspPenaltyReplayBufferSample(ReplayBufferSample):
+    """Replay buffer sample with a per-transition gripper-flip penalty
+    (HIL-SERL's ``grasp_penalty``), for RLPDHybrid's discrete critic target."""
+
+    grasp_penalty: torch.Tensor
+
+
+@dataclass
 class MCReplayBufferSample(ReplayBufferSample):
     """Replay buffer sample with Monte Carlo returns for Cal-QL."""
 

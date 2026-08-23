@@ -310,6 +310,10 @@ class OfflineIQLArgs:
 @dataclass
 class OfflineBCArgs:
     actor_lr: float = 3e-4
+    # Off (unsquashed Gaussian actor) sidesteps a tanh-Jacobian numerical
+    # blowup when expert actions sit at exactly the action bounds --
+    # relevant for near-binary action dims (e.g. a real-robot gripper).
+    tanh_squash: bool = True
 
 
 @dataclass

@@ -21,7 +21,11 @@ from rl_garden.buffers.mmap_storage import (
     MmapTensorStore,
     space_metadata,
 )
-from rl_garden.common.types import ReplayBufferSample, TensorDict
+from rl_garden.common.types import (
+    GraspPenaltyReplayBufferSample,
+    ReplayBufferSample,
+    TensorDict,
+)
 
 
 def _resolve_dtype(np_dtype) -> torch.dtype:
@@ -161,6 +165,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         sample_device: torch.device | str = "cuda",
         mmap_dir: Optional[str | Path] = None,
         mmap_mode: MmapMode = "create",
+        store_grasp_penalty: bool = False,
     ) -> None:
         assert isinstance(observation_space, spaces.Dict), (
             "DictReplayBuffer requires a Dict observation space."
@@ -168,6 +173,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         self.num_envs = num_envs
         self.buffer_size = buffer_size
         self.per_env_buffer_size = buffer_size // num_envs
+        self.store_grasp_penalty = store_grasp_penalty
         self.storage_device = torch.device(storage_device)
         self.sample_device = torch.device(sample_device)
         if mmap_dir is not None and self.storage_device.type != "cpu":
@@ -227,6 +233,8 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
             )
             self.rewards = torch.zeros(shape, device=self.storage_device)
             self.dones = torch.zeros(shape, device=self.storage_device)
+            if self.store_grasp_penalty:
+                self.grasp_penalty = torch.zeros(shape, device=self.storage_device)
         else:
             self.actions = self._mmap_store.tensor(
                 ("actions",),
@@ -239,6 +247,10 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
             self.dones = self._mmap_store.tensor(
                 ("dones",), shape=shape, dtype=torch.float32
             )
+            if self.store_grasp_penalty:
+                self.grasp_penalty = self._mmap_store.tensor(
+                    ("grasp_penalty",), shape=shape, dtype=torch.float32
+                )
 
         if self.pos < 0 or self.pos >= self.per_env_buffer_size:
             raise ValueError(f"Invalid mmap replay cursor position: {self.pos}")
@@ -260,19 +272,33 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         action: torch.Tensor,
         reward: torch.Tensor,
         done: torch.Tensor,
+        grasp_penalty: Optional[torch.Tensor] = None,
     ) -> None:
+        if not self.store_grasp_penalty and grasp_penalty is not None:
+            raise ValueError(
+                "grasp_penalty was passed but this buffer was constructed with "
+                "store_grasp_penalty=False."
+            )
         if self.storage_device.type == "cpu":
             obs = _tree_to_device(obs, self.storage_device)
             next_obs = _tree_to_device(next_obs, self.storage_device)
             action = action.cpu()
             reward = reward.cpu()
             done = done.cpu()
+            if grasp_penalty is not None:
+                grasp_penalty = grasp_penalty.cpu()
 
         self.obs[self.pos] = obs
         self.next_obs[self.pos] = next_obs
         self.actions[self.pos] = action
         self.rewards[self.pos] = reward
         self.dones[self.pos] = done
+        if self.store_grasp_penalty:
+            # Old demo pkls / non-grasp-penalty callers substitute zero
+            # rather than requiring every caller to pass this explicitly.
+            self.grasp_penalty[self.pos] = (
+                grasp_penalty if grasp_penalty is not None else torch.zeros_like(reward)
+            )
 
         self._advance()
         self._persist_cursor()
@@ -288,6 +314,15 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
             k: _tree_to_device(v, self.sample_device)
             for k, v in self.next_obs[batch_inds, env_inds].items()
         }
+        if self.store_grasp_penalty:
+            return GraspPenaltyReplayBufferSample(
+                obs=obs_sample,
+                next_obs=next_obs_sample,
+                actions=self.actions[batch_inds, env_inds].to(self.sample_device),
+                rewards=self.rewards[batch_inds, env_inds].to(self.sample_device),
+                dones=self.dones[batch_inds, env_inds].to(self.sample_device),
+                grasp_penalty=self.grasp_penalty[batch_inds, env_inds].to(self.sample_device),
+            )
         return ReplayBufferSample(
             obs=obs_sample,
             next_obs=next_obs_sample,

@@ -10,13 +10,16 @@ explicit-optimizer-ownership rule directly: ``discrete_critic`` and
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
+from gymnasium import spaces
 
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.buffers.demo_intervention import DemoInterventionMixin
+from rl_garden.buffers.dict_buffer import DictReplayBuffer
+from rl_garden.buffers.memory_efficient_dict_buffer import MemoryEfficientDictReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.base import BaseFeaturesExtractor
@@ -42,12 +45,22 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
         discrete_hidden_dim: int = 256,
         discrete_lr: float = 3e-4,
         discrete_tau: Optional[float] = None,
+        use_grasp_penalty: bool = False,
+        memory_efficient_buffer: bool = False,
+        memory_efficient_image_keys: Sequence[str] = (),
+        memory_efficient_frame_stack: int = 1,
         **rlpd_kwargs: Any,
     ) -> None:
         self.discrete_hidden_dim = discrete_hidden_dim
         self.discrete_lr = discrete_lr
         self._discrete_tau = discrete_tau
+        self.use_grasp_penalty = use_grasp_penalty
+        self.memory_efficient_buffer = memory_efficient_buffer
+        self.memory_efficient_image_keys = tuple(memory_efficient_image_keys)
+        self.memory_efficient_frame_stack = memory_efficient_frame_stack
         super().__init__(env, eval_env, **rlpd_kwargs)
+        if self.use_grasp_penalty:
+            self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "grasp_penalty")
 
     def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> RLPDHybridPolicy:
         return RLPDHybridPolicy(
@@ -71,6 +84,48 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
             discrete_hidden_dims=(self.discrete_hidden_dim,),
         )
+
+    def _build_replay_buffer(self):
+        if not self.use_grasp_penalty and not self.memory_efficient_buffer:
+            return super()._build_replay_buffer()
+        obs_space = self.env.single_observation_space
+        if not isinstance(obs_space, spaces.Dict) or self.nstep > 1:
+            raise ValueError(
+                "use_grasp_penalty/memory_efficient_buffer require a Dict "
+                "observation space and nstep == 1 (no NStepDictReplayBuffer "
+                "grasp_penalty column or dedup support this round)."
+            )
+        if self.memory_efficient_buffer:
+            return MemoryEfficientDictReplayBuffer(
+                observation_space=obs_space,
+                action_space=self.env.single_action_space,
+                num_envs=self.num_envs,
+                buffer_size=self.buffer_size,
+                image_keys=self.memory_efficient_image_keys,
+                frame_stack=self.memory_efficient_frame_stack,
+                storage_device=self.buffer_device,
+                sample_device=self.device,
+                store_grasp_penalty=self.use_grasp_penalty,
+            )
+        return DictReplayBuffer(
+            observation_space=obs_space,
+            action_space=self.env.single_action_space,
+            num_envs=self.num_envs,
+            buffer_size=self.buffer_size,
+            storage_device=self.buffer_device,
+            sample_device=self.device,
+            store_grasp_penalty=True,
+        )
+
+    def _replay_buffer_add_kwargs(
+        self, action_context, obs, next_obs, real_next_obs, infos, need_final_obs
+    ) -> dict[str, Any]:
+        kwargs = super()._replay_buffer_add_kwargs(
+            action_context, obs, next_obs, real_next_obs, infos, need_final_obs
+        )
+        if self.use_grasp_penalty and "grasp_penalty" in infos:
+            kwargs["grasp_penalty"] = infos["grasp_penalty"]
+        return kwargs
 
     def _setup_model(self) -> None:
         super()._setup_model()
@@ -108,7 +163,8 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
                 next_action = next_online_q.argmax(dim=-1, keepdim=True)
                 next_target_q = self.policy.discrete_target_critic(next_features)
                 next_q = next_target_q.gather(-1, next_action).squeeze(-1)
-                target = data.rewards.reshape(-1) + (1 - data.dones.reshape(-1)) * self.gamma * next_q
+                rewards = data.rewards + data.grasp_penalty if self.use_grasp_penalty else data.rewards
+                target = rewards.reshape(-1) + (1 - data.dones.reshape(-1)) * self.gamma * next_q
 
             loss = F.mse_loss(q_pred, target)
             self.dqn_optimizer.zero_grad()

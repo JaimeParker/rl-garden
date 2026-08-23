@@ -75,6 +75,7 @@ class BC(OfflineRLAlgorithm):
         ] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        tanh_squash: bool = True,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -129,6 +130,7 @@ class BC(OfflineRLAlgorithm):
         self.kernel_init = kernel_init
         self.backbone_type = backbone_type
         self.std_parameterization = std_parameterization
+        self.tanh_squash = tanh_squash
 
         obs_space = self.env.single_observation_space
         image_kwargs_explicit = {
@@ -237,6 +239,7 @@ class BC(OfflineRLAlgorithm):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
+            tanh_squash=self.tanh_squash,
         ).to(self.device)
 
         self.actor_optimizer = make_optimizer(

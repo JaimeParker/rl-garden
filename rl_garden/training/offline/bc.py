@@ -56,6 +56,7 @@ def _bc_kwargs(
         "kernel_init": args.kernel_init,
         "backbone_type": args.backbone_type,
         "std_parameterization": args.std_parameterization,
+        "tanh_squash": args.tanh_squash,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

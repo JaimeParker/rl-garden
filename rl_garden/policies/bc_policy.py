@@ -14,7 +14,12 @@ from gymnasium import spaces
 
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.networks import BackboneType, KernelInit, SquashedGaussianActor
+from rl_garden.networks import (
+    BackboneType,
+    KernelInit,
+    SquashedGaussianActor,
+    UnsquashedGaussianActor,
+)
 from rl_garden.policies.base import BasePolicy
 from rl_garden.policies.sac_policy import LOG_STD_MAX, WSRL_LOG_STD_MIN
 
@@ -38,6 +43,7 @@ class BCPolicy(BasePolicy):
         log_std_mode: Literal["clamp", "tanh"] = "tanh",
         log_std_min: float = WSRL_LOG_STD_MIN,
         log_std_max: float = LOG_STD_MAX,
+        tanh_squash: bool = True,
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "BCPolicy requires a Box action space."
@@ -46,9 +52,7 @@ class BCPolicy(BasePolicy):
         self.features_extractor = features_extractor
 
         fd = features_extractor.features_dim
-        self.actor = SquashedGaussianActor(
-            fd,
-            action_space,
+        actor_kwargs = dict(
             hidden_dims=list(net_arch),
             use_layer_norm=use_layer_norm,
             use_group_norm=use_group_norm,
@@ -57,10 +61,24 @@ class BCPolicy(BasePolicy):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
-            log_std_mode=log_std_mode,
             log_std_min=log_std_min,
             log_std_max=log_std_max,
         )
+        if tanh_squash:
+            self.actor = SquashedGaussianActor(
+                fd, action_space, log_std_mode=log_std_mode, **actor_kwargs
+            )
+        else:
+            # UnsquashedGaussianActor has no log_std_mode (only log_std_min/
+            # max clamping). Motivated by a real correctness concern, not
+            # just matching HIL-SERL's tanh_squash_distribution=False
+            # default: tanh-squashed evaluate_action_log_prob on expert
+            # actions sitting at exactly +/-1 -- which real Franka demos
+            # produce on the near-binary gripper dimension -- is numerically
+            # degenerate (the tanh Jacobian correction blows up at the
+            # boundary). This actor hard-clamps instead, with no Jacobian
+            # term, sidestepping that entirely.
+            self.actor = UnsquashedGaussianActor(fd, action_space, **actor_kwargs)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
         return self._extract_features(obs, stop_gradient=stop_gradient)

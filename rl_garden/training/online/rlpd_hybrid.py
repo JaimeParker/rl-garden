@@ -47,6 +47,16 @@ def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
         eval_env=eval_env,
         discrete_hidden_dim=args.discrete_hidden_dim,
         discrete_lr=args.discrete_lr,
+        # HilSerlArgs-only field (real-robot gripper-flip reward shaping);
+        # getattr so plain RLPDHybridArgs (sim training) callers are
+        # unaffected without needing this field.
+        use_grasp_penalty=getattr(args, "use_grasp_penalty", False),
+        # HilSerlArgs-only field (real-robot replay-buffer image dedup).
+        # image_keys reuses the same is_visual-gated computation above --
+        # empty/unused when memory_efficient_buffer is off (the default).
+        memory_efficient_buffer=getattr(args, "memory_efficient_buffer", False),
+        memory_efficient_image_keys=image_keys if is_visual else (),
+        memory_efficient_frame_stack=args.frame_stack,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         backup_entropy=args.backup_entropy,

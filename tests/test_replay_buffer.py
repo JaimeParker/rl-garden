@@ -14,6 +14,7 @@ from rl_garden.buffers.nstep_buffer import (
     LazyNextNStepDictReplayBuffer,
     NStepDictReplayBuffer,
 )
+from rl_garden.common.types import ReplayBufferSample
 
 
 def test_tensor_replay_buffer_add_and_sample():
@@ -108,6 +109,77 @@ def test_dict_replay_buffer_add_and_sample():
     assert batch.actions.shape == (5, 4)
     assert batch.rewards.shape == (5,)
     assert batch.dones.shape == (5,)
+
+
+def test_dict_replay_buffer_grasp_penalty_add_and_sample_round_trip():
+    from rl_garden.common.types import GraspPenaltyReplayBufferSample
+
+    obs_space = spaces.Dict(
+        {"state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)}
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+    num_envs, buffer_size = 2, 8
+    rb = DictReplayBuffer(
+        obs_space, act_space, num_envs=num_envs, buffer_size=buffer_size,
+        storage_device="cpu", sample_device="cpu", store_grasp_penalty=True,
+    )
+
+    def make_obs():
+        return {"state": torch.randn(num_envs, 5)}
+
+    # One add with an explicit grasp_penalty, one without (old-format caller
+    # / pre-existing demo pkl) -- the latter must substitute zero, not error.
+    rb.add(
+        obs=make_obs(), next_obs=make_obs(), action=torch.randn(num_envs, 4),
+        reward=torch.randn(num_envs), done=torch.zeros(num_envs),
+        grasp_penalty=torch.full((num_envs,), -0.05),
+    )
+    rb.add(
+        obs=make_obs(), next_obs=make_obs(), action=torch.randn(num_envs, 4),
+        reward=torch.randn(num_envs), done=torch.zeros(num_envs),
+    )
+
+    torch.testing.assert_close(rb.grasp_penalty[0], torch.full((num_envs,), -0.05))
+    torch.testing.assert_close(rb.grasp_penalty[1], torch.zeros(num_envs))
+
+    batch = rb.sample(batch_size=5)
+    assert isinstance(batch, GraspPenaltyReplayBufferSample)
+    assert batch.grasp_penalty.shape == (5,)
+
+
+def test_dict_replay_buffer_rejects_grasp_penalty_when_not_enabled():
+    obs_space = spaces.Dict(
+        {"state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)}
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+    rb = DictReplayBuffer(
+        obs_space, act_space, num_envs=1, buffer_size=4,
+        storage_device="cpu", sample_device="cpu",
+    )
+    with pytest.raises(ValueError, match="store_grasp_penalty=False"):
+        rb.add(
+            obs={"state": torch.zeros(1, 5)}, next_obs={"state": torch.zeros(1, 5)},
+            action=torch.zeros(1, 4), reward=torch.zeros(1), done=torch.zeros(1),
+            grasp_penalty=torch.zeros(1),
+        )
+
+
+def test_dict_replay_buffer_without_grasp_penalty_returns_plain_sample():
+    obs_space = spaces.Dict(
+        {"state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)}
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+    rb = DictReplayBuffer(
+        obs_space, act_space, num_envs=1, buffer_size=4,
+        storage_device="cpu", sample_device="cpu",
+    )
+    rb.add(
+        obs={"state": torch.zeros(1, 5)}, next_obs={"state": torch.zeros(1, 5)},
+        action=torch.zeros(1, 4), reward=torch.zeros(1), done=torch.zeros(1),
+    )
+    batch = rb.sample(batch_size=1)
+    assert type(batch) is ReplayBufferSample
+    assert not hasattr(batch, "grasp_penalty")
 
 
 def _mmap_obs_space() -> spaces.Dict:
