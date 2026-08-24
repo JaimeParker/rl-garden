@@ -19,12 +19,14 @@ hidden_dim: 512
 actor_hidden_layers: 3
 critic_hidden_layers: 3
 actor_use_layer_norm: false
-critic_use_layer_norm: false
+critic_use_layer_norm: true
 n_critics: 2
 cql_alpha: 5.0
 online_cql_alpha: 5.0
 cql_importance_sample: false
 cql_max_target_backup: true
+cql_clip_diff_min: -200.0
+cql_clip_diff_max: 200.0
 bootstrap_at_done: truncated
 num_eval_episodes: 20
 eval_episode_horizon: 1000
