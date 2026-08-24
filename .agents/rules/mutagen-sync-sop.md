@@ -38,7 +38,14 @@ Keep these categories out of Mutagen sync:
 - IDE files: `.cursor/`, `.vscode/`, `.idea/`, `.github/`.
 - Training artifacts: `runs/`, `logs/`, `wandb/`, `checkpoints/`.
 
-Only copy selected artifacts back manually when needed.
+Only copy selected artifacts back manually when needed -- use
+`scripts/pull_run_logs.sh <run_name> [tensorboard-log-dest] [group]` to pull
+one run's checkpoints/config.json back to the matching local `runs/` path,
+and optionally its group's TensorBoard event files (all runs sharing that
+group, not just this one) to a caller-supplied destination (e.g. an expnote
+workspace path). Register the pulled directory with `expnote run update
+<run_id> --meta tensorboard_dir=<tensorboard-log-dest>` so expnote's web UI
+can chart it.
 
 The three git-submodule baselines under `3rd_party/` (`Cal-QL`, `wsrl`,
 `implicit_q_learning`, see `baselines/baselines.yaml`) are also covered by

@@ -346,12 +346,12 @@ class DrQv2TrainingArgs:
     image_augmentation: str = "random_shift"
     image_random_shift_pad: int = 4
     frame_stack: int = 1
-    log_type: str = "wandb"
+    log_type: str = "tensorboard"
     log_dir: str = "runs"
     exp_name: str = ""
     wandb_project: str = "rl-garden"
     wandb_entity: str = ""
-    wandb_group: str = ""
+    log_group: str = ""
     log_keywords: str = ""
     std_log: bool = True
     log_freq: int = 1_000

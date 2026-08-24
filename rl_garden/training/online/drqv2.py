@@ -123,28 +123,27 @@ def run_drqv2(args: DrQv2Args) -> None:
 
 from dataclasses import dataclass
 
-from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.common.cli_args import CheckpointArgs
+from rl_garden.common.env_args import EnvBackendArgs, EnvRunArgs
 from rl_garden.training.online._registry import registry
 
 
 @dataclass
-class DrQv2Args(EnvBackendArgs):
+class DrQv2Args(EnvRunArgs, CheckpointArgs, EnvBackendArgs):
     """DrQ-v2 with multi-env backend support.
 
     ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``,
     ``--maniskill.reward-mode``.
     """
 
-    # --- Env ---
-    env_id: str = "PickCube-v1"
-    num_envs: int = 16
-    num_eval_envs: int = 16
+    # --- Env (overrides EnvRunArgs' defaults) ---
+    control_mode: str = "pd_ee_delta_pose"
+
+    # --- Env (not part of EnvRunArgs) ---
     obs_mode: str = "rgbd"
     include_state: bool = True
-    control_mode: str = "pd_ee_delta_pose"
     camera_width: int = 128
     camera_height: int = 128
-    render_mode: str = "rgb_array"
     per_camera_rgbd: bool = False
 
     # --- Training ---
@@ -155,7 +154,6 @@ class DrQv2Args(EnvBackendArgs):
     mmap_mode: Literal["create", "open"] = "create"
     learning_starts: int = 4_000
     batch_size: int = 256
-    seed: int = 1
 
     # --- DDPG ---
     gamma: float = 0.99
@@ -187,31 +185,10 @@ class DrQv2Args(EnvBackendArgs):
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
 
-    # --- Logging ---
-    log_type: str = "wandb"
-    log_dir: str = "runs"
-    exp_name: str = ""
-    wandb_project: str = "rl-garden"
-    wandb_entity: str = ""
-    wandb_group: str = ""
-    log_keywords: str = ""
-    std_log: bool = True
-    log_freq: int = 1_000
-
-    # --- Eval ---
-    eval_freq: int = 10_000
-    num_eval_steps: int = 50
-    capture_video: bool = True
-    eval_output_dir: str | None = None
-    video_fps: int = 30
-
-    # --- Checkpoint ---
-    checkpoint_dir: str | None = None
-    checkpoint_freq: int = 0
-    save_replay_buffer: bool = False
-    save_final_checkpoint: bool = True
-    load_checkpoint: str | None = None
+    # --- Checkpoint (overrides CheckpointArgs' default) ---
     load_replay_buffer: bool = False
+
+    # --- Replay buffer (not part of CheckpointArgs) ---
     replay_lazy_next_obs: bool = False
     replay_pin_sampled_batch: bool = False
 

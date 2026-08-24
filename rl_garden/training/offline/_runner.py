@@ -142,7 +142,7 @@ def _run_offline(
             log_keywords=args.log_keywords,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
-            wandb_group=args.wandb_group or f"{algorithm}_offline_pretrain",
+            log_group=args.log_group or f"{algorithm}_offline_pretrain",
         )
     resources.append(logger)
     logger.add_text(

@@ -129,7 +129,7 @@ def test_logging_environment_variables_are_not_configuration(monkeypatch):
 
     args = registry.parse_args(["sac"])
 
-    assert args.log_type == "wandb"
+    assert args.log_type == "tensorboard"
 
 
 def test_sac_disables_eval_env_when_eval_frequency_is_zero():

@@ -15,11 +15,14 @@ class LoggingArgs:
     eval_freq: int = 10_000
     num_eval_steps: int = 50
     std_log: bool = True
-    log_type: Literal["tensorboard", "wandb", "none"] = "wandb"
+    log_type: Literal["tensorboard", "wandb", "none"] = "tensorboard"
     log_keywords: Optional[str] = None
     wandb_project: str = "rl-garden"
     wandb_entity: Optional[str] = None
-    wandb_group: Optional[str] = None
+    # Groups runs in wandb's UI and nests TensorBoard's writer directory
+    # (log_dir/<log_group>/<run_name>/) -- see Logger.create in
+    # rl_garden/common/logger.py.
+    log_group: Optional[str] = None
 
 
 @dataclass

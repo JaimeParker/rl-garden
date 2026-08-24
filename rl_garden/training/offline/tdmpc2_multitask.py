@@ -106,7 +106,7 @@ def _run_tdmpc2_multitask(
             log_keywords=args.log_keywords,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
-            wandb_group=args.wandb_group or "tdmpc2_multitask",
+            log_group=args.log_group or "tdmpc2_multitask",
         )
     cleanup.append(logger.close)
 

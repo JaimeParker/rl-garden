@@ -178,7 +178,7 @@ def test_online_specialized_args_keep_existing_defaults() -> None:
     assert flash.num_envs == 512
     assert flash.batch_size == 2048
     assert flash.capture_video is False
-    assert flash.log_type == "wandb"
+    assert flash.log_type == "tensorboard"
     assert flash.log_dir == "runs"
 
 

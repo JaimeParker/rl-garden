@@ -9,6 +9,16 @@ Before training, evaluation, or remote debugging, read:
 Before changing or repairing Mutagen sync, read:
 `.agents/rules/mutagen-sync-sop.md`
 
+To pull a remote run's checkpoints/config.json (and optionally its
+TensorBoard event files) back to local, use:
+`scripts/pull_run_logs.sh <run_name> [tensorboard-log-dest] [group] <ssh-alias> <remote-bind-mount-path> <local-project-path>`
+`tensorboard-log-dest` is caller-supplied (e.g. an expnote workspace path),
+not assumed to be under this repo's `runs/`; when given with `group`, the
+whole group directory is pulled (all runs sharing that group), not just this
+one run, so expnote's tensorboard_dir viewer can compare them. Register the
+pulled directory with:
+`expnote run update <run_id> --meta tensorboard_dir=<tensorboard-log-dest>`
+
 Use these local bindings with those SOPs:
 
 - SSH alias: `<ssh-alias>`

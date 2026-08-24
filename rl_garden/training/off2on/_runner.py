@@ -318,7 +318,7 @@ def _run_off2on(
             log_keywords=args.log_keywords,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
-            wandb_group=args.wandb_group or args.env_id,
+            log_group=args.log_group or args.env_id,
         )
     resources.append(logger)
     logger.add_text(

@@ -96,7 +96,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
             log_keywords=args.log_keywords,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
-            wandb_group=args.wandb_group or "diffusion_bc",
+            log_group=args.log_group or "diffusion_bc",
         )
     cleanup.append(logger.close)
 

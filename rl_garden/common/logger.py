@@ -46,6 +46,23 @@ def _flatten_wandb_config(config: dict[str, Any], sep: str = ".") -> dict[str, A
     return flat
 
 
+def _coerce_hparam_value(value: Any) -> Any:
+    """Coerce a flattened config leaf into a type add_hparams() accepts.
+
+    torch's hparams() raises ValueError on any type other than
+    int/float/str/bool/None/torch.Tensor -- a single list-valued leaf (common
+    in a flattened RL config, e.g. network hidden_sizes) would otherwise abort
+    the whole add_hparams() call.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+
+def _hparam_dict(config: dict[str, Any]) -> dict[str, Any]:
+    return {k: _coerce_hparam_value(v) for k, v in _flatten_wandb_config(config).items()}
+
+
 class Logger:
     def __init__(
         self,
@@ -56,6 +73,8 @@ class Logger:
         self.writer = tensorboard
         self.wandb_run = wandb_run
         self.log_type = log_type
+        self._last_scalars: dict[str, float] = {}
+        self._hparams: dict[str, Any] | None = None
 
     @staticmethod
     def _parse_keywords(log_keywords: str | None) -> list[str]:
@@ -80,12 +99,24 @@ class Logger:
         log_keywords: str | None = None,
         wandb_project: str = "rl-garden",
         wandb_entity: str | None = None,
-        wandb_group: str | None = None,
+        log_group: str | None = None,
     ) -> Logger:
         normalized = log_type.lower()
         if normalized == "tensorboard":
-            writer = SummaryWriter(os.path.join(log_dir, run_name))
-            return cls(tensorboard=writer, log_type="tensorboard")
+            # log_group nests the TensorBoard run directory
+            # (log_dir/<log_group>/<run_name>/) so TensorBoard's run selector
+            # shows the same grouping wandb's UI would -- without this,
+            # tensorboard has no equivalent to wandb's group field.
+            run_dir = (
+                os.path.join(log_dir, log_group, run_name)
+                if log_group
+                else os.path.join(log_dir, run_name)
+            )
+            writer = SummaryWriter(run_dir)
+            logger = cls(tensorboard=writer, log_type="tensorboard")
+            if config:
+                logger._hparams = _hparam_dict(config)
+            return logger
         if normalized == "none":
             return cls(log_type="none")
         if normalized != "wandb":
@@ -124,8 +155,8 @@ class Logger:
         }
         if wandb_entity:
             init_kwargs["entity"] = wandb_entity
-        if wandb_group:
-            init_kwargs["group"] = wandb_group
+        if log_group:
+            init_kwargs["group"] = log_group
         if tags:
             init_kwargs["tags"] = tags
 
@@ -141,6 +172,8 @@ class Logger:
             self.wandb_run.log({tag: value}, step=step)
         if self.writer is not None:
             self.writer.add_scalar(tag, value, step)
+        if isinstance(value, (int, float)):
+            self._last_scalars[tag] = value
 
     def add_text(self, tag: str, text: str) -> None:
         if self.wandb_run is not None:
@@ -164,6 +197,7 @@ class Logger:
             import json
 
             self.writer.add_text("effective_config", json.dumps(config, sort_keys=True))
+            self._hparams = _hparam_dict(config)
 
     # --- RL metric logging utilities ---
 
@@ -274,7 +308,23 @@ class Logger:
 
         return " ".join(loss_parts), " ".join(q_parts)
 
+    def log_hparams(self) -> None:
+        """Write run config + latest metrics into TensorBoard's HParams tab.
+
+        No-op unless this Logger owns a tensorboard writer with a config set
+        (never true for wandb, which gets its config table via
+        update_config()). Metric keys are prefixed "hparam/" because
+        add_hparams() writes metric_dict entries as scalars into this same
+        run directory (run_name=".") -- reusing an existing tag name there
+        would duplicate/overwrite that tag's real training curve.
+        """
+        if self.writer is None or self._hparams is None:
+            return
+        metric_dict = {f"hparam/{k}": v for k, v in self._last_scalars.items()}
+        self.writer.add_hparams(self._hparams, metric_dict, run_name=".")
+
     def close(self) -> None:
+        self.log_hparams()
         if self.writer is not None:
             self.writer.close()
         if self.wandb_run is not None:
