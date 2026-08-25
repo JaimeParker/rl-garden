@@ -9,6 +9,7 @@ extractor: Box observations use ``FlattenExtractor`` and Dict observations use
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
@@ -118,8 +119,15 @@ class SAC(SACCore, OffPolicyAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        mmap_dir: Optional[str | Path] = None,
+        mmap_mode: Literal["create", "open"] = "create",
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
+        if mmap_dir is not None and save_replay_buffer:
+            raise ValueError(
+                "mmap replay buffers cannot be embedded in replay checkpoints; "
+                "set save_replay_buffer=False"
+            )
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -145,6 +153,8 @@ class SAC(SACCore, OffPolicyAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
         )
+        self.mmap_dir = mmap_dir
+        self.mmap_mode = mmap_mode
         self.policy_lr = policy_lr
         self.q_lr = q_lr
         if nstep < 1:
@@ -365,6 +375,33 @@ class SAC(SACCore, OffPolicyAlgorithm):
             states.pop("alpha_optimizer", None)
         super()._load_optimizer_state_dicts(states)
 
+    def load(
+        self,
+        path: str | Path,
+        strict: bool = True,
+        load_replay_buffer: bool = True,
+        load_optimizers: bool = True,
+    ) -> "SAC":
+        if self.mmap_dir is not None and load_replay_buffer:
+            raise ValueError(
+                "replay checkpoint loading is not supported with mmap buffers; "
+                "use mmap_mode='open' and load_replay_buffer=False"
+            )
+        return super().load(
+            path,
+            strict=strict,
+            load_replay_buffer=load_replay_buffer,
+            load_optimizers=load_optimizers,
+        )
+
+    def load_replay_buffer(self, path: str | Path, strict: bool = True) -> None:
+        if self.mmap_dir is not None:
+            raise ValueError(
+                "replay checkpoint loading is not supported with mmap buffers; "
+                "use mmap_mode='open'"
+            )
+        super().load_replay_buffer(path, strict=strict)
+
     def load_actor_checkpoint(self, path: str, *, strict: bool = True) -> None:
         """Load actor and shared encoder weights from a BC checkpoint."""
         checkpoint = load_checkpoint_file(path, map_location=self.device)
@@ -537,6 +574,8 @@ class SAC(SACCore, OffPolicyAlgorithm):
                     gamma=self.gamma,
                     storage_device=self.buffer_device,
                     sample_device=self.device,
+                    mmap_dir=self.mmap_dir,
+                    mmap_mode=self.mmap_mode,
                 )
             return DictReplayBuffer(
                 observation_space=obs_space,
@@ -545,6 +584,13 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 buffer_size=self.buffer_size,
                 storage_device=self.buffer_device,
                 sample_device=self.device,
+                mmap_dir=self.mmap_dir,
+                mmap_mode=self.mmap_mode,
+            )
+        if self.mmap_dir is not None:
+            raise ValueError(
+                "mmap_dir is only supported for Dict observation spaces "
+                "(image buffers); got a Box observation space."
             )
         if self.nstep > 1:
             return NStepTensorReplayBuffer(

@@ -166,6 +166,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         mmap_dir: Optional[str | Path] = None,
         mmap_mode: MmapMode = "create",
         store_grasp_penalty: bool = False,
+        manifest_extra: Optional[dict[str, Any]] = None,
     ) -> None:
         assert isinstance(observation_space, spaces.Dict), (
             "DictReplayBuffer requires a Dict observation space."
@@ -200,6 +201,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
                     "action_space": space_metadata(
                         action_space, dtype_resolver=_resolve_dtype
                     ),
+                    **(manifest_extra or {}),
                 },
             )
             self._cursor = self._mmap_store.tensor(

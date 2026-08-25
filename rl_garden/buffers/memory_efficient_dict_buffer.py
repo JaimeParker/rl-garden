@@ -73,14 +73,6 @@ class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
         mmap_mode: MmapMode = "create",
         store_grasp_penalty: bool = False,
     ) -> None:
-        if mmap_dir is not None:
-            # Non-goal this round: this class's own _ep_id/_step_id bookkeeping
-            # isn't mmap-backed, so a crash/reload would desync it from the
-            # (persisted) obs/next_obs/rewards storage. Regular tensor storage
-            # only, consistent with DictReplayBuffer's non-mmap default path.
-            raise NotImplementedError(
-                "MemoryEfficientDictReplayBuffer does not support mmap_dir yet."
-            )
         self.image_keys = tuple(image_keys)
         if not self.image_keys:
             raise ValueError("MemoryEfficientDictReplayBuffer requires image_keys.")
@@ -107,16 +99,44 @@ class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
             buffer_size=buffer_size,
             storage_device=storage_device,
             sample_device=sample_device,
-            mmap_dir=None,
+            mmap_dir=mmap_dir,
             mmap_mode=mmap_mode,
             store_grasp_penalty=store_grasp_penalty,
+            manifest_extra={
+                "frame_stack": self.frame_stack,
+                "image_keys": list(self.image_keys),
+            },
         )
 
         shape = (self.per_env_buffer_size, num_envs)
-        self._ep_id = torch.full(shape, -1, dtype=torch.long, device=self.storage_device)
-        self._current_ep_id = torch.zeros(num_envs, dtype=torch.long, device=self.storage_device)
-        self._step_id = torch.full(shape, -1, dtype=torch.long, device=self.storage_device)
-        self._current_step_id = torch.zeros(num_envs, dtype=torch.long, device=self.storage_device)
+        if self._mmap_store is None:
+            self._ep_id = torch.full(shape, -1, dtype=torch.long, device=self.storage_device)
+            self._current_ep_id = torch.zeros(num_envs, dtype=torch.long, device=self.storage_device)
+            self._step_id = torch.full(shape, -1, dtype=torch.long, device=self.storage_device)
+            self._current_step_id = torch.zeros(num_envs, dtype=torch.long, device=self.storage_device)
+        else:
+            self._ep_id = self._mmap_store.tensor(
+                ("memory_efficient", "episode_ids"),
+                shape=shape,
+                dtype=torch.int64,
+                fill_value=-1,
+            )
+            self._current_ep_id = self._mmap_store.tensor(
+                ("memory_efficient", "current_episode_ids"),
+                shape=(num_envs,),
+                dtype=torch.int64,
+            )
+            self._step_id = self._mmap_store.tensor(
+                ("memory_efficient", "step_ids"),
+                shape=shape,
+                dtype=torch.int64,
+                fill_value=-1,
+            )
+            self._current_step_id = self._mmap_store.tensor(
+                ("memory_efficient", "current_step_ids"),
+                shape=(num_envs,),
+                dtype=torch.int64,
+            )
 
     def add(
         self,
@@ -147,9 +167,15 @@ class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
 
         self._ep_id[pos] = self._current_ep_id
         self._step_id[pos] = self._current_step_id
-        self._current_ep_id = self._current_ep_id + done_bool.long()
-        self._current_step_id = torch.where(
-            done_bool, torch.zeros_like(self._current_step_id), self._current_step_id + 1
+        # In-place: `self._current_ep_id`/`self._current_step_id` may be
+        # mmap-backed (torch.from_numpy(memmap)) when mmap_dir is set --
+        # rebinding via `self._x = self._x + ...` would silently detach the
+        # attribute from the underlying memmap after the first add(), losing
+        # persistence with no error. See NStepDictReplayBuffer.add() for the
+        # same pattern.
+        self._current_ep_id += done_bool.long()
+        self._current_step_id.copy_(
+            torch.where(done_bool, torch.zeros_like(self._current_step_id), self._current_step_id + 1)
         )
 
     # ------------------------------------------------------------------

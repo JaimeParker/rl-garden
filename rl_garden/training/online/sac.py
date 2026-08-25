@@ -129,6 +129,8 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         SAC,
+        mmap_dir=args.mmap_dir,
+        mmap_mode=args.mmap_mode,
         **_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
     )
     if args.load_checkpoint is not None:
@@ -141,6 +143,11 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
 def run_sac(args: SACArgs) -> None:
     from rl_garden.training.online._runner import run_online
 
+    if args.mmap_dir is not None and args.load_replay_buffer:
+        raise SystemExit(
+            "--load-replay-buffer is not supported with --mmap-dir; "
+            "use --mmap-mode open to resume the disk-backed buffer"
+        )
     is_visual = args.obs_mode != "state"
     obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
     run_online(
@@ -148,6 +155,7 @@ def run_sac(args: SACArgs) -> None:
         obs_tag=obs_tag,
         make_env_request=_sac_env_request,
         build_agent=build_sac,
+        post_learn=lambda agent: getattr(agent.replay_buffer, "flush", lambda: None)(),
     )
 
 

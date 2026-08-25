@@ -83,6 +83,8 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
         RLPD,
         env=env,
         eval_env=eval_env,
+        mmap_dir=args.mmap_dir,
+        mmap_mode=args.mmap_mode,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         critic_use_layer_norm=args.critic_use_layer_norm,
@@ -170,6 +172,11 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
 def run_rlpd(args: RLPDArgs) -> None:
     from rl_garden.training.online._runner import run_online
 
+    if args.mmap_dir is not None and args.load_replay_buffer:
+        raise SystemExit(
+            "--load-replay-buffer is not supported with --mmap-dir; "
+            "use --mmap-mode open to resume the disk-backed buffer"
+        )
     is_visual = args.obs_mode != "state"
     obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
     run_online(
@@ -177,6 +184,7 @@ def run_rlpd(args: RLPDArgs) -> None:
         obs_tag=obs_tag,
         make_env_request=_rlpd_env_request,
         build_agent=build_rlpd,
+        post_learn=lambda agent: getattr(agent.replay_buffer, "flush", lambda: None)(),
     )
 
 

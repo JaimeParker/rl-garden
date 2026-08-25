@@ -108,6 +108,8 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
                 storage_device=self.buffer_device,
                 sample_device=self.device,
                 store_grasp_penalty=self.use_grasp_penalty,
+                mmap_dir=self.mmap_dir,
+                mmap_mode=self.mmap_mode,
             )
         return DictReplayBuffer(
             observation_space=obs_space,
@@ -116,6 +118,8 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             buffer_size=self.buffer_size,
             storage_device=self.buffer_device,
             sample_device=self.device,
+            mmap_dir=self.mmap_dir,
+            mmap_mode=self.mmap_mode,
             store_grasp_penalty=True,
         )
 

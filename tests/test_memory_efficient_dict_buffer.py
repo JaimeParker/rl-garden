@@ -10,6 +10,8 @@ buffer types for comparison.
 """
 from __future__ import annotations
 
+import json
+
 import gymnasium as gym
 import numpy as np
 import pytest
@@ -274,10 +276,86 @@ def test_add_raises_when_obs_not_pre_stacked():
         mem_rb.add(bad_obs, bad_obs, torch.zeros(1, 1), torch.zeros(1), torch.zeros(1))
 
 
-def test_mmap_dir_not_supported():
-    with pytest.raises(NotImplementedError):
+def test_mmap_dir_builds_manifest(tmp_path):
+    mem_rb = MemoryEfficientDictReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu", mmap_dir=tmp_path,
+    )
+    assert mem_rb._mmap_store is not None
+    manifest_path = tmp_path / "manifest.json"
+    assert manifest_path.is_file()
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["frame_stack"] == FRAME_STACK
+    assert manifest["image_keys"] == [IMAGE_KEY]
+
+
+def test_mmap_requires_cpu_storage(tmp_path):
+    with pytest.raises(ValueError, match="require CPU storage"):
         MemoryEfficientDictReplayBuffer(
             _obs_space(), _act_space(), num_envs=1, buffer_size=16,
             image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
-            storage_device="cpu", sample_device="cpu", mmap_dir="/tmp/whatever",
+            storage_device="cuda", sample_device="cuda", mmap_dir=tmp_path,
         )
+
+
+def test_mmap_open_restores_temporal_tracking(tmp_path):
+    transitions = _drive(episode_lengths=[4, 4], num_steps=8)
+
+    source = MemoryEfficientDictReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu", mmap_dir=tmp_path,
+    )
+    for obs, next_obs, action, reward, done in transitions:
+        source.add(obs, next_obs, action, reward, done)
+    source.flush()
+
+    restored = MemoryEfficientDictReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu",
+        mmap_dir=tmp_path, mmap_mode="open",
+    )
+
+    assert restored.pos == len(transitions)
+    torch.testing.assert_close(restored._current_ep_id, source._current_ep_id)
+    torch.testing.assert_close(restored._current_step_id, source._current_step_id)
+    torch.testing.assert_close(restored._ep_id, source._ep_id)
+    torch.testing.assert_close(restored._step_id, source._step_id)
+    assert restored._current_ep_id.tolist() == [2]
+    assert restored._current_step_id.tolist() == [0]
+
+
+def test_mmap_open_sampling_after_reopen(tmp_path):
+    transitions = _drive(episode_lengths=[4, 4], num_steps=8)
+
+    source = MemoryEfficientDictReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu", mmap_dir=tmp_path,
+    )
+    dict_rb = DictReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        storage_device="cpu", sample_device="cpu",
+    )
+    for obs, next_obs, action, reward, done in transitions:
+        source.add(obs, next_obs, action, reward, done)
+        dict_rb.add(obs, next_obs, action, reward, done)
+    source.flush()
+
+    restored = MemoryEfficientDictReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu",
+        mmap_dir=tmp_path, mmap_mode="open",
+    )
+
+    batch_inds = torch.arange(len(transitions))
+    env_inds = torch.zeros(len(transitions), dtype=torch.long)
+    restored_sample = restored._index_batch(batch_inds, env_inds)
+    dict_sample = dict_rb._index_batch(batch_inds, env_inds)
+
+    torch.testing.assert_close(restored_sample.obs[IMAGE_KEY], dict_sample.obs[IMAGE_KEY])
+    torch.testing.assert_close(restored_sample.next_obs[IMAGE_KEY], dict_sample.next_obs[IMAGE_KEY])
+    torch.testing.assert_close(restored_sample.obs["state"], dict_sample.obs["state"])

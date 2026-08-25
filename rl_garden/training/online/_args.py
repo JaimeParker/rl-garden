@@ -52,6 +52,8 @@ class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
     buffer_size: int = 200_000
     batch_size: int = 512
     utd: float = 0.25
+    mmap_dir: Optional[str] = None
+    mmap_mode: Literal["create", "open"] = "create"
 
 
 @dataclass
