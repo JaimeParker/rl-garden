@@ -203,6 +203,13 @@ class CombinedExtractor(BaseFeaturesExtractor):
                 else int(torch.initial_seed()) + _AUG_SEED_SALT
             )
         self._augmentation_generators: dict[str, torch.Generator] = {}
+        # Instance-scoped (not the bare module constants): two distinct
+        # CombinedExtractor instances (e.g. actor's + critic's own, under a
+        # heterogeneous-encoder policy) may both call prepare_batch() on the
+        # very same obs/next_obs dict -- a shared key would let the second
+        # call silently overwrite the first's cached augmented images.
+        self._aug_stack_key = f"{_AUG_STACK_KEY}_{id(self)}"
+        self._aug_images_key = f"{_AUG_IMAGES_KEY}_{id(self)}"
 
     @staticmethod
     def _image_space_to_hwc(
@@ -245,13 +252,13 @@ class CombinedExtractor(BaseFeaturesExtractor):
         return self._to_nchw(x)
 
     def _stack_images(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        cached = obs.get(_AUG_STACK_KEY)
+        cached = obs.get(self._aug_stack_key)
         if cached is not None:
             return cached
         return self._stack_images_uncached(obs)
 
     def _image_for_key(self, obs: dict[str, torch.Tensor], key: str) -> torch.Tensor:
-        cached = obs.get(_AUG_IMAGES_KEY)
+        cached = obs.get(self._aug_images_key)
         if cached is not None and key in cached:
             return cached[key]
         return self._to_nchw(self._prepare_image(key, obs[key]))
@@ -287,10 +294,10 @@ class CombinedExtractor(BaseFeaturesExtractor):
 
     def _prepare_augmented_images(self, obs: dict) -> None:
         if self.fusion_mode == "stack_channels":
-            obs[_AUG_STACK_KEY] = self._augment_image(self._stack_images_uncached(obs))
+            obs[self._aug_stack_key] = self._augment_image(self._stack_images_uncached(obs))
             return
 
-        obs[_AUG_IMAGES_KEY] = {
+        obs[self._aug_images_key] = {
             key: self._augment_image(self._to_nchw(self._prepare_image(key, obs[key])))
             for key in self.image_keys
         }

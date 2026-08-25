@@ -93,6 +93,11 @@ class SequenceSAC(SAC):
             critic_use_layer_norm=self.critic_use_layer_norm,
             log_std_min=self.actor_log_std_min,
             log_std_mode=self.actor_log_std_mode,
+            # Threaded through (rather than omitted) so a misconfigured
+            # policy_kwargs['critic_features_extractor_class'] raises
+            # RecurrentSACPolicy's clear guard, instead of being silently
+            # dropped.
+            critic_features_extractor=self._build_critic_features_extractor(),
         )
 
     # --- rollout hidden-state carry (pure subclass overrides of existing hooks) ---

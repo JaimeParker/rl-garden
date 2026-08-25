@@ -154,6 +154,8 @@ class SACPolicy(BasePolicy):
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         features_dim: Optional[int] = None,
+        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        critic_backbone_type: Optional[BackboneType] = None,
     ) -> None:
         del use_cql_alpha_lagrange, cql_alpha_lagrange_init
         super().__init__()
@@ -167,6 +169,11 @@ class SACPolicy(BasePolicy):
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_extractor = features_extractor
+        # Unset -> literally the same object as features_extractor (not just
+        # equal config): this identity is the single source of truth for
+        # "shared encoder" used by critic_features_for/prepare_batch_all/
+        # critic_and_encoder_parameters below.
+        self.critic_features_extractor = critic_features_extractor or features_extractor
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
 
@@ -179,6 +186,18 @@ class SACPolicy(BasePolicy):
 
         fd = features_dim if features_dim is not None else features_extractor.features_dim
         sc = features_extractor.structured_feature_config()
+
+        # Critic's own fd/sc/backbone, computed independently so a critic
+        # with a genuinely different (possibly structured) extractor is
+        # dispatched correctly below. Identical to fd/sc/backbone_type when
+        # critic_features_extractor wasn't overridden.
+        if self.critic_features_extractor is features_extractor:
+            critic_fd = fd
+            critic_sc = sc
+        else:
+            critic_fd = self.critic_features_extractor.features_dim
+            critic_sc = self.critic_features_extractor.structured_feature_config()
+        critic_backbone_type = critic_backbone_type or backbone_type
 
         # --- Actor adapter (token compression) ---
         if actor_feature_dim is not None:
@@ -198,35 +217,35 @@ class SACPolicy(BasePolicy):
             self._actor_adapter = None
             self._actor_fd = fd
 
-        # --- Critic ---
-        if sc is not None and sc.get("layout") == "token_and_prop":
+        # --- Critic --- (dispatched on critic_sc/critic_fd -- see above)
+        if critic_sc is not None and critic_sc.get("layout") == "token_and_prop":
             self.critic = SpatialEmbQEnsemble(
-                num_patches=sc["num_patches"],
-                patch_dim=sc["patch_dim"],
-                prop_dim=sc["prop_dim"],
+                num_patches=critic_sc["num_patches"],
+                patch_dim=critic_sc["patch_dim"],
+                prop_dim=critic_sc["prop_dim"],
                 action_space=action_space,
                 hidden_dims=critic_arch,
                 n_critics=n_critics,
                 spatial_emb_dim=critic_spatial_emb_dim,
                 use_layer_norm=critic_use_layer_norm,
                 kernel_init=kernel_init,
-                features_dim=fd,
+                features_dim=critic_fd,
             )
             self.critic_target = SpatialEmbQEnsemble(
-                num_patches=sc["num_patches"],
-                patch_dim=sc["patch_dim"],
-                prop_dim=sc["prop_dim"],
+                num_patches=critic_sc["num_patches"],
+                patch_dim=critic_sc["patch_dim"],
+                prop_dim=critic_sc["prop_dim"],
                 action_space=action_space,
                 hidden_dims=critic_arch,
                 n_critics=n_critics,
                 spatial_emb_dim=critic_spatial_emb_dim,
                 use_layer_norm=critic_use_layer_norm,
                 kernel_init=kernel_init,
-                features_dim=fd,
+                features_dim=critic_fd,
             )
-        elif sc is None:
+        elif critic_sc is None:
             self.critic = ContinuousCritic(
-                fd,
+                critic_fd,
                 action_space,
                 hidden_dims=critic_arch,
                 n_critics=n_critics,
@@ -235,11 +254,11 @@ class SACPolicy(BasePolicy):
                 num_groups=num_groups,
                 dropout_rate=critic_dropout_rate,
                 kernel_init=kernel_init,
-                backbone_type=backbone_type,
+                backbone_type=critic_backbone_type,
                 critic_impl=critic_impl,
             )
             self.critic_target = ContinuousCritic(
-                fd,
+                critic_fd,
                 action_space,
                 hidden_dims=critic_arch,
                 n_critics=n_critics,
@@ -248,12 +267,12 @@ class SACPolicy(BasePolicy):
                 num_groups=num_groups,
                 dropout_rate=critic_dropout_rate,
                 kernel_init=kernel_init,
-                backbone_type=backbone_type,
+                backbone_type=critic_backbone_type,
                 critic_impl=critic_impl,
             )
         else:
             raise ValueError(
-                f"Unknown structured_feature_config layout {sc.get('layout')!r}. "
+                f"Unknown structured_feature_config layout {critic_sc.get('layout')!r}. "
                 "Supported: 'token_and_prop'."
             )
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -290,6 +309,40 @@ class SACPolicy(BasePolicy):
         stop_gradient: bool = False,
     ) -> torch.Tensor:
         return self._extract_features(obs, stop_gradient=stop_gradient)
+
+    def extract_critic_features(
+        self,
+        obs: Obs,
+        stop_gradient: bool = False,
+    ) -> torch.Tensor:
+        return self.critic_features_extractor.extract(obs, stop_gradient=stop_gradient)
+
+    def critic_features_for(
+        self,
+        obs: Obs,
+        actor_features: torch.Tensor,
+        stop_gradient: bool = True,
+    ) -> torch.Tensor:
+        """Critic-role features for ``obs``, for callers that already hold
+        actor-role features for the same ``obs`` (e.g. the actor loss's
+        Q(s, pi(s)) term). Reuses ``actor_features`` -- zero extra
+        compute, today's exact behavior -- when the encoder is shared;
+        re-extracts through the critic's own encoder only when it's
+        genuinely separate. ``stop_gradient`` applies only on that
+        separate-encoder path; the shared path's gradient behavior is
+        whatever ``actor_features`` already has."""
+        if self.critic_features_extractor is self.features_extractor:
+            return actor_features
+        return self.extract_critic_features(obs, stop_gradient=stop_gradient)
+
+    def prepare_batch_all(self, obs: Obs, next_obs: Optional[Obs] = None) -> None:
+        """Call ``prepare_batch`` on every distinct extractor instance this
+        policy owns (deduped by identity, so the shared default case still
+        calls it exactly once)."""
+        extractors = {id(self.features_extractor): self.features_extractor}
+        extractors[id(self.critic_features_extractor)] = self.critic_features_extractor
+        for extractor in extractors.values():
+            extractor.prepare_batch(obs, next_obs)
 
     def _transform_features_for_actor(self, features: torch.Tensor) -> torch.Tensor:
         """Apply token compressor adapter if configured; otherwise identity."""
@@ -382,7 +435,8 @@ class SACPolicy(BasePolicy):
         the training RNG if random uniform actions are sampled.
         """
         with torch.enable_grad():
-            features = self.extract_features(obs, stop_gradient=True)
+            actor_features = self.extract_features(obs, stop_gradient=True)
+            features = self.critic_features_for(obs, actor_features, stop_gradient=True)
             if batch_size < features.shape[0]:
                 features = features[:batch_size]
             features = features.detach()
@@ -498,13 +552,22 @@ class SACPolicy(BasePolicy):
 
     def critic_and_encoder_parameters(self):
         # Encoder trained via Q-loss (matches sac_rgbd.py L581-L585).
+        # critic_features_extractor is features_extractor in the (default)
+        # shared case, so this is unchanged there.
         yield from self.critic.parameters()
-        yield from self.features_extractor.parameters()
+        yield from self.critic_features_extractor.parameters()
 
     def actor_parameters(self):
-        # Actor-only; RGBD actor path uses stop_gradient on image encodings.
+        # Actor-only; RGBD actor path uses stop_gradient on image encodings
+        # in the shared-encoder case, so features_extractor is deliberately
+        # excluded there (it trains via critic_and_encoder_parameters'
+        # Q-loss instead). When critic_features_extractor is genuinely
+        # separate, features_extractor is actor-exclusive -- nothing else
+        # would ever train it -- so it belongs on this optimizer instead.
         if self._actor_adapter is not None:
             yield from self._actor_adapter.parameters()
+        if self.critic_features_extractor is not self.features_extractor:
+            yield from self.features_extractor.parameters()
         yield from self.actor.parameters()
 
     def cql_alpha_lagrange_parameters(self):

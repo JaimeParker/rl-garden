@@ -64,6 +64,11 @@ class SequencePPO(PPO):
             value_dropout_rate=self.value_dropout_rate,
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
+            # Threaded through (rather than omitted) so a misconfigured
+            # policy_kwargs['critic_features_extractor_class'] raises
+            # RecurrentPPOPolicy's clear guard, instead of being silently
+            # dropped.
+            critic_features_extractor=self._build_critic_features_extractor(),
         ).to(self.device)
         self.policy_optimizer = make_optimizer(
             self.policy.parameters(),

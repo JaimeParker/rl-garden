@@ -34,17 +34,26 @@ def _ppo_env_request(args, run_name):
 
 def _ppo_image_kwargs(args, env) -> dict:
     from rl_garden.common.cli_args import (
+        critic_features_extractor_kwargs_from_args,
         image_encoder_factory_from_args,
         image_keys_from_env,
     )
 
     if args.obs_mode == "state":
         return {}
-    return {
+    kwargs = {
         "image_keys": image_keys_from_env(env, args),
         "image_encoder_factory": image_encoder_factory_from_args(args),
         "image_fusion_mode": args.image_fusion_mode,
     }
+    if args.critic_encoder:
+        critic_image_keys = image_keys_from_env(
+            env, args, image_key_filter=args.critic_image_keys
+        )
+        policy_kwargs = critic_features_extractor_kwargs_from_args(args, critic_image_keys)
+        if policy_kwargs:
+            kwargs["policy_kwargs"] = policy_kwargs
+    return kwargs
 
 
 def _ppo_common_kwargs(
@@ -86,6 +95,7 @@ def _ppo_common_kwargs(
         value_dropout_rate=args.value_dropout_rate,
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
+        critic_backbone_type=args.critic_backbone_type,
         log_std_init=args.log_std_init,
         seed=args.seed,
         logger=logger,

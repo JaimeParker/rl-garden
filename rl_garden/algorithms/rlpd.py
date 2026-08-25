@@ -45,6 +45,7 @@ class RLPD(PriorDataReplayMixin, SAC):
         critic_dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        critic_backbone_type: Optional[BackboneType] = None,
         use_pnorm: bool = False,
         exclude_bias_from_decay: bool = False,
         **sac_kwargs: Any,
@@ -56,12 +57,17 @@ class RLPD(PriorDataReplayMixin, SAC):
         self.use_pnorm = use_pnorm
         self.exclude_bias_from_decay = exclude_bias_from_decay
         self._init_prior_data_params()
+        # critic_backbone_type is forwarded to (and stored by) SAC.__init__
+        # rather than set here directly -- SAC.__init__ runs inside this
+        # super().__init__() call and would otherwise overwrite a
+        # pre-set value back to its own default.
         super().__init__(
             env,
             eval_env,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
             critic_use_layer_norm=critic_use_layer_norm,
+            critic_backbone_type=critic_backbone_type,
             **sac_kwargs,
         )
 
@@ -85,6 +91,8 @@ class RLPD(PriorDataReplayMixin, SAC):
             log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
+            critic_features_extractor=self._build_critic_features_extractor(),
+            critic_backbone_type=self.critic_backbone_type,
         )
 
     def _setup_model(self) -> None:

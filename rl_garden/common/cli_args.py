@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Literal, Optional
 
 @dataclass
@@ -77,6 +77,19 @@ class VisionArgs:
     # channel-stacking. Required for multi-camera envs (e.g. peg) when each
     # camera should feed an independent encoder under ``per_key`` fusion.
     per_camera_rgbd: bool = False
+    # Opt-in heterogeneous critic encoder. Unset (default) keeps today's
+    # exact behavior: actor and critic share one encoder instance and
+    # ``backbone_type``. See critic_features_extractor_kwargs_from_args()
+    # below.
+    critic_encoder: Optional[
+        Literal["plain_conv", "resnet10", "resnet18", "vit", "drqv2_conv", "cnn3d"]
+    ] = None
+    critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
+    # Critic-only obs-key overrides (asymmetric/privileged-critic-lite --
+    # subsets keys already present in the obs dict, does not synthesize new
+    # ones). Unset falls back to the actor's image_keys/include_state.
+    critic_image_keys: Optional[str] = None
+    critic_include_state: Optional[bool] = None
 
 
 def resolve_checkpoint_dir(args: Any, run_name: str) -> Optional[str]:
@@ -358,6 +371,49 @@ def vit_sac_kwargs_from_args(
     return _resolve_encoder_spec(args).build_sac_kwargs(args, image_keys)
 
 
+def critic_features_extractor_kwargs_from_args(
+    args: VisionArgs, image_keys: tuple[str, ...]
+) -> dict[str, Any]:
+    """``policy_kwargs``-shaped ``{critic_features_extractor_class,
+    critic_features_extractor_kwargs}`` for ``args.critic_encoder`` -- covers
+    both the flat ``CombinedExtractor`` path and vit's structured
+    ``ViTTokenAndPropExtractor`` path (dispatched the same way
+    ``vit_sac_kwargs_from_args`` does for the actor/shared path), so the
+    caller doesn't need to special-case vit. Returns ``{}`` when
+    ``args.critic_encoder`` is unset -- purely additive; the default/shared
+    path never calls this.
+    """
+    if not args.critic_encoder:
+        return {}
+    critic_args = replace(args, encoder=args.critic_encoder)
+    sac_kwargs = vit_sac_kwargs_from_args(critic_args, image_keys)
+    if sac_kwargs:
+        policy_kwargs = sac_kwargs["policy_kwargs"]
+        return {
+            "critic_features_extractor_class": policy_kwargs["features_extractor_class"],
+            "critic_features_extractor_kwargs": policy_kwargs["features_extractor_kwargs"],
+        }
+    from rl_garden.encoders import CombinedExtractor
+
+    use_proprio = (
+        args.critic_include_state
+        if args.critic_include_state is not None
+        else args.include_state
+    )
+    return {
+        "critic_features_extractor_class": CombinedExtractor,
+        "critic_features_extractor_kwargs": dict(
+            image_keys=image_keys,
+            image_encoder_factory=image_encoder_factory_from_args(critic_args),
+            use_proprio=use_proprio,
+            fusion_mode=args.image_fusion_mode,
+            enable_stacking=args.frame_stack > 1,
+            image_augmentation=args.image_augmentation,
+            random_shift_pad=args.image_random_shift_pad,
+        ),
+    }
+
+
 def image_keys_from_obs_mode(obs_mode: str) -> tuple[str, ...]:
     return ("rgb",) if obs_mode == "rgb" else ("rgb", "depth")
 
@@ -371,15 +427,22 @@ def _parse_image_key_filter(value: Optional[str]) -> Optional[tuple[str, ...]]:
     return keys
 
 
-def image_keys_from_env(env: Any, args: VisionArgs) -> tuple[str, ...]:
+def image_keys_from_env(
+    env: Any, args: VisionArgs, image_key_filter: Optional[str] = None
+) -> tuple[str, ...]:
     """Resolve image keys for ``CombinedExtractor`` from the built env.
 
     When ``args.per_camera_rgbd`` is set the env emits one ``rgb_<cam>`` (and
     optionally ``depth_<cam>``) key per camera; we discover them from the
     observation space. Otherwise we fall back to the single-key default that
     matches ``FlattenRGBDObservationWrapper``.
+
+    ``image_key_filter`` overrides ``args.image_keys`` when given (e.g. to
+    resolve ``args.critic_image_keys`` through this same logic instead).
     """
-    explicit_keys = _parse_image_key_filter(args.image_keys)
+    explicit_keys = _parse_image_key_filter(
+        image_key_filter if image_key_filter is not None else args.image_keys
+    )
     if explicit_keys is not None:
         obs_space = env.single_observation_space
         if hasattr(obs_space, "spaces"):

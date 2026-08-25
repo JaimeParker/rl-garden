@@ -29,7 +29,12 @@ class PPO(OnPolicyAlgorithm):
 
     _compatible_checkpoint_algorithms = ("PPO",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
-        {"features_extractor_class", "features_extractor_kwargs"}
+        {
+            "features_extractor_class",
+            "features_extractor_kwargs",
+            "critic_features_extractor_class",
+            "critic_features_extractor_kwargs",
+        }
     )
 
     def __init__(
@@ -80,6 +85,7 @@ class PPO(OnPolicyAlgorithm):
             Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
         ] = None,
         backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
+        critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -162,6 +168,7 @@ class PPO(OnPolicyAlgorithm):
         self.value_dropout_rate = value_dropout_rate
         self.kernel_init = kernel_init
         self.backbone_type = backbone_type
+        self.critic_backbone_type = critic_backbone_type
 
         obs_space = self.env.single_observation_space
         image_kwargs_explicit = {
@@ -215,6 +222,14 @@ class PPO(OnPolicyAlgorithm):
         self._setup_model()
 
     def _actor_stop_gradient(self) -> bool:
+        # detach_encoder_on_actor only makes sense when the encoder is
+        # shared with the value head (it trains via value loss instead).
+        # With a separate critic_features_extractor, features_extractor is
+        # actor-exclusive and needs the actor loss's gradient -- nothing
+        # else would ever train it -- so the detach request is ignored in
+        # that case rather than silently leaving it at random init.
+        if self.policy.critic_features_extractor is not self.policy.features_extractor:
+            return False
         return bool(self.detach_encoder_on_actor)
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
@@ -338,16 +353,17 @@ class PPO(OnPolicyAlgorithm):
                 "Unsupported policy_kwargs keys: "
                 + ", ".join(unknown_keys)
                 + ". Supported keys are: features_extractor_class, "
-                + "features_extractor_kwargs."
+                + "features_extractor_kwargs, critic_features_extractor_class, "
+                + "critic_features_extractor_kwargs."
             )
-        features_extractor_kwargs = normalized.get("features_extractor_kwargs", {})
-        if features_extractor_kwargs is None:
-            features_extractor_kwargs = {}
-        if not isinstance(features_extractor_kwargs, dict):
-            raise TypeError(
-                "policy_kwargs['features_extractor_kwargs'] must be a dict."
-            )
-        normalized["features_extractor_kwargs"] = dict(features_extractor_kwargs)
+        for key in ("features_extractor_kwargs", "critic_features_extractor_kwargs"):
+            kwargs = normalized.get(key)
+            if kwargs is None:
+                continue
+            if not isinstance(kwargs, dict):
+                raise TypeError(f"policy_kwargs[{key!r}] must be a dict.")
+            normalized[key] = dict(kwargs)
+        normalized.setdefault("features_extractor_kwargs", {})
         return normalized
 
     def _resolve_policy_kwargs(self) -> dict[str, Any]:
@@ -390,8 +406,29 @@ class PPO(OnPolicyAlgorithm):
             **resolved["features_extractor_kwargs"],
         )
 
+    def _build_critic_features_extractor(self) -> Optional[BaseFeaturesExtractor]:
+        """A second extractor for PPO's value head, only when policy_kwargs
+        explicitly asked for one -- otherwise ``None`` so PPOPolicy falls
+        back to sharing ``features_extractor`` (today's exact behavior)."""
+        critic_class = self.policy_kwargs.get("critic_features_extractor_class")
+        if critic_class is None:
+            return None
+        if not isinstance(critic_class, type) or not issubclass(
+            critic_class, BaseFeaturesExtractor
+        ):
+            raise TypeError(
+                "policy_kwargs['critic_features_extractor_class'] must be a "
+                "BaseFeaturesExtractor subclass."
+            )
+        critic_kwargs = self.policy_kwargs.get("critic_features_extractor_kwargs") or {}
+        return critic_class(
+            observation_space=self.env.single_observation_space,
+            **critic_kwargs,
+        )
+
     def _setup_model(self) -> None:
         features_extractor = self._build_features_extractor()
+        critic_features_extractor = self._build_critic_features_extractor()
         self.policy = PPOPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
@@ -407,6 +444,8 @@ class PPO(OnPolicyAlgorithm):
             value_dropout_rate=self.value_dropout_rate,
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
+            critic_features_extractor=critic_features_extractor,
+            critic_backbone_type=self.critic_backbone_type,
         ).to(self.device)
         self.policy_optimizer = make_optimizer(
             self.policy.parameters(),

@@ -14,6 +14,7 @@ def _rlpd_hybrid_env_request(args, run_name):
 def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import RLPDHybrid
     from rl_garden.common.cli_args import (
+        critic_features_extractor_kwargs_from_args,
         image_encoder_factory_from_args,
         image_keys_from_env,
         vit_sac_kwargs_from_args,
@@ -30,6 +31,15 @@ def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
     if is_visual:
         factory = image_encoder_factory_from_args(args)
         image_keys = image_keys_from_env(env, args)
+        sac_kwargs = vit_sac_kwargs_from_args(args, image_keys)
+        policy_kwargs = dict(sac_kwargs.pop("policy_kwargs", {}) or {})
+        if args.critic_encoder:
+            critic_image_keys = image_keys_from_env(
+                env, args, image_key_filter=args.critic_image_keys
+            )
+            policy_kwargs.update(
+                critic_features_extractor_kwargs_from_args(args, critic_image_keys)
+            )
         image_kwargs = dict(
             image_keys=image_keys,
             image_encoder_factory=factory,
@@ -38,8 +48,11 @@ def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
             image_augmentation=args.image_augmentation,
             random_shift_pad=args.image_random_shift_pad,
             image_augmentation_seed=args.seed + 1_000_003,
-            **vit_sac_kwargs_from_args(args, image_keys),
+            critic_backbone_type=args.critic_backbone_type,
+            **sac_kwargs,
         )
+        if policy_kwargs:
+            image_kwargs["policy_kwargs"] = policy_kwargs
 
     agent = construct_agent(
         RLPDHybrid,

@@ -47,14 +47,17 @@ class RLPDHybridPolicy(RLPDPolicy):
         super().__init__(
             observation_space, continuous_action_space, features_extractor, **rlpd_kwargs
         )
+        # discrete_critic is architecturally a third critic head -- follows
+        # the critic role's extractor (== features_extractor in the default
+        # shared case).
         self.discrete_critic = DiscreteCritic(
-            features_extractor.features_dim,
+            self.critic_features_extractor.features_dim,
             discrete_hidden_dims,
             n_actions=n_discrete_actions,
             use_layer_norm=discrete_use_layer_norm,
         )
         self.discrete_target_critic = DiscreteCritic(
-            features_extractor.features_dim,
+            self.critic_features_extractor.features_dim,
             discrete_hidden_dims,
             n_actions=n_discrete_actions,
             use_layer_norm=discrete_use_layer_norm,
@@ -76,7 +79,8 @@ class RLPDHybridPolicy(RLPDPolicy):
             continuous_action = self.actor.deterministic_action(actor_input)
         else:
             continuous_action, _ = self.actor.action_log_prob(actor_input)
-        discrete_index = self.discrete_critic(features).argmax(dim=-1)
+        discrete_features = self.critic_features_for(obs, features, stop_gradient=True)
+        discrete_index = self.discrete_critic(discrete_features).argmax(dim=-1)
         discrete_action = self.discrete_action_from_index(discrete_index)
         return torch.cat([continuous_action, discrete_action], dim=-1)
 

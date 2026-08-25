@@ -9,6 +9,7 @@ import pytest
 from rl_garden.common.cli_args import (
     ENCODER_REGISTRY,
     VisionArgs,
+    critic_features_extractor_kwargs_from_args,
     image_encoder_factory_from_args,
     image_keys_from_env,
     image_keys_from_obs_mode,
@@ -1018,6 +1019,37 @@ def test_image_keys_from_obs_mode() -> None:
     assert image_keys_from_obs_mode("rgbd") == ("rgb", "depth")
 
 
+def test_critic_features_extractor_kwargs_empty_when_unset() -> None:
+    args = VisionArgs(encoder="resnet10")
+    assert critic_features_extractor_kwargs_from_args(args, ("rgb",)) == {}
+
+
+def test_critic_features_extractor_kwargs_flat_for_non_vit_critic_encoder() -> None:
+    from rl_garden.encoders import CombinedExtractor
+
+    args = VisionArgs(encoder="drqv2_conv", critic_encoder="resnet10")
+    kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
+    assert kwargs["critic_features_extractor_class"] is CombinedExtractor
+    assert kwargs["critic_features_extractor_kwargs"]["image_keys"] == ("rgb",)
+    # actor's own encoder choice (drqv2_conv) must not leak into the critic's
+    # image_encoder_factory -- only args.critic_encoder (resnet10) should.
+    assert callable(kwargs["critic_features_extractor_kwargs"]["image_encoder_factory"])
+
+
+def test_critic_features_extractor_kwargs_structured_for_vit_critic_encoder() -> None:
+    from rl_garden.encoders import ViTTokenAndPropExtractor
+
+    args = VisionArgs(encoder="resnet10", critic_encoder="vit")
+    kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
+    assert kwargs["critic_features_extractor_class"] is ViTTokenAndPropExtractor
+
+
+def test_critic_features_extractor_kwargs_respects_critic_include_state_override() -> None:
+    args = VisionArgs(encoder="resnet10", critic_encoder="resnet10", critic_include_state=False)
+    kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
+    assert kwargs["critic_features_extractor_kwargs"]["use_proprio"] is False
+
+
 def test_image_keys_from_env_can_filter_explicit_per_camera_keys() -> None:
     from gymnasium import spaces
 
@@ -1055,6 +1087,28 @@ def test_image_keys_from_env_rejects_missing_explicit_key() -> None:
 
     with pytest.raises(ValueError, match="rgb_missing"):
         image_keys_from_env(_Env(), args)
+
+
+def test_image_keys_from_env_image_key_filter_overrides_args_image_keys() -> None:
+    from gymnasium import spaces
+
+    class _Env:
+        single_observation_space = spaces.Dict(
+            {
+                "rgb_base_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype="uint8"),
+                "rgb_hand_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype="uint8"),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype="float32"),
+            }
+        )
+
+    args = VisionArgs(per_camera_rgbd=True, image_keys="rgb_base_camera")
+
+    # image_key_filter (resolving args.critic_image_keys) wins over args.image_keys.
+    assert image_keys_from_env(_Env(), args, image_key_filter="rgb_hand_camera") == (
+        "rgb_hand_camera",
+    )
+    # Omitted -> falls back to args.image_keys, unchanged from before.
+    assert image_keys_from_env(_Env(), args) == ("rgb_base_camera",)
 
 
 def test_resolve_num_eval_steps_falls_back_to_default_when_unset() -> None:

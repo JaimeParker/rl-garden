@@ -83,6 +83,8 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
             discrete_hidden_dims=(self.discrete_hidden_dim,),
+            critic_features_extractor=self._build_critic_features_extractor(),
+            critic_backbone_type=self.critic_backbone_type,
         )
 
     def _build_replay_buffer(self):
@@ -151,14 +153,14 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
     def _train_discrete_critic(self, gradient_steps: int) -> None:
         for _ in range(gradient_steps):
             data = self._sample_train_batch(self.batch_size)
-            self.policy.features_extractor.prepare_batch(data.obs, data.next_obs)
+            self.policy.prepare_batch_all(data.obs, data.next_obs)
             labels = _discrete_labels_from_actions(data.actions)
 
-            features = self.policy.extract_features(data.obs, stop_gradient=True)
+            features = self.policy.extract_critic_features(data.obs, stop_gradient=True)
             q_pred = self.policy.discrete_critic(features).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
 
             with torch.no_grad():
-                next_features = self.policy.extract_features(data.next_obs, stop_gradient=True)
+                next_features = self.policy.extract_critic_features(data.next_obs, stop_gradient=True)
                 next_online_q = self.policy.discrete_critic(next_features)
                 next_action = next_online_q.argmax(dim=-1, keepdim=True)
                 next_target_q = self.policy.discrete_target_critic(next_features)

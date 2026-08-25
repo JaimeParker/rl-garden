@@ -45,7 +45,15 @@ class RecurrentSACPolicy(SACPolicy):
         log_std_mode: str = "tanh",
         log_std_min: float = LOG_STD_MIN,
         log_std_max: float = LOG_STD_MAX,
+        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
     ) -> None:
+        if critic_features_extractor is not None:
+            raise ValueError(
+                "RecurrentSACPolicy does not support a separate "
+                "critic_features_extractor: recurrent_encoder is a single RNN "
+                "shared between the encoder and both actor/critic heads, so "
+                "there is no way to route a second encoder's output through it."
+            )
         # recurrent_encoder.features_dim is read here (a plain property, safe
         # before nn.Module registration); self.recurrent_encoder is assigned
         # AFTER super().__init__() returns, since nn.Module.__setattr__ requires

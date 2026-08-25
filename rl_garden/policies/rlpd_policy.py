@@ -44,6 +44,8 @@ class RLPDPolicy(SACPolicy):
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
+        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        critic_backbone_type: Optional[BackboneType] = None,
     ) -> None:
         super().__init__(
             observation_space=observation_space,
@@ -63,9 +65,18 @@ class RLPDPolicy(SACPolicy):
             log_std_mode=log_std_mode,
             actor_feature_dim=actor_feature_dim,
             critic_spatial_emb_dim=critic_spatial_emb_dim,
+            critic_features_extractor=critic_features_extractor,
+            critic_backbone_type=critic_backbone_type,
         )
         if not use_pnorm:
             return
+        if critic_features_extractor is not None:
+            raise ValueError(
+                "use_pnorm=True is not supported with critic_features_extractor "
+                "set: the pnorm rebuild below reconstructs critic/actor from a "
+                "single shared features_extractor and would silently discard "
+                "the separate critic encoder SACPolicy.__init__ already built."
+            )
 
         sc = features_extractor.structured_feature_config()
         if sc is not None and sc.get("layout") == "token_and_prop":

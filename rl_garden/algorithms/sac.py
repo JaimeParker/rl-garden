@@ -39,7 +39,14 @@ from rl_garden.policies.sac_policy import SACPolicy
 
 class SAC(SACCore, OffPolicyAlgorithm):
     _compatible_checkpoint_algorithms = ("SAC",)
-    _SUPPORTED_POLICY_KWARGS = frozenset({"features_extractor_class", "features_extractor_kwargs"})
+    _SUPPORTED_POLICY_KWARGS = frozenset(
+        {
+            "features_extractor_class",
+            "features_extractor_kwargs",
+            "critic_features_extractor_class",
+            "critic_features_extractor_kwargs",
+        }
+    )
 
     def __init__(
         self,
@@ -87,6 +94,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         actor_log_std_mode: Literal["clamp", "tanh"] = "clamp",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
+        critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None,
         image_encoder_factory: Optional[ImageEncoderFactory] = None,
         image_keys: Optional[tuple[str, ...]] = None,
         state_key: Optional[str] = None,
@@ -190,6 +198,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         self.actor_log_std_mode = actor_log_std_mode
         self.actor_feature_dim = actor_feature_dim
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
+        self.critic_backbone_type = critic_backbone_type
 
         obs_space = self.env.single_observation_space
         image_kwargs_explicit = {
@@ -442,16 +451,18 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 "Unsupported policy_kwargs keys: "
                 + ", ".join(unknown_keys)
                 + ". Supported keys are: features_extractor_class, "
-                + "features_extractor_kwargs."
+                + "features_extractor_kwargs, critic_features_extractor_class, "
+                + "critic_features_extractor_kwargs."
             )
 
-        features_extractor_kwargs = normalized.get("features_extractor_kwargs", {})
-        if features_extractor_kwargs is None:
-            features_extractor_kwargs = {}
-        if not isinstance(features_extractor_kwargs, dict):
-            raise TypeError("policy_kwargs['features_extractor_kwargs'] must be a dict.")
-
-        normalized["features_extractor_kwargs"] = dict(features_extractor_kwargs)
+        for key in ("features_extractor_kwargs", "critic_features_extractor_kwargs"):
+            kwargs = normalized.get(key)
+            if kwargs is None:
+                continue
+            if not isinstance(kwargs, dict):
+                raise TypeError(f"policy_kwargs[{key!r}] must be a dict.")
+            normalized[key] = dict(kwargs)
+        normalized.setdefault("features_extractor_kwargs", {})
         return normalized
 
     def _resolve_policy_kwargs(self) -> dict[str, Any]:
@@ -491,6 +502,26 @@ class SAC(SACCore, OffPolicyAlgorithm):
         return features_extractor_class(
             observation_space=self.env.single_observation_space,
             **resolved["features_extractor_kwargs"],
+        )
+
+    def _build_critic_features_extractor(self) -> Optional[BaseFeaturesExtractor]:
+        """A second extractor for the critic, only when policy_kwargs
+        explicitly asked for one -- otherwise ``None`` so SACPolicy falls
+        back to sharing ``features_extractor`` (today's exact behavior)."""
+        critic_class = self.policy_kwargs.get("critic_features_extractor_class")
+        if critic_class is None:
+            return None
+        if not isinstance(critic_class, type) or not issubclass(
+            critic_class, BaseFeaturesExtractor
+        ):
+            raise TypeError(
+                "policy_kwargs['critic_features_extractor_class'] must be a "
+                "BaseFeaturesExtractor subclass."
+            )
+        critic_kwargs = self.policy_kwargs.get("critic_features_extractor_kwargs") or {}
+        return critic_class(
+            observation_space=self.env.single_observation_space,
+            **critic_kwargs,
         )
 
     def _build_replay_buffer(self):
@@ -567,10 +598,17 @@ class SAC(SACCore, OffPolicyAlgorithm):
             log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
+            critic_features_extractor=self._build_critic_features_extractor(),
+            critic_backbone_type=self.critic_backbone_type,
         )
 
     def _actor_stop_gradient(self) -> bool:
-        return self._is_dict_obs
+        # Only stop-gradient when the encoder is shared with the critic
+        # (its established Q-loss-only training convention). With a
+        # separate critic_features_extractor, features_extractor is
+        # actor-exclusive and needs the actor loss's gradient -- nothing
+        # else would ever train it. See SACPolicy.actor_parameters().
+        return self._is_dict_obs and self.policy.critic_features_extractor is self.policy.features_extractor
 
     @staticmethod
     def _resolve_net_arch(
