@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="rl-garden logo" width="360">
+</p>
+
 # rl-garden
 
 `rl-garden` is a PyTorch-native robot-learning framework for online RL, offline RL,
