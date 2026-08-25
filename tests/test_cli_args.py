@@ -17,6 +17,7 @@ from rl_garden.common.cli_args import (
     vit_sac_kwargs_from_args,
     warn_if_eval_budget_undersized,
 )
+from rl_garden.common.effective_config import inactive_config_paths
 from rl_garden.training.offline._args import OfflineVisionArgs, TDMPC2MultitaskTrainingArgs
 from rl_garden.training.offline.awac import AWACArgs
 from rl_garden.training.offline.td3_bc import TD3BCArgs
@@ -1048,6 +1049,35 @@ def test_critic_features_extractor_kwargs_respects_critic_include_state_override
     args = VisionArgs(encoder="resnet10", critic_encoder="resnet10", critic_include_state=False)
     kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
     assert kwargs["critic_features_extractor_kwargs"]["use_proprio"] is False
+
+
+def test_critic_image_keys_and_include_state_inactive_without_critic_encoder() -> None:
+    # Without critic_encoder, critic_features_extractor_kwargs_from_args()
+    # is never reached by any build_* call site (all gate on
+    # `if args.critic_encoder:` first), so an explicit critic_image_keys/
+    # critic_include_state would otherwise be silently ignored -- not a
+    # dimension mismatch, just a no-op. Flag it at config-resolution time
+    # instead, matching the pretrained_weights/freeze_resnet_* precedent
+    # for "field X requires field Y" just above this in the same function.
+    args = VisionArgs(
+        obs_mode="rgb", encoder="resnet10", critic_image_keys="rgb", critic_include_state=False
+    )
+    inactive = inactive_config_paths(args)
+    assert inactive["critic_image_keys"] == "critic_encoder is not set"
+    assert inactive["critic_include_state"] == "critic_encoder is not set"
+
+
+def test_critic_image_keys_and_include_state_active_with_critic_encoder() -> None:
+    args = VisionArgs(
+        obs_mode="rgb",
+        encoder="resnet10",
+        critic_encoder="resnet10",
+        critic_image_keys="rgb",
+        critic_include_state=False,
+    )
+    inactive = inactive_config_paths(args)
+    assert "critic_image_keys" not in inactive
+    assert "critic_include_state" not in inactive
 
 
 def test_image_keys_from_env_can_filter_explicit_per_camera_keys() -> None:

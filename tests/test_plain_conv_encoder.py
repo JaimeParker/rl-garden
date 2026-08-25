@@ -150,6 +150,83 @@ def test_plain_conv_gap_applies_to_each_per_key_camera() -> None:
     )
 
 
+def test_combined_extractor_excludes_unrequested_image_key_but_keeps_genuine_vector_key() -> None:
+    obs_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "depth": spaces.Box(0.0, 1.0, (64, 64, 1), dtype=np.float32),
+            "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
+            "extra": spaces.Box(-1.0, 1.0, (3,), dtype=np.float32),
+        }
+    )
+    factory = image_encoder_factory_from_args(
+        VisionArgs(encoder="plain_conv", encoder_features_dim=16)
+    )
+    extractor = CombinedExtractor(
+        obs_space,
+        image_keys=("rgb",),
+        image_encoder_factory=factory,
+        proprio_latent_dim=4,
+    )
+
+    assert "depth" not in extractor.vector_extractors
+    assert "extra" in extractor.vector_extractors
+    # 16 (image) + 4 (proprio) + 3 (extra) -- must NOT include depth's raw
+    # 64*64*1=4096 pixels.
+    assert extractor.features_dim == 16 + 4 + 3
+
+
+def test_combined_extractor_drops_unrequested_per_camera_key() -> None:
+    obs_space = spaces.Dict(
+        {
+            "rgb_base_camera": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "rgb_hand_camera": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
+        }
+    )
+    factory = image_encoder_factory_from_args(
+        VisionArgs(encoder="plain_conv", encoder_features_dim=16, image_fusion_mode="per_key")
+    )
+    extractor = CombinedExtractor(
+        obs_space,
+        image_keys=("rgb_base_camera",),
+        image_encoder_factory=factory,
+        fusion_mode="per_key",
+        proprio_latent_dim=4,
+    )
+
+    assert set(extractor.image_encoders) == {"rgb_base_camera"}
+    assert "rgb_hand_camera" not in extractor.vector_extractors
+    # 16 (image) + 4 (proprio) -- must NOT include rgb_hand_camera's raw
+    # 64*64*3=12288 pixels.
+    assert extractor.features_dim == 16 + 4
+
+
+def test_combined_extractor_keeps_low_dim_rgb_prefixed_key_as_vector() -> None:
+    # Locks in shape-gating (not name alone): a low-dimensional key that
+    # merely starts with "rgb" (e.g. a validity flag) must stay on the
+    # ordinary vector path, not be swept into the image-exclusion set.
+    obs_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "rgb_valid": spaces.Box(0.0, 1.0, (1,), dtype=np.float32),
+            "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
+        }
+    )
+    factory = image_encoder_factory_from_args(
+        VisionArgs(encoder="plain_conv", encoder_features_dim=16)
+    )
+    extractor = CombinedExtractor(
+        obs_space,
+        image_keys=("rgb",),
+        image_encoder_factory=factory,
+        proprio_latent_dim=4,
+    )
+
+    assert "rgb_valid" in extractor.vector_extractors
+    assert extractor.features_dim == 16 + 4 + 1
+
+
 def test_plain_conv_pool_feature_map_alias_uses_adaptive_max() -> None:
     enc = PlainConv(_image_space(), features_dim=16, pool_feature_map=True)
     out = enc(torch.zeros(2, 3, 64, 64))

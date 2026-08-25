@@ -376,6 +376,9 @@ def inactive_config_paths(args: Any) -> dict[str, str]:
         for name in visual_names:
             if name.startswith("vit_"):
                 inactive[name] = f"encoder is {encoder!r}"
+    if getattr(args, "critic_encoder", None) is None:
+        for name in ("critic_image_keys", "critic_include_state"):
+            inactive[name] = "critic_encoder is not set"
     return inactive
 
 

@@ -17,6 +17,12 @@ the encoded features. The proprio branch follows hil-serl's design
 
 Inputs from ManiSkill's ``FlattenRGBDObservationWrapper`` are HWC uint8
 tensors for images; we permute to NCHW and normalize to [0,1] here.
+
+A key present in ``observation_space`` but not requested via ``image_keys``
+is dropped entirely (not flattened as a generic vector) when it is
+image-shaped and matches the ``rgb*``/``depth*`` naming convention
+(see ``discover_image_keys``) -- it is "spoken for" by the image branch even
+when unused, the same way ``state_key`` already is.
 """
 from __future__ import annotations
 
@@ -96,6 +102,18 @@ class CombinedExtractor(BaseFeaturesExtractor):
         random_shift_pad: int = 4,
         augmentation_seed: Optional[int] = None,
     ) -> None:
+        """``image_keys`` are resolved against ``observation_space`` into
+        ``present_image_keys`` and get their own encoder(s). Any other key
+        in the space is either ``state_key`` (proprio branch) or a genuine
+        vector key (flattened as-is) -- *except* a key matching the
+        ``rgb*``/``depth*`` naming convention with an image-shaped Box
+        (``discover_image_keys`` + a 3D/4D shape check), which is dropped
+        entirely rather than flattened, even though it wasn't requested.
+        This only affects keys unrequested by name+shape; a requested image
+        key under a non-conventional name (e.g. a ``"wrist"`` camera) is
+        unaffected -- it's still built as an image encoder via
+        ``present_image_keys`` membership regardless of naming.
+        """
         assert isinstance(observation_space, spaces.Dict)
         if fusion_mode not in ("stack_channels", "per_key"):
             raise ValueError(
@@ -164,7 +182,23 @@ class CombinedExtractor(BaseFeaturesExtractor):
             features_dim += proprio.features_dim
 
         vector_extractors: nn.ModuleDict = nn.ModuleDict()
-        image_key_set = set(present_image_keys)
+        # Keys that look like images by the rgb*/depth* naming convention
+        # (discover_image_keys) AND have an image-shaped Box are excluded
+        # from the generic vector-flatten fallback below, whether or not
+        # they were requested via `image_keys` -- mirrors state_key's
+        # unconditional exclusion just below: a key "spoken for" by another
+        # branch must never fall through to nn.Flatten() merely because it
+        # wasn't requested. An unrequested image-shaped key is therefore
+        # dropped entirely: no encoder is built for it, it is not
+        # vectorized, and it does not count toward features_dim.
+        # Shape-gating (not name alone) keeps a low-dimensional rgb*/depth*-
+        # named key (e.g. a hypothetical `rgb_valid` flag) on the ordinary
+        # vector path.
+        image_key_set = set(present_image_keys) | {
+            k
+            for k in discover_image_keys(observation_space)
+            if _is_image_shaped_box(observation_space.spaces[k], enable_stacking=enable_stacking)
+        }
         for key, subspace in observation_space.spaces.items():
             if key in image_key_set or key == state_key:
                 continue
@@ -172,7 +206,13 @@ class CombinedExtractor(BaseFeaturesExtractor):
             vector_extractors[key] = nn.Flatten()
             features_dim += int(np.prod(subspace.shape))
 
-        assert features_dim > 0, "CombinedExtractor produced 0-dim output."
+        assert features_dim > 0, (
+            "CombinedExtractor produced 0-dim output. If observation_space "
+            "contains keys, check whether they were all excluded: "
+            "unrequested rgb*/depth*-prefixed image-shaped keys are "
+            "dropped (not vectorized) per the image_keys contract "
+            "documented on __init__."
+        )
         super().__init__(observation_space, features_dim)
 
         self.image_keys: tuple[str, ...] = tuple(present_image_keys)
@@ -339,6 +379,19 @@ class CombinedExtractor(BaseFeaturesExtractor):
 
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.extract(obs, stop_gradient=False)
+
+
+def _is_image_shaped_box(subspace: spaces.Space, *, enable_stacking: bool) -> bool:
+    """True if `subspace` has the shape CombinedExtractor treats as an
+    image: 3D (H, W, C), or 4D (T, H, W, C) when `enable_stacking`. Used
+    with the rgb*/depth* naming convention (discover_image_keys) to
+    identify keys "spoken for" by the image branch even when not
+    requested via `image_keys`.
+    """
+    if not isinstance(subspace, spaces.Box):
+        return False
+    ndim = len(subspace.shape)
+    return ndim == 3 or (enable_stacking and ndim == 4)
 
 
 def discover_image_keys(observation_space: spaces.Dict) -> tuple[str, ...]:

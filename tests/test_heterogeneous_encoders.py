@@ -371,3 +371,61 @@ def test_rlpd_hybrid_discrete_critic_sized_from_critic_extractor():
         critic_features_extractor=critic_extractor,
     )
     assert policy.discrete_critic.net[0].in_features == 9
+
+
+# --- separate critic extractor: real CombinedExtractor drops unrequested keys ---
+
+
+def test_separate_critic_extractor_drops_unrequested_image_key():
+    obs_space = spaces.Dict(
+        {
+            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "depth": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
+            "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+        }
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    agent = SAC(
+        env=DummyVecEnv(obs_space, act_space),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=64,
+        batch_size=4,
+        learning_starts=0,
+        training_freq=1,
+        eval_freq=0,
+        net_arch={"pi": [16], "qf": [16]},
+        image_keys=("rgb", "depth"),
+        proprio_latent_dim=4,
+        policy_kwargs={
+            "critic_features_extractor_class": CombinedExtractor,
+            "critic_features_extractor_kwargs": {
+                "image_keys": ("rgb",),
+                "proprio_latent_dim": 4,
+            },
+        },
+    )
+
+    critic_extractor = agent.policy.critic_features_extractor
+    assert isinstance(critic_extractor, CombinedExtractor)
+    assert critic_extractor.image_keys == ("rgb",)
+    assert "depth" not in critic_extractor.vector_extractors
+
+    for _ in range(8):
+        obs = {
+            "rgb": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
+            "depth": torch.rand(1, 64, 64, 1),
+            "state": torch.randn(1, 4),
+        }
+        next_obs = {
+            "rgb": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
+            "depth": torch.rand(1, 64, 64, 1),
+            "state": torch.randn(1, 4),
+        }
+        actions = torch.randn(1, *act_space.shape).clamp(-1, 1)
+        rewards = torch.randn(1)
+        dones = torch.zeros(1)
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+
+    info = agent.train(gradient_steps=1, compute_info=True)
+    assert info
