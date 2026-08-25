@@ -12,20 +12,28 @@ platforms can be integrated without creating platform-specific training entrypoi
 
 ## Capabilities
 
-- **Online RL:** SAC, PPO, DrQ-v2, and FlashSAC.
-- **Offline RL and imitation:** BC, IQL, CQL, Cal-QL, and offline SAC-family
-  pretraining.
-- **Offline-to-online:** WSRL pretraining, warm start, and online fine-tuning.
+- **Online RL:** SAC, PPO, RLPD, RLPD-Hybrid, TD3, DrQ-v2, FlashSAC, TDMPC2,
+  DPPO, SACFlow, ACRLPD, plus recurrent and transformer SAC/PPO variants. See
+  the [Training Entrypoints](#training-entrypoints) table for the full list.
+- **Offline RL and imitation:** BC, Diffusion BC, IQL, CQL, Cal-QL, BCQ, PLAS,
+  EDAC, SPOT, ReBRAC, FQL, QGF, QAM, TD3+BC, AWAC, and multitask TDMPC2.
+- **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, and ACFQL pretraining,
+  warm start, and online fine-tuning.
 - **Observations:** flat state tensors and dict observations containing RGB, depth,
   proprioception, or mixed vector inputs.
-- **Visual encoders:** PlainConv, ResNet, and ViT backbones with configurable image-key
-  fusion, pooling, augmentation, and proprioception fusion.
+- **Visual encoders:** PlainConv, ResNet, DrQ-v2 conv, 3D CNN, and ViT backbones
+  with configurable image-key fusion, pooling, augmentation, and proprioception
+  fusion. Actor and critic share one encoder by default; SAC-family and PPO-family
+  policies can opt into independent actor/critic encoder architectures.
 - **Replay:** tensor, dict, Monte-Carlo return, and PPO rollout buffers with
   explicit storage and sample devices.
-- **Environment backends:** a registry-based interface with current ManiSkill and
-  RoboTwin implementations and support for adding further platforms.
+- **Environment backends:** a registry-based interface with ManiSkill, RoboTwin,
+  IsaacLab, MuJoCo, MuJoCo Warp (GPU), Minari, legacy D4RL/Adroit/Kitchen, a
+  real-robot Franka backend, and a template for adding further platforms.
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration
   recording, and learned reward classifiers.
+- **Distributed training:** optional RLinf/Ray adapters for offline, async
+  off-policy (SAC/RLPD), and FSDP on-policy (PPO) training.
 
 ## Project Layout
 
@@ -37,11 +45,13 @@ rl_garden/
 ├── datasets/      # Offline and WSRL dataset workflows
 ├── encoders/      # State, CNN, ResNet, RGBD/proprio, pooling, augmentation
 ├── envs/          # Environment backend registry, implementations, wrappers
+├── integrations/  # Optional RLinf/Ray adapters (offline, SAC/RLPD, FSDP PPO)
 ├── models/        # ACT and reward models
 ├── networks/      # Actor, critic, value, and backbone modules
 ├── policies/      # Algorithm policy composition
 └── training/      # Registered online, offline, and off2on training packages
 robot_infra/       # Optional submodule (rlgarden-robot-infra): controllers, teleoperation
+real_world/        # Optional submodule (rlgarden-real-world): ActorLoop/LearnerLoop, franka_real backend
 examples/          # Thin dispatchers and specialized experiment entrypoints
 scripts/           # Launchers with experiment defaults
 tests/             # Unit and backend/accelerator integration tests
@@ -78,9 +88,14 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, recurrent and transformer SAC/PPO |
-| Offline | `examples/pretrain_offline.py` | `bc`, `iql`, `cql`, `calql`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
-| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo` |
+| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `acfql` |
+
+Every registered algorithm's exact args and defaults can be listed with
+`--print-config`; use `python examples/train_online.py --help` (or
+`pretrain_offline.py` / `train_off2on.py`) to see the current algorithm list
+directly from the registry instead of relying on this table staying in sync.
 
 All registry-managed entrypoints accept `--config PRESET.yaml`, `--print-config`,
 `--dry-run`, and `--explain-param FIELD`. Static printing does not load a
@@ -135,9 +150,9 @@ python examples/pretrain_offline.py iql \
   --offline_dataset demos/pickcube.h5
 ```
 
-BC and IQL support dict observations containing image and state inputs. CQL,
-Cal-QL, and WSRL currently use flat state datasets for their standard offline
-workflow.
+BC, IQL, CQL, and FQL support dict observations containing image and state
+inputs. Cal-QL, WSRL, and the remaining offline algorithms currently use flat
+state datasets for their standard offline workflow.
 
 ### Offline-to-Online Training
 
@@ -171,6 +186,15 @@ python examples/train_online.py ppo \
 See [RoboTwin Integration](docs/guides/robotwin.md) for installation, assets, observation
 mapping, rewards, and performance controls.
 
+Other registered `--env-backend` values: `maniskill` (default for most examples),
+`isaaclab` (see [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md) and the
+[known camera-stall issue](docs/guides/isaaclab-camera-stall.md)), `mujoco`,
+`mujoco_warp` (GPU-vectorized MuJoCo), `minari`, and `d4rl_legacy` (legacy
+Gym/D4RL Adroit and Kitchen tasks, see
+[D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)).
+`franka_real` is added by the optional `rlgarden-real-world` submodule for
+real-robot training.
+
 `rl_garden/envs/custom/` is a runnable template for authoring a brand-new
 environment that isn't wrapping an existing simulator (`--env-backend custom
 --env-id PointReach-v0`). Copy it to start your own backend; see
@@ -179,8 +203,9 @@ environment that isn't wrapping an existing simulator (`--env-backend custom
 ## Visual Training
 
 Use `--encoder plain_conv` for the lightweight CNN path, a ResNet name such as
-`--encoder resnet10`, or `--encoder vit` for the ViT path. Image keys can be fused
-in two ways:
+`--encoder resnet10`/`resnet18`, `--encoder drqv2_conv` for DrQ-v2's conv stack,
+`--encoder cnn3d` for volumetric/stacked-frame input, or `--encoder vit` for the
+ViT path. Image keys can be fused in two ways:
 
 - `stack_channels`: concatenate visual keys before a single encoder. This is the
   default and the simplest path for a single RGB stream.
@@ -211,8 +236,13 @@ python examples/train_online.py sac \
 
 `--freeze-resnet-backbone` keeps the stem and residual blocks fixed while leaving
 the pooling/bottleneck head trainable. `--freeze-resnet-encoder` freezes the full
-visual extractor. For dict observations, SAC shares the encoder between actor and
-critic; actor updates detach encoder features while critic updates train it.
+visual extractor. By default, actor and critic (SAC-family and PPO-family) share
+one encoder instance; actor updates detach encoder features while critic/value
+updates train it. `--critic-encoder <name>` opts a policy into an independently
+architected critic encoder (e.g. an MLP critic over state paired with a ResNet
+actor over images) — when set, the actor's own encoder trains through the actor
+loss instead of relying on the critic's gradient. This is an advanced, opt-in
+path; leaving it unset keeps today's shared-encoder behavior unchanged.
 
 Torchvision-style ResNet checkpoints must be converted to rl-garden parameter names:
 
@@ -285,16 +315,6 @@ two separate repos, added back as optional git submodules:
 Neither is required for simulation-only use; `git submodule update --init` to
 pull them in.
 
-Learned reward utilities live under `rl_garden/models/reward/`. Typical entrypoints
-include:
-
-```bash
-python rl_garden/models/reward/classifiers/hsv/generate_labels.py \
-  --data_dir data/epi0-19_trimmed --tune_hsv --camera high
-python rl_garden/models/reward/classifiers/color/train.py
-python rl_garden/models/reward/classifiers/alignment/train.py
-```
-
 ## Testing
 
 Run the available test suite from the repository root:
@@ -321,12 +341,15 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 
 - [Checkpoint Save & Load](docs/guides/checkpoint.md)
 - [Configuration System](docs/guides/configuration.md)
+- [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)
 - [IsaacLab Camera Training Stall (known issue)](docs/guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)
 - [RoboTwin Integration](docs/guides/robotwin.md)
 - [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
 - [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
+- [IQL Overview](docs/design/iql-overview.md)
+- [RLinf Integration](docs/design/rlinf-integration.md)
 - [WSRL Overview](docs/design/wsrl-overview.md)
 - [RNG and Numerical Determinism](docs/design/rng-numerical-determinism.md)
 
@@ -334,6 +357,8 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 
 The implementation combines ideas and engineering patterns from multiple projects
 rather than treating any single framework as its template. Reference implementations
-are kept under `3rd_party/` and include ManiSkill, stable-baselines3, hil-serl, WSRL,
-Cal-QL, RLPD/RLinf, BPPO, Uni-O4, TDMPC2, and robot-controller projects. Treat these
+are kept under `3rd_party/`: `Cal-QL`, `wsrl`, and `implicit_q_learning` are real git
+submodules (see [Baseline Install](.agents/runbooks/baseline-install.md)); `CORL`,
+`NexRL`, `RL-100`, `RLinf`, `dppo`, `fql`, `hil-serl`, `qam`, `qc`, `qgf`, and
+`stable-baselines3` are untracked read-only reference clones. Treat all of these
 directories as read-only unless a change is explicitly requested.

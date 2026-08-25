@@ -6,6 +6,7 @@ Operational how-to for running and configuring the framework.
 
 - [Checkpoint Save & Load](guides/checkpoint.md)
 - [Configuration System](guides/configuration.md)
+- [D4RL Legacy Manipulation Baselines](guides/d4rl-legacy-expansion.md)
 - [IsaacLab Camera Training Stall (known issue)](guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](guides/offline-acceleration.md)
@@ -19,6 +20,7 @@ Architecture and rationale behind specific subsystems.
 
 - [WSRL Overview](design/wsrl-overview.md)
 - [IQL Overview](design/iql-overview.md)
+- [RLinf Integration](design/rlinf-integration.md)
 - [RNG and Numerical Determinism](design/rng-numerical-determinism.md)
 
 ## Robot Infra and Real-World RL
