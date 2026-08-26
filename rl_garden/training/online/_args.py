@@ -421,6 +421,30 @@ class FlashSACTrainingArgs(LoggingArgs):
     load_checkpoint: Optional[str] = None
 
 
+@dataclass
+class DAggerTrainingArgs(EnvRunArgs, CheckpointArgs):
+    """DAgger (Ross et al. 2011). State-only (Box observations) for this
+    CLI entrypoint -- ``DAgger`` itself also supports Dict/vision
+    observations via BC's dispatch when constructed programmatically, but a
+    live scripted expert is task-specific (see ``expert`` below), so a
+    minimal CLI-selectable set of mock experts is what's wired here; a real
+    expert is expected to be supplied by constructing ``DAgger`` directly."""
+
+    total_timesteps: int = 100_000
+    expert: Literal["zero", "random_uniform"] = "random_uniform"
+    demo_buffer_size: int = 100_000
+    buffer_device: str = "cuda"
+    device: str = "auto"
+    beta_rounds: int = 15
+    rollout_steps_per_round: int = 1_000
+    gradient_steps_per_round: int = 100
+    batch_size: int = 256
+    actor_lr: float = 3e-4
+    weight_decay: float = 0.0
+    tanh_squash: bool = True
+    net_arch: tuple[int, ...] = (256, 256)
+
+
 def sac_initial_training_phase_from_args(
     args: SACTrainingArgs,
 ) -> Optional[InitialTrainingPhase]:

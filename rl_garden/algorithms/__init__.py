@@ -9,6 +9,7 @@ from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.cql import CQL
+from rl_garden.algorithms.dagger import DAgger
 from rl_garden.algorithms.ddpg import DDPG
 from rl_garden.algorithms.diffusion_bc import DiffusionBC
 from rl_garden.algorithms.dppo import DPPO
@@ -64,6 +65,7 @@ __all__ = [
     "FlowBC",
     "FQL",
     "CQL",
+    "DAgger",
     "DDPG",
     "DiffusionBC",
     "DPPO",

@@ -99,6 +99,7 @@ def test_phase_registries_discover_expected_algorithms():
         "rlpd_hybrid",
         "acrlpd",
         "tdmpc2",
+        "dagger",
     }
     assert set(offline.entries()) == {
         "bc",
