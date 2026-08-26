@@ -76,12 +76,16 @@ class SequencePPO(PPO):
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
         )
-        self._lr_scheduler = make_lr_scheduler(
-            self.policy_optimizer,
-            schedule_type=self.lr_schedule,
-            warmup_steps=self.lr_warmup_steps,
-            decay_steps=self.lr_decay_steps,
-            min_lr_ratio=self.lr_min_ratio,
+        self._lr_scheduler = (
+            None
+            if self.lr_schedule == "adaptive_kl"
+            else make_lr_scheduler(
+                self.policy_optimizer,
+                schedule_type=self.lr_schedule,
+                warmup_steps=self.lr_warmup_steps,
+                decay_steps=self.lr_decay_steps,
+                min_lr_ratio=self.lr_min_ratio,
+            )
         )
         buffer_cls = RecurrentDictRolloutBuffer if self._is_dict_obs else RecurrentRolloutBuffer
         self.rollout_buffer = buffer_cls(
@@ -92,6 +96,7 @@ class SequencePPO(PPO):
             device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
+            store_dist_params=(self.lr_schedule == "adaptive_kl"),
         )
 
     def _initial_hidden_state(self, batch_size: int):
@@ -101,9 +106,24 @@ class SequencePPO(PPO):
         return self.policy.recurrent_encoder.mask_state(hidden, 1.0 - next_done.float())
 
     def _rollout_step(self, obs, hidden, episode_starts: torch.Tensor):
+        policy_obs = self._obs_to_policy_device(obs)
+        self.policy.update_obs_normalizer(policy_obs)
+        if self.lr_schedule == "adaptive_kl":
+            with torch.no_grad():
+                actions, values, log_probs, entropy, new_hidden, mean, log_std = (
+                    self.policy.act_recurrent_with_dist_params(
+                        policy_obs,
+                        hidden,
+                        episode_starts,
+                        deterministic=False,
+                        stop_gradient_actor=self._actor_stop_gradient(),
+                    )
+                )
+            self._rollout_mean, self._rollout_log_std = mean, log_std
+            return actions, values, log_probs, entropy, new_hidden
         with torch.no_grad():
             return self.policy.act_recurrent(
-                self._obs_to_policy_device(obs),
+                policy_obs,
                 hidden,
                 episode_starts,
                 deterministic=False,
@@ -176,15 +196,31 @@ class SequencePPO(PPO):
         )
 
     def _evaluate_minibatch(self, data: RecurrentRolloutBufferSample):
-        values, log_prob, entropy = self.policy.evaluate_actions_sequence(
-            data.obs,
-            data.actions,
-            data.initial_hidden,
-            data.episode_starts,
-            stop_gradient_actor=self._actor_stop_gradient(),
-        )
+        if self.lr_schedule == "adaptive_kl":
+            values, log_prob, entropy, mean, log_std = (
+                self.policy.evaluate_actions_sequence_with_dist_params(
+                    data.obs,
+                    data.actions,
+                    data.initial_hidden,
+                    data.episode_starts,
+                    stop_gradient_actor=self._actor_stop_gradient(),
+                )
+            )
+            new_mean = mean.reshape((-1,) + mean.shape[2:])
+            new_log_std = log_std.reshape((-1,) + log_std.shape[2:])
+            old_mean = data.old_mean.reshape((-1,) + data.old_mean.shape[2:])
+            old_log_std = data.old_log_std.reshape((-1,) + data.old_log_std.shape[2:])
+        else:
+            values, log_prob, entropy = self.policy.evaluate_actions_sequence(
+                data.obs,
+                data.actions,
+                data.initial_hidden,
+                data.episode_starts,
+                stop_gradient_actor=self._actor_stop_gradient(),
+            )
+            new_mean = new_log_std = old_mean = old_log_std = None
         # (T,B,1) tensors; T-major flatten so index [t,b] lands at the same flat
-        # offset across all seven tensors below.
+        # offset across all eleven tensors below.
         return (
             values.flatten(),
             log_prob.flatten(),
@@ -193,6 +229,10 @@ class SequencePPO(PPO):
             data.old_log_prob.reshape(-1),
             data.advantages.reshape(-1),
             data.returns.reshape(-1),
+            old_mean,
+            old_log_std,
+            new_mean,
+            new_log_std,
         )
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

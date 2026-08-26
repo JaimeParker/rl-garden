@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Optional
 
 import torch
 from gymnasium import spaces
@@ -22,6 +22,8 @@ class RolloutBufferSample:
     old_log_prob: torch.Tensor
     advantages: torch.Tensor
     returns: torch.Tensor
+    old_mean: Optional[torch.Tensor] = None
+    old_log_std: Optional[torch.Tensor] = None
 
 
 class RolloutBuffer:
@@ -36,6 +38,7 @@ class RolloutBuffer:
         device: torch.device | str = "cuda",
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
+        store_dist_params: bool = False,
     ) -> None:
         if num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}.")
@@ -78,6 +81,11 @@ class RolloutBuffer:
         self.final_values = torch.zeros(shape, dtype=torch.float32, device=self.device)
         self.advantages = torch.zeros(shape, dtype=torch.float32, device=self.device)
         self.returns = torch.zeros(shape, dtype=torch.float32, device=self.device)
+        self.store_dist_params = store_dist_params
+        if store_dist_params:
+            action_shape = shape + tuple(action_space.shape)
+            self.means = torch.zeros(action_shape, dtype=torch.float32, device=self.device)
+            self.log_stds = torch.zeros(action_shape, dtype=torch.float32, device=self.device)
 
     @property
     def buffer_size(self) -> int:
@@ -98,6 +106,8 @@ class RolloutBuffer:
         values: torch.Tensor,
         log_probs: torch.Tensor,
         final_values: torch.Tensor | None = None,
+        mean: torch.Tensor | None = None,
+        log_std: torch.Tensor | None = None,
     ) -> None:
         if self.pos >= self.num_steps:
             raise RuntimeError(
@@ -121,6 +131,10 @@ class RolloutBuffer:
             self.final_values[self.pos] = final_values.reshape(self.num_envs).to(
                 self.device
             )
+        if self.store_dist_params:
+            assert mean is not None and log_std is not None
+            self.means[self.pos] = mean.to(self.device)
+            self.log_stds[self.pos] = log_std.to(self.device)
 
         self.pos += 1
         self.full = self.pos == self.num_steps
@@ -191,6 +205,16 @@ class RolloutBuffer:
         flat_log_probs = self.log_probs.reshape(-1)
         flat_advantages = self.advantages.reshape(-1)
         flat_returns = self.returns.reshape(-1)
+        flat_means = (
+            self.means.reshape((-1,) + self.means.shape[2:])
+            if self.store_dist_params
+            else None
+        )
+        flat_log_stds = (
+            self.log_stds.reshape((-1,) + self.log_stds.shape[2:])
+            if self.store_dist_params
+            else None
+        )
 
         indices = torch.randperm(self.buffer_size, device=self.device)
         for start in range(0, self.buffer_size, batch_size):
@@ -202,6 +226,8 @@ class RolloutBuffer:
                 old_log_prob=flat_log_probs[mb_inds],
                 advantages=flat_advantages[mb_inds],
                 returns=flat_returns[mb_inds],
+                old_mean=flat_means[mb_inds] if flat_means is not None else None,
+                old_log_std=flat_log_stds[mb_inds] if flat_log_stds is not None else None,
             )
 
 

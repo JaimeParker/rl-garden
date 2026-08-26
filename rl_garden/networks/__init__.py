@@ -6,6 +6,7 @@ from rl_garden.networks.actor_critic import (
     EnsembleQCritic,
     SquashedGaussianActor,
     UnsquashedGaussianActor,
+    gaussian_kl_divergence,
     get_actor_critic_arch,
 )
 from rl_garden.networks.actor_vector_field import ActorVectorField
@@ -78,5 +79,6 @@ __all__ = [
     "ValueNetwork",
     "build_diffusion_mlp_head",
     "create_mlp",
+    "gaussian_kl_divergence",
     "get_actor_critic_arch",
 ]

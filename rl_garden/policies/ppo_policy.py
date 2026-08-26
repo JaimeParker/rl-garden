@@ -160,3 +160,42 @@ class PPOPolicy(BasePolicy):
 
     def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
         return self.actor.clamp_action(actions)
+
+    def update_obs_normalizer(self, obs: Obs) -> None:
+        self.features_extractor.update_normalizer(obs)
+        if self.critic_features_extractor is not self.features_extractor:
+            self.critic_features_extractor.update_normalizer(obs)
+
+    def act_with_value_logprob_and_dist_params(
+        self, obs: Obs, deterministic: bool = False, *, stop_gradient_actor: bool = False
+    ) -> tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+    ]:
+        """Like ``act_with_value_and_logprob``, but also returns the rollout
+        Gaussian's ``(mean, log_std)`` -- the "old" distribution params the
+        adaptive-KL LR schedule (``lr_schedule="adaptive_kl"``) needs. Single
+        actor forward pass, no duplicate compute."""
+        actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
+        value_features = self.extract_critic_features(obs, stop_gradient=False)
+        dist = self.actor(actor_features)
+        action = dist.mean if deterministic else dist.sample()
+        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        values = self.value_net(value_features)
+        log_std = self.actor.log_std.expand_as(dist.mean)
+        return action, values, log_prob, entropy, dist.mean, log_std
+
+    def evaluate_actions_with_dist_params(
+        self, obs: Obs, actions: torch.Tensor, *, stop_gradient_actor: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Like ``evaluate_actions``, but also returns the current policy's
+        ``(mean, log_std)`` -- the "new" distribution params the adaptive-KL
+        LR schedule needs. Single actor forward pass, no duplicate compute."""
+        actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
+        value_features = self.extract_critic_features(obs, stop_gradient=False)
+        dist = self.actor(actor_features)
+        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        values = self.value_net(value_features)
+        log_std = self.actor.log_std.expand_as(dist.mean)
+        return values, log_prob, entropy, dist.mean, log_std

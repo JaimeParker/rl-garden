@@ -90,3 +90,12 @@ class BaseFeaturesExtractor(nn.Module):
         cache keys. Each is a fresh dict returned by the replay buffer's
         ``sample()`` call, so mutation does not pollute replay storage.
         """
+
+    def update_normalizer(self, obs) -> None:
+        """Update any running obs-normalization statistics from ``obs``.
+
+        Default no-op so callers (e.g. ``PPOPolicy``) can invoke this
+        uniformly on whichever extractor class is plugged in, whether or not
+        it supports running normalization. Override in extractors that do
+        (``FlattenExtractor``, ``CombinedExtractor`` with ``normalize_obs=True``).
+        """

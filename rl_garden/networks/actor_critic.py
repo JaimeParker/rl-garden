@@ -503,6 +503,22 @@ class DiagGaussianActor(nn.Module):
         return torch.max(torch.min(actions, self.action_high), self.action_low)
 
 
+def gaussian_kl_divergence(
+    old_mean: torch.Tensor,
+    old_log_std: torch.Tensor,
+    new_mean: torch.Tensor,
+    new_log_std: torch.Tensor,
+) -> torch.Tensor:
+    """Analytic per-sample KL(old || new) between two diagonal Gaussians,
+    summed over the action dimension. Matches rsl_rl's
+    ``GaussianDistribution.kl_divergence``
+    (``3rd_party/rsl_rl/rsl_rl/modules/distribution.py``), used to drive the
+    ``lr_schedule="adaptive_kl"`` PPO LR schedule."""
+    old_dist = torch.distributions.Normal(old_mean, old_log_std.exp())
+    new_dist = torch.distributions.Normal(new_mean, new_log_std.exp())
+    return torch.distributions.kl_divergence(old_dist, new_dist).sum(dim=-1)
+
+
 class _QHead(nn.Module):
     """Single Q-network: trunk over (features, actions) -> scalar Q."""
 

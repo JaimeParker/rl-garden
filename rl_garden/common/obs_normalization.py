@@ -32,3 +32,40 @@ class ObsNormalizingMixin:
 
     def _normalize_obs(self, obs: torch.Tensor) -> torch.Tensor:
         return (obs - self.obs_mean) / self.obs_std
+
+
+class RunningObsNormalizer(torch.nn.Module):
+    """Online mean/std obs normalizer updated incrementally during rollout.
+
+    Unlike ``ObsNormalizingMixin`` (fit once from an offline dataset, then
+    frozen), this tracks a running estimate that keeps moving throughout
+    training -- ports rsl_rl's ``EmpiricalNormalization``
+    (``3rd_party/rsl_rl/rsl_rl/modules/normalization.py``). ``update()`` only
+    updates statistics in ``training`` mode, so calling it during an eval
+    rollout (``policy.eval()`` is active) is automatically a no-op.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-2) -> None:
+        super().__init__()
+        self.eps = eps
+        self.register_buffer("_mean", torch.zeros(1, dim))
+        self.register_buffer("_var", torch.ones(1, dim))
+        self.register_buffer("_std", torch.ones(1, dim))
+        self.register_buffer("count", torch.tensor(0, dtype=torch.long))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - self._mean) / (self._std + self.eps)
+
+    @torch.jit.unused
+    def update(self, x: torch.Tensor) -> None:
+        if not self.training:
+            return
+        count_x = x.shape[0]
+        self.count += count_x
+        rate = count_x / self.count
+        var_x = torch.var(x, dim=0, unbiased=False, keepdim=True)
+        mean_x = torch.mean(x, dim=0, keepdim=True)
+        delta_mean = mean_x - self._mean
+        self._mean += rate * delta_mean
+        self._var += rate * (var_x - self._var + delta_mean * (mean_x - self._mean))
+        self._std = torch.sqrt(self._var)

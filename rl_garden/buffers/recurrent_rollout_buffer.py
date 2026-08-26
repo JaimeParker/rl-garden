@@ -34,6 +34,8 @@ class RecurrentRolloutBufferSample:
     returns: torch.Tensor          # (T, mb_envs)
     episode_starts: torch.Tensor   # (T, mb_envs) -- 1.0 = reset hidden state before this timestep
     initial_hidden: RecurrentState # sliced to mb_envs
+    old_mean: Optional[torch.Tensor] = None      # (T, mb_envs, act_dim)
+    old_log_std: Optional[torch.Tensor] = None    # (T, mb_envs, act_dim)
 
 
 class RecurrentRolloutBuffer(RolloutBuffer):
@@ -89,6 +91,8 @@ class RecurrentRolloutBuffer(RolloutBuffer):
                 returns=self.returns[:, idx],
                 episode_starts=episode_starts[:, idx],
                 initial_hidden=_index_recurrent_state(initial_hidden, idx),
+                old_mean=self.means[:, idx] if self.store_dist_params else None,
+                old_log_std=self.log_stds[:, idx] if self.store_dist_params else None,
             )
 
 

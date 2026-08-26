@@ -192,10 +192,16 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     detach_encoder_on_actor: Optional[bool] = None
     weight_decay: float = 0.0
     use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_schedule: Literal[
+        "constant", "linear_warmup", "warmup_cosine", "adaptive_kl"
+    ] = "constant"
     lr_warmup_steps: int = 0
     lr_decay_steps: int = 0
     lr_min_ratio: float = 0.0
+    desired_kl: float = 0.01
+    adaptive_lr_min: float = 1e-5
+    adaptive_lr_max: float = 1e-2
+    normalize_obs: bool = False
     actor_use_layer_norm: bool = False
     value_use_layer_norm: bool = False
     actor_use_group_norm: bool = False

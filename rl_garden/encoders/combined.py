@@ -33,6 +33,7 @@ import torch
 import torch.nn as nn
 from gymnasium import spaces
 
+from rl_garden.common.obs_normalization import RunningObsNormalizer
 from rl_garden.encoders.base import BaseFeaturesExtractor, image_needs_normalization
 from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.encoders.plain_conv import PlainConv
@@ -101,6 +102,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         image_augmentation: ImageAugmentationMode = "none",
         random_shift_pad: int = 4,
         augmentation_seed: Optional[int] = None,
+        normalize_obs: bool = False,
     ) -> None:
         """``image_keys`` are resolved against ``observation_space`` into
         ``present_image_keys`` and get their own encoder(s). Any other key
@@ -228,6 +230,14 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.image_encoders = image_encoders
         self.proprio = proprio
         self.vector_extractors = vector_extractors
+        self._obs_normalizers: nn.ModuleDict = nn.ModuleDict()
+        if normalize_obs:
+            if has_state:
+                state_dim = int(np.prod(observation_space.spaces[state_key].shape))
+                self._obs_normalizers[state_key] = RunningObsNormalizer(state_dim)
+            for key in vector_extractors:
+                vec_dim = int(np.prod(observation_space.spaces[key].shape))
+                self._obs_normalizers[key] = RunningObsNormalizer(vec_dim)
         self.image_augmentation = image_augmentation
         self.random_shift_pad = random_shift_pad
         self.random_shift = (
@@ -362,6 +372,8 @@ class CombinedExtractor(BaseFeaturesExtractor):
     def _encode_proprio(self, state: torch.Tensor) -> torch.Tensor:
         if self.enable_stacking and state.ndim > 2:
             state = state.flatten(1)
+        if self.state_key in self._obs_normalizers:
+            state = self._obs_normalizers[self.state_key](state)
         assert self.proprio is not None
         return self.proprio(state)
 
@@ -374,11 +386,26 @@ class CombinedExtractor(BaseFeaturesExtractor):
         if self.has_state:
             out.append(self._encode_proprio(obs[self.state_key]))
         for key, extractor in self.vector_extractors.items():
-            out.append(extractor(obs[key]))
+            flat = extractor(obs[key])
+            if key in self._obs_normalizers:
+                flat = self._obs_normalizers[key](flat)
+            out.append(flat)
         return torch.cat(out, dim=-1)
 
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.extract(obs, stop_gradient=False)
+
+    def update_normalizer(self, obs: dict[str, torch.Tensor]) -> None:
+        if not self._obs_normalizers:
+            return
+        if self.has_state and self.state_key in self._obs_normalizers:
+            state = obs[self.state_key]
+            if self.enable_stacking and state.ndim > 2:
+                state = state.flatten(1)
+            self._obs_normalizers[self.state_key].update(state)
+        for key, extractor in self.vector_extractors.items():
+            if key in self._obs_normalizers:
+                self._obs_normalizers[key].update(extractor(obs[key]))
 
 
 def _is_image_shaped_box(subspace: spaces.Space, *, enable_stacking: bool) -> bool:

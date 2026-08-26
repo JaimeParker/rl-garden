@@ -125,12 +125,24 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     def _rollout_policy(
         self, obs
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        policy_obs = self._obs_to_policy_device(obs)
+        self.policy.update_obs_normalizer(policy_obs)
         with torch.no_grad():
             return self.policy(
-                self._obs_to_policy_device(obs),
+                policy_obs,
                 deterministic=False,
                 stop_gradient_actor=self._actor_stop_gradient(),
             )
+
+    def _extra_rollout_buffer_kwargs(self) -> dict:
+        """Extra ``rollout_buffer.add()`` kwargs for this rollout step.
+
+        Trivial no-op default so ``learn()``'s single, shared ``add()`` call
+        site can splat this uniformly regardless of subclass; overridden by
+        ``PPO`` when ``lr_schedule="adaptive_kl"`` needs to pass along the
+        rollout-time distribution params it stashed during this step.
+        """
+        return {}
 
     def _actor_stop_gradient(self) -> bool:
         return False
@@ -256,6 +268,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     values,
                     log_probs,
                     final_values=final_values,
+                    **self._extra_rollout_buffer_kwargs(),
                 )
                 rollout_reward_sum += float(rewards.float().sum().item())
                 rollout_reward_count += int(rewards.numel())

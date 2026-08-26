@@ -87,6 +87,38 @@ class RecurrentPPOPolicy(PPOPolicy):
         values = self.value_net(latent)
         return actions, values, log_prob, entropy, new_hidden
 
+    def act_recurrent_with_dist_params(
+        self,
+        obs: Obs,
+        hidden: RecurrentState,
+        episode_starts: torch.Tensor,
+        deterministic: bool = False,
+        *,
+        stop_gradient_actor: bool = False,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        RecurrentState,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        """Like ``act_recurrent``, but also returns the rollout Gaussian's
+        ``(mean, log_std)`` -- the "old" distribution params the adaptive-KL
+        LR schedule (``lr_schedule="adaptive_kl"``) needs. Single actor
+        forward pass, no duplicate compute."""
+        raw = self._extract_features(obs, stop_gradient=False)
+        latent, new_hidden = self.recurrent_encoder.step(raw, hidden, episode_starts)
+        actor_latent = latent.detach() if stop_gradient_actor else latent
+        dist = self.actor(actor_latent)
+        actions = dist.mean if deterministic else dist.sample()
+        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        values = self.value_net(latent)
+        log_std = self.actor.log_std.expand_as(dist.mean)
+        return actions, values, log_prob, entropy, new_hidden, dist.mean, log_std
+
     def predict_recurrent(
         self,
         obs: Obs,
@@ -149,4 +181,39 @@ class RecurrentPPOPolicy(PPOPolicy):
             values.reshape(num_steps, num_envs, -1),
             log_prob.reshape(num_steps, num_envs, -1),
             entropy.reshape(num_steps, num_envs, -1),
+        )
+
+    def evaluate_actions_sequence_with_dist_params(
+        self,
+        obs: Obs,
+        actions: torch.Tensor,
+        initial_hidden: RecurrentState,
+        episode_starts: torch.Tensor,
+        *,
+        stop_gradient_actor: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Like ``evaluate_actions_sequence``, but also returns the current
+        policy's ``(mean, log_std)`` -- the "new" distribution params the
+        adaptive-KL LR schedule needs. obs/actions: (T, B, ...). All returns
+        are (T, B, ...)-shaped, matching ``evaluate_actions_sequence``."""
+        num_steps, num_envs = actions.shape[0], actions.shape[1]
+        flat_obs = flatten_leading_dims(obs)
+        raw = self._extract_features(flat_obs, stop_gradient=False)
+        raw = raw.reshape(num_steps, num_envs, -1)
+        latent, _ = self.recurrent_encoder.forward_sequence(raw, initial_hidden, episode_starts)
+
+        actor_latent = latent.detach() if stop_gradient_actor else latent
+        flat_actor_latent = actor_latent.reshape(num_steps * num_envs, -1)
+        flat_actions = actions.reshape(num_steps * num_envs, -1)
+        dist = self.actor(flat_actor_latent)
+        log_prob = dist.log_prob(flat_actions).sum(-1, keepdim=True)
+        entropy = dist.entropy().sum(-1, keepdim=True)
+        values = self.value_net(latent.reshape(num_steps * num_envs, -1))
+        log_std = self.actor.log_std.expand_as(dist.mean)
+        return (
+            values.reshape(num_steps, num_envs, -1),
+            log_prob.reshape(num_steps, num_envs, -1),
+            entropy.reshape(num_steps, num_envs, -1),
+            dist.mean.reshape(num_steps, num_envs, -1),
+            log_std.reshape(num_steps, num_envs, -1),
         )

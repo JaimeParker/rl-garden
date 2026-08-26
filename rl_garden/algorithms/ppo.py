@@ -21,6 +21,7 @@ from rl_garden.encoders.combined import (
     default_image_encoder_factory,
 )
 from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.networks.actor_critic import gaussian_kl_divergence
 from rl_garden.policies.ppo_policy import PPOPolicy
 
 
@@ -57,10 +58,16 @@ class PPO(OnPolicyAlgorithm):
         anneal_lr: bool = False,
         weight_decay: float = 0.0,
         use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
+        lr_schedule: Literal[
+            "constant", "linear_warmup", "warmup_cosine", "adaptive_kl"
+        ] = "constant",
         lr_warmup_steps: int = 0,
         lr_decay_steps: int = 0,
         lr_min_ratio: float = 0.0,
+        desired_kl: float = 0.01,
+        adaptive_lr_min: float = 1e-5,
+        adaptive_lr_max: float = 1e-2,
+        normalize_obs: bool = False,
         net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         value_hidden_dims: Optional[Sequence[int]] = None,
@@ -128,6 +135,13 @@ class PPO(OnPolicyAlgorithm):
             raise ValueError(f"clip_coef must be positive, got {clip_coef}.")
         if max_grad_norm <= 0:
             raise ValueError(f"max_grad_norm must be positive, got {max_grad_norm}.")
+        if lr_schedule == "adaptive_kl" and anneal_lr:
+            raise ValueError(
+                "anneal_lr=True is incompatible with lr_schedule='adaptive_kl': "
+                "_step_lr()'s anneal_lr branch unconditionally overwrites the "
+                "optimizer's lr from self.learning_rate every train() call, "
+                "silently clobbering the adaptive-KL mutation."
+            )
         self.learning_rate = learning_rate
         self.num_minibatches = num_minibatches
         self.minibatch_size = max(1, self.batch_size // num_minibatches)
@@ -149,10 +163,14 @@ class PPO(OnPolicyAlgorithm):
         self.anneal_lr = anneal_lr
         self.weight_decay = weight_decay
         self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
+        self.lr_schedule: ScheduleType | Literal["adaptive_kl"] = lr_schedule
         self.lr_warmup_steps = lr_warmup_steps
         self.lr_decay_steps = lr_decay_steps
         self.lr_min_ratio = lr_min_ratio
+        self.desired_kl = desired_kl
+        self.adaptive_lr_min = adaptive_lr_min
+        self.adaptive_lr_max = adaptive_lr_max
+        self.normalize_obs = normalize_obs
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
@@ -232,6 +250,34 @@ class PPO(OnPolicyAlgorithm):
             return False
         return bool(self.detach_encoder_on_actor)
 
+    def _rollout_policy(
+        self, obs
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        policy_obs = self._obs_to_policy_device(obs)
+        self.policy.update_obs_normalizer(policy_obs)
+        if self.lr_schedule == "adaptive_kl":
+            with torch.no_grad():
+                actions, values, log_prob, entropy, mean, log_std = (
+                    self.policy.act_with_value_logprob_and_dist_params(
+                        policy_obs,
+                        deterministic=False,
+                        stop_gradient_actor=self._actor_stop_gradient(),
+                    )
+                )
+            self._rollout_mean, self._rollout_log_std = mean, log_std
+            return actions, values, log_prob, entropy
+        with torch.no_grad():
+            return self.policy(
+                policy_obs,
+                deterministic=False,
+                stop_gradient_actor=self._actor_stop_gradient(),
+            )
+
+    def _extra_rollout_buffer_kwargs(self) -> dict:
+        if self.lr_schedule != "adaptive_kl":
+            return {}
+        return {"mean": self._rollout_mean, "log_std": self._rollout_log_std}
+
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
@@ -252,6 +298,10 @@ class PPO(OnPolicyAlgorithm):
             "lr_warmup_steps": self.lr_warmup_steps,
             "lr_decay_steps": self.lr_decay_steps,
             "lr_min_ratio": self.lr_min_ratio,
+            "desired_kl": self.desired_kl,
+            "adaptive_lr_min": self.adaptive_lr_min,
+            "adaptive_lr_max": self.adaptive_lr_max,
+            "normalize_obs": self.normalize_obs,
             "net_arch": self.net_arch,
             "log_std_init": self.log_std_init,
             "detach_encoder_on_actor": self.detach_encoder_on_actor,
@@ -340,8 +390,9 @@ class PPO(OnPolicyAlgorithm):
                 "use_proprio": self._use_proprio,
                 "fusion_mode": self._image_fusion_mode,
                 "enable_stacking": self._enable_stacking,
+                "normalize_obs": self.normalize_obs,
             }
-        return {}
+        return {"normalize_obs": self.normalize_obs}
 
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
@@ -453,12 +504,16 @@ class PPO(OnPolicyAlgorithm):
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
         )
-        self._lr_scheduler = make_lr_scheduler(
-            self.policy_optimizer,
-            schedule_type=self.lr_schedule,
-            warmup_steps=self.lr_warmup_steps,
-            decay_steps=self.lr_decay_steps,
-            min_lr_ratio=self.lr_min_ratio,
+        self._lr_scheduler = (
+            None
+            if self.lr_schedule == "adaptive_kl"
+            else make_lr_scheduler(
+                self.policy_optimizer,
+                schedule_type=self.lr_schedule,
+                warmup_steps=self.lr_warmup_steps,
+                decay_steps=self.lr_decay_steps,
+                min_lr_ratio=self.lr_min_ratio,
+            )
         )
         buffer_cls = DictRolloutBuffer if self._is_dict_obs else RolloutBuffer
         self.rollout_buffer = buffer_cls(
@@ -469,6 +524,7 @@ class PPO(OnPolicyAlgorithm):
             device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
+            store_dist_params=(self.lr_schedule == "adaptive_kl"),
         )
 
     def _current_clip_coef(self) -> float:
@@ -508,11 +564,23 @@ class PPO(OnPolicyAlgorithm):
         advantages: torch.Tensor,
         returns: torch.Tensor,
         clip_coef: float,
+        old_mean: Optional[torch.Tensor] = None,
+        old_log_std: Optional[torch.Tensor] = None,
+        new_mean: Optional[torch.Tensor] = None,
+        new_log_std: Optional[torch.Tensor] = None,
     ) -> dict[str, float | bool]:
         """One PPO minibatch gradient step on 1-D tensors. ``result["stop"]`` is
         True if target_kl triggered an early stop (caller should break after
         recording ``clipfrac``, matching the pre-refactor loop's behavior of
-        recording clipfrac for the aborting minibatch but no other metric)."""
+        recording clipfrac for the aborting minibatch but no other metric).
+
+        ``old_mean``/``old_log_std``/``new_mean``/``new_log_std`` are only
+        passed when ``lr_schedule == "adaptive_kl"``, in which case this also
+        mutates ``self.policy_optimizer``'s LR in place per rsl_rl's exact
+        adaptive-KL rule, before the gradient step below. Note the early
+        return above (on ``target_kl``) skips the LR update for that
+        minibatch too -- rsl_rl has no early-stop mechanism to interact with,
+        so pass ``target_kl=None`` for a numeric parity run against it."""
         if self.norm_adv and len(advantages) > 1:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -524,6 +592,21 @@ class PPO(OnPolicyAlgorithm):
             clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
         if self.target_kl is not None and approx_kl > self.target_kl:
             return {"stop": True, "clipfrac": clipfrac}
+
+        if self.lr_schedule == "adaptive_kl":
+            with torch.no_grad():
+                kl_mean = gaussian_kl_divergence(
+                    old_mean, old_log_std, new_mean, new_log_std
+                ).mean()
+                current_lr = self.policy_optimizer.param_groups[0]["lr"]
+                if kl_mean > self.desired_kl * 2.0:
+                    new_lr = max(self.adaptive_lr_min, current_lr / 1.5)
+                elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
+                    new_lr = min(self.adaptive_lr_max, current_lr * 1.5)
+                else:
+                    new_lr = current_lr
+                for group in self.policy_optimizer.param_groups:
+                    group["lr"] = new_lr
 
         policy_loss = self._policy_loss(advantages=advantages, ratio=ratio, clip_coef=clip_coef)
         if self.clip_vloss:
@@ -557,14 +640,30 @@ class PPO(OnPolicyAlgorithm):
 
     def _evaluate_minibatch(
         self, data: RolloutBufferSample
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns 1-D (values, log_prob, entropy, old_values, old_log_prob, advantages, returns)."""
-        values, log_prob, entropy = self.policy.evaluate_actions(
-            data.obs, data.actions, stop_gradient_actor=self._actor_stop_gradient()
-        )
+    ) -> tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+        torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
+        """Returns 1-D (values, log_prob, entropy, old_values, old_log_prob,
+        advantages, returns, old_mean, old_log_std, new_mean, new_log_std).
+        The last four are ``None`` unless ``lr_schedule == "adaptive_kl"``."""
+        if self.lr_schedule == "adaptive_kl":
+            values, log_prob, entropy, new_mean, new_log_std = (
+                self.policy.evaluate_actions_with_dist_params(
+                    data.obs, data.actions, stop_gradient_actor=self._actor_stop_gradient()
+                )
+            )
+            old_mean, old_log_std = data.old_mean, data.old_log_std
+        else:
+            values, log_prob, entropy = self.policy.evaluate_actions(
+                data.obs, data.actions, stop_gradient_actor=self._actor_stop_gradient()
+            )
+            new_mean = new_log_std = old_mean = old_log_std = None
         return (
             values.flatten(), log_prob.flatten(), entropy.flatten(),
             data.old_values, data.old_log_prob, data.advantages, data.returns,
+            old_mean, old_log_std, new_mean, new_log_std,
         )
 
     def train(self) -> dict[str, float]:
@@ -586,9 +685,10 @@ class PPO(OnPolicyAlgorithm):
 
         for _ in range(self.update_epochs):
             for data in self._iter_minibatches():
-                values, log_prob, entropy, old_values, old_log_prob, advantages, returns = (
-                    self._evaluate_minibatch(data)
-                )
+                (
+                    values, log_prob, entropy, old_values, old_log_prob, advantages, returns,
+                    old_mean, old_log_std, new_mean, new_log_std,
+                ) = self._evaluate_minibatch(data)
                 result = self._ppo_minibatch_update(
                     values=values,
                     log_prob=log_prob,
@@ -598,6 +698,10 @@ class PPO(OnPolicyAlgorithm):
                     advantages=advantages,
                     returns=returns,
                     clip_coef=clip_coef,
+                    old_mean=old_mean,
+                    old_log_std=old_log_std,
+                    new_mean=new_mean,
+                    new_log_std=new_log_std,
                 )
 
                 clipfracs.append(result["clipfrac"])

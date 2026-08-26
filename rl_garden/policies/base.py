@@ -20,3 +20,12 @@ class BasePolicy(nn.Module, ABC):
         self, obs: Obs, stop_gradient: bool = False
     ) -> torch.Tensor:
         return self.features_extractor.extract(obs, stop_gradient=stop_gradient)
+
+    def update_obs_normalizer(self, obs: Obs) -> None:
+        """Update any running obs-normalization statistics from ``obs``.
+
+        Default no-op so rollout code (``OnPolicyAlgorithm``) can call this
+        uniformly on any policy, whether or not it supports running
+        normalization. Override in policies whose extractor(s) do (e.g.
+        ``PPOPolicy``).
+        """
