@@ -4,12 +4,14 @@ Mirrors the fixture style of test_wsrl.py, but targets Off2OnCalQL and
 focuses on what actually differs from WSRL's defaults: no warmup, mixed
 replay retained by default, adaptive mixing ratio, CQL retained online.
 """
+from unittest.mock import MagicMock
+
 import pytest
 import torch
 from gymnasium import spaces
-from unittest.mock import MagicMock
 
 from rl_garden.algorithms.off2on_calql import Off2OnCalQL
+from rl_garden.buffers import MCTensorReplayBuffer, TensorReplayBuffer
 
 
 @pytest.fixture
@@ -230,6 +232,55 @@ def test_switch_to_online_mode_empty_resets_stale_mc_caches(off2on_calql_agent):
     assert buffer._valid_indices_cache is None
     assert buffer._sampleable_size_cache is None
     assert buffer._perm is None
+
+
+def test_empty_no_online_cql_uses_plain_online_replay(simple_env):
+    agent = Off2OnCalQL(
+        env=simple_env,
+        buffer_size=100,
+        buffer_device="cpu",
+        learning_starts=10,
+        batch_size=8,
+        gamma=0.99,
+        tau=0.005,
+        training_freq=4,
+        utd=1.0,
+        net_arch={"pi": [32, 32], "qf": [32, 32]},
+        n_critics=4,
+        critic_subsample_size=2,
+        use_cql_loss=True,
+        cql_n_actions=4,
+        cql_alpha=1.0,
+        cql_autotune_alpha=False,
+        use_calql=True,
+        online_use_cql_loss=False,
+        online_cql_alpha=0.0,
+        device="cpu",
+        seed=42,
+    )
+    _fill_buffer(agent.replay_buffer, 5, marker=1.0)
+    assert isinstance(agent.replay_buffer, MCTensorReplayBuffer)
+
+    agent.switch_to_online_mode(online_replay_mode="empty")
+
+    assert not agent.use_cql_loss
+    assert isinstance(agent.replay_buffer, TensorReplayBuffer)
+    assert len(agent.replay_buffer) == 0
+    assert agent._replay_buffer_step_kwargs(
+        torch.zeros(agent.num_envs, dtype=torch.bool),
+        torch.zeros(agent.num_envs, dtype=torch.bool),
+    ) == {}
+
+    n = agent.replay_buffer.num_envs
+    agent.replay_buffer.add(
+        torch.zeros(n, 4),
+        torch.ones(n, 4),
+        torch.zeros(n, 2),
+        torch.zeros(n),
+        torch.zeros(n),
+    )
+    sample = agent._sample_batch(agent.batch_size)
+    assert sample.obs.shape[0] == agent.batch_size
 
 
 def test_off2on_calql_one_update_smoke(off2on_calql_agent):

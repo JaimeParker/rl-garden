@@ -15,6 +15,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.cql import CQL, _CQLRolloutTrainingShell
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
+from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 
 
@@ -63,6 +64,20 @@ class CalQLCore:
         if isinstance(obs_space, spaces.Dict):
             return MCDictReplayBuffer(**kwargs)
         return MCTensorReplayBuffer(**kwargs)
+
+    def _build_plain_replay_buffer(self):
+        obs_space = self.env.single_observation_space
+        kwargs = {
+            "observation_space": obs_space,
+            "action_space": self.env.single_action_space,
+            "num_envs": self.num_envs,
+            "buffer_size": self.buffer_size,
+            "storage_device": self.buffer_device,
+            "sample_device": self.device,
+        }
+        if isinstance(obs_space, spaces.Dict):
+            return DictReplayBuffer(**kwargs)
+        return TensorReplayBuffer(**kwargs)
 
     def _calql_lower_bound(
         self,
@@ -151,6 +166,21 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
             num_eval_steps=self.num_eval_steps,
         )
 
+    def switch_to_online_mode(
+        self,
+        online_replay_mode: Literal["empty", "append", "mixed"] = "append",
+        offline_data_ratio: float | Literal["auto"] = 0.0,
+    ) -> None:
+        already_online = self._online_start_step is not None
+        super().switch_to_online_mode(
+            online_replay_mode=online_replay_mode,
+            offline_data_ratio=offline_data_ratio,
+        )
+        if already_online or online_replay_mode != "empty" or self.use_cql_loss:
+            return
+        if isinstance(self.replay_buffer, (MCDictReplayBuffer, MCTensorReplayBuffer)):
+            self.replay_buffer = self._build_plain_replay_buffer()
+
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
@@ -163,6 +193,10 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         terminations: torch.Tensor,
         truncations: torch.Tensor,
     ) -> dict[str, Any]:
+        if not isinstance(
+            self.replay_buffer, (MCDictReplayBuffer, MCTensorReplayBuffer)
+        ):
+            return super()._replay_buffer_step_kwargs(terminations, truncations)
         # The MC buffer needs the true episode boundary (termination |
         # truncation), independent of the Bellman `done` used for TD
         # bootstrapping -- see MCReplayBufferMixin._build_mc_table.
