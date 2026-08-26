@@ -317,6 +317,30 @@ class OfflineBCArgs:
 
 
 @dataclass
+class OfflineFlowBCArgs:
+    """FlowBC-specific network/training knobs. Deliberately not built on
+    ``OfflineActorArgs`` -- that class's ``backbone_type``/``std_parameterization``/
+    ``actor_use_group_norm``/``num_groups``/``actor_dropout_rate`` fields are
+    Gaussian-actor-specific and have no ``ActorVectorField`` equivalent; reusing
+    it would expose CLI flags that silently do nothing."""
+
+    actor_lr: float = 3e-4
+    net_arch: tuple[int, ...] = (512, 512, 512, 512)
+    flow_steps: int = 10
+    actor_use_layer_norm: bool = False
+    kernel_init: Optional[
+        Literal[
+            "xavier_uniform",
+            "xavier_normal",
+            "orthogonal",
+            "kaiming_uniform",
+            "orthogonal_near_zero_output",
+        ]
+    ] = None
+    activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
+
+
+@dataclass
 class OfflineWSRLArgs:
     training_freq: int = 64
 

@@ -5,6 +5,7 @@ from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.bc import BC
 from rl_garden.algorithms.bcq import BCQ
 from rl_garden.algorithms.flash_sac import FlashSAC
+from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.cql import CQL
@@ -59,6 +60,7 @@ __all__ = [
     "BCQ",
     "CalQL",
     "FlashSAC",
+    "FlowBC",
     "FQL",
     "CQL",
     "DDPG",
