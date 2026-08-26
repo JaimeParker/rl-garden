@@ -67,6 +67,17 @@ class BaseAlgorithm(ABC):
     def _training_update_mask(self) -> TrainingUpdateMask:
         return STANDARD_UPDATE_MASK
 
+    def _ddp_extra_broadcast_modules(self) -> list:
+        """Extra modules (beyond ``self.policy``, broadcast unconditionally
+        by the online runner) that need their rank-0 state broadcast at DDP
+        startup. No-op default: none.
+
+        Exists because some algorithms keep trainable state outside
+        ``self.policy`` (e.g. SAC's ``alpha_tuner``, see
+        ``algorithms/sac_ddp.py``).
+        """
+        return []
+
     def _obs_to_policy_device(self, obs):
         """Move CPU-backed env observations to the policy device for inference.
 

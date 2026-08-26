@@ -142,6 +142,18 @@ class SACCore:
     def _clip_grad_norm(self, params) -> None:
         return None
 
+    def _sync_ddp_grads(self, params: list) -> None:
+        """Hook called after ``backward()``, before grad-clipping and
+        ``optimizer.step()``, for one optimizer's trainable parameters.
+
+        No-op by default. DDP-enabled subclasses (see
+        ``algorithms/sac_ddp.py``) override this to all-reduce gradients
+        across ranks. ``params`` must be a materialized list, not a
+        generator -- it is reused for grad-clipping immediately after this
+        call, and a generator can only be iterated once.
+        """
+        del params
+
     def _alpha_loss(self, log_prob_detached: torch.Tensor) -> torch.Tensor:
         alpha_tuner = getattr(self, "alpha_tuner", None)
         if alpha_tuner is not None:
@@ -363,7 +375,9 @@ class SACCore:
                 critic_loss, critic_info = self._critic_loss(data)
                 self.q_optimizer.zero_grad()
                 critic_loss.backward()
-                self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+                critic_params = list(self.policy.critic_and_encoder_parameters())
+                self._sync_ddp_grads(critic_params)
+                self._clip_grad_norm(critic_params)
                 self.q_optimizer.step()
                 self._step_critic_scheduler()
                 self._post_critic_update(data, critic_info)
@@ -380,7 +394,9 @@ class SACCore:
                 actor_loss, log_prob_detached = self._actor_loss_from_batch(data)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
-                self._clip_grad_norm(self.policy.actor_parameters())
+                actor_params = list(self.policy.actor_parameters())
+                self._sync_ddp_grads(actor_params)
+                self._clip_grad_norm(actor_params)
                 self.actor_optimizer.step()
                 self._step_actor_scheduler()
 
@@ -388,7 +404,9 @@ class SACCore:
                     alpha_loss = self._alpha_loss(log_prob_detached)
                     self.alpha_optimizer.zero_grad()
                     alpha_loss.backward()
-                    self._clip_grad_norm(self._alpha_parameters())
+                    alpha_params = list(self._alpha_parameters())
+                    self._sync_ddp_grads(alpha_params)
+                    self._clip_grad_norm(alpha_params)
                     self.alpha_optimizer.step()
                     if compute_info:
                         alpha_losses_t.append(alpha_loss.detach())
@@ -465,7 +483,9 @@ class SACCore:
                 critic_loss, critic_info = self._critic_loss(mb)
                 self.q_optimizer.zero_grad()
                 critic_loss.backward()
-                self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+                critic_params = list(self.policy.critic_and_encoder_parameters())
+                self._sync_ddp_grads(critic_params)
+                self._clip_grad_norm(critic_params)
                 self.q_optimizer.step()
                 self._step_critic_scheduler()
                 self._post_critic_update(mb, critic_info)
@@ -491,7 +511,9 @@ class SACCore:
             actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
-            self._clip_grad_norm(self.policy.actor_parameters())
+            actor_params = list(self.policy.actor_parameters())
+            self._sync_ddp_grads(actor_params)
+            self._clip_grad_norm(actor_params)
             self.actor_optimizer.step()
             self._step_actor_scheduler()
 
@@ -499,7 +521,9 @@ class SACCore:
                 alpha_loss = self._alpha_loss(log_prob_detached)
                 self.alpha_optimizer.zero_grad()
                 alpha_loss.backward()
-                self._clip_grad_norm(self._alpha_parameters())
+                alpha_params = list(self._alpha_parameters())
+                self._sync_ddp_grads(alpha_params)
+                self._clip_grad_norm(alpha_params)
                 self.alpha_optimizer.step()
                 if compute_info:
                     alpha_loss_t = alpha_loss.detach()

@@ -129,6 +129,10 @@ def run_online(
         agent_policy = getattr(agent, "policy", None)
         if agent_policy is not None:
             broadcast_module_state(agent_policy, src=0)
+        extra_broadcast = getattr(agent, "_ddp_extra_broadcast_modules", None)
+        if extra_broadcast is not None:
+            for extra_module in extra_broadcast():
+                broadcast_module_state(extra_module, src=0)
         materialized_derived = {
             "run_name": run_name,
             "checkpoint_dir": checkpoint_dir,

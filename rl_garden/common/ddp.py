@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
-from typing import Any
+from typing import Any, Iterable
 
 import torch
 import torch.distributed as dist
@@ -113,18 +113,24 @@ def broadcast_module_state(module: torch.nn.Module, src: int = 0) -> None:
         dist.broadcast(tensor, src=src)
 
 
-def allreduce_grads(module: torch.nn.Module) -> None:
-    """Average ``module``'s parameter gradients across all ranks, in place.
+def allreduce_param_grads(params: Iterable[torch.nn.Parameter]) -> None:
+    """Average a set of parameters' gradients across all ranks, in place.
 
     No-op unless DDP is active. Direct port of rsl_rl's
-    ``reduce_parameters()``: flattens every trainable param's ``.grad``
+    ``reduce_parameters()``: flattens every given param's ``.grad``
     (skipping params with no grad) into one tensor, ``all_reduce(SUM)``,
     divides by ``ddp_world_size()``, scatters back into each param's
     ``.grad``.
+
+    Takes a plain parameter iterable rather than a single ``nn.Module``
+    because some optimizers' trainable parameters span multiple submodules
+    (e.g. SAC's critic head plus a separately-owned shared encoder,
+    ``SACPolicy.critic_and_encoder_parameters()``) -- see ``allreduce_grads``
+    below for the common single-module case.
     """
     if not is_ddp_active():
         return
-    params = [p for p in module.parameters() if p.grad is not None]
+    params = [p for p in params if p.grad is not None]
     if not params:
         return
     grads = [p.grad.view(-1) for p in params]
@@ -136,6 +142,16 @@ def allreduce_grads(module: torch.nn.Module) -> None:
         numel = p.grad.numel()
         p.grad.copy_(flat[offset : offset + numel].view_as(p.grad))
         offset += numel
+
+
+def allreduce_grads(module: torch.nn.Module) -> None:
+    """Average ``module``'s parameter gradients across all ranks, in place.
+
+    No-op unless DDP is active. Thin wrapper around
+    ``allreduce_param_grads(module.parameters())`` for the common case where
+    an optimizer's trainable parameters all live on one ``nn.Module``.
+    """
+    allreduce_param_grads(module.parameters())
 
 
 def allreduce_mean(value: torch.Tensor) -> torch.Tensor:

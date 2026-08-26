@@ -90,13 +90,17 @@ def _sac_common_kwargs(
 
 
 def build_sac(args, env, eval_env, logger, checkpoint_dir):
+    import os
+
     from rl_garden.algorithms import SAC
+    from rl_garden.algorithms.sac_ddp import SACDDP
     from rl_garden.common.cli_args import (
         critic_features_extractor_kwargs_from_args,
         image_encoder_factory_from_args,
         image_keys_from_env,
         vit_sac_kwargs_from_args,
     )
+    from rl_garden.common.ddp import ddp_rank, is_ddp_active
     from rl_garden.training.inspection import construct_agent
 
     is_visual = args.obs_mode != "state"
@@ -127,9 +131,21 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
         if policy_kwargs:
             image_kwargs["policy_kwargs"] = policy_kwargs
 
+    algo_cls = SACDDP if is_ddp_active() else SAC
+    mmap_dir = args.mmap_dir
+    if is_ddp_active() and mmap_dir is not None:
+        if args.mmap_mode == "open":
+            raise SystemExit(
+                "--mmap-mode open (resuming a shared disk-backed buffer) is "
+                "not supported under multi-GPU DDP: each rank would need its "
+                "own resumed buffer, and this feature only supports "
+                "creating a fresh, rank-local one. Use --mmap-mode create."
+            )
+        mmap_dir = os.path.join(mmap_dir, f"rank{ddp_rank()}")
+
     agent = construct_agent(
-        SAC,
-        mmap_dir=args.mmap_dir,
+        algo_cls,
+        mmap_dir=mmap_dir,
         mmap_mode=args.mmap_mode,
         **_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
     )
