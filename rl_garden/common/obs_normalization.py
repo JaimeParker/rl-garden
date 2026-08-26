@@ -43,6 +43,15 @@ class RunningObsNormalizer(torch.nn.Module):
     (``3rd_party/rsl_rl/rsl_rl/modules/normalization.py``). ``update()`` only
     updates statistics in ``training`` mode, so calling it during an eval
     rollout (``policy.eval()`` is active) is automatically a no-op.
+
+    KNOWN LIMITATION under multi-GPU DDP (``rl_garden/common/ddp.py``):
+    ``update()`` is never all-reduced across ranks, so each rank's stats
+    drift apart from the others over training even though the policy
+    weights stay in lockstep (via gradient all-reduce). Rank-0-only
+    checkpointing therefore saves rank 0's own local view of these stats,
+    not a globally-averaged one. Correctly synchronizing this needs a
+    parallel-variance (Welford) merge across ranks, not a plain average --
+    not implemented here.
     """
 
     def __init__(self, dim: int, eps: float = 1e-2) -> None:

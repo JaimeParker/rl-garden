@@ -10,6 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from rl_garden.common import Logger, seed_everything
+from rl_garden.common.ddp import (
+    broadcast_module_state,
+    ddp_local_rank,
+    ddp_rank,
+    init_ddp,
+    pin_backend_config_device,
+    shutdown_ddp,
+)
 from rl_garden.common.effective_config import json_value, persist_effective_config
 from rl_garden.envs.backend_registry import EnvRequest, make_training_envs
 from rl_garden.training.inspection import (
@@ -33,6 +41,8 @@ def run_online(
 ) -> None:
     from rl_garden.training.online._registry import registry
 
+    init_ddp()
+
     algorithm, _ = registry.entry_for_args(args)
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -50,7 +60,9 @@ def run_online(
                 post_learn=post_learn,
             )
 
-    seed_everything(args.seed)
+    is_rank0 = ddp_rank() == 0
+    effective_seed = args.seed + ddp_rank()
+    seed_everything(effective_seed)
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     tag = f"_{obs_tag}" if obs_tag else ""
@@ -66,9 +78,15 @@ def run_online(
         checkpoint_dir = None
     else:
         checkpoint_dir = os.path.join(args.log_dir, run_name, "checkpoints")
+    if not is_rank0:
+        # Only rank 0 writes checkpoints/logs/config -- run_name/checkpoint_dir
+        # are not rank-salted, so every non-rank-0 write would race with
+        # rank 0's on the same path.
+        checkpoint_dir = None
 
     dry_run = is_dry_run()
-    if dry_run:
+    config_path: Path | None = None
+    if dry_run or not is_rank0:
         logger = Logger(log_type="none")
     else:
         config_path = Path(args.log_dir) / run_name / "config.json"
@@ -94,14 +112,23 @@ def run_online(
         + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
     )
 
-    req = make_env_request(args, run_name)
+    # A separate args copy carrying this rank's own seed, used only for env
+    # construction and agent construction -- run_name/config persistence
+    # above intentionally keep the original args.seed (the user's CLI value,
+    # not an internal per-rank implementation detail).
+    rank_args = replace(args, seed=effective_seed)
+    req = make_env_request(rank_args, run_name)
+    pin_backend_config_device(req.backend_config, ddp_local_rank())
     if dry_run:
         req = replace(req, capture_video=False, eval_record_dir=None)
     env = None
     eval_env = None
     try:
         env, eval_env = make_training_envs(args.env_backend, req)
-        agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
+        agent = build_agent(rank_args, env, eval_env, logger, checkpoint_dir)
+        agent_policy = getattr(agent, "policy", None)
+        if agent_policy is not None:
+            broadcast_module_state(agent_policy, src=0)
         materialized_derived = {
             "run_name": run_name,
             "checkpoint_dir": checkpoint_dir,
@@ -124,15 +151,16 @@ def run_online(
                 derived=materialized_derived,
             )
             return
-        materialized = materialize_config(
-            env_request=req,
-            env=env,
-            eval_env=eval_env,
-            agent=agent,
-            derived=materialized_derived,
-        )
-        persist_effective_config(materialized, config_path)
-        logger.update_config(json_value(materialized))
+        if is_rank0:
+            materialized = materialize_config(
+                env_request=req,
+                env=env,
+                eval_env=eval_env,
+                agent=agent,
+                derived=materialized_derived,
+            )
+            persist_effective_config(materialized, config_path)
+            logger.update_config(json_value(materialized))
         agent.learn(total_timesteps=args.total_timesteps)
         if post_learn is not None:
             post_learn(agent)
@@ -142,3 +170,4 @@ def run_online(
             env.close()
         if eval_env is not None:
             eval_env.close()
+        shutdown_ddp()

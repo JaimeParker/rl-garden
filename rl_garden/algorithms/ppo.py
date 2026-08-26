@@ -12,6 +12,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.rollout_buffer import DictRolloutBuffer, RolloutBuffer, RolloutBufferSample
+from rl_garden.common.ddp import allreduce_grads, allreduce_mean, is_ddp_active
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
@@ -141,6 +142,17 @@ class PPO(OnPolicyAlgorithm):
                 "_step_lr()'s anneal_lr branch unconditionally overwrites the "
                 "optimizer's lr from self.learning_rate every train() call, "
                 "silently clobbering the adaptive-KL mutation."
+            )
+        if is_ddp_active() and target_kl is not None:
+            raise ValueError(
+                "target_kl is not None under an active torch.distributed "
+                "process group: target_kl's early-stop is a per-rank decision "
+                "computed from that rank's own local minibatch data. If one "
+                "rank stops early while another continues to the next "
+                "minibatch's backward()+grad-allreduce, ranks call "
+                "all_reduce a different number of times and the job "
+                "deadlocks. Pass target_kl=None for multi-GPU runs (rsl_rl "
+                "has no early-stop mechanism at all, for the same reason)."
             )
         self.learning_rate = learning_rate
         self.num_minibatches = num_minibatches
@@ -598,6 +610,7 @@ class PPO(OnPolicyAlgorithm):
                 kl_mean = gaussian_kl_divergence(
                     old_mean, old_log_std, new_mean, new_log_std
                 ).mean()
+                kl_mean = allreduce_mean(kl_mean)
                 current_lr = self.policy_optimizer.param_groups[0]["lr"]
                 if kl_mean > self.desired_kl * 2.0:
                     new_lr = max(self.adaptive_lr_min, current_lr / 1.5)
@@ -621,6 +634,7 @@ class PPO(OnPolicyAlgorithm):
 
         self.policy_optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        allreduce_grads(self.policy)
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
         self.policy_optimizer.step()
 
