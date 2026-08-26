@@ -196,6 +196,45 @@ class DiffusionBCTrainingArgs(CheckpointArgs, LoggingArgs):
 
 
 @dataclass
+class VisionDiffusionBCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
+    """Vision-conditioned Diffusion BC pretraining. A standalone sibling of
+    ``DiffusionBCTrainingArgs`` (not built on it) -- mirrors its field set
+    exactly, plus ``OfflineVisionArgs`` for image-encoder config, since
+    ``VisionDiffusionBC`` is itself a standalone sibling of ``DiffusionBC``.
+    Same reasoning as that class for not inheriting ``OfflineCommonArgs``."""
+
+    dataset_path: str = ""
+    num_offline_steps: int = 200_000
+    offline_num_traj: Optional[int] = None
+    horizon_steps: int = 4
+    cond_steps: int = 1
+    denoising_steps: int = 20
+    activation_fn: Literal["relu", "gelu", "mish"] = "relu"
+    residual_style: bool = True
+    time_dim: int = 16
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    denoised_clip_value: Optional[float] = 1.0
+    randn_clip_value: float = 10.0
+    final_action_clip_value: Optional[float] = None
+    min_sampling_denoising_std: float = 0.1
+    actor_lr: float = 1e-3
+    weight_decay: float = 1e-6
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
+    grad_clip_norm: Optional[float] = None
+    batch_size: int = 128
+    ema_decay: float = 0.995
+    ema_update_every: int = 10
+    ema_start_step: int = 0
+    seed: int = 1
+    device: str = "auto"
+
+
+@dataclass
 class OfflineDeviceArgs:
     device: str = "auto"
 

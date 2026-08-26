@@ -49,6 +49,7 @@ from rl_garden.algorithms.tdmpc2 import TDMPC2
 from rl_garden.algorithms.tdmpc2.multitask import TDMPC2Multitask
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
+from rl_garden.algorithms.vision_diffusion_bc import VisionDiffusionBC
 from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
@@ -98,6 +99,7 @@ __all__ = [
     "TDMPC2Multitask",
     "TransformerPPO",
     "TransformerSAC",
+    "VisionDiffusionBC",
     "WSRL",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",

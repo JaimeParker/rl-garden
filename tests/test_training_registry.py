@@ -103,6 +103,7 @@ def test_phase_registries_discover_expected_algorithms():
     assert set(offline.entries()) == {
         "bc",
         "diffusion_bc",
+        "vision_diffusion_bc",
         "flow_bc",
         "fql",
         "iql",
