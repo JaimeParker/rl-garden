@@ -92,14 +92,27 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
+| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `vision_diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `acfql` |
 
 Every registered algorithm's exact args and defaults can be listed with
 `--print-config`; use `python examples/train_online.py --help` (or
 `pretrain_offline.py` / `train_off2on.py`) to see the current algorithm list
 directly from the registry instead of relying on this table staying in sync.
+
+**"Online" means "needs live env rollout during training," not "is
+reward-driven RL."** Most entries under `train_online.py` optimize a reward
+signal (`sac`, `ppo`, `rlpd`, ...), but `dagger` and `policy_distillation` are
+imitation learning: their loss is supervised regression against an expert/
+teacher action, not reward. They live under `train_online.py` (reusing its
+env-construction, logging, and checkpoint machinery) purely because, unlike
+`bc`/`diffusion_bc`/`flow_bc` under `pretrain_offline.py`, they need to
+collect on-policy rollouts to see the state distribution the trained policy
+will actually encounter -- that's an infrastructure requirement, not a claim
+that they're RL. `policy_distillation` in particular trains no critic and
+never reads a reward from the env at all; see its module docstring
+(`rl_garden/algorithms/policy_distillation.py`) for the teacher/student split.
 
 All registry-managed entrypoints accept `--config PRESET.yaml`, `--print-config`,
 `--dry-run`, and `--explain-param FIELD`. Static printing does not load a

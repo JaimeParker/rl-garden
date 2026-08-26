@@ -31,6 +31,7 @@ from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.plas import PLAS
+from rl_garden.algorithms.policy_distillation import PolicyDistillation
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.algorithms.qam import QAM
 from rl_garden.algorithms.qgf import QGF
@@ -82,6 +83,7 @@ __all__ = [
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
     "PLAS",
+    "PolicyDistillation",
     "PPO",
     "QAM",
     "QGF",

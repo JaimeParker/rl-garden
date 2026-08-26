@@ -143,6 +143,48 @@ def load_checkpoint_file(path: str | Path, map_location: str | torch.device) -> 
     return torch.load(Path(path), map_location=map_location)
 
 
+def load_filtered_state_dict(
+    module: torch.nn.Module,
+    state_dict: dict[str, Any],
+    prefix: str = "",
+    strict: bool = False,
+) -> None:
+    """Load only the entries of ``state_dict`` under ``prefix`` into ``module``.
+
+    ``module`` should be the submodule ``prefix`` names, not its parent --
+    e.g. to load ``some_state_dict["actor.*"]`` into ``target.actor``, call
+    ``load_filtered_state_dict(target.actor, some_state_dict, prefix="actor")``,
+    not ``load_filtered_state_dict(target, ...)`` (the latter would strip
+    the prefix and then fail to match ``target``'s own, still-prefixed,
+    top-level keys). ``prefix=""`` loads ``state_dict`` into ``module``
+    as-is, no stripping -- for when ``module`` already matches
+    ``state_dict``'s own key namespace.
+
+    Generic cross-algorithm primitive: any algorithm's own
+    ``state_dict()["policy"]`` (or any other nested ``nn.Module`` state
+    dict) can be filtered down to one submodule's weights and loaded into a
+    freshly constructed module of matching shape -- without requiring the
+    source and target to share a full env/obs-space binding the way
+    ``BaseAlgorithm.load()`` does.
+    """
+    if not prefix:
+        module.load_state_dict(state_dict, strict=strict)
+        return
+    key_prefix = f"{prefix}."
+    filtered = {
+        key[len(key_prefix):]: value
+        for key, value in state_dict.items()
+        if key.startswith(key_prefix)
+    }
+    if not filtered:
+        available = sorted({key.split(".", 1)[0] for key in state_dict})
+        raise ValueError(
+            f"No state_dict keys found under prefix {prefix!r} "
+            f"(available top-level prefixes: {available})."
+        )
+    module.load_state_dict(filtered, strict=strict)
+
+
 def replay_buffer_path_for_checkpoint(path: str | Path) -> Path:
     ckpt_path = Path(path)
     stem = ckpt_path.stem

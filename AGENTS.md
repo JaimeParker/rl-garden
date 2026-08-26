@@ -46,24 +46,19 @@ entrypoints to a specific simulator.
 - Keep device transfers explicit for every environment backend. CPU-backed
   environments are supported, but must not introduce implicit CPU copies into a
   GPU training path.
-- RGBD actor and critic share the encoder; actor updates detach encoder features.
 - Keep optional environment and hardware dependencies lazy so core package imports,
   registry discovery, and configuration inspection work without every backend
   installed.
-- `3rd_party/` holds reference submodules and external clones; do not edit unless
-  the user explicitly requests it. Three entries (`Cal-QL`, `wsrl`,
-  `implicit_q_learning`) are registered as real git submodules with install
-  tooling (`scripts/install_baseline.sh`, `baselines/baselines.yaml`) --
-  see [`.agents/runbooks/baseline-install.md`](.agents/runbooks/baseline-install.md).
-  The rest remain untracked read-only reference clones.
 
 ## Development Rules
 
 - Inspect existing patterns with `rg` before editing.
 - Make surgical changes. Do not refactor adjacent code or reformat unrelated files.
-- Prefer subclass overrides over changing parent classes. Add a parent hook only
-  when it is generic, has a no-op or trivially correct default, and benefits more
-  than one implementation.
+- Maximize reuse via subclassing: override in a subclass rather than editing a
+  shared parent. Add a parent hook only if ≥2 *existing* subclasses need
+  genuinely different behavior there (never a hypothetical future one), with a
+  no-op/trivial default for the rest -- otherwise implement it in that one
+  subclass.
 - Keep algorithm-specific fields in subclasses. If parent-side variability is
   unavoidable, prefer an overridable class attribute over `hasattr` branches.
 - Keep optimizer ownership explicit for actor, critic, encoder, entropy coefficient,

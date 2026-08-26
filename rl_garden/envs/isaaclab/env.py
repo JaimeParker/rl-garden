@@ -77,6 +77,12 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         )
 
     def _extract_obs(self, obs_dict: dict):
+        # TODO(policy-distillation): this collapses to a single obs tensor
+        # even when obs_dict also has IsaacLab's native "critic" (privileged)
+        # group -- expose it as an additional Dict key here (alongside
+        # "state"/"policy") so PolicyDistillation(teacher_obs_keys=[...])
+        # can consume it without a bespoke env wrapper. See
+        # rl_garden/algorithms/policy_distillation.py.
         if self.obs_mode == "state":
             if "state" in obs_dict:
                 return obs_dict["state"]

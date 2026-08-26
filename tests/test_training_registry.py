@@ -100,6 +100,7 @@ def test_phase_registries_discover_expected_algorithms():
         "acrlpd",
         "tdmpc2",
         "dagger",
+        "policy_distillation",
     }
     assert set(offline.entries()) == {
         "bc",

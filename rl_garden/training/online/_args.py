@@ -1,7 +1,7 @@
 """CLI argument dataclasses for online training algorithms."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, VisionArgs
@@ -443,6 +443,36 @@ class DAggerTrainingArgs(EnvRunArgs, CheckpointArgs):
     weight_decay: float = 0.0
     tanh_squash: bool = True
     net_arch: tuple[int, ...] = (256, 256)
+
+
+@dataclass
+class PolicyDistillationTrainingArgs(EnvRunArgs, CheckpointArgs):
+    """Teacher-student on-policy distillation
+    (``rl_garden/algorithms/policy_distillation.py``). Dict observations
+    only -- the env must expose both a privileged obs group (for the
+    teacher) and a realistic obs group (for the student) as named Dict
+    keys, selected via ``teacher_obs_keys``/``student_obs_keys``. State-only
+    (no vision fields): distillation's motivating use case (sim-to-real
+    legged-robot locomotion) is low-dimensional state, not images. v1 loads
+    a PPO-trained teacher only -- ``teacher_net_arch`` must match the
+    teacher's own architecture (its own checkpoint's obs/action space is
+    validated implicitly by shape at load time, non-strict)."""
+
+    total_timesteps: int = 1_000_000
+    device: str = "auto"
+    teacher_checkpoint: str = ""
+    teacher_obs_keys: list[str] = field(default_factory=list)
+    student_obs_keys: list[str] = field(default_factory=list)
+    teacher_net_arch: tuple[int, ...] = (256, 256, 256)
+    num_steps: int = 50
+    num_learning_epochs: int = 5
+    num_minibatches: int = 4
+    loss_type: Literal["mse", "huber"] = "mse"
+    actor_lr: float = 3e-4
+    weight_decay: float = 0.0
+    max_grad_norm: Optional[float] = None
+    net_arch: tuple[int, ...] = (256, 256)
+    tanh_squash: bool = True
 
 
 def sac_initial_training_phase_from_args(
