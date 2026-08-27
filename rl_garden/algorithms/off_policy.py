@@ -12,7 +12,6 @@ from __future__ import annotations
 import time
 from abc import abstractmethod
 from collections import defaultdict, deque
-from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -107,24 +106,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def train(
         self, gradient_steps: int, compute_info: bool = False
     ) -> dict[str, float]: ...
-
-    # --- logging hooks ---
-
-    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
-        if self.logger is None:
-            return
-        for key, value in metrics.items():
-            self.logger.add_scalar(f"eval/{key}", value, step)
-
-    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
-        if self.logger is None:
-            return
-        self.logger.add_scalar(f"train/{key}", value, step)
-
-    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
-        if self.logger is None:
-            return
-        self.logger.log_metrics(metrics, step)
 
     def _explore_action(self, obs) -> torch.Tensor:
         """Random uniform action in [-1, 1] across all envs. Used pre-learning."""
@@ -251,22 +232,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             return {k: v.clone() for k, v in obs.items()}
         return obs.clone()
 
-    def _obs_to_policy_device(self, obs):
-        """Move CPU-backed env observations to the policy device for inference.
-
-        GPU ManiSkill envs already return tensors on ``self.device`` and this is
-        a no-op. This fallback exists for CPU simulator backends such as
-        ``physx_cpu``; model training and replay sampling remain CUDA-first.
-        """
-        if isinstance(obs, dict):
-            return {
-                k: v if v.device == self.device else v.to(self.device)
-                for k, v in obs.items()
-            }
-        if obs.device == self.device:
-            return obs
-        return obs.to(self.device)
-
     @staticmethod
     def _write_final_obs(real_next_obs, infos, need_final_obs):
         if "final_observation" not in infos:
@@ -278,18 +243,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         else:
             real_next_obs[need_final_obs] = final[need_final_obs]
 
-    @staticmethod
-    def _first_metric(metrics: dict[str, float], keys: tuple[str, ...]) -> float:
-        for key in keys:
-            if key in metrics:
-                return float(metrics[key])
-        return float("nan")
-
-    @staticmethod
-    def _fmt_metric(value: float) -> str:
-        return "nan" if value != value else f"{value:.4f}"
-
     # --- checkpointing ---
+
+    def _checkpoint_includes_replay_buffer(self) -> bool:
+        return self.save_replay_buffer
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         metadata = {
@@ -323,28 +280,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         elif self.initial_training_phase is not None:
             # Pre-phase-state checkpoints used absolute global-step thresholds.
             self._initial_phase_start_step = 0
-
-    def _checkpoint_path(self, name: str) -> Path:
-        assert self.checkpoint_dir is not None
-        return Path(self.checkpoint_dir) / name
-
-    def _save_checkpoint(self, name: str) -> None:
-        if self.checkpoint_dir is None:
-            return
-        self.save(
-            self._checkpoint_path(name),
-            include_replay_buffer=self.save_replay_buffer,
-        )
-
-    def _maybe_save_periodic_checkpoint(self, previous_step: int) -> None:
-        if self.checkpoint_dir is None or self.checkpoint_freq <= 0:
-            return
-        if self._global_step // self.checkpoint_freq <= previous_step // self.checkpoint_freq:
-            return
-        if self._global_step == self._last_checkpoint_step:
-            return
-        self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
-        self._last_checkpoint_step = self._global_step
 
     # --- main loop ---
 

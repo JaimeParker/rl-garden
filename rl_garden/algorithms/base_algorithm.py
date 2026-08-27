@@ -67,6 +67,15 @@ class BaseAlgorithm(ABC):
     def _training_update_mask(self) -> TrainingUpdateMask:
         return STANDARD_UPDATE_MASK
 
+    def _checkpoint_includes_replay_buffer(self) -> bool:
+        """Whether ``_save_checkpoint`` writes replay-buffer state. No-op
+        default: false. Algorithms with a real replay buffer (e.g.
+        ``OffPolicyAlgorithm``) override this to read their own
+        CLI-configured ``self.save_replay_buffer``; on-policy algorithms have
+        no replay buffer and correctly never need to.
+        """
+        return False
+
     def _ddp_extra_broadcast_modules(self) -> list:
         """Extra modules (beyond ``self.policy``, broadcast unconditionally
         by the online runner) that need their rank-0 state broadcast at DDP
@@ -126,6 +135,35 @@ class BaseAlgorithm(ABC):
     def _eval_finalize_hook(self) -> dict[str, float]:
         """Extra metrics merged into `_evaluate()`'s return value."""
         return {}
+
+    # --- metric formatting / logging ---
+
+    @staticmethod
+    def _first_metric(metrics: dict[str, float], keys: tuple[str, ...]) -> float:
+        for key in keys:
+            if key in metrics:
+                return float(metrics[key])
+        return float("nan")
+
+    @staticmethod
+    def _fmt_metric(value: float) -> str:
+        return "nan" if value != value else f"{value:.4f}"
+
+    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        for key, value in metrics.items():
+            self.logger.add_scalar(f"eval/{key}", value, step)
+
+    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
+        if self.logger is None:
+            return
+        self.logger.add_scalar(f"train/{key}", value, step)
+
+    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        if self.logger is None:
+            return
+        self.logger.log_metrics(metrics, step)
 
     # --- evaluation ---
 
@@ -235,6 +273,28 @@ class BaseAlgorithm(ABC):
         self._load_extra_checkpoint_state(sd.get("extra", {}))
         if load_optimizers:
             self._load_optimizer_state_dicts(sd.get("optimizers", {}))
+
+    def _checkpoint_path(self, name: str) -> Path:
+        assert self.checkpoint_dir is not None
+        return Path(self.checkpoint_dir) / name
+
+    def _save_checkpoint(self, name: str) -> None:
+        if self.checkpoint_dir is None:
+            return
+        self.save(
+            self._checkpoint_path(name),
+            include_replay_buffer=self._checkpoint_includes_replay_buffer(),
+        )
+
+    def _maybe_save_periodic_checkpoint(self, previous_step: int) -> None:
+        if self.checkpoint_dir is None or self.checkpoint_freq <= 0:
+            return
+        if self._global_step // self.checkpoint_freq <= previous_step // self.checkpoint_freq:
+            return
+        if self._global_step == self._last_checkpoint_step:
+            return
+        self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
+        self._last_checkpoint_step = self._global_step
 
     def save(self, path: str | Path, include_replay_buffer: bool = False) -> Path:
         """Save model/optimizer/train state to ``path``.

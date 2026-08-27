@@ -42,9 +42,8 @@ from pathlib import Path
 from typing import Any
 
 from gymnasium import spaces
-from tqdm import trange
 
-from rl_garden.algorithms.offline import _log_eval_stdout
+from rl_garden.algorithms.offline import _log_eval_stdout, run_offline_pretraining
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     resolve_checkpoint_dir,
@@ -82,7 +81,6 @@ def _offline_update_loop(
     log_freq: int,
     std_log: bool,
     *,
-    start_step: int = 0,
     eval_freq: int | None = None,
 ) -> None:
     # `eval_freq` here is in *gradient-update* units (this loop takes exactly
@@ -90,65 +88,21 @@ def _offline_update_loop(
     # env-step-unit `eval_freq` (see `OffPolicyAlgorithm.learn()`). `None`
     # preserves the pre-existing behavior of reading `agent.eval_freq`.
     offline_eval_freq = agent.eval_freq if eval_freq is None else eval_freq
-    gradient_steps = 1
-    interval_update_time = 0.0
-    interval_update_steps = 0
-    for step in trange(steps, desc="offline"):
-        should_log = log_freq > 0 and (
-            (step + 1) % log_freq == 0 or (step + 1) == steps
-        )
-        update_t = time.perf_counter()
-        losses = agent.train(gradient_steps, compute_info=should_log)
-        interval_update_time += time.perf_counter() - update_t
-        interval_update_steps += gradient_steps
-
-        if (
-            offline_eval_freq > 0
-            and agent.eval_env is not None
-            and (step + 1) % offline_eval_freq == 0
-        ):
-            eval_t = time.perf_counter()
-            eval_metrics = agent._evaluate()
-            agent._log_eval_metrics(eval_metrics, start_step + step + 1)
-            if std_log:
-                _log_eval_stdout(agent, eval_metrics, start_step + step + 1)
-            logger.add_scalar(
-                "time/eval_time", time.perf_counter() - eval_t, start_step + step + 1
-            )
-
-        if log_freq > 0 and (step + 1) % log_freq == 0:
-            logger.log_metrics(losses, start_step + step + 1)
-            offline_update_fps = (
-                interval_update_steps / interval_update_time
-                if interval_update_time > 0
-                else float("nan")
-            )
-            logger.add_scalar(
-                "time/offline_update_time",
-                interval_update_time,
-                start_step + step + 1,
-            )
-            logger.add_scalar(
-                "time/offline_update_fps",
-                offline_update_fps,
-                start_step + step + 1,
-            )
-            if std_log:
-                progress = 100.0 * (step + 1) / steps if steps > 0 else 100.0
-                loss_summary, q_summary = logger.format_metrics(losses)
-                q_part = f" q={q_summary}" if q_summary else ""
-                print(
-                    "[offline] "
-                    f"step={step + 1}/{steps} ({progress:.2f}%) "
-                    f"fps={offline_update_fps:.4f} "
-                    f"{loss_summary}{q_part}",
-                    flush=True,
-                )
-            interval_update_time = 0.0
-            interval_update_steps = 0
-
-        if agent.checkpoint_freq > 0 and (step + 1) % agent.checkpoint_freq == 0:
-            agent._save_checkpoint(f"checkpoint_{step + 1}.pt")
+    run_offline_pretraining(
+        agent,
+        num_steps=steps,
+        gradient_steps=1,
+        checkpoint_dir=getattr(agent, "checkpoint_dir", None),
+        checkpoint_freq=getattr(agent, "checkpoint_freq", 0),
+        # off2on saves its own offline_final.pt separately via
+        # `_save_offline_checkpoint` right after this loop returns.
+        save_final_checkpoint=False,
+        save_replay_buffer=getattr(agent, "save_replay_buffer", False),
+        log_freq=log_freq,
+        std_log=std_log,
+        eval_freq=offline_eval_freq,
+        desc="offline",
+    )
 
 
 def _evaluate_offline_end(agent: Any, logger: Logger, step: int, std_log: bool) -> None:
@@ -410,11 +364,9 @@ def _run_off2on(
             logger,
             args.log_freq,
             args.std_log,
-            start_step=offline_start_step,
             eval_freq=getattr(args, "offline_eval_freq", None),
         )
         offline_end_step = offline_start_step + args.num_offline_steps
-        agent._global_step = offline_end_step
         _evaluate_offline_end(agent, logger, offline_end_step, args.std_log)
         _save_offline_checkpoint(
             agent,

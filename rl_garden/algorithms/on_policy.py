@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from abc import abstractmethod
 from collections import defaultdict
-from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -73,48 +72,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             "gae_lambda": self.gae_lambda,
             "finite_horizon_gae": self.finite_horizon_gae,
         }
-
-    def _checkpoint_path(self, name: str) -> Path:
-        assert self.checkpoint_dir is not None
-        return Path(self.checkpoint_dir) / name
-
-    def _save_checkpoint(self, name: str) -> None:
-        if self.checkpoint_dir is not None:
-            self.save(self._checkpoint_path(name), include_replay_buffer=False)
-
-    def _maybe_save_periodic_checkpoint(self, previous_step: int) -> None:
-        if self.checkpoint_dir is None or self.checkpoint_freq <= 0:
-            return
-        if (
-            self._global_step // self.checkpoint_freq
-            <= previous_step // self.checkpoint_freq
-        ):
-            return
-        if self._global_step == self._last_checkpoint_step:
-            return
-        self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
-        self._last_checkpoint_step = self._global_step
-
-    @staticmethod
-    def _first_metric(metrics: dict[str, float], keys: tuple[str, ...]) -> float:
-        for key in keys:
-            if key in metrics:
-                return float(metrics[key])
-        return float("nan")
-
-    @staticmethod
-    def _fmt_metric(value: float) -> str:
-        return "nan" if value != value else f"{value:.4f}"
-
-    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
-        if self.logger is None:
-            return
-        for key, value in metrics.items():
-            self.logger.add_scalar(f"eval/{key}", value, step)
-
-    def _log_rollout_metric(self, key: str, value: float, step: int) -> None:
-        if self.logger is not None:
-            self.logger.add_scalar(f"train/{key}", value, step)
 
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:

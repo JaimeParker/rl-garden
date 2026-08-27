@@ -148,12 +148,6 @@ class OfflineRLAlgorithm(BaseAlgorithm):
             num_eval_steps=self.num_eval_steps,
         )
 
-    def _log_eval_metrics(self, metrics: dict[str, float], step: int) -> None:
-        if self.logger is None:
-            return
-        for key, value in metrics.items():
-            self.logger.add_scalar(f"eval/{key}", value, step)
-
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
@@ -163,11 +157,6 @@ class OfflineRLAlgorithm(BaseAlgorithm):
             "gamma": self.gamma,
             "offline_sampling": self.offline_sampling,
         }
-
-    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
-        if self.logger is None:
-            return
-        self.logger.log_metrics(metrics, step)
 
 
 def infer_specs_from_h5(
