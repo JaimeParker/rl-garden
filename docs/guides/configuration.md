@@ -10,7 +10,16 @@ infer a static graph of every parameter consumer.
 
 Values are resolved from lowest to highest priority:
 
-1. Dataclass defaults and subclass overrides.
+1. Dataclass defaults. This layer itself has two levels, resolved by ordinary
+   Python subclassing (MRO), not by the config system:
+   - Shared fields declared once in `rl_garden/common/cli_args.py` (logging,
+     checkpoint) and `rl_garden/common/env_args.py` (environment) -- the
+     generic baseline every algorithm inherits unchanged.
+   - An algorithm's own `*Args` subclass, which may re-declare one of those
+     fields with a different default (e.g. `DrQv2Args`/`TD3Args` overriding
+     `load_replay_buffer`). This should stay the exception: most algorithms
+     never need to touch a shared field's default, and doing so is a visible
+     redeclaration in that subclass, not a hidden global change.
 2. One strict YAML preset passed with `--config`.
 3. Explicit CLI flags.
 

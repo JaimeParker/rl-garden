@@ -31,7 +31,7 @@ class CheckpointArgs:
     checkpoint_freq: int = 0
     load_checkpoint: Optional[str] = None
     save_replay_buffer: bool = False
-    load_replay_buffer: bool = True
+    load_replay_buffer: bool = False
     save_final_checkpoint: bool = True
 
 
