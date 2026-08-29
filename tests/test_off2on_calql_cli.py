@@ -77,7 +77,7 @@ def test_d4rl_expansion_presets_are_strict_and_complete():
     repo_root = Path(__file__).resolve().parents[1]
     paths = sorted((repo_root / "configs" / "off2on").glob("calql_*_v*_*.yaml"))
 
-    assert len(paths) == 15
+    assert len(paths) == 19
     configs = {}
     for path in paths:
         args = CalQLOff2OnArgs()
@@ -87,6 +87,17 @@ def test_d4rl_expansion_presets_are_strict_and_complete():
     assert configs["pen-binary-v0"].offline_dataset is None
     assert configs["pen-binary-v0"].num_online_steps == 300_000
     assert configs["door-binary-v0"].sparse_negative_reward == -5.0
+    assert configs["antmaze-medium-play-v2"].dataset_backend == "d4rl_legacy"
+    assert configs["antmaze-medium-play-v2"].offline_data_ratio == 0.5
+    assert configs["antmaze-medium-play-v2"].reward_scale == 10.0
+    assert configs["antmaze-medium-play-v2"].reward_bias == -5.0
+    assert configs["antmaze-medium-play-v2"].cql_alpha == 5.0
+    assert configs["antmaze-medium-play-v2"].cql_target_action_gap == 0.8
+    assert configs["antmaze-medium-play-v2"].cql_alpha_param == "exp_clip"
+    assert configs["antmaze-medium-diverse-v2"].offline_dataset == "antmaze-medium-diverse-v2"
+    assert configs["antmaze-large-play-v2"].num_online_steps == 1_000_000
+    assert configs["antmaze-large-diverse-v2"].cql_autotune_alpha is True
+    assert configs["kitchen-complete-v0"].critic_use_layer_norm is True
     assert configs["kitchen-mixed-v0"].offline_data_ratio == 0.25
     assert configs["kitchen-mixed-v0"].cql_importance_sample is False
     assert configs["relocate-expert-v1"].hidden_dim == 256

@@ -19,7 +19,7 @@ hidden_dim: 512
 actor_hidden_layers: 3
 critic_hidden_layers: 3
 actor_use_layer_norm: false
-critic_use_layer_norm: false
+critic_use_layer_norm: true
 n_critics: 2
 cql_alpha: 5.0
 online_cql_alpha: 5.0
