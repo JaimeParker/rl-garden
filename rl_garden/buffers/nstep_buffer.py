@@ -7,11 +7,12 @@ across episode boundaries.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import torch
 from gymnasium import spaces
 
+from rl_garden.buffers._final_obs_table import FinalObsTableMixin
 from rl_garden.buffers._nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dict_buffer import (
@@ -329,15 +330,7 @@ class NStepDictReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         )
 
 
-def _copy_dict_array(src: DictArray, dst: DictArray, count: int) -> None:
-    for key, value in src.data.items():
-        if isinstance(value, DictArray):
-            _copy_dict_array(value, dst.data[key], count)
-        else:
-            dst.data[key][:count].copy_(value[:count])
-
-
-class LazyNextNStepDictReplayBuffer(NStepDictReplayBuffer):
+class LazyNextNStepDictReplayBuffer(FinalObsTableMixin, NStepDictReplayBuffer):
     """N-step dict replay that stores only sparse episode-end next observations.
 
     Normal bootstrap observations are reconstructed from later ``obs`` slots in
@@ -367,26 +360,11 @@ class LazyNextNStepDictReplayBuffer(NStepDictReplayBuffer):
             mmap_dir=mmap_dir,
             **kwargs,
         )
-        initial_capacity = (
-            int(final_obs_capacity)
-            if final_obs_capacity is not None
-            else max(1024, self.buffer_size // 64)
-        )
-        if initial_capacity <= 0:
-            raise ValueError("final_obs_capacity must be positive")
-        self._final_obs = DictArray(
-            (initial_capacity,),
-            self.observation_space,
-            device=self.storage_device,
-        )
-        self._final_slot_ids = torch.full(
+        self._is_dict_obs = True
+        self._init_final_obs_table(
             (self.per_env_buffer_size, self.num_envs),
-            -1,
-            dtype=torch.long,
-            device=self.storage_device,
+            capacity=final_obs_capacity,
         )
-        self._free_final_slots: list[int] = []
-        self._next_final_slot = 0
 
     def _build_next_obs_storage(
         self,
@@ -397,52 +375,14 @@ class LazyNextNStepDictReplayBuffer(NStepDictReplayBuffer):
         return None
 
     def _before_overwrite(self, pos: int) -> None:
-        old_slots = self._final_slot_ids[pos]
-        for slot in old_slots[old_slots >= 0].tolist():
-            self._free_final_slots.append(int(slot))
-        old_slots.fill_(-1)
-
-    def _grow_final_obs(self) -> None:
-        current = self._final_obs.shape[0]
-        grown = DictArray(
-            (current * 2,),
-            self.observation_space,
-            device=self.storage_device,
-        )
-        _copy_dict_array(self._final_obs, grown, current)
-        self._final_obs = grown
-
-    def _allocate_final_slot(self) -> int:
-        if self._free_final_slots:
-            return self._free_final_slots.pop()
-        if self._next_final_slot >= self._final_obs.shape[0]:
-            self._grow_final_obs()
-        slot = self._next_final_slot
-        self._next_final_slot += 1
-        return slot
-
-    def _store_tree_leaf(
-        self,
-        storage: Any,
-        slot: int,
-        value: Any,
-        env: int,
-    ) -> None:
-        if isinstance(storage, DictArray):
-            for key in storage.data:
-                self._store_tree_leaf(storage.data[key], slot, value[key], env)
-        else:
-            storage[slot] = value[env]
+        self._free_final_slot(pos)
 
     def _store_next_obs(
         self,
         next_obs: dict[str, torch.Tensor],
         episode_end_bool: torch.Tensor,
     ) -> None:
-        for env in episode_end_bool.nonzero(as_tuple=False).flatten().tolist():
-            slot = self._allocate_final_slot()
-            self._final_slot_ids[self.pos, env] = slot
-            self._store_tree_leaf(self._final_obs, slot, next_obs, int(env))
+        self._store_final_obs_for_episode_ends(self.pos, episode_end_bool, next_obs)
 
     def _final_obs_at_slots(self, slots: torch.Tensor) -> dict[str, torch.Tensor]:
         return self._final_obs[slots]

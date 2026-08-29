@@ -83,3 +83,13 @@ class WithoutReplaceSamplerMixin:
     def epoch_size(self) -> int:
         """Total transitions in one epoch (full pass through the buffer)."""
         return self.size * self.num_envs
+
+    # ------------------------------------------------------------------
+    # With-replacement sample
+    # ------------------------------------------------------------------
+
+    def sample(self, batch_size: int) -> ReplayBufferSample:
+        upper = self.size
+        batch_inds = torch.randint(0, upper, size=(batch_size,))
+        env_inds = torch.randint(0, self.num_envs, size=(batch_size,))
+        return self._index_batch(batch_inds, env_inds)
