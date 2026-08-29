@@ -103,6 +103,7 @@ def test_phase_registries_discover_expected_algorithms():
         "policy_distillation",
     }
     assert set(offline.entries()) == {
+        "a2a_bc",
         "bc",
         "diffusion_bc",
         "vision_diffusion_bc",

@@ -33,15 +33,18 @@ from rl_garden.networks.latent_actor import LatentActor
 from rl_garden.networks.mlp import Activation, KernelInit, MLPResNet, create_mlp
 from rl_garden.networks.perturbation_actor import PerturbationActor
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
+from rl_garden.networks.sequence_cnn import ActionChunkDecoder, CNNSequenceEncoder
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder, SequenceState
 from rl_garden.networks.spatial_critic import SpatialEmbQEnsemble, SpatialEmbQHead
 from rl_garden.networks.value import ValueNetwork
 
 __all__ = [
+    "ActionChunkDecoder",
     "ActorVectorField",
     "Activation",
     "BackboneType",
     "BehaviorVAE",
+    "CNNSequenceEncoder",
     "ConditionalVAE",
     "CriticImpl",
     "DeterministicTanhActor",

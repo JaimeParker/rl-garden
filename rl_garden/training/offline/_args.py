@@ -235,6 +235,49 @@ class VisionDiffusionBCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingAr
 
 
 @dataclass
+class A2ABCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
+    """A2A flow-matching BC pretraining. A standalone sibling of
+    ``VisionDiffusionBCTrainingArgs`` (not built on it) -- swaps
+    diffusion-specific fields (``denoising_steps``, ``ema_*``,
+    ``residual_style``, ``time_dim``) for A2A's flow-in-latent-space fields.
+    ``include_state`` must stay True (enforced in the entrypoint) -- the
+    state-history window is the flow's source, not optional."""
+
+    dataset_path: str = ""
+    num_offline_steps: int = 200_000
+    offline_num_traj: Optional[int] = None
+    horizon_steps: int = 8
+    cond_steps: int = 8
+    latent_dim: int = 512
+    cnn_num_layers: int = 3
+    cnn_hidden_channels: int = 512
+    cnn_kernel_size: int = 5
+    activation_fn: Literal["relu", "gelu", "mish"] = "relu"
+    decoder_net_arch: tuple[int, ...] = (512, 512, 512, 512)
+    flow_hidden_dims: tuple[int, ...] = (512, 512, 512, 512)
+    num_sampling_steps: int = 6
+    consistency_weight: float = 1.0
+    enc_recon_weight: float = 0.5
+    flow_recon_weight: float = 0.5
+    enc_contrastive_weight: float = 0.0
+    flow_contrastive_weight: float = 0.0
+    contrastive_temperature: float = 0.1
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    actor_lr: float = 1e-3
+    weight_decay: float = 1e-6
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
+    grad_clip_norm: Optional[float] = None
+    batch_size: int = 128
+    seed: int = 1
+    device: str = "auto"
+
+
+@dataclass
 class OfflineDeviceArgs:
     device: str = "auto"
 

@@ -1,3 +1,4 @@
+from rl_garden.algorithms.a2a_bc import A2ABC
 from rl_garden.algorithms.acfql import ACFQL
 from rl_garden.algorithms.acrlpd import ACRLPD
 from rl_garden.algorithms.awac import AWAC
@@ -55,6 +56,7 @@ from rl_garden.algorithms.vision_diffusion_bc import VisionDiffusionBC
 from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
+    "A2ABC",
     "ACFQL",
     "ACRLPD",
     "AWAC",
