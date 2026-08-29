@@ -121,6 +121,13 @@ trains. Normal runs atomically save the same versioned effective configuration
 under `{log_dir}/{run_name}/config.json`. See the
 [configuration guide](docs/guides/configuration.md).
 
+## References
+
+`rl-garden` reimplements published algorithms rather than inventing new ones.
+Every algorithm above is ported from, or cross-checked against, a named paper
+and/or reference implementation (many vendored read-only under `3rd_party/`);
+see [docs/REFERENCES.md](docs/REFERENCES.md) for the full per-algorithm table.
+
 ### Online Training
 
 State SAC with a reusable preset:
