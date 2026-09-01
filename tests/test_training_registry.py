@@ -112,6 +112,7 @@ def test_phase_registries_discover_expected_algorithms():
         "fql",
         "hilp",
         "idql",
+        "opal",
         "iql",
         "cql",
         "calql",

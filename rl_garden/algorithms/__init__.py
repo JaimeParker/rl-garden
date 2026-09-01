@@ -27,6 +27,7 @@ from rl_garden.algorithms.offline import (
     infer_specs_from_h5,
     run_offline_pretraining,
 )
+from rl_garden.algorithms.opal import OPAL
 from rl_garden.algorithms.off2on_awac import Off2OnAWAC
 from rl_garden.algorithms.off2on_calql import Off2OnCalQL
 from rl_garden.algorithms.off2on_iql import Off2OnIQL
@@ -90,6 +91,7 @@ __all__ = [
     "Off2OnSPOT",
     "OffPolicyAlgorithm",
     "OnPolicyAlgorithm",
+    "OPAL",
     "PLAS",
     "PolicyDistillation",
     "PPO",

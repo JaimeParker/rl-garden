@@ -265,6 +265,29 @@ class HILPTrainingArgs(CheckpointArgs, LoggingArgs):
 
 
 @dataclass
+class OPALTrainingArgs(CheckpointArgs, LoggingArgs):
+    """OPAL VAE pretraining. Deliberately does NOT inherit ``OfflineCommonArgs``:
+    ``run_offline`` assumes an ``agent.replay_buffer`` populated via
+    ``load_offline_dataset``, but ``OPAL`` loads a ``WindowedTrajectoryDataset``
+    directly in its constructor and has no replay buffer at all -- same
+    reasoning as ``HILPTrainingArgs``/``A2ABCTrainingArgs``. State-based
+    (Box observations) only."""
+
+    dataset_path: str = ""
+    num_offline_steps: int = 1_000_000
+    offline_num_traj: Optional[int] = None
+    skill_dim: int = 8
+    chunk_size: int = 4
+    hidden_size: int = 256
+    vae_hidden_dims: tuple[int, ...] = (256, 256)
+    kl_coef: float = 0.1
+    lr: float = 3e-4
+    batch_size: int = 256
+    seed: int = 1
+    device: str = "auto"
+
+
+@dataclass
 class A2ABCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
     """A2A flow-matching BC pretraining. A standalone sibling of
     ``VisionDiffusionBCTrainingArgs`` (not built on it) -- swaps

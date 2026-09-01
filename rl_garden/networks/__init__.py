@@ -11,6 +11,7 @@ from rl_garden.networks.actor_critic import (
 )
 from rl_garden.networks.actor_vector_field import ActorVectorField
 from rl_garden.networks.behavior_vae import BehaviorVAE
+from rl_garden.networks.bigru_sequence_encoder import BiGRUSequenceEncoder
 from rl_garden.networks.conditional_vae import ConditionalVAE
 from rl_garden.networks.diffusion_mlp import DiffusionMLP, build_diffusion_mlp_head
 from rl_garden.networks.flash_sac_layers import (
@@ -32,6 +33,7 @@ from rl_garden.networks.goal_conditioned_value import GoalConditionedPhiValue
 from rl_garden.networks.gtrxl import GTrXLLatentEncoder, GTrXLState
 from rl_garden.networks.latent_actor import LatentActor
 from rl_garden.networks.mlp import Activation, KernelInit, MLPResNet, create_mlp
+from rl_garden.networks.opal_vae import OPALVAE
 from rl_garden.networks.perturbation_actor import PerturbationActor
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
 from rl_garden.networks.reward_mask_relabeler import RewardMaskRelabeler
@@ -47,6 +49,7 @@ __all__ = [
     "Activation",
     "BackboneType",
     "BehaviorVAE",
+    "BiGRUSequenceEncoder",
     "CNNSequenceEncoder",
     "ConditionalVAE",
     "CriticImpl",
@@ -70,6 +73,7 @@ __all__ = [
     "LatentActor",
     "MLPResNet",
     "NormalTanhPolicy",
+    "OPALVAE",
     "PerturbationActor",
     "RecurrentLatentEncoder",
     "RecurrentState",
