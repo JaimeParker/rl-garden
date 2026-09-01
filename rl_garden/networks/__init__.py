@@ -28,6 +28,7 @@ from rl_garden.networks.flash_sac_layers import (
     UnitRMSNorm,
 )
 from rl_garden.networks.flow_actor import FlowMatchingActor
+from rl_garden.networks.goal_conditioned_value import GoalConditionedPhiValue
 from rl_garden.networks.gtrxl import GTrXLLatentEncoder, GTrXLState
 from rl_garden.networks.latent_actor import LatentActor
 from rl_garden.networks.mlp import Activation, KernelInit, MLPResNet, create_mlp
@@ -62,6 +63,7 @@ __all__ = [
     "FlashSACBlock",
     "FlashSACEmbedder",
     "FlowMatchingActor",
+    "GoalConditionedPhiValue",
     "GTrXLLatentEncoder",
     "GTrXLState",
     "KernelInit",

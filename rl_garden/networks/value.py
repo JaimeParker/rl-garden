@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from rl_garden.networks.actor_critic import BackboneType, _build_trunk
-from rl_garden.networks.mlp import KernelInit
+from rl_garden.networks.mlp import Activation, KernelInit
 
 
 class ValueNetwork(nn.Module):
@@ -25,6 +25,7 @@ class ValueNetwork(nn.Module):
         dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        activation_fn: Optional[Activation] = None,
     ) -> None:
         super().__init__()
         self.trunk, trunk_dim = _build_trunk(
@@ -36,6 +37,7 @@ class ValueNetwork(nn.Module):
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            activation_fn=activation_fn,
         )
         self.head = nn.Linear(trunk_dim, 1)
 

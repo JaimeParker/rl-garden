@@ -350,6 +350,7 @@ class UnsquashedGaussianActor(nn.Module):
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
         tanh_mean: bool = False,
+        activation_fn: Optional[Activation] = None,
     ) -> None:
         super().__init__()
         if std_parameterization not in ("exp", "uniform"):
@@ -372,6 +373,7 @@ class UnsquashedGaussianActor(nn.Module):
             num_groups=num_groups,
             dropout_rate=dropout_rate,
             kernel_init=kernel_init,
+            activation_fn=activation_fn,
         )
         self.fc_mean = nn.Linear(trunk_dim, act_dim)
         if std_parameterization == "exp":

@@ -235,6 +235,36 @@ class VisionDiffusionBCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingAr
 
 
 @dataclass
+class HILPTrainingArgs(CheckpointArgs, LoggingArgs):
+    """HILP pretraining. Deliberately does NOT inherit ``OfflineCommonArgs``:
+    ``run_offline`` assumes an ``agent.replay_buffer`` populated via
+    ``load_offline_dataset``, but ``HILP`` loads a ``HindsightGoalDataset``
+    directly in its constructor and has no replay buffer at all -- same
+    reasoning as ``DiffusionBCTrainingArgs``/``A2ABCTrainingArgs``. State-based
+    (Box observations) only."""
+
+    dataset_path: str = ""
+    num_offline_steps: int = 1_000_000
+    offline_num_traj: Optional[int] = None
+    skill_dim: int = 32
+    value_hidden_dims: tuple[int, ...] = (512, 512, 512)
+    actor_hidden_dims: tuple[int, ...] = (512, 512, 512)
+    discount: float = 0.99
+    tau: float = 0.005
+    expectile: float = 0.95
+    skill_expectile: float = 0.9
+    skill_temperature: float = 10.0
+    skill_discount: float = 0.99
+    p_currgoal: float = 0.0
+    p_trajgoal: float = 0.625
+    p_randomgoal: float = 0.375
+    lr: float = 3e-4
+    batch_size: int = 1024
+    seed: int = 1
+    device: str = "auto"
+
+
+@dataclass
 class A2ABCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
     """A2A flow-matching BC pretraining. A standalone sibling of
     ``VisionDiffusionBCTrainingArgs`` (not built on it) -- swaps
