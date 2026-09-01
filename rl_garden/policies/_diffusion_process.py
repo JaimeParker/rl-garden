@@ -1,7 +1,7 @@
 """DDPM forward/reverse process math shared by ``DiffusionPolicy`` (BC
 pretrain) and ``DPPOPolicy`` (PPO fine-tune).
 
-Ported from ``3rd_party/dppo/model/diffusion/diffusion.py::DiffusionModel``
+Ported from ``dppo/model/diffusion/diffusion.py::DiffusionModel``
 and ``model/diffusion/sampling.py``, verified against source directly.
 **DDPM only** -- the reference's DDIM branch (``use_ddim``, learnable
 ``eta``) is out of scope for this port and intentionally not implemented.
@@ -42,6 +42,24 @@ def _cosine_beta_schedule(denoising_steps: int, s: float = 0.008) -> torch.Tenso
     return torch.tensor(betas, dtype=torch.float32)
 
 
+def _vp_beta_schedule(
+    denoising_steps: int, b_min: float = 0.1, b_max: float = 10.0
+) -> torch.Tensor:
+    """Variance-preserving schedule, ``3rd_party/IDQL/jaxrl5/networks/diffusion.py``'s
+    ``vp_beta_schedule`` -- IDQL's actual default (not cosine)."""
+    t = np.arange(1, denoising_steps + 1, dtype=np.float64)
+    steps = float(denoising_steps)
+    alpha = np.exp(-b_min / steps - 0.5 * (b_max - b_min) * (2 * t - 1) / steps**2)
+    betas = 1.0 - alpha
+    return torch.tensor(betas, dtype=torch.float32)
+
+
+def _linear_beta_schedule(
+    denoising_steps: int, beta_start: float = 1e-4, beta_end: float = 2e-2
+) -> torch.Tensor:
+    return torch.linspace(beta_start, beta_end, denoising_steps, dtype=torch.float32)
+
+
 def _extract(a: torch.Tensor, t: torch.Tensor, x_ndim: int) -> torch.Tensor:
     out = a.gather(-1, t)
     return out.reshape(t.shape[0], *([1] * (x_ndim - 1)))
@@ -52,6 +70,7 @@ class DiffusionProcess:
         self,
         *,
         denoising_steps: int,
+        schedule: str = "cosine",
         denoised_clip_value: Optional[float] = 1.0,
         randn_clip_value: float = 10.0,
         final_action_clip_value: Optional[float] = None,
@@ -63,7 +82,14 @@ class DiffusionProcess:
         self.randn_clip_value = randn_clip_value
         self.final_action_clip_value = final_action_clip_value
 
-        betas = _cosine_beta_schedule(denoising_steps)
+        if schedule == "cosine":
+            betas = _cosine_beta_schedule(denoising_steps)
+        elif schedule == "vp":
+            betas = _vp_beta_schedule(denoising_steps)
+        elif schedule == "linear":
+            betas = _linear_beta_schedule(denoising_steps)
+        else:
+            raise ValueError(f"Unknown schedule: {schedule!r}")
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = torch.cat([torch.ones(1), alphas_cumprod[:-1]])

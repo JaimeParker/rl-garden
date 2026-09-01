@@ -390,6 +390,21 @@ class OfflineIQLArgs:
 
 
 @dataclass
+class OfflineIDQLArgs:
+    actor_lr: float = 3e-4
+    critic_value_lr: float = 3e-4
+    expectile: float = 0.7
+    tau: float = 0.005
+    actor_tau: float = 0.001
+    actor_objective: Literal["bc", "soft_adv", "hard_adv", "exp_adv"] = "bc"
+    policy_temperature: float = 3.0
+    diffusion_mlp_dims: tuple[int, ...] = (256, 256)
+    denoising_steps: int = 5
+    schedule: Literal["cosine", "vp", "linear"] = "vp"
+    n_action_samples: int = 64
+
+
+@dataclass
 class OfflineBCArgs:
     actor_lr: float = 3e-4
     # Off (unsquashed Gaussian actor) sidesteps a tanh-Jacobian numerical
