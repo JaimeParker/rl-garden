@@ -97,6 +97,7 @@ def test_phase_registries_discover_expected_algorithms():
         "td3",
         "rlpd",
         "rlpd_hybrid",
+        "explore",
         "acrlpd",
         "tdmpc2",
         "dagger",
