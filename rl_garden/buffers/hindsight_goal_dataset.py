@@ -1,5 +1,5 @@
 """Hindsight goal relabeling over a static offline trajectory dataset, ported
-from ``3rd_party/HILP/hilp_gcrl/src/dataset_utils.py::GCDataset``.
+from ``HILP/hilp_gcrl/src/dataset_utils.py::GCDataset``.
 
 A stateful, resample-every-call sampler (unlike
 ``chunked_dataset.py::load_h5_dataset_as_chunks``'s one-shot static

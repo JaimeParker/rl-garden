@@ -98,6 +98,7 @@ def test_phase_registries_discover_expected_algorithms():
         "rlpd",
         "rlpd_hybrid",
         "explore",
+        "supe",
         "acrlpd",
         "tdmpc2",
         "dagger",

@@ -1,5 +1,5 @@
 """Random Network Distillation novelty bonus (Burda et al. 2018), ported for
-ExPLORe-style exploration (``3rd_party/ExPLORe/rlpd/agents/rnd.py``'s
+ExPLORe-style exploration (``ExPLORe/rlpd/agents/rnd.py``'s
 ``StateActionFeature`` pair): a frozen random target network and a trained
 predictor network over ``(obs, action)``; the squared prediction error is the
 intrinsic reward bonus. Generic novelty-bonus module, independent of any

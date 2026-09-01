@@ -45,7 +45,7 @@ def _cosine_beta_schedule(denoising_steps: int, s: float = 0.008) -> torch.Tenso
 def _vp_beta_schedule(
     denoising_steps: int, b_min: float = 0.1, b_max: float = 10.0
 ) -> torch.Tensor:
-    """Variance-preserving schedule, ``3rd_party/IDQL/jaxrl5/networks/diffusion.py``'s
+    """Variance-preserving schedule, ``IDQL/jaxrl5/networks/diffusion.py``'s
     ``vp_beta_schedule`` -- IDQL's actual default (not cosine)."""
     t = np.arange(1, denoising_steps + 1, dtype=np.float64)
     steps = float(denoising_steps)

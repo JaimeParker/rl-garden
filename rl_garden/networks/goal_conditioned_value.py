@@ -1,5 +1,5 @@
 """Goal-conditioned distance value ("Hilbert representation"), ported from
-``3rd_party/HILP/hilp_gcrl/src/special_networks.py::GoalConditionedPhiValue``.
+``HILP/hilp_gcrl/src/special_networks.py::GoalConditionedPhiValue``.
 
 ``phi`` is a 2-member ensemble of independent MLP trunks (LayerNorm+GELU
 after every *hidden* layer, matching the reference's ``LayerNormRepresentation``

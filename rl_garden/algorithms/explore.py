@@ -158,9 +158,11 @@ class ExPLORe(RLPD):
         # Intentional near-duplication of PriorDataReplayMixin._sample_train_batch
         # (rl_garden/buffers/prior_data_replay.py:133-152) rather than a new
         # parent hook there -- AGENTS.md's parent-hook rule needs >=2 existing
-        # subclasses needing it, and today ExPLORe is the only one. Reconcile
-        # once SUPE needs the same offline-relabel-before-mix shape (see
-        # prior_data_replay.py:175-177 for the analogous precedent).
+        # subclasses needing it, and ExPLORe was the only one at the time this
+        # was written. Resolved: SUPE (rl_garden/algorithms/supe.py) needs the
+        # identical offline-relabel-before-mix shape and simply subclasses
+        # ExPLORe directly, inheriting this method verbatim -- no new parent
+        # hook was needed after all.
         if self.offline_replay_buffer is None or self.offline_data_ratio <= 0.0:
             return self.replay_buffer.sample(batch_size)
         if len(self.offline_replay_buffer) == 0:

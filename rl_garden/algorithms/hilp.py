@@ -9,7 +9,7 @@ via ``HindsightGoalDataset`` (``rl_garden/buffers/hindsight_goal_dataset.py``)
 -- no replay buffer, mirrors ``A2ABC``'s reasoning for the same shape
 (``rl_garden/algorithms/a2a_bc.py``). State-based (Box observations) only.
 
-Ported directly from ``3rd_party/HILP/hilp_gcrl/src/agents/hilp.py`` (read in
+Ported directly from ``HILP/hilp_gcrl/src/agents/hilp.py`` (read in
 full). Three details that read as inconsistencies but are **deliberate**,
 matching the reference exactly -- do not "fix" them:
 

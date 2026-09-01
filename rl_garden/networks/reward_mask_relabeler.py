@@ -1,5 +1,5 @@
 """Reward/mask relabeling head for ExPLORe-style optimistic reward labeling
-(Li et al. 2023, ``3rd_party/ExPLORe/rlpd/agents/rm.py``).
+(Li et al. 2023, ``ExPLORe/rlpd/agents/rm.py``).
 
 Two independent MLPs over ``(obs, action)`` -- ``r_net`` regresses reward with
 MSE, ``m_net`` predicts the episode mask (``1 - done``) with BCE-with-logits.
