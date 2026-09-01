@@ -179,6 +179,43 @@ def test_load_skill_relabeled_offline_buffer_aggregation(tmp_path):
     assert agent.offline_replay_buffer.dones[3, 0].item() == 0.0
 
 
+def test_truncation_does_not_zero_rewards_but_still_sets_done(tmp_path):
+    # Matches ChunkDataset.create's own distinction (chunk_dataset.py:139-152,
+    # d4rl_datasets.py:40,44): reward-zeroing uses termination *only*
+    # (`masks`), while the aggregated `dones` output uses the broader
+    # terminated-OR-truncated boundary signal.
+    opal_checkpoint, _ = _make_opal_checkpoint(tmp_path)
+    agent = _make_supe_agent(opal_checkpoint)
+
+    relabel_path = tmp_path / "truncation_demo.h5"
+    rewards = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype=np.float32)
+    truncated = np.array([False, True, False, False, False, False])
+    with h5py.File(relabel_path, "w") as f:
+        g = f.create_group("traj_0")
+        g.create_dataset("obs", data=np.random.randn(7, _OBS_DIM).astype(np.float32))
+        g.create_dataset(
+            "actions", data=np.random.uniform(-1, 1, (6, _ACTION_DIM)).astype(np.float32)
+        )
+        g.create_dataset("rewards", data=rewards)
+        g.create_dataset("terminated", data=np.zeros(6, dtype=bool))
+        g.create_dataset("truncated", data=truncated)
+
+    discount = 0.9
+    agent.load_skill_relabeled_offline_buffer(
+        str(relabel_path), buffer_size=16, chunk_size=_CHUNK_SIZE, discount=discount,
+        offline_data_ratio=0.5,
+    )
+
+    # Window start=1: rewards=[2,3,4], truncated (not terminated) at the
+    # middle position -- reward is NOT zeroed (unlike the terminated case
+    # above), but `dones` still fires for the aggregated output.
+    expected_reward_1 = 2.0 * discount**0 + 3.0 * discount**1 + 4.0 * discount**2
+    assert torch.isclose(
+        agent.offline_replay_buffer.rewards[1, 0], torch.tensor(expected_reward_1), atol=1e-5
+    )
+    assert agent.offline_replay_buffer.dones[1, 0].item() == 1.0
+
+
 def test_checkpoint_metadata_includes_opal_checkpoint(tmp_path):
     opal_checkpoint, _ = _make_opal_checkpoint(tmp_path)
     agent = _make_supe_agent(opal_checkpoint)

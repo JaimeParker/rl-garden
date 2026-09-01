@@ -68,3 +68,25 @@ def test_chunk_size_larger_than_all_trajectories_raises(tmp_path):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_terminated_window_excludes_truncation(tmp_path):
+    path = tmp_path / "demo.h5"
+    length = 6
+    with h5py.File(path, "w") as f:
+        g = f.create_group("traj_0")
+        g.create_dataset("obs", data=np.random.randn(length + 1, 4).astype(np.float32))
+        g.create_dataset(
+            "actions", data=np.random.uniform(-1, 1, (length, 2)).astype(np.float32)
+        )
+        g.create_dataset("rewards", data=np.zeros(length, dtype=np.float32))
+        terminated = np.array([False, False, True, False, False, False])
+        truncated = np.array([False, True, False, False, False, False])
+        g.create_dataset("terminated", data=terminated)
+        g.create_dataset("truncated", data=truncated)
+
+    ds = WindowedTrajectoryDataset(path, chunk_size=3)
+    # done_window (combined, terminated OR truncated) must reflect both
+    # events; terminated_window (termination-only) must reflect only index 2.
+    assert torch.equal(ds._dones, torch.tensor([0.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
+    assert torch.equal(ds._terminated, torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0]))

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import torch
 
@@ -33,13 +33,35 @@ from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
 
 
+def _terminated_only(traj: dict[str, Any], length: int, device: torch.device) -> Optional[torch.Tensor]:
+    """True-termination-only signal, distinct from truncation -- returns
+    ``None`` if the trajectory doesn't separately record it (caller falls
+    back to the combined done signal). Mirrors upstream's ``masks =
+    1 - terminals`` (``SUPE/supe/data/d4rl_datasets.py:44``), used for
+    reward-zeroing (``ChunkDataset.create``'s ``masks`` field) as distinct
+    from its ``dones`` output field (``traj_end OR terminals``,
+    ``d4rl_datasets.py:40``, used only for the aggregated episode-boundary
+    flag) -- see ``WindowedTrajectorySample``'s ``terminated_window`` vs.
+    ``done_window`` docstring.
+    """
+    for key in ("terminated", "terminations"):
+        if key in traj:
+            return torch.as_tensor(traj[key][:length], device=device).bool().float()
+    return None
+
+
 @dataclass
 class WindowedTrajectorySample:
     obs_window: Obs  # (B, chunk_size, *obs_shape)
     action_window: torch.Tensor  # (B, chunk_size, action_dim)
     next_obs: Obs  # (B, *obs_shape) -- the window's next_obs after its last step
     reward_window: torch.Tensor  # (B, chunk_size)
-    done_window: torch.Tensor  # (B, chunk_size)
+    done_window: torch.Tensor  # (B, chunk_size) -- combined boundary (terminated OR
+    # truncated), matching upstream's aggregated `dones` output field.
+    terminated_window: torch.Tensor  # (B, chunk_size) -- true termination only
+    # (excludes truncation), matching upstream's `masks` field used for
+    # reward-zeroing; falls back to done_window when the source H5 doesn't
+    # separately record termination vs. truncation.
 
 
 class WindowedTrajectoryDataset:
@@ -63,6 +85,7 @@ class WindowedTrajectoryDataset:
         action_parts: list[torch.Tensor] = []
         reward_parts: list[torch.Tensor] = []
         done_parts: list[torch.Tensor] = []
+        terminated_parts: list[torch.Tensor] = []
         valid_start_parts: list[torch.Tensor] = []
         running_total = 0
 
@@ -84,11 +107,15 @@ class WindowedTrajectoryDataset:
                 num_windows = length - chunk_size + 1
                 if num_windows <= 0:
                     continue
+                terminated = _terminated_only(traj, length, self.device)
+                if terminated is None:
+                    terminated = dones
                 obs_parts.append(obs)
                 next_obs_parts.append(next_obs)
                 action_parts.append(actions)
                 reward_parts.append(rewards)
                 done_parts.append(dones)
+                terminated_parts.append(terminated)
                 valid_start_parts.append(
                     running_total + torch.arange(num_windows, device=self.device)
                 )
@@ -104,6 +131,7 @@ class WindowedTrajectoryDataset:
         self._actions = torch.cat(action_parts, dim=0)
         self._rewards = torch.cat(reward_parts, dim=0)
         self._dones = torch.cat(done_parts, dim=0)
+        self._terminated = torch.cat(terminated_parts, dim=0)
         self.valid_starts = torch.cat(valid_start_parts, dim=0)
 
     def _gather(self, starts: torch.Tensor) -> WindowedTrajectorySample:
@@ -115,6 +143,7 @@ class WindowedTrajectoryDataset:
             next_obs=index_obs(self._next_obs, last_idx),
             reward_window=self._rewards[window_idx],
             done_window=self._dones[window_idx],
+            terminated_window=self._terminated[window_idx],
         )
 
     def sample(self, batch_size: int) -> WindowedTrajectorySample:

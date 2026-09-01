@@ -124,11 +124,15 @@ class SUPE(ExPLORe):
         with torch.no_grad():
             for batch in windowed.all_windows(relabel_batch_size):
                 skills = self.opal_vae.encode(batch.obs_window, batch.action_window)
-                # Reward discounting zeroed past the window's first
-                # termination (matches ChunkDataset.create,
-                # chunk_dataset.py:139-146): `alive` is a cumulative
-                # "not yet terminated within this window" mask.
-                alive = 1.0 - (torch.cumsum(batch.done_window, dim=-1) > 0).float()
+                # Reward discounting zeroed past the window's first *true*
+                # termination (matches ChunkDataset.create's `masks` field,
+                # chunk_dataset.py:139-146, d4rl_datasets.py:44 -- termination
+                # only, excluding truncation): `alive` is a cumulative "not
+                # yet terminated within this window" mask. The aggregated
+                # `dones` output below intentionally uses the broader
+                # done_window (terminated OR truncated) instead, matching
+                # upstream's separate `dones` field (d4rl_datasets.py:40).
+                alive = 1.0 - (torch.cumsum(batch.terminated_window, dim=-1) > 0).float()
                 discounted = batch.reward_window * discounts[None, :]
                 seq_rewards = torch.cat(
                     [discounted[:, :1], discounted[:, 1:] * alive[:, :-1]], dim=-1,

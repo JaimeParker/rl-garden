@@ -15,14 +15,35 @@ the same ``_tree_where`` helper. The one structural difference from
 from the *current* observation, rather than consuming a pre-computed chunk
 from the caller.
 
-``deterministic`` is fixed at construction (mirrors upstream SUPE's separate
-``sample_skill_actions``/``eval_skill_actions``,
-``SUPE/supe/pretraining/opal.py:447-460``): False for the training
-env (stochastic decode via ``decoder.action_log_prob``'s rsample+clamp
-path), True for eval (``decoder.deterministic_action``'s mean+clamp path).
+``deterministic`` is fixed at construction: False selects a stochastic
+decode (``decoder.action_log_prob``'s rsample+clamp path), True a
+deterministic one (``decoder.deterministic_action``'s mean+clamp path).
+Upstream SUPE's own online rollout (``MetaPolicyActionWrapper.step()``,
+``SUPE/supe/wrappers/meta_env_wrapper.py:104-118``) always calls the
+stochastic ``sample_skill_actions`` -- for *both* its train and eval
+instances (``train_finetuning_supe.py:185-203``); its own ``eval`` flag
+only toggles reward-discount handling, never action determinism. The
+deterministic path (``eval_skill_actions``, ``opal.py:454-460``) exists
+upstream but is used only by OPAL's own standalone pretraining eval loop,
+never by SUPE's online rollout -- so ``rl_garden/training/online/supe.py``
+constructs both the train and eval wrapper with ``deterministic=False``,
+matching upstream exactly. This parameter stays available as a general
+capability of the wrapper, not because SUPE's own pipeline uses ``True``.
 
 State-only (Box observations): ``features = concat(obs, skill)`` assumes a
 flat observation tensor, matching every other algorithm's state-only scope.
+
+Deliberate simplification vs. upstream: ``MetaPolicyActionWrapper`` isn't
+actually a clean one-fresh-rollout-per-``step()`` wrapper -- it keeps a
+persistent sliding observation/action window *across* ``step()`` calls
+(``meta_env_wrapper.py:177-182``), so a mid-horizon termination can return a
+transition whose actions mix the previous and current skill. That
+"interpolated" path is gated behind ``FLAGS.interpolate``, which is off by
+default with the code's own comment "Not used for any experiments in the
+paper" (``train_finetuning_supe.py:43,330``) -- so this wrapper's simpler,
+stateless-per-call semantics matches upstream's actual paper-reported
+behavior in every case that matters, and a persistent single-instance
+sliding window wouldn't vectorize across a batched env anyway.
 """
 from __future__ import annotations
 

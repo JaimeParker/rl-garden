@@ -16,23 +16,32 @@ from rl_garden.training.online.rlpd import _rlpd_env_request
 def build_supe(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import SUPE
     from rl_garden.algorithms.supe import load_opal_vae
+    from rl_garden.common.utils import get_device
     from rl_garden.envs.wrappers import SkillActionWrapper
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
     obs_dim = int(np.prod(env.single_observation_space.shape))
     opal_vae = load_opal_vae(
-        args.opal_checkpoint, obs_dim, env.single_action_space, device=args.device,
+        args.opal_checkpoint, obs_dim, env.single_action_space, device=get_device("auto"),
     )
     skill_dim = opal_vae.skill_dim
 
+    # Both envs decode stochastically: upstream's MetaPolicyActionWrapper.step()
+    # (meta_env_wrapper.py:104-118) always calls the stochastic
+    # `sample_skill_actions`, for both the train and eval instances
+    # (train_finetuning_supe.py:185-203) -- its `eval` flag only toggles
+    # reward-discount handling, never action determinism. The deterministic
+    # decode path (`eval_skill_actions`, opal.py:454-460) exists upstream but
+    # is used only by OPAL's own standalone pretraining eval loop
+    # (run_opal.py), not by SUPE's online rollout.
     env = SkillActionWrapper(
         env, opal_vae.decoder, horizon=args.horizon, skill_dim=skill_dim, deterministic=False,
     )
     if eval_env is not None:
         eval_env = SkillActionWrapper(
             eval_env, opal_vae.decoder, horizon=args.horizon, skill_dim=skill_dim,
-            deterministic=True,
+            deterministic=False,
         )
 
     net_arch = {
