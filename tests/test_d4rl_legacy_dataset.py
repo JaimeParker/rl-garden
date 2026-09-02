@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -211,8 +212,30 @@ def test_legacy_loader_dispatches_supported_task_families(monkeypatch):
     assert load_d4rl_legacy_dataset_to_replay_buffer(buffer, "pen-human-v1") == 4
 
 
-def test_legacy_loader_rejects_unknown_family(monkeypatch):
+def test_legacy_loader_dispatches_locomotion_family(monkeypatch):
     env = _FakeDenseD4RLEnv("halfcheetah-medium-v2")
+    monkeypatch.setattr(
+        "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
+    )
+    buffer = MCTensorReplayBuffer(
+        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+        action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=10,
+        gamma=0.5,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    with pytest.warns(RuntimeWarning, match="finite-horizon backward sum"):
+        assert (
+            load_d4rl_legacy_dataset_to_replay_buffer(buffer, "halfcheetah-medium-v2")
+            == 4
+        )
+
+
+def test_legacy_loader_rejects_unknown_family(monkeypatch):
+    env = _FakeDenseD4RLEnv("totally-fake-env-v2")
     monkeypatch.setattr(
         "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
     )
@@ -225,5 +248,7 @@ def test_legacy_loader_rejects_unknown_family(monkeypatch):
         sample_device="cpu",
     )
 
-    with np.testing.assert_raises_regex(NotImplementedError, "AntMaze, Adroit, and Kitchen"):
-        load_d4rl_legacy_dataset_to_replay_buffer(buffer, "halfcheetah-medium-v2")
+    with np.testing.assert_raises_regex(
+        NotImplementedError, "AntMaze, Adroit, Kitchen, and Locomotion"
+    ):
+        load_d4rl_legacy_dataset_to_replay_buffer(buffer, "totally-fake-env-v2")

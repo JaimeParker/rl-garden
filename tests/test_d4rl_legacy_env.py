@@ -199,3 +199,20 @@ def test_standard_adroit_reports_d4rl_normalized_score(monkeypatch):
 
     assert info["final_info"]["episode"]["normalized_score"].tolist() == [10.0]
     env.close()
+
+
+def test_locomotion_reports_d4rl_normalized_score(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeStandardAdroitEnv(),
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="halfcheetah-medium-v2", num_envs=1, device="cpu")
+    )
+
+    env.reset()
+    env.step(torch.zeros((1, 1)))
+    _, _, _, _, info = env.step(torch.zeros((1, 1)))
+
+    assert info["final_info"]["episode"]["normalized_score"].tolist() == [10.0]
+    env.close()

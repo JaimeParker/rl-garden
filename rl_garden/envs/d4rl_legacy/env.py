@@ -7,6 +7,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from rl_garden.buffers.d4rl_legacy_dataset import is_locomotion_env_id
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
 
 
@@ -100,6 +101,9 @@ class _D4RLEpisodeMetrics(gym.Wrapper):
                 episode["num_stages_solved"] = np.float32(self.last_reward)
                 episode["normalized_score"] = np.float32(self.last_reward * 25.0)
             elif self.env_id.startswith(("pen-", "door-", "relocate-")):
+                normalized = self.legacy_env.get_normalized_score(episode_return)
+                episode["normalized_score"] = np.float32(float(normalized) * 100.0)
+            elif is_locomotion_env_id(self.env_id):
                 normalized = self.legacy_env.get_normalized_score(episode_return)
                 episode["normalized_score"] = np.float32(float(normalized) * 100.0)
             info["episode"] = episode

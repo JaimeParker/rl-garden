@@ -1,6 +1,7 @@
 """Cal-QL dataset semantics for supported legacy D4RL task families."""
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict
 from typing import Any
 
@@ -282,6 +283,14 @@ def _official_calql_antmaze_dataset(
     }
 
 
+_LOCOMOTION_PREFIXES = ("halfcheetah-", "hopper-", "walker2d-")
+
+
+def is_locomotion_env_id(env_id: str) -> bool:
+    """True for D4RL Gym MuJoCo locomotion tasks (dense reward, no terminal)."""
+    return env_id.lower().startswith(_LOCOMOTION_PREFIXES)
+
+
 def load_d4rl_legacy_dataset_to_replay_buffer(
     buffer: BaseReplayBuffer,
     env_id: str,
@@ -299,9 +308,22 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
         family = "kitchen"
     elif env_name.startswith(("pen-", "door-", "relocate-")) and "binary" not in env_name:
         family = "adroit"
+    elif is_locomotion_env_id(env_name):
+        family = "locomotion"
+        warnings.warn(
+            "Loading a MuJoCo locomotion D4RL dataset: mc_returns are "
+            "computed as a finite-horizon backward sum, which underestimates "
+            "the true value for timeout-truncated episodes (all of "
+            "HalfCheetah, and the non-falling tail of Hopper/Walker2d) since "
+            "there is no terminal state to anchor an infinite-horizon "
+            "return. Treat mc_returns for this family as unreliable unless "
+            "you have accounted for this.",
+            RuntimeWarning,
+        )
     else:
         raise NotImplementedError(
-            "The d4rl_legacy loader supports AntMaze, Adroit, and Kitchen only."
+            "The d4rl_legacy loader supports AntMaze, Adroit, Kitchen, and "
+            "Locomotion only."
         )
 
     gamma = float(getattr(buffer, "gamma", 0.99))
@@ -311,6 +333,7 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
             "antmaze": _official_calql_antmaze_dataset,
             "adroit": _standard_d4rl_dataset,
             "kitchen": _official_calql_kitchen_dataset,
+            "locomotion": _standard_d4rl_dataset,
         }[family]
         dataset = loader(
             env,
