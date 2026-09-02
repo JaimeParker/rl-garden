@@ -93,9 +93,52 @@ in `baselines/core/wire_protocol.py`. This lets the official JAX code run
 in its own JAX/CUDA stack without ever importing JAX and rl-garden's own
 torch/gym stack in the same process.
 
-`wsrl`'s and `iql_jax`'s orchestrators are not yet implemented (stub
-packages only — see their module docstrings and `baselines/baselines.yaml`);
-only `cal_ql`'s is runnable today.
+`wsrl` has a script-forwarding orchestrator for WSRL's own D4RL
+offline-to-online launch scripts. It launches the unmodified WSRL release
+scripts from `3rd_party/wsrl` and records the resolved command; it does not use
+the rl-garden env bridge. `iql_jax` is still a stub package.
+
+### WSRL runtime notes
+
+Install WSRL from its own `requirements.txt` first, then record every
+necessary runtime deviation instead of treating it as an invisible part of the
+baseline. The public WSRL D4RL code paths have two known extra requirements in
+our remote D4RL stack:
+
+- `mj_envs` is imported by WSRL's environment helpers but is not listed in the
+  WSRL requirements file. Install it into the dedicated WSRL venv, outside the
+  read-only `3rd_party/wsrl` tree.
+- `jax[cuda11_pip]==0.4.20` must resolve to a CUDA/cuDNN stack compatible with
+  `jaxlib==0.4.20+cuda11.cudnn86`. If pip resolves an incompatible cuDNN 9.x
+  package, pin `nvidia-cudnn-cu11==8.9.6.50` in the WSRL venv and record that
+  compatibility pin in the run metadata.
+
+Before launching a formal WSRL run, do a local-on-host smoke check in the same
+venv and container/runtime environment:
+
+```bash
+python - <<'PY'
+import gym
+import jax
+import wsrl.agents.calql  # noqa: F401
+
+print(jax.devices())
+env = gym.make("antmaze-large-play-v2")
+obs = env.reset()
+dataset = env.get_dataset()
+print(getattr(obs, "shape", None), dataset["observations"].shape)
+PY
+```
+
+Only create/register the formal training run after imports, JAX GPU devices,
+environment creation, and D4RL dataset loading all succeed. Keep failed import
+or environment-start attempts in a separate smoke/debug directory; do not reuse
+that directory as the formal training output directory.
+
+WSRL may ignore project/group arguments passed through launcher scripts and
+write to its own WandB project. Record both the requested WandB destination and
+the actual WandB destination in ExpNote, e.g. `requested_wandb_project=d4rl`
+and `wandb_project=wsrl`.
 
 ## Do not modify or install-editable the submodules
 

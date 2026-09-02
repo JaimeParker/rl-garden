@@ -68,6 +68,29 @@ Required when applicable:
 | `log_path` | path to the raw training log on the host it ran on |
 | `wandb_entity`, `wandb_project`, `wandb_run_id`, `wandb_url` | **required whenever the run is wandb-tracked** — `wandb_url` must be filled in, not left for later |
 
+For official baselines, keep requested launch intent separate from observed
+runtime behavior. Some upstream launchers ignore or rewrite fields such as
+WandB project/group. In that case record both sides explicitly, e.g.
+`requested_wandb_project=d4rl`, `requested_wandb_group=<requested-group>`,
+`wandb_project=<actual-project>`, and `wandb_group=<actual-group>`. Also record
+the upstream source revision (`<baseline>_commit`), the dedicated Python
+environment, the resolved launcher command or `command.json`, and any necessary
+runtime deviations from the upstream requirements (for example a CUDA/cuDNN
+compatibility pin or missing dependency install).
+
+Use consistent path fields when a run spans host/container/local locations:
+
+| Field | Meaning |
+|---|---|
+| `log_path` | raw training log path on the host where the run executed |
+| `remote_run_dir` or `output_dir` | host-side run/output directory |
+| `container_run_dir` | in-container path for the same run directory, if different |
+| `tensorboard_run_dir` | host-side TensorBoard event directory |
+| `container_tensorboard_run_dir` | in-container TensorBoard path, if different |
+| `remote_config_path` or `command_json` | host-side resolved config/command file |
+| `container_config_path` | in-container resolved config path, if different |
+| `final_checkpoint_path` | host-side final checkpoint path |
+
 `import rlgarden <config.json> --topic <topic> [--run-id <wandb-run-id>]
 [--wandb-url <url>]` is the preferred way to fill in `environment`/
 `implementation`/`seed`/`log_dir`/`wandb_project`/`wandb_entity`/etc. from
@@ -93,6 +116,12 @@ completion/failure (`expnote run update <id> --status finished|failed|stopped`).
 from wandb directly — not yet adopted as mandatory in this workflow; treat it
 as an optional cross-check until confirmed reliable, not a replacement for
 reading a run's actual state.
+
+Failed setup, import, dataset-loading, or launcher smoke attempts are not
+training runs. Do not register them as ExpNote runs and do not attach their
+logs to a later successful training run. Keep smoke/debug output in a separate
+directory from the formal run output directory so failed-start artifacts cannot
+be mistaken for part of the accepted training record.
 
 ## 4. After training: writing result and analysis
 
@@ -137,4 +166,3 @@ expnote validate --json
 
 Cross-device work uses `expnote workspace pack`/`unpack` since the SQLite
 workspace directory is not part of any git checkout.
-

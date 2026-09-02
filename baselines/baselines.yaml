@@ -39,9 +39,9 @@ runnable:
       cwd=3rd_party/wsrl, never pip install -e (keeps the submodule gitlink
       clean). Uses its own D4RL fork (zhouzypaul/D4RL), DIFFERENT from
       cal_ql's/rl-garden's nakamotoo fork -- each baseline's venv is fully
-      isolated so this is not a conflict. Online phase steps rl-garden's
-      canonical env via the bridge on every training step, not just eval --
-      expect IPC overhead; orchestrator not yet implemented (stub package).
+      isolated so this is not a conflict. The current orchestrator forwards to
+      WSRL's own D4RL offline-to-online launch scripts and intentionally uses
+      WSRL's own env stack rather than the rl-garden env bridge.
 
   iql_jax:
     path: 3rd_party/implicit_q_learning
