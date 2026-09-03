@@ -50,6 +50,37 @@ def test_rlpd_policy_default_matches_plain_sac_policy_shapes():
     assert q_all.shape == (3, 5, 1)
 
 
+def test_rlpd_policy_forwards_std_parameterization_to_actor():
+    obs_space = _obs_space()
+    fe = FlattenExtractor(obs_space)
+    policy = RLPDPolicy(
+        observation_space=obs_space,
+        action_space=_action_space(),
+        features_extractor=fe,
+        net_arch=[16],
+        n_critics=3,
+        critic_subsample_size=2,
+        std_parameterization="uniform",
+    )
+    assert policy.actor.std_parameterization == "uniform"
+
+
+def test_rlpd_policy_use_pnorm_forwards_std_parameterization_to_rebuilt_actor():
+    obs_space = _obs_space()
+    fe = FlattenExtractor(obs_space)
+    policy = RLPDPolicy(
+        observation_space=obs_space,
+        action_space=_action_space(),
+        features_extractor=fe,
+        net_arch=[16],
+        n_critics=3,
+        critic_subsample_size=2,
+        use_pnorm=True,
+        std_parameterization="uniform",
+    )
+    assert policy.actor.std_parameterization == "uniform"
+
+
 def test_rlpd_policy_use_pnorm_normalizes_actor_and_critic_trunks():
     obs_space = _obs_space()
     fe = FlattenExtractor(obs_space)

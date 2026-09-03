@@ -18,6 +18,7 @@ from typing import Any, Literal, Optional
 import torch
 from gymnasium import spaces
 
+from rl_garden.buffers.d4rl_legacy_dataset import load_d4rl_legacy_dataset_to_replay_buffer
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
 from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 from rl_garden.buffers.minari_dataset import load_minari_dataset_to_replay_buffer
@@ -25,7 +26,7 @@ from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
-DatasetBackend = Literal["h5", "minari"]
+DatasetBackend = Literal["h5", "minari", "d4rl_legacy"]
 
 
 class PriorDataReplayMixin:
@@ -111,6 +112,15 @@ class PriorDataReplayMixin:
             )
         elif backend == "minari":
             loaded = load_minari_dataset_to_replay_buffer(
+                self.offline_replay_buffer,
+                str(path),
+                num_episodes=num_traj,
+                reward_scale=reward_scale,
+                reward_bias=reward_bias,
+                success_key=success_key,
+            )
+        elif backend == "d4rl_legacy":
+            loaded = load_d4rl_legacy_dataset_to_replay_buffer(
                 self.offline_replay_buffer,
                 str(path),
                 num_episodes=num_traj,

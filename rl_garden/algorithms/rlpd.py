@@ -11,7 +11,7 @@ RLPD-recommended defaults.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from rl_garden.algorithms.sac import SAC
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
@@ -48,6 +48,7 @@ class RLPD(PriorDataReplayMixin, SAC):
         critic_backbone_type: Optional[BackboneType] = None,
         use_pnorm: bool = False,
         exclude_bias_from_decay: bool = False,
+        std_parameterization: Literal["exp", "uniform"] = "exp",
         **sac_kwargs: Any,
     ) -> None:
         self.actor_dropout_rate = actor_dropout_rate
@@ -56,6 +57,7 @@ class RLPD(PriorDataReplayMixin, SAC):
         self.backbone_type = backbone_type
         self.use_pnorm = use_pnorm
         self.exclude_bias_from_decay = exclude_bias_from_decay
+        self.std_parameterization = std_parameterization
         self._init_prior_data_params()
         # critic_backbone_type is forwarded to (and stored by) SAC.__init__
         # rather than set here directly -- SAC.__init__ runs inside this
@@ -87,6 +89,7 @@ class RLPD(PriorDataReplayMixin, SAC):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             use_pnorm=self.use_pnorm,
+            std_parameterization=self.std_parameterization,
             log_std_min=self.actor_log_std_min,
             log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
@@ -138,4 +141,5 @@ class RLPD(PriorDataReplayMixin, SAC):
             "backbone_type": self.backbone_type,
             "use_pnorm": self.use_pnorm,
             "exclude_bias_from_decay": self.exclude_bias_from_decay,
+            "std_parameterization": self.std_parameterization,
         }

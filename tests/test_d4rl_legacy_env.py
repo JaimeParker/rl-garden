@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import ClassVar
 
+import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -103,6 +104,39 @@ def test_legacy_env_exposes_torch_vector_contract_and_success(monkeypatch):
     assert terminated2.tolist() == [True]
     assert info2["final_info"]["episode"]["success_at_end"].tolist() == [1.0]
     env.close()
+
+
+def test_make_d4rl_legacy_env_selects_vector_backend_by_num_envs(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeLegacyEnv(),
+    )
+    calls = []
+    real_sync = gym.vector.SyncVectorEnv
+
+    def fake_sync(env_fns, **kwargs):
+        calls.append("sync")
+        return real_sync(env_fns, **kwargs)
+
+    def fake_async(env_fns, **kwargs):
+        calls.append("async")
+        # Stand in for AsyncVectorEnv without spawning real subprocesses --
+        # this test only asserts which vector-env class gets selected.
+        return real_sync(env_fns, **kwargs)
+
+    monkeypatch.setattr("rl_garden.envs.d4rl_legacy.env.gym.vector.SyncVectorEnv", fake_sync)
+    monkeypatch.setattr("rl_garden.envs.d4rl_legacy.env.gym.vector.AsyncVectorEnv", fake_async)
+
+    env1 = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="antmaze-test-v2", num_envs=1, device="cpu")
+    )
+    env1.close()
+    env4 = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="antmaze-test-v2", num_envs=4, device="cpu")
+    )
+    env4.close()
+
+    assert calls == ["sync", "async"]
 
 
 def test_legacy_train_reward_transform_is_explicit(monkeypatch):

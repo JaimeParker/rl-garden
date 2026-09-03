@@ -71,7 +71,7 @@ entrypoints to a specific simulator.
 
 Before finishing code changes:
 
-1. Run the smallest relevant test set first, prefer to run tests on remote.
+1. Run the smallest relevant test set first, prefer to run pytest on remote.
 2. For environment or training changes, run a tiny smoke test where dependencies
    and hardware permit it.
 3. Report exact commands and results.

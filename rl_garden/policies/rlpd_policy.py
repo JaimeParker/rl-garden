@@ -40,6 +40,7 @@ class RLPDPolicy(SACPolicy):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         use_pnorm: bool = False,
+        std_parameterization: Literal["exp", "uniform"] = "exp",
         log_std_min: float = -5.0,
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         actor_feature_dim: Optional[int] = None,
@@ -61,6 +62,7 @@ class RLPDPolicy(SACPolicy):
             critic_dropout_rate=critic_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+            std_parameterization=std_parameterization,
             log_std_min=log_std_min,
             log_std_mode=log_std_mode,
             actor_feature_dim=actor_feature_dim,
@@ -114,6 +116,7 @@ class RLPDPolicy(SACPolicy):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             use_pnorm=True,
+            std_parameterization=std_parameterization,
             log_std_mode=log_std_mode,
             log_std_min=log_std_min,
         )

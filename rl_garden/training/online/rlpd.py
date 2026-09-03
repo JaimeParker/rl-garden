@@ -122,6 +122,7 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
         q_mc_diagnostics=args.q_mc_diagnostics,
         initial_training_phase=sac_initial_training_phase_from_args(args),
         critic_impl=args.critic_impl,
+        std_parameterization=args.std_parameterization,
         actor_use_layer_norm=args.actor_use_layer_norm,
         actor_log_std_min=args.actor_log_std_min,
         actor_log_std_mode=args.actor_log_std_mode,
@@ -205,7 +206,8 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """RLPD -- high UTD + REDQ-style critic ensemble subsampling + LayerNorm
     + offline/online prior-data mixing from step 0, on top of SAC.
 
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default), ``robotwin``, or
+    ``d4rl_legacy``.
     """
 
     n_critics: int = 10
@@ -218,6 +220,7 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     kernel_init: KernelInit | None = None
     backbone_type: BackboneType = "mlp"
     use_pnorm: bool = False
+    std_parameterization: Literal["exp", "uniform"] = "exp"
 
     weight_decay: float = 0.0
     use_adamw: bool = False
@@ -228,7 +231,7 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     lr_min_ratio: float = 0.0
     grad_clip_norm: float | None = None
 
-    dataset_backend: Literal["h5", "minari"] = "h5"
+    dataset_backend: Literal["h5", "minari", "d4rl_legacy"] = "h5"
     offline_dataset: str | None = None
     offline_num_traj: int | None = None
     offline_buffer_size: int | None = None
