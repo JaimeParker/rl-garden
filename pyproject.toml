@@ -28,6 +28,23 @@ d4rl-legacy = [
     "mujoco-py==2.1.2.14",
     "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f",
 ]
+# PyPI's "robomimic" is stuck at 0.3.0 (pre-HuggingFace, no HF_REPO_ID/
+# DATASET_REGISTRY HF migration) -- pin to the v0.5.0 git tag for the
+# HuggingFace-hosted dataset registry this backend's download docs assume.
+# Confirmed by installing plain PyPI robomimic and checking directly:
+# has DATASET_REGISTRY=True but HF_REPO_ID=False on 0.3.0.
+robomimic = [
+    "robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git@v0.5.0",
+    "robosuite",
+    # Published robosuite==1.5.2's own metadata only pins mujoco>=3.3.0 (no
+    # upper bound); robosuite's GitHub main has since added mujoco<3.10
+    # ("3.10 changed mj_fullM signature; breaks controllers/parts/
+    # controller.py"). Without this pin, plain `pip install robosuite`
+    # grabs the newest mujoco and fails constructing any robosuite env
+    # (AssertionError in binding_utils.get_joint_qpos_addr, confirmed by
+    # reproducing it end to end against mujoco 3.12.0).
+    "mujoco>=3.3.0,<3.10",
+]
 d4rl-legacy-manip = [
     "gym==0.23.1",
     "numpy==1.23.5",

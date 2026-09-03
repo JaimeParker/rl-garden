@@ -138,6 +138,20 @@ class CustomConfig:
 
 
 @dataclass
+class RobomimicConfig:
+    """robomimic-specific env settings. CLI prefix: ``--robomimic.<field>``"""
+
+    dataset_path: Optional[str] = None
+    device: str = "cpu"
+    horizon: int = 400
+    terminate_on_success: bool = False
+    # JSON-encoded dict forwarded verbatim to the env's env_kwargs when
+    # dataset_path is unset. Escape hatch, same convention as
+    # ManiSkillConfig.env_kwargs_json.
+    env_kwargs_json: str = "{}"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -154,6 +168,7 @@ class EnvBackendArgs:
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
     isaaclab: IsaacLabConfig = field(default_factory=IsaacLabConfig)
     custom: CustomConfig = field(default_factory=CustomConfig)
+    robomimic: RobomimicConfig = field(default_factory=RobomimicConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

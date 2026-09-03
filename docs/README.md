@@ -10,6 +10,7 @@ Operational how-to for running and configuring the framework.
 - [IsaacLab Camera Training Stall (known issue)](guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](guides/offline-acceleration.md)
+- [robomimic Integration](guides/robomimic-integration.md)
 - [RoboTwin Integration](guides/robotwin.md)
 - [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
 - [WSRL Reproduction](guides/wsrl-reproduction.md)
