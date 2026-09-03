@@ -85,6 +85,29 @@ class RoboTwinBackend(EnvBackend):
             reward_mode=rt.reward_mode if rt is not None else "dense",  # type: ignore[arg-type]
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
+            reward_shaping_mode=(
+                rt.reward_shaping_mode if rt is not None else "absolute"
+            ),
+            use_relative_reward=(
+                rt.use_relative_reward if rt is not None else False
+            ),
+            dense_success_reward=(
+                rt.dense_success_reward if rt is not None else 1.0
+            ),
+            potential_discount=(
+                rt.potential_discount if rt is not None else 0.99
+            ),
+            potential_weight=rt.potential_weight if rt is not None else 5.0,
+            dense_weight=rt.dense_weight if rt is not None else 0.03,
+            relative_weight=rt.relative_weight if rt is not None else 3.0,
+            step_penalty=rt.step_penalty if rt is not None else 0.003,
+            stall_threshold=(
+                rt.stall_threshold if rt is not None else 1e-4
+            ),
+            stall_penalty=rt.stall_penalty if rt is not None else 0.035,
+            backtrack_penalty=(
+                rt.backtrack_penalty if rt is not None else 0.06
+            ),
             control_mode=req.control_mode or "delta_joint_pos",  # type: ignore[arg-type]
             joint_delta_scale=rt.joint_delta_scale if rt is not None else 0.05,
             gripper_delta_scale=rt.gripper_delta_scale if rt is not None else 0.2,

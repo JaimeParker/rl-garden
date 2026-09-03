@@ -25,6 +25,13 @@ def process_pose(pose: Iterable, dim: Optional[int | Iterable] = None) -> np.nda
     return pose[mask.astype(bool)]
 
 
+def _base_check_success(base: Any) -> bool:
+    check_success = getattr(base, "check_success", None)
+    if check_success is None:
+        return False
+    return bool(check_success())
+
+
 class BaseTask(abc.ABC):
     @abc.abstractmethod
     def compute_reward(self) -> float: ...
@@ -332,7 +339,7 @@ class Place(SubTask):
 
     def is_success(self) -> bool:
         if self.eps is None:
-            return bool(self.base.check_success())
+            return _base_check_success(self.base)
         entity_pose = process_pose(np.concatenate([self.entity.get_pose().p, self.entity.get_pose().q]), self.eps_mask)
         return bool(np.all(np.abs(entity_pose - self._target_pose(self.eps_mask)) < self.eps))
 
@@ -342,7 +349,7 @@ class Place(SubTask):
             not self.is_success()
             and self.base.robot.is_left_gripper_open()
             and self.base.robot.is_right_gripper_open()
-            and not self.base.check_success()
+            and not _base_check_success(self.base)
             and not left_grab
             and not right_grab
         )
@@ -360,7 +367,74 @@ class Endpose(SubTask):
         return float(((1 - np.tanh(left_dist * 5)) + (1 - np.tanh(right_dist * 5))) / 2)
 
     def is_success(self) -> bool:
-        return bool(self.base.check_success())
+        return _base_check_success(self.base)
+
+
+class OpenArticulation(SubTask):
+    """Shape reaching an articulation handle and opening its target joint."""
+
+    def __init__(
+        self,
+        base,
+        max_reward: float = 4.0,
+        entity=None,
+        joint_idx: int = 0,
+        contact_point_idx: int = 1,
+        target_fraction: float = 0.4,
+        arm_tag: Optional[str | int] = None,
+        a_d: float = 5.0,
+        c_d: float = 1.0,
+        c_qpos: float = 3.0,
+    ) -> None:
+        super().__init__(base, max_reward, entity=entity)
+        if abs(c_d + c_qpos - max_reward) >= 1e-5:
+            raise ValueError("c_d + c_qpos must equal max_reward")
+        if not 0.0 <= target_fraction <= 1.0:
+            raise ValueError("target_fraction must be in [0, 1]")
+
+        self.entity = entity
+        self.joint_idx = joint_idx
+        self.contact_point_idx = contact_point_idx
+        self.arm_tag = _arm_index(arm_tag)
+        self.a_d = a_d
+        self.c_d = c_d
+        self.c_qpos = c_qpos
+
+        limits = np.asarray(entity.get_qlimits(), dtype=np.float64)[joint_idx]
+        lower, upper = float(limits[0]), float(limits[1])
+        if upper <= lower:
+            raise ValueError("articulation joint upper limit must exceed lower limit")
+        self.initial_qpos = float(np.asarray(entity.get_qpos())[joint_idx])
+        self.target_qpos = lower + (upper - lower) * target_fraction
+
+    def compute_reward(self) -> float:
+        contact_pose = np.asarray(
+            self.entity.get_contact_point(self.contact_point_idx), dtype=np.float64
+        )
+        tcp_poses = [
+            np.asarray(self.base.robot.get_left_tcp_pose(), dtype=np.float64),
+            np.asarray(self.base.robot.get_right_tcp_pose(), dtype=np.float64),
+        ]
+        dists = [np.linalg.norm(tcp[:3] - contact_pose[:3]) for tcp in tcp_poses]
+        arm_idx = int(np.argmin(dists)) if self.arm_tag is None else self.arm_tag
+        reach_reward = 1.0 - np.tanh(dists[arm_idx] * self.a_d)
+
+        qpos = float(np.asarray(self.entity.get_qpos())[self.joint_idx])
+        if self.initial_qpos >= self.target_qpos:
+            progress = float(qpos >= self.target_qpos)
+        else:
+            progress = float(
+                np.clip(
+                    (qpos - self.initial_qpos)
+                    / (self.target_qpos - self.initial_qpos),
+                    0.0,
+                    1.0,
+                )
+            )
+        return float(reach_reward * self.c_d + progress * self.c_qpos)
+
+    def is_success(self) -> bool:
+        return _base_check_success(self.base)
 
 
 class Rank(SubTask):
@@ -387,7 +461,7 @@ class Rank(SubTask):
         ok = []
         for i in range(len(poses) - 1):
             ok.append(poses[i][0] < poses[i + 1][0] and np.all(np.abs(poses[i][: len(eps)] - poses[i + 1][: len(eps)]) < eps))
-        return bool((all(ok) and self.base.is_left_gripper_open() and self.base.is_right_gripper_open()) or self.base.check_success())
+        return bool((all(ok) and self.base.is_left_gripper_open() and self.base.is_right_gripper_open()) or _base_check_success(self.base))
 
 
 class Stack(SubTask):
@@ -436,7 +510,7 @@ class Stack(SubTask):
         return float(sum(pair_rewards) + target_reward)
 
     def is_success(self) -> bool:
-        return bool(self.base.check_success())
+        return _base_check_success(self.base)
 
 
 class SparseExtra(SubTask):

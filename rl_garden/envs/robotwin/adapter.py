@@ -89,6 +89,7 @@ class RoboTwinTaskAdapter:
         self.task = None
         self.elapsed_steps = 0
         self.last_dense_reward = 0.0
+        self.last_reward_components = self._empty_reward_components()
         self._eval_video_index = 0
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
@@ -207,7 +208,13 @@ class RoboTwinTaskAdapter:
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
         self.elapsed_steps = 0
-        self.last_dense_reward = 0.0
+        self.last_dense_reward = (
+            self._dense_potential()
+            if self.cfg.reward_mode == "dense"
+            and self.cfg.reward_shaping_mode in {"relative", "potential", "hybrid"}
+            else 0.0
+        )
+        self.last_reward_components = self._empty_reward_components()
         obs = self.get_obs()
         obs["_env_seed"] = self.env_seed
         self._start_eval_video_if_needed(obs.get("rgb"))
@@ -233,6 +240,13 @@ class RoboTwinTaskAdapter:
             "instruction": self._instruction(),
             "env_seed": self.env_seed,
         }
+        if self.cfg.use_relative_reward or self.cfg.reward_shaping_mode != "absolute":
+            info.update(
+                {
+                    f"reward_component/{key}": value
+                    for key, value in self.last_reward_components.items()
+                }
+            )
         if success or bool(truncated):
             self._stop_eval_video_if_needed()
 
@@ -330,25 +344,96 @@ class RoboTwinTaskAdapter:
             return "delta_ee"
         return "qpos"
 
+    @staticmethod
+    def _empty_reward_components() -> dict[str, float]:
+        return {
+            "dense": 0.0,
+            "relative": 0.0,
+            "potential": 0.0,
+            "success": 0.0,
+            "step": 0.0,
+            "stall": 0.0,
+            "backtrack": 0.0,
+            "total": 0.0,
+        }
+
     def _compute_reward(self, success: bool) -> float:
+        components = self._empty_reward_components()
         if self.cfg.reward_mode == "sparse":
             reward = 1.0 if success else 0.0
-        elif success:
-            reward = 1.0
-        else:
-            reward_obj = getattr(self.task, "reward", None)
-            reward_obj.update()
-            if reward_obj.is_fail():
-                reward = 0.0
-            else:
-                reward = float(reward_obj.compute_reward())
-        reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
-        if self.cfg.use_relative_reward:
-            diff = reward - self.last_dense_reward
+            components["success"] = reward
+        elif self.cfg.use_relative_reward:
+            reward = self._legacy_absolute_dense_reward(success)
+            reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
+            components["relative"] = reward - self.last_dense_reward
+            components["total"] = components["relative"]
             self.last_dense_reward = reward
-            return float(diff)
-        self.last_dense_reward = reward
+            self.last_reward_components = components
+            return float(components["total"])
+        else:
+            mode = self.cfg.reward_shaping_mode
+            if mode == "absolute":
+                reward = self._legacy_absolute_dense_reward(success)
+                if success:
+                    components["success"] = reward
+                else:
+                    components["dense"] = reward
+            else:
+                potential = self._dense_potential()
+                if mode == "relative":
+                    components["relative"] = potential - self.last_dense_reward
+                    if success:
+                        components["success"] = self.cfg.dense_success_reward
+                elif mode == "potential":
+                    components["potential"] = self.cfg.potential_weight * (
+                        self.cfg.potential_discount * potential
+                        - self.last_dense_reward
+                    )
+                    if success:
+                        components["success"] = self.cfg.dense_success_reward
+                elif mode == "hybrid":
+                    delta_potential = potential - self.last_dense_reward
+                    components["dense"] = self.cfg.dense_weight * potential
+                    components["relative"] = (
+                        self.cfg.relative_weight * delta_potential
+                    )
+                    if success:
+                        components["success"] = self.cfg.dense_success_reward
+                    else:
+                        components["step"] = -self.cfg.step_penalty
+                        if abs(delta_potential) < self.cfg.stall_threshold:
+                            components["stall"] = -self.cfg.stall_penalty
+                        elif delta_potential < -self.cfg.stall_threshold:
+                            components["backtrack"] = -self.cfg.backtrack_penalty
+                else:
+                    raise RuntimeError(f"Unsupported reward shaping mode {mode!r}.")
+                self.last_dense_reward = potential
+                reward = sum(components.values())
+        reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
+        if (
+            self.cfg.reward_mode == "sparse"
+            or self.cfg.reward_shaping_mode == "absolute"
+        ):
+            self.last_dense_reward = reward
+        components["total"] = float(reward)
+        self.last_reward_components = components
         return float(reward)
+
+    def _legacy_absolute_dense_reward(self, success: bool) -> float:
+        if success:
+            return float(self.cfg.dense_success_reward)
+        return self._dense_potential()
+
+    def _dense_potential(self) -> float:
+        reward_obj = getattr(self.task, "reward", None)
+        if reward_obj is None:
+            raise RuntimeError(
+                "Dense RoboTwin reward requested before task reward initialization."
+            )
+        reward_obj.update()
+        if reward_obj.is_fail():
+            return 0.0
+        return float(reward_obj.compute_reward())
 
     def _begin_reward_trace(self) -> None:
         assert self.task is not None

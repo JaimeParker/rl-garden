@@ -72,6 +72,12 @@ class _Robot:
     def get_right_ee_pose(self):
         return [0.5, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
 
+    def get_left_tcp_pose(self):
+        return self.get_left_ee_pose()
+
+    def get_right_tcp_pose(self):
+        return self.get_right_ee_pose()
+
 
 class _Pose:
     def __init__(self, p, q=None):
@@ -87,6 +93,25 @@ class _Actor:
         return self._pose
 
 
+class _Articulation(_Actor):
+    def __init__(self, p, q=None, qpos=0.0):
+        super().__init__(p, q=q)
+        self._qpos = float(qpos)
+
+    def get_qlimits(self):
+        return np.array([[0.0, 1.0]], dtype=np.float32)
+
+    def get_qpos(self):
+        return np.array([self._qpos], dtype=np.float32)
+
+    def set_qpos(self, qpos):
+        self._qpos = float(qpos)
+
+    def get_contact_point(self, idx):
+        assert idx == 1
+        return [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
+
 class _StackBowlsTask:
     def __init__(self):
         self.bowl1 = _Actor([0.0, -0.1, 0.76])
@@ -97,7 +122,7 @@ class _StackBowlsTask:
 class _OpenLaptopTask:
     def __init__(self):
         self.robot = _Robot()
-        self.laptop = _Actor([0.0, 0.0, 0.0], q=[0.7, 0.0, 0.0, 0.7])
+        self.laptop = _Articulation([0.0, 0.0, 0.0], q=[0.7, 0.0, 0.0, 0.7])
         self.closed = False
         self.took_action = False
 
@@ -367,6 +392,7 @@ def test_reward_registry_covers_rlinf_robotwin_env_configs():
         "handover_block",
         "lift_pot",
         "move_can_pot",
+        "open_laptop",
         "pick_dual_bottles",
         "place_container_plate",
         "place_empty_cup",
@@ -375,9 +401,16 @@ def test_reward_registry_covers_rlinf_robotwin_env_configs():
     )
 
 
-def test_open_laptop_is_not_registered_for_dense_reward():
-    with pytest.raises(KeyError, match="open_laptop"):
-        build_task_reward("open_laptop", object())
+def test_open_laptop_dense_reward_factory_builds():
+    task = _OpenLaptopTask()
+    task.arm_tag = "left"
+
+    reward = build_task_reward("open_laptop", task)
+    task.laptop.set_qpos(0.4)
+    reward.update()
+
+    assert reward.compute_reward() == pytest.approx(1.0)
+    assert task.reward is reward
 
 
 def test_open_laptop_sparse_adapter_initializes_arm_tag(monkeypatch):
