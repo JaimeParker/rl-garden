@@ -35,7 +35,9 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     # The dataset locator is a filesystem path for "h5", a dataset id for
     # "minari", and a legacy Gym environment id for "d4rl_legacy".
     num_online_steps: int = 1_000_000
-    dataset_backend: Literal["h5", "minari", "d4rl_legacy", "robomimic", "ogbench", "rlbench"] = "h5"
+    # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
+    # Literal: a new backend registers itself, no CLI arg change needed here.
+    dataset_backend: str = "h5"
     offline_dataset: Optional[str] = None
     offline_num_traj: Optional[int] = None
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"

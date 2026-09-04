@@ -13,23 +13,16 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.d4rl_legacy_dataset import load_d4rl_legacy_dataset_to_replay_buffer
+from rl_garden.buffers.dataset_backend_registry import DatasetRequest, load_dataset
 from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
-from rl_garden.buffers.minari_dataset import load_minari_dataset_to_replay_buffer
 from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
-from rl_garden.buffers.ogbench_dataset import load_ogbench_dataset_to_replay_buffer
-from rl_garden.buffers.rlbench_dataset import load_rlbench_dataset_to_replay_buffer
-from rl_garden.buffers.robomimic_dataset import load_robomimic_dataset_to_replay_buffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
-
-DatasetBackend = Literal["h5", "minari", "d4rl_legacy", "robomimic", "ogbench", "rlbench"]
 
 
 class PriorDataReplayMixin:
@@ -92,7 +85,7 @@ class PriorDataReplayMixin:
         path: str | Path,
         *,
         buffer_size: int,
-        backend: DatasetBackend = "h5",
+        backend: str = "h5",
         num_traj: Optional[int] = None,
         offline_data_ratio: float = 0.5,
         reward_scale: float = 1.0,
@@ -104,62 +97,17 @@ class PriorDataReplayMixin:
                 f"offline_data_ratio must be in [0, 1], got {offline_data_ratio}."
             )
         self.offline_replay_buffer = self._build_prior_data_buffer(int(buffer_size))
-        if backend == "h5":
-            loaded = load_h5_dataset_to_replay_buffer(
-                self.offline_replay_buffer,
-                path,
+        loaded = load_dataset(
+            self.offline_replay_buffer,
+            DatasetRequest(
+                path=str(path),
                 num_traj=num_traj,
                 reward_scale=reward_scale,
                 reward_bias=reward_bias,
                 success_key=success_key,
-            )
-        elif backend == "minari":
-            loaded = load_minari_dataset_to_replay_buffer(
-                self.offline_replay_buffer,
-                str(path),
-                num_episodes=num_traj,
-                reward_scale=reward_scale,
-                reward_bias=reward_bias,
-                success_key=success_key,
-            )
-        elif backend == "d4rl_legacy":
-            loaded = load_d4rl_legacy_dataset_to_replay_buffer(
-                self.offline_replay_buffer,
-                str(path),
-                num_episodes=num_traj,
-                reward_scale=reward_scale,
-                reward_bias=reward_bias,
-                success_key=success_key,
-            )
-        elif backend == "robomimic":
-            loaded = load_robomimic_dataset_to_replay_buffer(
-                self.offline_replay_buffer,
-                path,
-                num_traj=num_traj,
-                reward_scale=reward_scale,
-                reward_bias=reward_bias,
-                success_key=success_key,
-            )
-        elif backend == "ogbench":
-            loaded = load_ogbench_dataset_to_replay_buffer(
-                self.offline_replay_buffer,
-                str(path),
-                num_traj=num_traj,
-                reward_scale=reward_scale,
-                reward_bias=reward_bias,
-                success_key=success_key,
-            )
-        elif backend == "rlbench":
-            loaded = load_rlbench_dataset_to_replay_buffer(
-                self.offline_replay_buffer,
-                str(path),
-                num_traj=num_traj,
-                reward_scale=reward_scale,
-                reward_bias=reward_bias,
-                success_key=success_key,
-            )
-        else:
-            raise ValueError(f"Unknown dataset backend: {backend!r}")
+            ),
+            backend_name=backend,
+        )
 
         self.offline_data_ratio = float(offline_data_ratio)
         if self.logger is not None:

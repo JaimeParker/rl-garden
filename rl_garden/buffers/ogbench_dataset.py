@@ -30,6 +30,11 @@ from gymnasium import spaces
 
 from rl_garden.buffers._dataset_common import _add_flat_transitions, _mc_returns, _to_tensor
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.dataset_backend_registry import (
+    DatasetBackend,
+    DatasetRequest,
+    register_dataset_backend,
+)
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 DEFAULT_DATASET_DIR = "~/.ogbench/data"
@@ -131,3 +136,23 @@ def load_ogbench_dataset_to_replay_buffer(
         )
     finally:
         env.close()
+
+
+class OGBenchDatasetBackend(DatasetBackend):
+    @classmethod
+    def infer_specs(cls, req: DatasetRequest):
+        return infer_specs_from_ogbench(req.path)
+
+    @classmethod
+    def load(cls, buffer, req: DatasetRequest) -> int:
+        return load_ogbench_dataset_to_replay_buffer(
+            buffer,
+            req.path,
+            num_traj=req.num_traj,
+            reward_scale=req.reward_scale,
+            reward_bias=req.reward_bias,
+            success_key=req.success_key,
+        )
+
+
+register_dataset_backend("ogbench", OGBenchDatasetBackend)

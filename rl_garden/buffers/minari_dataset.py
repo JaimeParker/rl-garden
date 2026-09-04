@@ -17,6 +17,11 @@ from rl_garden.buffers._dataset_common import (
     _to_tensor,
 )
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.dataset_backend_registry import (
+    DatasetBackend,
+    DatasetRequest,
+    register_dataset_backend,
+)
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 
@@ -172,3 +177,29 @@ def load_minari_dataset_to_replay_buffer(
         success_all,
         episode_ends=episode_end_all,
     )
+
+
+class MinariDatasetBackend(DatasetBackend):
+    @classmethod
+    def infer_specs(cls, req: DatasetRequest):
+        obs_space, action_space = infer_specs_from_minari(req.path)
+        if not isinstance(action_space, spaces.Box):
+            raise ValueError(
+                f"Minari dataset {req.path!r} has a {type(action_space).__name__} action "
+                "space; only continuous (Box) actions are supported."
+            )
+        return obs_space, action_space
+
+    @classmethod
+    def load(cls, buffer, req: DatasetRequest) -> int:
+        return load_minari_dataset_to_replay_buffer(
+            buffer,
+            req.path,
+            num_episodes=req.num_traj,
+            reward_scale=req.reward_scale,
+            reward_bias=req.reward_bias,
+            success_key=req.success_key,
+        )
+
+
+register_dataset_backend("minari", MinariDatasetBackend)

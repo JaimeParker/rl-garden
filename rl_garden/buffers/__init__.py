@@ -3,6 +3,11 @@ from rl_garden.buffers.d4rl_legacy_dataset import (
     infer_specs_from_d4rl_legacy,
     load_d4rl_legacy_dataset_to_replay_buffer,
 )
+from rl_garden.buffers.dataset_backend_registry import (
+    DatasetRequest,
+    infer_dataset_specs,
+    load_dataset,
+)
 from rl_garden.buffers.dict_buffer import DictArray, DictReplayBuffer
 from rl_garden.buffers.mc_buffer import (
     MCDictReplayBuffer,
@@ -57,6 +62,7 @@ from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 __all__ = [
     "BaseReplayBuffer",
     "ChunkedTensorReplayBuffer",
+    "DatasetRequest",
     "DictArray",
     "DictRolloutBuffer",
     "DictReplayBuffer",
@@ -77,12 +83,14 @@ __all__ = [
     "TransformerReplayBuffer",
     "TransformerReplayBufferSample",
     "infer_box_specs_from_h5",
+    "infer_dataset_specs",
     "infer_specs_from_d4rl_legacy",
     "infer_specs_from_h5",
     "infer_specs_from_minari",
     "infer_specs_from_ogbench",
     "infer_specs_from_rlbench",
     "infer_specs_from_robomimic",
+    "load_dataset",
     "load_h5_dataset_to_replay_buffer",
     "load_d4rl_legacy_dataset_to_replay_buffer",
     "load_minari_dataset_to_replay_buffer",

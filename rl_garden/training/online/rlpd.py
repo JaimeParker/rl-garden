@@ -231,7 +231,9 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     lr_min_ratio: float = 0.0
     grad_clip_norm: float | None = None
 
-    dataset_backend: Literal["h5", "minari", "d4rl_legacy", "robomimic", "ogbench", "rlbench"] = "h5"
+    # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
+    # Literal: a new backend registers itself, no CLI arg change needed here.
+    dataset_backend: str = "h5"
     offline_dataset: str | None = None
     offline_num_traj: int | None = None
     offline_buffer_size: int | None = None

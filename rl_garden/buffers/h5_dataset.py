@@ -23,6 +23,11 @@ from rl_garden.buffers._dataset_common import (
 )
 from rl_garden.buffers._h5_common import _read_node, _require_h5py
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.dataset_backend_registry import (
+    DatasetBackend,
+    DatasetRequest,
+    register_dataset_backend,
+)
 from rl_garden.common.types import Obs
 
 
@@ -253,3 +258,23 @@ def load_h5_dataset_to_replay_buffer(
         success_all,
         episode_ends=episode_ends_all.bool(),
     )
+
+
+class H5DatasetBackend(DatasetBackend):
+    @classmethod
+    def infer_specs(cls, req: DatasetRequest):
+        return infer_specs_from_h5(req.path, action_low=req.action_low, action_high=req.action_high)
+
+    @classmethod
+    def load(cls, buffer, req: DatasetRequest) -> int:
+        return load_h5_dataset_to_replay_buffer(
+            buffer,
+            req.path,
+            num_traj=req.num_traj,
+            reward_scale=req.reward_scale,
+            reward_bias=req.reward_bias,
+            success_key=req.success_key,
+        )
+
+
+register_dataset_backend("h5", H5DatasetBackend)

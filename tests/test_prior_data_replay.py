@@ -257,7 +257,7 @@ def test_load_offline_replay_buffer_d4rl_legacy(monkeypatch):
         return 3
 
     monkeypatch.setattr(
-        "rl_garden.buffers.prior_data_replay.load_d4rl_legacy_dataset_to_replay_buffer",
+        "rl_garden.buffers.d4rl_legacy_dataset.load_d4rl_legacy_dataset_to_replay_buffer",
         fake_loader,
     )
 
@@ -295,7 +295,7 @@ def test_load_offline_replay_buffer_robomimic(monkeypatch):
         return 3
 
     monkeypatch.setattr(
-        "rl_garden.buffers.prior_data_replay.load_robomimic_dataset_to_replay_buffer",
+        "rl_garden.buffers.robomimic_dataset.load_robomimic_dataset_to_replay_buffer",
         fake_loader,
     )
 
@@ -333,7 +333,7 @@ def test_load_offline_replay_buffer_ogbench(monkeypatch):
         return 3
 
     monkeypatch.setattr(
-        "rl_garden.buffers.prior_data_replay.load_ogbench_dataset_to_replay_buffer",
+        "rl_garden.buffers.ogbench_dataset.load_ogbench_dataset_to_replay_buffer",
         fake_loader,
     )
 
@@ -354,9 +354,12 @@ def test_load_offline_replay_buffer_ogbench(monkeypatch):
 def test_load_offline_replay_buffer_rlbench(monkeypatch):
     calls = {}
 
-    def fake_loader(buffer, path, *, num_traj, reward_scale, reward_bias, success_key):
+    def fake_loader(
+        buffer, path, *, num_traj, obs_mode, cameras, image_size, reward_scale, reward_bias, success_key
+    ):
         calls["path"] = path
         calls["num_traj"] = num_traj
+        calls["obs_mode"] = obs_mode
         calls["reward_scale"] = reward_scale
         calls["reward_bias"] = reward_bias
         calls["success_key"] = success_key
@@ -371,7 +374,7 @@ def test_load_offline_replay_buffer_rlbench(monkeypatch):
         return 3
 
     monkeypatch.setattr(
-        "rl_garden.buffers.prior_data_replay.load_rlbench_dataset_to_replay_buffer",
+        "rl_garden.buffers.rlbench_dataset.load_rlbench_dataset_to_replay_buffer",
         fake_loader,
     )
 

@@ -53,6 +53,11 @@ from gymnasium import spaces
 
 from rl_garden.buffers._dataset_common import _add_flat_transitions, _concat, _mc_returns, _to_tensor
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.dataset_backend_registry import (
+    DatasetBackend,
+    DatasetRequest,
+    register_dataset_backend,
+)
 
 RLBENCH_CAMERA_NAMES: tuple[str, ...] = (
     "left_shoulder",
@@ -324,3 +329,51 @@ def load_rlbench_dataset_to_replay_buffer(
         successes_all,
         episode_ends=dones_all.bool(),
     )
+
+
+def _resolve_obs_mode_and_camera_config(req: DatasetRequest) -> tuple[str, tuple[str, ...], tuple[int, int]]:
+    """Shared by infer_specs/load below -- resolves the same obs_mode/
+    cameras/image_size the live env would use, from req.obs_mode (top-level
+    --obs_mode) and req.backend_config (the RLBenchConfig CLI sub-config,
+    resolved by rl_garden.training._dataset as getattr(args, "rlbench",
+    None)). Falls back to this module's own defaults when backend_config is
+    unset (e.g. called outside the offline-training args plumbing)."""
+    obs_mode = req.obs_mode or "state"
+    if req.backend_config is not None:
+        cameras = tuple(req.backend_config.cameras)
+        image_size = tuple(req.backend_config.image_size)
+    else:
+        cameras = RLBENCH_CAMERA_NAMES
+        image_size = (128, 128)
+    return obs_mode, cameras, image_size
+
+
+class RLBenchDatasetBackend(DatasetBackend):
+    """Unlike every other registered backend, obs_mode/backend_config
+    genuinely matter here: RLBench's dataset obs shape (flat state Box vs.
+    a Dict with per-camera keys) must match whatever the live env was
+    configured with -- see rl_garden.envs.rlbench's own obs_mode handling.
+    """
+
+    @classmethod
+    def infer_specs(cls, req: DatasetRequest):
+        obs_mode, cameras, image_size = _resolve_obs_mode_and_camera_config(req)
+        return infer_specs_from_rlbench(req.path, obs_mode=obs_mode, cameras=cameras, image_size=image_size)
+
+    @classmethod
+    def load(cls, buffer, req: DatasetRequest) -> int:
+        obs_mode, cameras, image_size = _resolve_obs_mode_and_camera_config(req)
+        return load_rlbench_dataset_to_replay_buffer(
+            buffer,
+            req.path,
+            num_traj=req.num_traj,
+            obs_mode=obs_mode,
+            cameras=cameras,
+            image_size=image_size,
+            reward_scale=req.reward_scale,
+            reward_bias=req.reward_bias,
+            success_key=req.success_key,
+        )
+
+
+register_dataset_backend("rlbench", RLBenchDatasetBackend)
