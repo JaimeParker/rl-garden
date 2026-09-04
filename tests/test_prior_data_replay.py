@@ -349,3 +349,41 @@ def test_load_offline_replay_buffer_ogbench(monkeypatch):
     assert len(agent.offline_replay_buffer) == 3
     assert agent.offline_data_ratio == 0.4
     assert calls["path"] == "cube-single-play-singletask-v0"
+
+
+def test_load_offline_replay_buffer_rlbench(monkeypatch):
+    calls = {}
+
+    def fake_loader(buffer, path, *, num_traj, reward_scale, reward_bias, success_key):
+        calls["path"] = path
+        calls["num_traj"] = num_traj
+        calls["reward_scale"] = reward_scale
+        calls["reward_bias"] = reward_bias
+        calls["success_key"] = success_key
+        for _ in range(3):
+            buffer.add(
+                obs=torch.zeros(1, 4),
+                next_obs=torch.zeros(1, 4),
+                action=torch.zeros(1, 2),
+                reward=torch.ones(1),
+                done=torch.zeros(1, dtype=torch.bool),
+            )
+        return 3
+
+    monkeypatch.setattr(
+        "rl_garden.buffers.prior_data_replay.load_rlbench_dataset_to_replay_buffer",
+        fake_loader,
+    )
+
+    agent = _agent()
+    loaded = agent.load_offline_replay_buffer(
+        "/data/rlbench_demos/reach_target",
+        backend="rlbench",
+        buffer_size=16,
+        offline_data_ratio=0.4,
+    )
+
+    assert loaded == 3
+    assert len(agent.offline_replay_buffer) == 3
+    assert agent.offline_data_ratio == 0.4
+    assert calls["path"] == "/data/rlbench_demos/reach_target"

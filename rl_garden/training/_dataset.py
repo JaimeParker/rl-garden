@@ -15,11 +15,13 @@ from rl_garden.buffers import (
     infer_specs_from_d4rl_legacy,
     infer_specs_from_minari,
     infer_specs_from_ogbench,
+    infer_specs_from_rlbench,
     infer_specs_from_robomimic,
     load_d4rl_legacy_dataset_to_replay_buffer,
     load_h5_dataset_to_replay_buffer,
     load_minari_dataset_to_replay_buffer,
     load_ogbench_dataset_to_replay_buffer,
+    load_rlbench_dataset_to_replay_buffer,
     load_robomimic_dataset_to_replay_buffer,
 )
 
@@ -47,6 +49,8 @@ def infer_offline_dataset_specs(args: Any) -> tuple[spaces.Space, spaces.Box]:
         return infer_specs_from_robomimic(args.offline_dataset)
     if args.dataset_backend == "ogbench":
         return infer_specs_from_ogbench(args.offline_dataset)
+    if args.dataset_backend == "rlbench":
+        return infer_specs_from_rlbench(args.offline_dataset)
     raise ValueError(f"Unsupported offline dataset backend: {args.dataset_backend!r}")
 
 
@@ -87,6 +91,13 @@ def load_offline_dataset(replay_buffer: Any, args: Any) -> int:
         )
     if args.dataset_backend == "ogbench":
         return load_ogbench_dataset_to_replay_buffer(
+            replay_buffer,
+            args.offline_dataset,
+            num_traj=args.offline_num_traj,
+            **common_kwargs,
+        )
+    if args.dataset_backend == "rlbench":
+        return load_rlbench_dataset_to_replay_buffer(
             replay_buffer,
             args.offline_dataset,
             num_traj=args.offline_num_traj,

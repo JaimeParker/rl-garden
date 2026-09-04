@@ -166,6 +166,26 @@ class OGBenchConfig:
 
 
 @dataclass
+class RLBenchConfig:
+    """RLBench-specific env settings. CLI prefix: ``--rlbench.<field>``"""
+
+    device: str = "cpu"
+    # Cameras enabled when obs_mode == "rgb" (rgb+depth each; never
+    # mask/point_cloud). RLBench's own default ObservationConfig enables all
+    # 5 -- trimming this is a cost knob, not a correctness one.
+    cameras: tuple[str, ...] = ("left_shoulder", "right_shoulder", "wrist", "front", "overhead")
+    image_size: tuple[int, int] = (128, 128)
+    headless: bool = True
+    # JSON-encoded dict forwarded verbatim to rlbench.environment.Environment
+    # (e.g. robot_setup, shaped_rewards, static_positions) -- rarely needed.
+    env_kwargs_json: str = "{}"
+    # "sync" (single process) or "async" (one OS process per env --
+    # recommended once obs_mode == "rgb", each instance owns its own
+    # CoppeliaSim renderer/GL context).
+    vectorization: str = "sync"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -184,6 +204,7 @@ class EnvBackendArgs:
     custom: CustomConfig = field(default_factory=CustomConfig)
     robomimic: RobomimicConfig = field(default_factory=RobomimicConfig)
     ogbench: OGBenchConfig = field(default_factory=OGBenchConfig)
+    rlbench: RLBenchConfig = field(default_factory=RLBenchConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

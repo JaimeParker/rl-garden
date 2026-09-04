@@ -25,10 +25,11 @@ from rl_garden.buffers.minari_dataset import load_minari_dataset_to_replay_buffe
 from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.ogbench_dataset import load_ogbench_dataset_to_replay_buffer
+from rl_garden.buffers.rlbench_dataset import load_rlbench_dataset_to_replay_buffer
 from rl_garden.buffers.robomimic_dataset import load_robomimic_dataset_to_replay_buffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
-DatasetBackend = Literal["h5", "minari", "d4rl_legacy", "robomimic", "ogbench"]
+DatasetBackend = Literal["h5", "minari", "d4rl_legacy", "robomimic", "ogbench", "rlbench"]
 
 
 class PriorDataReplayMixin:
@@ -141,6 +142,15 @@ class PriorDataReplayMixin:
             )
         elif backend == "ogbench":
             loaded = load_ogbench_dataset_to_replay_buffer(
+                self.offline_replay_buffer,
+                str(path),
+                num_traj=num_traj,
+                reward_scale=reward_scale,
+                reward_bias=reward_bias,
+                success_key=success_key,
+            )
+        elif backend == "rlbench":
+            loaded = load_rlbench_dataset_to_replay_buffer(
                 self.offline_replay_buffer,
                 str(path),
                 num_traj=num_traj,

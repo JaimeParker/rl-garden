@@ -11,6 +11,7 @@ Operational how-to for running and configuring the framework.
 - [IsaacLab Custom Tasks](guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](guides/offline-acceleration.md)
 - [OGBench Integration](guides/ogbench-integration.md)
+- [RLBench Integration](guides/rlbench-integration.md)
 - [robomimic Integration](guides/robomimic-integration.md)
 - [RoboTwin Integration](guides/robotwin.md)
 - [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
