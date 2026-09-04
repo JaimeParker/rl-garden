@@ -58,6 +58,7 @@ d4rl-legacy-manip = [
     "mjrl @ git+https://github.com/aravindr93/mjrl.git@3871d93763d3b49c4741e6daeaebbc605fe140dc",
     "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f",
 ]
+ogbench = ["ogbench"]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
 

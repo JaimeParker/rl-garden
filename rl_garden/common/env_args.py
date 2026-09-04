@@ -152,6 +152,20 @@ class RobomimicConfig:
 
 
 @dataclass
+class OGBenchConfig:
+    """OGBench-specific env settings. CLI prefix: ``--ogbench.<field>``"""
+
+    device: str = "cpu"
+    # JSON-encoded dict forwarded verbatim to gym.make() (rarely needed --
+    # every OGBench task variant is already encoded in env_id itself).
+    env_kwargs_json: str = "{}"
+    # "sync" (single process) or "async" (one OS process per env --
+    # recommended for visual-* env ids, each of which owns its own MuJoCo
+    # renderer/GL context).
+    vectorization: str = "sync"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -169,6 +183,7 @@ class EnvBackendArgs:
     isaaclab: IsaacLabConfig = field(default_factory=IsaacLabConfig)
     custom: CustomConfig = field(default_factory=CustomConfig)
     robomimic: RobomimicConfig = field(default_factory=RobomimicConfig)
+    ogbench: OGBenchConfig = field(default_factory=OGBenchConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

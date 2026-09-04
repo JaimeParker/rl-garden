@@ -38,6 +38,10 @@ from rl_garden.buffers.transformer_replay_buffer import (
 )
 from rl_garden.buffers.chunked_replay_buffer import ChunkedTensorReplayBuffer
 from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
+from rl_garden.buffers.ogbench_dataset import (
+    infer_specs_from_ogbench,
+    load_ogbench_dataset_to_replay_buffer,
+)
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
 from rl_garden.buffers.rebrac_replay_buffer import ReBRACReplayBuffer
 from rl_garden.buffers.robomimic_dataset import (
@@ -72,9 +76,11 @@ __all__ = [
     "infer_specs_from_d4rl_legacy",
     "infer_specs_from_h5",
     "infer_specs_from_minari",
+    "infer_specs_from_ogbench",
     "infer_specs_from_robomimic",
     "load_h5_dataset_to_replay_buffer",
     "load_d4rl_legacy_dataset_to_replay_buffer",
     "load_minari_dataset_to_replay_buffer",
+    "load_ogbench_dataset_to_replay_buffer",
     "load_robomimic_dataset_to_replay_buffer",
 ]
