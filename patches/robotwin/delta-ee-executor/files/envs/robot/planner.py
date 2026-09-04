@@ -1,0 +1,673 @@
+import mplib.planner
+import mplib
+import numpy as np
+import pdb
+import traceback
+import xml.etree.ElementTree as ET
+import numpy as np
+import toppra as ta
+from mplib.sapien_utils import SapienPlanner, SapienPlanningWorld
+import transforms3d as t3d
+import envs._GLOBAL_CONFIGS as CONFIGS
+
+
+# ********************** MplibPlanner **********************
+class MplibPlanner:
+    # links=None, joints=None
+    def __init__(
+        self,
+        urdf_path,
+        srdf_path,
+        move_group,
+        robot_origion_pose,
+        robot_entity,
+        planner_type="mplib_RRT",
+        scene=None,
+    ):
+        super().__init__()
+        ta.setup_logging("CRITICAL")  # hide logging
+
+        links = [link.get_name() for link in robot_entity.get_links()]
+        joints = [joint.get_name() for joint in robot_entity.get_active_joints()]
+
+        if scene is None:
+            self.planner = mplib.Planner(
+                urdf=urdf_path,
+                srdf=srdf_path,
+                move_group=move_group,
+                user_link_names=links,
+                user_joint_names=joints,
+                use_convex=False,
+            )
+            self.planner.set_base_pose(robot_origion_pose)
+        else:
+            planning_world = SapienPlanningWorld(scene, [robot_entity])
+            allowed_collision_matrix = (
+                planning_world.get_allowed_collision_matrix()
+            )
+            srdf_root = ET.parse(srdf_path).getroot()
+
+            for element in srdf_root.findall(".//disable_collisions"):
+                link1 = element.get("link1")
+                link2 = element.get("link2")
+
+                if link1 and link2:
+                    allowed_collision_matrix.set_entry(
+                        link1,
+                        link2,
+                        True,
+                    )
+
+            self.planner = SapienPlanner(planning_world, move_group)
+
+        self.planner_type = planner_type
+        self.plan_step_lim = 2500
+        self.TOPP = self.planner.TOPP
+
+    def show_info(self):
+        print("joint_limits", self.planner.joint_limits)
+        print("joint_acc_limits", self.planner.joint_acc_limits)
+
+    def plan_pose(
+        self,
+        now_qpos,
+        target_pose,
+        use_point_cloud=False,
+        use_attach=False,
+        arms_tag=None,
+        try_times=2,
+        log=True,
+    ):
+        result = {}
+        result["status"] = "Fail"
+
+        now_try_times = 1
+        while result["status"] != "Success" and now_try_times < try_times:
+            result = self.planner.plan_pose(
+                goal_pose=target_pose,
+                current_qpos=now_qpos,
+                time_step=1 / 250,
+                planning_time=2, 
+                fix_joint_limits=False
+                # rrt_range=0.05
+                # =================== mplib 0.1.1 ===================
+                # use_point_cloud=use_point_cloud,
+                # use_attach=use_attach,
+                # planner_name="RRTConnect"
+            )
+            now_try_times += 1
+
+        if result["status"] != "Success":
+            if log:
+                print(f"\n {arms_tag} arm planning failed ({result['status']}) !")
+        else:
+            n_step = result["position"].shape[0]
+            if n_step > self.plan_step_lim:
+                if log:
+                    print(f"\n {arms_tag} arm planning wrong! (step = {n_step})")
+                result["status"] = "Fail"
+
+        return result
+
+    def plan_screw(
+        self,
+        now_qpos,
+        target_pose,
+        use_point_cloud=False,
+        use_attach=False,
+        arms_tag=None,
+        log=False,
+    ):
+        """
+        Interpolative planning with screw motion.
+        Will not avoid collision and will fail if the path contains collision.
+        """
+        result = {"status": "Fail"}
+        best_result = None
+        best_score = np.inf
+        best_position_error = np.inf
+        best_rotation_error = np.inf
+
+        # MPlib recommends screw motion for simple Cartesian moves and a
+        # sampling-based fallback when the straight path is unavailable.
+        for qpos_step in (0.1, 0.05, 0.02, 0.005, 0.0025):
+            try:
+                candidate = self.planner.plan_screw(
+                    goal_pose=target_pose,
+                    current_qpos=now_qpos,
+                    qpos_step=qpos_step,
+                    time_step=1 / 250,
+                )
+            except RuntimeError:
+                continue
+
+            positions = np.asarray(
+                candidate.get("position", []),
+                dtype=np.float64,
+            )
+
+            if (
+                candidate.get("status") != "Success"
+                or positions.ndim != 2
+                or positions.shape[0] == 0
+            ):
+                result = candidate
+                continue
+
+            current_qpos = np.asarray(now_qpos, dtype=np.float64)
+            terminal_move_qpos = positions[-1]
+            if terminal_move_qpos.shape != current_qpos.shape:
+                current_qpos = current_qpos[
+                    np.asarray(
+                        self.planner.move_group_joint_indices,
+                        dtype=np.intp,
+                    )
+                ]
+            terminal_motion = (
+                terminal_move_qpos - current_qpos + np.pi
+            ) % (2.0 * np.pi) - np.pi
+            if np.max(np.abs(terminal_motion)) <= 1e-6:
+                continue
+
+            terminal_qpos = np.asarray(
+                self.planner.pad_move_group_qpos(positions[-1]),
+                dtype=np.float64,
+            )
+            pinocchio = self.planner.pinocchio_model
+            pinocchio.compute_forward_kinematics(terminal_qpos)
+            terminal_pose = (
+                self.planner.robot.get_base_pose()
+                * pinocchio.get_link_pose(
+                    self.planner.move_group_link_id
+                )
+            )
+            position_error = np.linalg.norm(
+                np.asarray(terminal_pose.p, dtype=np.float64)
+                - np.asarray(target_pose.p, dtype=np.float64)
+            )
+            terminal_quaternion = np.asarray(
+                terminal_pose.q,
+                dtype=np.float64,
+            )
+            target_quaternion = np.asarray(
+                target_pose.q,
+                dtype=np.float64,
+            )
+            terminal_quaternion /= np.linalg.norm(terminal_quaternion)
+            target_quaternion /= np.linalg.norm(target_quaternion)
+            rotation_error = 2.0 * np.arccos(
+                np.clip(
+                    abs(
+                        np.dot(
+                            terminal_quaternion,
+                            target_quaternion,
+                        )
+                    ),
+                    0.0,
+                    1.0,
+                )
+            )
+
+            score = position_error + 0.01 * rotation_error
+            if score < best_score:
+                best_result = candidate
+                best_score = score
+                best_position_error = position_error
+                best_rotation_error = rotation_error
+
+            if (
+                position_error <= 5e-3
+                and rotation_error <= np.deg2rad(2.0)
+            ):
+                result = candidate
+                break
+
+            result = {
+                "status": "Fail",
+                "error": "screw terminal pose misses target",
+            }
+
+        # A bounded near-target screw result is safer for contact-rich
+        # manipulation than an RRT detour through a different IK branch.
+        if (
+            result.get("status") != "Success"
+            and best_result is not None
+            and best_position_error <= 6e-3
+            and best_rotation_error <= np.deg2rad(1.0)
+        ):
+            result = best_result
+            print(
+                "\n[mplib-screw-bounded] "
+                f"arm={arms_tag} "
+                f"position_mm={best_position_error * 1000.0:.4f} "
+                f"rotation_deg={np.degrees(best_rotation_error):.4f}",
+                flush=True,
+            )
+
+        # plan fail
+        if result["status"] != "Success":
+            if log:
+                print(f"\n {arms_tag} arm planning failed ({result['status']}) !")
+            # return result
+        else:
+            n_step = result["position"].shape[0]
+            # plan step lim
+            if n_step > self.plan_step_lim:
+                if log:
+                    print(f"\n {arms_tag} arm planning wrong! (step = {n_step})")
+                result["status"] = "Fail"
+
+        return result
+
+    def plan_path(
+        self,
+        now_qpos,
+        target_pose,
+        use_point_cloud=False,
+        use_attach=False,
+        arms_tag=None,
+        log=True,
+    ):
+        """
+        Interpolative planning with screw motion.
+        Will not avoid collision and will fail if the path contains collision.
+        """
+        if self.planner_type == "mplib_RRT":
+            result = self.plan_pose(
+                now_qpos,
+                target_pose,
+                use_point_cloud,
+                use_attach,
+                arms_tag,
+                try_times=10,
+                log=log,
+            )
+        elif self.planner_type == "mplib_screw":
+            result = self.plan_screw(now_qpos, target_pose, use_point_cloud, use_attach, arms_tag, log)
+
+        return result
+
+    def plan_grippers(self, now_val, target_val):
+        num_step = 200  # TODO
+        dis_val = target_val - now_val
+        per_step = dis_val / num_step
+        res = {}
+        vals = np.linspace(now_val, target_val, num_step)
+        res["num_step"] = num_step
+        res["per_step"] = per_step  # dis per step
+        res["result"] = vals
+        return res
+
+
+# ********************** MplibWrapperPlanner **********************
+# A wrapper that mimics CuroboPlanner interface but uses mplib internally
+
+class MplibWrapperPlanner(MplibPlanner):
+    """
+    A wrapper planner that mimics CuroboPlanner interface but uses mplib internally.
+    This allows using mplib with the same interface as CuroboPlanner.
+    """
+    def __init__(
+        self,
+        robot_origion_pose,
+        active_joints_name,
+        all_joints,
+        urdf_path=None,
+        srdf_path=None,
+        move_group=None,
+        robot_entity=None,
+        planner_type="mplib_RRT",
+        scene=None,
+    ):
+        super().__init__(urdf_path, srdf_path, move_group, robot_origion_pose, robot_entity, planner_type, scene)
+        ta.setup_logging("CRITICAL")  # hide logging
+
+        self.active_joints_name = active_joints_name
+        self.all_joints = all_joints
+
+    def plan_path(
+        self,
+        curr_joint_pos,
+        target_gripper_pose,
+        constraint_pose=None,
+        arms_tag=None,
+    ):
+        """Plan a single path"""
+
+        pose_list = list(target_gripper_pose.p) + list(target_gripper_pose.q)
+        pose_obj = mplib.pymp.Pose(pose_list[:3], pose_list[3:])
+
+        # Keep the complete articulation qpos and its original joint order.
+        # The SAPIEN planning world contains all active joints, while the
+        # move-group joints are sparse indices inside that full vector.
+        joint_angles_array = np.asarray(
+            curr_joint_pos,
+            dtype=np.float64,
+        ).copy()
+        if (
+            joint_angles_array.ndim != 1
+            or joint_angles_array.shape[0] != len(self.all_joints)
+        ):
+            raise ValueError(
+                "full articulation qpos required by MPlib wrapper"
+            )
+
+        # Call mplib planner with world coordinate pose
+        result = super().plan_path(
+            now_qpos=joint_angles_array,
+            target_pose=pose_obj,
+            use_point_cloud=False,
+            use_attach=False,
+            arms_tag=arms_tag,
+            log=False
+        )
+        
+        # Ensure result format matches CuroboPlanner output
+        if result.get("status") == "Success":
+            if not isinstance(result.get("position"), np.ndarray):
+                result["position"] = np.array(result["position"])
+            if not isinstance(result.get("velocity"), np.ndarray):
+                result["velocity"] = np.array(result["velocity"])
+        
+        return result
+    
+    def plan_batch(
+        self,
+        curr_joint_pos,
+        target_gripper_pose_list,
+        constraint_pose=None,
+        arms_tag=None
+    ):
+        """Plan multiple paths - matching CuroboPlanner's interface"""
+
+        poses_list = []
+        for i, target_gripper_pose in enumerate(target_gripper_pose_list):
+            # 直接使用原始位姿
+            pose_list = list(target_gripper_pose.p) + list(target_gripper_pose.q)
+            poses_list.append(pose_list)
+        
+        # Get joint angles for active joints
+        joint_indices = [self.all_joints.index(name) for name in self.active_joints_name 
+                        if name in self.all_joints]
+        joint_angles = [curr_joint_pos[index] for index in joint_indices]
+        joint_angles = [round(angle, 5) for angle in joint_angles]
+        
+        # Plan for each pose
+        results = {
+            "status": [],
+            "position": [],
+            "velocity": []
+        }
+
+        for i, pose in enumerate(poses_list):
+            joint_angles_array = np.array(joint_angles)
+
+            pose_obj = mplib.pymp.Pose(pose[:3], pose[3:])
+            
+            result = super().plan_path(
+                now_qpos=joint_angles_array,
+                target_pose=pose_obj,
+                use_point_cloud=False,
+                use_attach=False,
+                arms_tag=arms_tag,
+                log=False
+            )
+            
+            results["status"].append("Success" if result["status"] == "Success" else "Failure")
+            if result["status"] == "Success":
+                results["position"].append(result["position"])
+                results["velocity"].append(result["velocity"])
+            else:
+                results["position"].append(np.array([]))
+                results["velocity"].append(np.array([]))
+        
+        # Convert to proper format
+        results["status"] = np.array(results["status"], dtype=object)
+        results["position"] = np.array(results["position"], dtype=object)
+        results["velocity"] = np.array(results["velocity"], dtype=object)
+
+        return results
+
+
+# ********************** CuroboPlanner (optional, requires curobo library) **********************
+try:
+    # ********************** CuroboPlanner (optional) **********************
+    from curobo.types.math import Pose as CuroboPose
+    import time
+    from curobo.types.robot import JointState
+    from curobo.wrap.reacher.motion_gen import (
+        MotionGen,
+        MotionGenConfig,
+        MotionGenPlanConfig,
+        PoseCostMetric,
+    )
+    from curobo.util import logger
+    import torch
+    import yaml
+
+    class CuroboPlanner:
+
+        def __init__(
+            self,
+            robot_origion_pose,
+            active_joints_name,
+            all_joints,
+            yml_path=None,
+        ):
+            super().__init__()
+            ta.setup_logging("CRITICAL")  # hide logging
+            logger.setup_logger(level="error", logger_name="'curobo")
+
+            if yml_path != None:
+                self.yml_path = yml_path
+            else:
+                raise ValueError("[Planner.py]: CuroboPlanner yml_path is None!")
+            self.robot_origion_pose = robot_origion_pose
+            self.active_joints_name = active_joints_name
+            self.all_joints = all_joints
+
+            # translate from baselink to arm's base
+            with open(self.yml_path, "r") as f:
+                yml_data = yaml.safe_load(f)
+            self.frame_bias = yml_data["planner"]["frame_bias"]
+
+            # motion generation
+            if True:
+                world_config = {
+                    "cuboid": {
+                        "table": {
+                            "dims": [0.7, 2, 0.04],  # x, y, z
+                            "pose": [
+                                self.robot_origion_pose.p[1],
+                                0.0,
+                                0.74 - self.robot_origion_pose.p[2],
+                                1,
+                                0,
+                                0,
+                                0.0,
+                            ],  # x, y, z, qw, qx, qy, qz
+                        },
+                    }
+                }
+            motion_gen_config = MotionGenConfig.load_from_robot_config(
+                self.yml_path,
+                world_config,
+                interpolation_dt=1 / 250,
+                num_trajopt_seeds=1,
+            )
+
+            self.motion_gen = MotionGen(motion_gen_config)
+            self.motion_gen.warmup()
+            motion_gen_config = MotionGenConfig.load_from_robot_config(
+                self.yml_path,
+                world_config,
+                interpolation_dt=1 / 250,
+                num_trajopt_seeds=1,
+                num_graph_seeds=1,
+            )
+            self.motion_gen_batch = MotionGen(motion_gen_config)
+            self.motion_gen_batch.warmup(batch=CONFIGS.ROTATE_NUM)
+
+        def plan_path(
+            self,
+            curr_joint_pos,
+            target_gripper_pose,
+            constraint_pose=None,
+            arms_tag=None,
+        ):
+            # transformation from world to arm's base
+            world_base_pose = np.concatenate([
+                np.array(self.robot_origion_pose.p),
+                np.array(self.robot_origion_pose.q),
+            ])
+            world_target_pose = np.concatenate([np.array(target_gripper_pose.p), np.array(target_gripper_pose.q)])
+            target_pose_p, target_pose_q = self._trans_from_world_to_base(world_base_pose, world_target_pose)
+            target_pose_p[0] += self.frame_bias[0]
+            target_pose_p[1] += self.frame_bias[1]
+            target_pose_p[2] += self.frame_bias[2]
+
+            goal_pose_of_gripper = CuroboPose.from_list(list(target_pose_p) + list(target_pose_q))
+            joint_indices = [self.all_joints.index(name) for name in self.active_joints_name if name in self.all_joints]
+            joint_angles = [curr_joint_pos[index] for index in joint_indices]
+            joint_angles = [round(angle, 5) for angle in joint_angles]  # avoid the precision problem
+            # print('[debug]: joint_angles: ', joint_angles)
+            start_joint_states = JointState.from_position(
+                torch.tensor(joint_angles).cuda().reshape(1, -1),
+                joint_names=self.active_joints_name,
+            )
+            # plan
+            c_start_time = time.time()
+            plan_config = MotionGenPlanConfig(max_attempts=10)
+            if constraint_pose is not None:
+                pose_cost_metric = PoseCostMetric(
+                    hold_partial_pose=True,
+                    hold_vec_weight=self.motion_gen.tensor_args.to_device(constraint_pose),
+                )
+                plan_config.pose_cost_metric = pose_cost_metric
+
+            self.motion_gen.reset(reset_seed=True)  # 运行的代码
+            result = self.motion_gen.plan_single(start_joint_states, goal_pose_of_gripper, plan_config)
+            # traj = result.get_interpolated_plan()
+            c_time = time.time() - c_start_time
+
+            # output
+            res_result = dict()
+            if result.success.item() == False:
+                res_result["status"] = "Fail"
+                return res_result
+            else:
+                res_result["status"] = "Success"
+                res_result["position"] = np.array(result.interpolated_plan.position.to("cpu"))
+                res_result["velocity"] = np.array(result.interpolated_plan.velocity.to("cpu"))
+                return res_result
+
+        def plan_batch(
+            self,
+            curr_joint_pos,
+            target_gripper_pose_list,
+            constraint_pose=None,
+            arms_tag=None,
+        ):
+            """
+            Plan a batch of trajectories for multiple target poses.
+
+            Input:
+                - curr_joint_pos: List of current joint angles (1 x n)
+                - target_gripper_pose_list: List of target poses [sapien.Pose, sapien.Pose, ...]
+
+            Output:
+                - result['status']: numpy array of string values indicating "Success"/"Fail" for each pose
+                - result['position']: numpy array of joint positions with shape (n x m x l)
+                  where n is number of target poses, m is number of waypoints, l is number of joints
+                - result['velocity']: numpy array of joint velocities with same shape as position
+            """
+
+            num_poses = len(target_gripper_pose_list)
+            # transformation from world to arm's base
+            world_base_pose = np.concatenate([
+                np.array(self.robot_origion_pose.p),
+                np.array(self.robot_origion_pose.q),
+            ])
+            poses_list = []
+            for target_gripper_pose in target_gripper_pose_list:
+                world_target_pose = np.concatenate([np.array(target_gripper_pose.p), np.array(target_gripper_pose.q)])
+                base_target_pose_p, base_target_pose_q = self._trans_from_world_to_base(
+                    world_base_pose, world_target_pose)
+                base_target_pose_list = list(base_target_pose_p) + list(base_target_pose_q)
+                base_target_pose_list[0] += self.frame_bias[0]
+                base_target_pose_list[1] += self.frame_bias[1]
+                base_target_pose_list[2] += self.frame_bias[2]
+                poses_list.append(base_target_pose_list)
+
+            poses_cuda = torch.tensor(poses_list, dtype=torch.float32).cuda()
+            #
+            goal_pose_of_gripper = CuroboPose(poses_cuda[:, :3], poses_cuda[:, 3:])
+            joint_indices = [self.all_joints.index(name) for name in self.active_joints_name if name in self.all_joints]
+            joint_angles = [curr_joint_pos[index] for index in joint_indices]
+            joint_angles = [round(angle, 5) for angle in joint_angles]  # avoid the precision problem
+            joint_angles_cuda = (torch.tensor(joint_angles, dtype=torch.float32).cuda().reshape(1, -1))
+            joint_angles_cuda = torch.cat([joint_angles_cuda] * num_poses, dim=0)
+            start_joint_states = JointState.from_position(joint_angles_cuda, joint_names=self.active_joints_name)
+            # plan
+            c_start_time = time.time()
+            plan_config = MotionGenPlanConfig(max_attempts=10)
+            if constraint_pose is not None:
+                pose_cost_metric = PoseCostMetric(
+                    hold_partial_pose=True,
+                    hold_vec_weight=self.motion_gen.tensor_args.to_device(constraint_pose),
+                )
+                plan_config.pose_cost_metric = pose_cost_metric
+
+            self.motion_gen.reset(reset_seed=True)
+            try:
+                result = self.motion_gen_batch.plan_batch(start_joint_states, goal_pose_of_gripper, plan_config)
+            except Exception as e:
+                return {"status": ["Failure" for i in range(10)]}
+            c_time = time.time() - c_start_time
+
+            # output
+            res_result = dict()
+            # Convert boolean success values to "Success"/"Failure" strings
+            success_array = result.success.cpu().numpy()
+            status_array = np.array(["Success" if s else "Failure" for s in success_array], dtype=object)
+            res_result["status"] = status_array
+
+            if np.all(res_result["status"] == "Failure"):
+                return res_result
+
+            res_result["position"] = np.array(result.interpolated_plan.position.to("cpu"))
+            res_result["velocity"] = np.array(result.interpolated_plan.velocity.to("cpu"))
+            return res_result
+
+        def plan_grippers(self, now_val, target_val):
+            num_step = 200
+            dis_val = target_val - now_val
+            step = dis_val / num_step
+            res = {}
+            vals = np.linspace(now_val, target_val, num_step)
+            res["num_step"] = num_step
+            res["per_step"] = step
+            res["result"] = vals
+            return res
+
+        def _trans_from_world_to_base(self, base_pose, target_pose):
+            '''
+                transform target pose from world frame to base frame
+                base_pose: np.array([x, y, z, qw, qx, qy, qz])
+                target_pose: np.array([x, y, z, qw, qx, qy, qz])
+            '''
+            base_p, base_q = base_pose[0:3], base_pose[3:]
+            target_p, target_q = target_pose[0:3], target_pose[3:]
+            rel_p = target_p - base_p
+            wRb = t3d.quaternions.quat2mat(base_q)
+            wRt = t3d.quaternions.quat2mat(target_q)
+            result_p = wRb.T @ rel_p
+            result_q = t3d.quaternions.mat2quat(wRb.T @ wRt)
+            return result_p, result_q
+
+except Exception as e:
+    print('[planner.py]: Something wrong happened when importing CuroboPlanner! Please check if Curobo is installed correctly. If the problem still exists, you can install Curobo from https://github.com/NVlabs/curobo manually.')
+    print('Exception traceback:')
+    traceback.print_exc()
+    # If Curobo is not available, set CuroboPlanner to None
+    CuroboPlanner = None

@@ -1,0 +1,551 @@
+diff --git a/envs/_base_task.py b/envs/_base_task.py
+index 79fc88534c7465073bb4308e487e8ae1b8ce918f..37b36616f6dcb46eb9f22be83bea1a25a9be85a2 100644
+--- a/envs/_base_task.py
++++ b/envs/_base_task.py
+@@ -99,6 +99,24 @@ class Base_Task(gym.Env):
+ 
+         self.now_obs = {}
+         self.take_action_cnt = 0
++        self.delta_ee_command_reference = bool(
++            kwags.get("delta_ee_command_reference", False)
++        )
++        self.delta_ee_command_reanchor = bool(
++            kwags.get("delta_ee_command_reanchor", False)
++        )
++        self.delta_ee_planner_type = kwags.get(
++            "delta_ee_planner_type",
++            None,
++        )
++        self.delta_ee_terminal_settle_tolerance = float(
++            kwags.get("delta_ee_terminal_settle_tolerance", 5e-4)
++        )
++        self.delta_ee_terminal_settle_max_ticks = int(
++            kwags.get("delta_ee_terminal_settle_max_ticks", 100)
++        )
++        self._delta_ee_left_command_pose = None
++        self._delta_ee_right_command_pose = None
+         self.eval_video_path = kwags.get("eval_video_save_dir", None)
+ 
+         self.save_freq = kwags.get("save_freq")
+@@ -121,6 +139,21 @@ class Base_Task(gym.Env):
+ 
+         self.create_table_and_wall(table_xy_bias=table_xy_bias, table_height=0.74)
+         self.load_robot(**kwags)
++        if self.delta_ee_planner_type is not None:
++            if self.delta_ee_planner_type not in {
++                "mplib_RRT",
++                "mplib_screw",
++            }:
++                raise ValueError(
++                    "Unsupported delta_ee_planner_type: "
++                    f"{self.delta_ee_planner_type!r}"
++                )
++            self.robot.left_planner.planner_type = (
++                self.delta_ee_planner_type
++            )
++            self.robot.right_planner.planner_type = (
++                self.delta_ee_planner_type
++            )
+         self.load_camera(**kwags)
+         self.robot.move_to_homestate()
+ 
+@@ -1633,8 +1666,101 @@ class Base_Task(gym.Env):
+         elif action_type == 'ee' or action_type == 'delta_ee':
+             # ====================== delta_ee control ======================
+             if action_type == 'delta_ee':
+-                now_left_action = self.get_arm_pose("left")
+-                now_right_action = self.get_arm_pose("right")
++                actual_left_action = self.get_arm_pose("left")
++                actual_right_action = self.get_arm_pose("right")
++
++                if self.delta_ee_command_reference:
++                    if self._delta_ee_left_command_pose is None:
++                        self._delta_ee_left_command_pose = (
++                            actual_left_action.copy()
++                        )
++                    if self._delta_ee_right_command_pose is None:
++                        self._delta_ee_right_command_pose = (
++                            actual_right_action.copy()
++                        )
++
++                    def reanchor(command_pose, actual_pose, arm_tag):
++                        command_pose = np.asarray(
++                            command_pose,
++                            dtype=np.float64,
++                        )
++                        actual_pose = np.asarray(
++                            actual_pose,
++                            dtype=np.float64,
++                        )
++                        position_error = np.linalg.norm(
++                            command_pose[:3] - actual_pose[:3]
++                        )
++                        command_quaternion = command_pose[3:]
++                        actual_quaternion = actual_pose[3:]
++                        quaternion_dot = abs(
++                            np.dot(
++                                command_quaternion
++                                / np.linalg.norm(command_quaternion),
++                                actual_quaternion
++                                / np.linalg.norm(actual_quaternion),
++                            )
++                        )
++                        rotation_error = 2.0 * np.arccos(
++                            np.clip(quaternion_dot, 0.0, 1.0)
++                        )
++                        if (
++                            position_error > 5e-3
++                            or rotation_error > np.deg2rad(2.0)
++                        ):
++                            print(
++                                "\n[delta-ee-reanchor] "
++                                f"step={self.take_action_cnt} "
++                                f"arm={arm_tag} "
++                                f"position_mm={position_error * 1000.0:.4f} "
++                                f"rotation_deg={np.degrees(rotation_error):.4f}",
++                                flush=True,
++                            )
++                            return actual_pose.copy()
++                        return command_pose
++
++                    if self.delta_ee_command_reanchor:
++                        self._delta_ee_left_command_pose = reanchor(
++                            self._delta_ee_left_command_pose,
++                            actual_left_action,
++                            "left",
++                        )
++                        self._delta_ee_right_command_pose = reanchor(
++                            self._delta_ee_right_command_pose,
++                            actual_right_action,
++                            "right",
++                        )
++                    now_left_action = self._delta_ee_left_command_pose
++                    now_right_action = self._delta_ee_right_command_pose
++                else:
++                    now_left_action = actual_left_action
++                    now_right_action = actual_right_action
++
++                def is_near_zero_delta(delta_action):
++                    delta_action = np.asarray(
++                        delta_action,
++                        dtype=np.float64,
++                    )
++                    quaternion = delta_action[3:]
++                    quaternion_norm = np.linalg.norm(quaternion)
++                    if quaternion_norm <= 1e-12:
++                        return False
++                    quaternion = quaternion / quaternion_norm
++                    rotation_angle = 2.0 * np.arccos(
++                        np.clip(abs(quaternion[0]), 0.0, 1.0)
++                    )
++                    return (
++                        np.linalg.norm(delta_action[:3]) <= 1e-5
++                        and rotation_angle <= np.deg2rad(0.01)
++                    )
++
++                left_delta_hold = is_near_zero_delta(
++                    left_arm_actions[0]
++                )
++                right_delta_hold = is_near_zero_delta(
++                    right_arm_actions[0]
++                )
++
+                 def transfer_action(action, delta_action):
+                     action_mat = np.eye(4)
+                     delta_mat = np.eye(4)
+@@ -1648,27 +1774,103 @@ class Base_Task(gym.Env):
+                     return np.concatenate((new_p, new_q))
+                 now_left_action = transfer_action(now_left_action, left_arm_actions[0])
+                 now_right_action = transfer_action(now_right_action, right_arm_actions[0])
++
++                if self.delta_ee_command_reference:
++                    self._delta_ee_left_command_pose = (
++                        now_left_action.copy()
++                    )
++                    self._delta_ee_right_command_pose = (
++                        now_right_action.copy()
++                    )
++
+                 left_arm_actions = np.array([now_left_action])
+                 right_arm_actions = np.array([now_right_action])
+             # ====================== end of delta_ee control ===============
+ 
+-            left_result = self.robot.left_plan_path(left_arm_actions[0])
+-            right_result = self.robot.right_plan_path(right_arm_actions[0])
++            def hold_result(arm_tag):
++                if arm_tag == "left":
++                    qpos = self.robot.get_left_arm_real_jointState()[:-1]
++                else:
++                    qpos = self.robot.get_right_arm_real_jointState()[:-1]
++                qpos = np.asarray(qpos, dtype=np.float64)
++                return {
++                    "status": "Success",
++                    "position": np.repeat(qpos[None, :], 50, axis=0),
++                    "velocity": np.zeros((50, qpos.shape[0])),
++                }
++
++            if action_type == "delta_ee" and left_delta_hold:
++                left_result = hold_result("left")
++                print(
++                    "\n[delta-ee-hold] "
++                    f"step={self.take_action_cnt} arm=left",
++                    flush=True,
++                )
++            else:
++                left_result = self.robot.left_plan_path(
++                    left_arm_actions[0]
++                )
++
++            if action_type == "delta_ee" and right_delta_hold:
++                right_result = hold_result("right")
++                print(
++                    "\n[delta-ee-hold] "
++                    f"step={self.take_action_cnt} arm=right",
++                    flush=True,
++                )
++            else:
++                right_result = self.robot.right_plan_path(
++                    right_arm_actions[0]
++                )
+             if left_result["status"] != "Success":
+                 left_n_step = 50
+                 topp_left_flag = False
++                if (
++                    action_type == "delta_ee"
++                    and self.delta_ee_command_reference
++                ):
++                    self._delta_ee_left_command_pose = (
++                        actual_left_action.copy()
++                    )
+                 # print("left fail")
+             else: 
+                 left_n_step = left_result["position"].shape[0]
+                 topp_left_flag = True
++            if left_n_step == 0:
++                left_n_step = 50
++                topp_left_flag = False
++                if (
++                    action_type == "delta_ee"
++                    and self.delta_ee_command_reference
++                ):
++                    self._delta_ee_left_command_pose = (
++                        actual_left_action.copy()
++                    )
+             
+             if right_result["status"] != "Success":
+                 right_n_step = 50
+                 topp_right_flag = False
++                if (
++                    action_type == "delta_ee"
++                    and self.delta_ee_command_reference
++                ):
++                    self._delta_ee_right_command_pose = (
++                        actual_right_action.copy()
++                    )
+                 # print("right fail")
+             else:
+                 right_n_step = right_result["position"].shape[0]
+                 topp_right_flag = True
++            if right_n_step == 0:
++                right_n_step = 50
++                topp_right_flag = False
++                if (
++                    action_type == "delta_ee"
++                    and self.delta_ee_command_reference
++                ):
++                    self._delta_ee_right_command_pose = (
++                        actual_right_action.copy()
++                    )
+ 
+         # ========== Gripper ==========
+ 
+@@ -1740,6 +1942,84 @@ class Base_Task(gym.Env):
+                     self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+                 return
+ 
++        if action_type == "delta_ee":
++            left_terminal_qpos = (
++                np.asarray(left_result["position"][-1], dtype=np.float64)
++                if topp_left_flag else None
++            )
++            right_terminal_qpos = (
++                np.asarray(right_result["position"][-1], dtype=np.float64)
++                if topp_right_flag else None
++            )
++
++            def wrapped_joint_error(actual, target):
++                difference = (
++                    np.asarray(actual, dtype=np.float64)
++                    - np.asarray(target, dtype=np.float64)
++                )
++                difference = (
++                    difference + np.pi
++                ) % (2.0 * np.pi) - np.pi
++                return float(np.max(np.abs(difference)))
++
++            settle_ticks = 0
++
++            for _ in range(self.delta_ee_terminal_settle_max_ticks):
++                left_error = (
++                    wrapped_joint_error(
++                        self.robot.get_left_arm_real_jointState()[:-1],
++                        left_terminal_qpos,
++                    )
++                    if topp_left_flag else 0.0
++                )
++                right_error = (
++                    wrapped_joint_error(
++                        self.robot.get_right_arm_real_jointState()[:-1],
++                        right_terminal_qpos,
++                    )
++                    if topp_right_flag else 0.0
++                )
++
++                if (
++                    left_error <= self.delta_ee_terminal_settle_tolerance
++                    and right_error
++                    <= self.delta_ee_terminal_settle_tolerance
++                ):
++                    break
++
++                if topp_left_flag:
++                    self.robot.set_arm_joints(
++                        left_terminal_qpos,
++                        np.zeros_like(left_terminal_qpos),
++                        "left",
++                    )
++                if topp_right_flag:
++                    self.robot.set_arm_joints(
++                        right_terminal_qpos,
++                        np.zeros_like(right_terminal_qpos),
++                        "right",
++                    )
++
++                self.scene.step()
++                self._update_render()
++                settle_ticks += 1
++
++                if self.check_success():
++                    self.eval_success = True
++                    self.get_obs()
++                    if self.eval_video_path is not None:
++                        self.eval_video_ffmpeg.stdin.write(
++                            self.now_obs["observation"]
++                            ["head_camera"]["rgb"].tobytes()
++                        )
++                    return
++
++            print(
++                "\n[delta-ee-terminal-settle] "
++                f"step={self.take_action_cnt} ticks={settle_ticks}",
++                flush=True,
++            )
++
+         self._update_render()
+         if self.render_freq:  # UI
+             self.viewer.render()
+diff --git a/envs/robot/planner.py b/envs/robot/planner.py
+index f086bf7213473e90f25a732da79f80f333ba6a20..6a44615301c6b608ca49ba07924d4e89183c6c14 100644
+--- a/envs/robot/planner.py
++++ b/envs/robot/planner.py
+@@ -3,6 +3,7 @@ import mplib
+ import numpy as np
+ import pdb
+ import traceback
++import xml.etree.ElementTree as ET
+ import numpy as np
+ import toppra as ta
+ from mplib.sapien_utils import SapienPlanner, SapienPlanningWorld
+@@ -41,6 +42,22 @@ class MplibPlanner:
+             self.planner.set_base_pose(robot_origion_pose)
+         else:
+             planning_world = SapienPlanningWorld(scene, [robot_entity])
++            allowed_collision_matrix = (
++                planning_world.get_allowed_collision_matrix()
++            )
++            srdf_root = ET.parse(srdf_path).getroot()
++
++            for element in srdf_root.findall(".//disable_collisions"):
++                link1 = element.get("link1")
++                link2 = element.get("link2")
++
++                if link1 and link2:
++                    allowed_collision_matrix.set_entry(
++                        link1,
++                        link2,
++                        True,
++                    )
++
+             self.planner = SapienPlanner(planning_world, move_group)
+ 
+         self.planner_type = planner_type
+@@ -105,14 +122,127 @@ class MplibPlanner:
+         Interpolative planning with screw motion.
+         Will not avoid collision and will fail if the path contains collision.
+         """
+-        result = self.planner.plan_screw(
+-            goal_pose=target_pose,
+-            current_qpos=now_qpos,
+-            time_step=1 / 250,
+-            # =================== mplib 0.1.1 ===================
+-            # use_point_cloud=use_point_cloud,
+-            # use_attach=use_attach,
+-        )
++        result = {"status": "Fail"}
++        best_result = None
++        best_score = np.inf
++        best_position_error = np.inf
++        best_rotation_error = np.inf
++
++        # MPlib recommends screw motion for simple Cartesian moves and a
++        # sampling-based fallback when the straight path is unavailable.
++        for qpos_step in (0.1, 0.05, 0.02, 0.005, 0.0025):
++            try:
++                candidate = self.planner.plan_screw(
++                    goal_pose=target_pose,
++                    current_qpos=now_qpos,
++                    qpos_step=qpos_step,
++                    time_step=1 / 250,
++                )
++            except RuntimeError:
++                continue
++
++            positions = np.asarray(
++                candidate.get("position", []),
++                dtype=np.float64,
++            )
++
++            if (
++                candidate.get("status") != "Success"
++                or positions.ndim != 2
++                or positions.shape[0] == 0
++            ):
++                result = candidate
++                continue
++
++            current_qpos = np.asarray(now_qpos, dtype=np.float64)
++            terminal_move_qpos = positions[-1]
++            if terminal_move_qpos.shape != current_qpos.shape:
++                current_qpos = current_qpos[
++                    np.asarray(
++                        self.planner.move_group_joint_indices,
++                        dtype=np.intp,
++                    )
++                ]
++            terminal_motion = (
++                terminal_move_qpos - current_qpos + np.pi
++            ) % (2.0 * np.pi) - np.pi
++            if np.max(np.abs(terminal_motion)) <= 1e-6:
++                continue
++
++            terminal_qpos = np.asarray(
++                self.planner.pad_move_group_qpos(positions[-1]),
++                dtype=np.float64,
++            )
++            pinocchio = self.planner.pinocchio_model
++            pinocchio.compute_forward_kinematics(terminal_qpos)
++            terminal_pose = (
++                self.planner.robot.get_base_pose()
++                * pinocchio.get_link_pose(
++                    self.planner.move_group_link_id
++                )
++            )
++            position_error = np.linalg.norm(
++                np.asarray(terminal_pose.p, dtype=np.float64)
++                - np.asarray(target_pose.p, dtype=np.float64)
++            )
++            terminal_quaternion = np.asarray(
++                terminal_pose.q,
++                dtype=np.float64,
++            )
++            target_quaternion = np.asarray(
++                target_pose.q,
++                dtype=np.float64,
++            )
++            terminal_quaternion /= np.linalg.norm(terminal_quaternion)
++            target_quaternion /= np.linalg.norm(target_quaternion)
++            rotation_error = 2.0 * np.arccos(
++                np.clip(
++                    abs(
++                        np.dot(
++                            terminal_quaternion,
++                            target_quaternion,
++                        )
++                    ),
++                    0.0,
++                    1.0,
++                )
++            )
++
++            score = position_error + 0.01 * rotation_error
++            if score < best_score:
++                best_result = candidate
++                best_score = score
++                best_position_error = position_error
++                best_rotation_error = rotation_error
++
++            if (
++                position_error <= 5e-3
++                and rotation_error <= np.deg2rad(2.0)
++            ):
++                result = candidate
++                break
++
++            result = {
++                "status": "Fail",
++                "error": "screw terminal pose misses target",
++            }
++
++        # A bounded near-target screw result is safer for contact-rich
++        # manipulation than an RRT detour through a different IK branch.
++        if (
++            result.get("status") != "Success"
++            and best_result is not None
++            and best_position_error <= 6e-3
++            and best_rotation_error <= np.deg2rad(1.0)
++        ):
++            result = best_result
++            print(
++                "\n[mplib-screw-bounded] "
++                f"arm={arms_tag} "
++                f"position_mm={best_position_error * 1000.0:.4f} "
++                f"rotation_deg={np.degrees(best_rotation_error):.4f}",
++                flush=True,
++            )
+ 
+         # plan fail
+         if result["status"] != "Success":
+@@ -207,12 +337,20 @@ class MplibWrapperPlanner(MplibPlanner):
+         pose_list = list(target_gripper_pose.p) + list(target_gripper_pose.q)
+         pose_obj = mplib.pymp.Pose(pose_list[:3], pose_list[3:])
+ 
+-        # Get joint positions for active joints only
+-        joint_indices = [self.all_joints.index(name) for name in self.active_joints_name 
+-                        if name in self.all_joints]
+-        joint_angles = [curr_joint_pos[index] for index in joint_indices]
+-        joint_angles = [round(angle, 5) for angle in joint_angles]  # avoid precision problems
+-        joint_angles_array = np.array(joint_angles)
++        # Keep the complete articulation qpos and its original joint order.
++        # The SAPIEN planning world contains all active joints, while the
++        # move-group joints are sparse indices inside that full vector.
++        joint_angles_array = np.asarray(
++            curr_joint_pos,
++            dtype=np.float64,
++        ).copy()
++        if (
++            joint_angles_array.ndim != 1
++            or joint_angles_array.shape[0] != len(self.all_joints)
++        ):
++            raise ValueError(
++                "full articulation qpos required by MPlib wrapper"
++            )
+ 
+         # Call mplib planner with world coordinate pose
+         result = super().plan_path(
+@@ -532,4 +670,4 @@ except Exception as e:
+     print('Exception traceback:')
+     traceback.print_exc()
+     # If Curobo is not available, set CuroboPlanner to None
+-    CuroboPlanner = None
+\ No newline at end of file
++    CuroboPlanner = None

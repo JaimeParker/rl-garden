@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import importlib
 import logging
 import os
@@ -21,6 +22,12 @@ from rl_garden.envs.robotwin.rewards import build_task_reward
 
 LOGGER = logging.getLogger(__name__)
 UNSTABLE_RETRY_WARNING_INTERVAL = 20
+
+
+def _clear_sapien_cache_after_task_release() -> None:
+    """Clear renderer caches only after all adapter task references are gone."""
+    from sapien.render import clear_cache
+    clear_cache()
 
 
 @dataclass
@@ -89,17 +96,29 @@ class RoboTwinTaskAdapter:
         self.task = None
         self.elapsed_steps = 0
         self.last_dense_reward = 0.0
+        self.last_reward_components = self._empty_reward_components()
         self._eval_video_index = 0
+        # Match RoboTwin's VectorEnv lifecycle: cache cleanup frequency is
+        # counted in resets, not in control steps from the previous episode.
+        self.reset_count = 0
+        self.clear_cache_freq = max(1, int(self.cfg.clear_cache_freq))
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
             self.env_seed = int(env_seed)
-        self.close(
-            clear_cache=(
-                self.elapsed_steps > 0
-                and self.elapsed_steps % self.cfg.clear_cache_freq == 0
+        if self.task is not None:
+            self.reset_count += 1
+            should_clear_cache = (
+                self.reset_count % self.clear_cache_freq == 0
             )
-        )
+            self.close(clear_cache=should_clear_cache)
+            LOGGER.debug(
+                "RoboTwin reset cleanup env_id=%s reset_count=%s "
+                "clear_cache=%s",
+                self.env_id,
+                self.reset_count,
+                should_clear_cache,
+            )
         self.task = make_task(self.task_name, self.cfg.robotwin_root)
         args = dict(self.task_args)
         args.setdefault(
@@ -207,7 +226,13 @@ class RoboTwinTaskAdapter:
         if self.cfg.reward_mode == "dense":
             build_task_reward(self.task_name, self.task)
         self.elapsed_steps = 0
-        self.last_dense_reward = 0.0
+        self.last_dense_reward = (
+            self._dense_potential()
+            if self.cfg.reward_mode == "dense"
+            and self.cfg.reward_shaping_mode in {"relative", "potential", "hybrid"}
+            else 0.0
+        )
+        self.last_reward_components = self._empty_reward_components()
         obs = self.get_obs()
         obs["_env_seed"] = self.env_seed
         self._start_eval_video_if_needed(obs.get("rgb"))
@@ -233,6 +258,13 @@ class RoboTwinTaskAdapter:
             "instruction": self._instruction(),
             "env_seed": self.env_seed,
         }
+        if self.cfg.use_relative_reward or self.cfg.reward_shaping_mode != "absolute":
+            info.update(
+                {
+                    f"reward_component/{key}": value
+                    for key, value in self.last_reward_components.items()
+                }
+            )
         if success or bool(truncated):
             self._stop_eval_video_if_needed()
 
@@ -251,9 +283,22 @@ class RoboTwinTaskAdapter:
 
     def close(self, clear_cache: bool = True) -> None:
         if self.task is not None:
+            task = self.task
             self._stop_eval_video_if_needed()
-            self.task.close_env(clear_cache=clear_cache)
+            # Base_Task.close_env clears renderer globals before the adapter
+            # releases its task.  Task-specific actor attributes can therefore
+            # still retain SAPIEN objects during that early clear.  Drop the
+            # adapter reference first, let Python release those objects, and
+            # only then clear the global SAPIEN render cache.
             self.task = None
+            try:
+                task.close_env(clear_cache=False)
+            finally:
+                del task
+                gc.collect()
+                if clear_cache:
+                    _clear_sapien_cache_after_task_release()
+                    gc.collect()
 
     def _to_robotwin_action(self, action: np.ndarray) -> np.ndarray:
         action = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -330,25 +375,96 @@ class RoboTwinTaskAdapter:
             return "delta_ee"
         return "qpos"
 
+    @staticmethod
+    def _empty_reward_components() -> dict[str, float]:
+        return {
+            "dense": 0.0,
+            "relative": 0.0,
+            "potential": 0.0,
+            "success": 0.0,
+            "step": 0.0,
+            "stall": 0.0,
+            "backtrack": 0.0,
+            "total": 0.0,
+        }
+
     def _compute_reward(self, success: bool) -> float:
+        components = self._empty_reward_components()
         if self.cfg.reward_mode == "sparse":
             reward = 1.0 if success else 0.0
-        elif success:
-            reward = 1.0
-        else:
-            reward_obj = getattr(self.task, "reward", None)
-            reward_obj.update()
-            if reward_obj.is_fail():
-                reward = 0.0
-            else:
-                reward = float(reward_obj.compute_reward())
-        reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
-        if self.cfg.use_relative_reward:
-            diff = reward - self.last_dense_reward
+            components["success"] = reward
+        elif self.cfg.use_relative_reward:
+            reward = self._legacy_absolute_dense_reward(success)
+            reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
+            components["relative"] = reward - self.last_dense_reward
+            components["total"] = components["relative"]
             self.last_dense_reward = reward
-            return float(diff)
-        self.last_dense_reward = reward
+            self.last_reward_components = components
+            return float(components["total"])
+        else:
+            mode = self.cfg.reward_shaping_mode
+            if mode == "absolute":
+                reward = self._legacy_absolute_dense_reward(success)
+                if success:
+                    components["success"] = reward
+                else:
+                    components["dense"] = reward
+            else:
+                potential = self._dense_potential()
+                if mode == "relative":
+                    components["relative"] = potential - self.last_dense_reward
+                    if success:
+                        components["success"] = self.cfg.dense_success_reward
+                elif mode == "potential":
+                    components["potential"] = self.cfg.potential_weight * (
+                        self.cfg.potential_discount * potential
+                        - self.last_dense_reward
+                    )
+                    if success:
+                        components["success"] = self.cfg.dense_success_reward
+                elif mode == "hybrid":
+                    delta_potential = potential - self.last_dense_reward
+                    components["dense"] = self.cfg.dense_weight * potential
+                    components["relative"] = (
+                        self.cfg.relative_weight * delta_potential
+                    )
+                    if success:
+                        components["success"] = self.cfg.dense_success_reward
+                    else:
+                        components["step"] = -self.cfg.step_penalty
+                        if abs(delta_potential) < self.cfg.stall_threshold:
+                            components["stall"] = -self.cfg.stall_penalty
+                        elif delta_potential < -self.cfg.stall_threshold:
+                            components["backtrack"] = -self.cfg.backtrack_penalty
+                else:
+                    raise RuntimeError(f"Unsupported reward shaping mode {mode!r}.")
+                self.last_dense_reward = potential
+                reward = sum(components.values())
+        reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
+        if (
+            self.cfg.reward_mode == "sparse"
+            or self.cfg.reward_shaping_mode == "absolute"
+        ):
+            self.last_dense_reward = reward
+        components["total"] = float(reward)
+        self.last_reward_components = components
         return float(reward)
+
+    def _legacy_absolute_dense_reward(self, success: bool) -> float:
+        if success:
+            return float(self.cfg.dense_success_reward)
+        return self._dense_potential()
+
+    def _dense_potential(self) -> float:
+        reward_obj = getattr(self.task, "reward", None)
+        if reward_obj is None:
+            raise RuntimeError(
+                "Dense RoboTwin reward requested before task reward initialization."
+            )
+        reward_obj.update()
+        if reward_obj.is_fail():
+            return 0.0
+        return float(reward_obj.compute_reward())
 
     def _begin_reward_trace(self) -> None:
         assert self.task is not None
@@ -452,6 +568,35 @@ class RoboTwinTaskAdapter:
         return getattr(self.task, "instruction", None)
 
 
+def _canonicalize_robotwin_joint_state(
+    state: Any,
+) -> np.ndarray:
+    """Match online angular state to the RoboTwin demonstration convention."""
+    canonical = np.asarray(
+        state,
+        dtype=np.float32,
+    ).copy()
+
+    if canonical.ndim == 0 or canonical.shape[-1] != 14:
+        return canonical
+
+    # State layout:
+    # left arm joints [0:6], left gripper [6],
+    # right arm joints [7:13], right gripper [13].
+    # SAPIEN may report an equivalent continuous-joint angle
+    # as q +/- 2*pi, while the demonstrations use principal angles.
+    arm_joint_indices = np.asarray(
+        (0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12),
+        dtype=np.intp,
+    )
+    arm_state = canonical[..., arm_joint_indices]
+    canonical[..., arm_joint_indices] = (
+        arm_state + np.pi
+    ) % (2.0 * np.pi) - np.pi
+
+    return canonical
+
+
 def _extract_robotwin_obs(
     raw_obs: dict[str, Any], instruction: Optional[str]
 ) -> dict[str, Any]:
@@ -471,7 +616,7 @@ def _extract_robotwin_obs(
         "rgb": head.get("rgb"),
         "rgb_left_wrist": left.get("rgb"),
         "rgb_right_wrist": right.get("rgb"),
-        "state": np.asarray(state, dtype=np.float32),
+        "state": _canonicalize_robotwin_joint_state(state),
         "instruction": instruction,
     }
 
