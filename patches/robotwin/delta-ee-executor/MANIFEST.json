@@ -1,0 +1,33 @@
+{
+  "name": "robotwin-delta-ee-executor-runtime-patch",
+  "description": "External RoboTwin runtime patch required by the current open_laptop ACT + Residual SAC delta-EE executor configuration.",
+  "base_commit": "0008ae6800df9f75fc8de7098bacb01735fd8fd2",
+  "target_commit": "964a4e4b1c434d62a5d106a8fbc543210641a8d9",
+  "patch_file": {
+    "path": "robotwin-delta-ee-executor.patch",
+    "sha256": "5693ec7ff775f1a29901c690fa66df270ae48af95333dfb6e22d1d756277fa51",
+    "git_blob": "147f05db2625f74988a94110b7f99ee141bb6038"
+  },
+  "files": [
+    {
+      "path": "envs/_base_task.py",
+      "base_sha256": "aa9d717ad214b9d68c6eeb83ed03f2491db6addc98deaa988a48a3c074178bdd",
+      "base_git_blob": "79fc88534c7465073bb4308e487e8ae1b8ce918f",
+      "target_sha256": "ce1072e90a3d9083333181bf5bd53f15d2d86c540b5720738ad151ac98fb2bbc",
+      "target_git_blob": "37b36616f6dcb46eb9f22be83bea1a25a9be85a2"
+    },
+    {
+      "path": "envs/robot/planner.py",
+      "base_sha256": "178a72a7b6ededee66e7f78ebc35e7c39c4a855a1d713b90a01a32868d49f24a",
+      "base_git_blob": "f086bf7213473e90f25a732da79f80f333ba6a20",
+      "target_sha256": "c170726233650ba3fc54feb89e3f41df40081f6b2feffdc82b4e10cb7c586c7c",
+      "target_git_blob": "6a44615301c6b608ca49ba07924d4e89183c6c14"
+    }
+  ],
+  "excluded_runtime_files": [
+    {
+      "path": "envs/robot/robot.py",
+      "reason": "Read by the runtime but not modified by the recorded target patch."
+    }
+  ]
+}

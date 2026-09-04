@@ -46,12 +46,20 @@ class RoboTwinEnv(gym.Env):
         )
         h, w = cfg.image_size
         obs_spaces: dict[str, spaces.Space] = {
-            "rgb": spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8),
             "state": spaces.Box(low=-np.inf, high=np.inf, shape=(14,), dtype=np.float32),
         }
+        visual_observation_keys = ["rgb"]
         if cfg.include_wrist_cameras:
-            obs_spaces["rgb_left_wrist"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
-            obs_spaces["rgb_right_wrist"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
+            visual_observation_keys.extend(("rgb_left_wrist", "rgb_right_wrist"))
+        self._visual_observation_keys = tuple(visual_observation_keys)
+        if cfg.obs_mode != "state":
+            for key in self._visual_observation_keys:
+                obs_spaces[key] = spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(h, w, 3),
+                    dtype=np.uint8,
+                )
         self.single_observation_space = spaces.Dict(obs_spaces)
         self.observation_space = self.single_observation_space
 
@@ -74,6 +82,49 @@ class RoboTwinEnv(gym.Env):
         self.fail_once = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.returns = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.elapsed_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.reward_component_sums = {
+            name: torch.zeros(
+                self.num_envs, dtype=torch.float32, device=self.device
+            )
+            for name in (
+                "dense", "relative", "potential", "success",
+                "step", "stall", "backtrack", "total",
+            )
+        }
+        self._base_policy_observation_size: Optional[tuple[int, int]] = None
+        self._base_policy_visual_obs: Optional[dict[str, torch.Tensor]] = None
+
+    def configure_base_policy_observation(
+        self,
+        image_size: tuple[int, int],
+    ) -> None:
+        """Cache same-step visual observations at a base policy's resolution.
+
+        The regular observation returned by the environment keeps ``cfg.image_size``
+        and is therefore the only observation stored in replay.  A frozen visual
+        base policy can read this separate cache without increasing replay memory.
+        """
+
+        height, width = (int(value) for value in image_size)
+        if height <= 0 or width <= 0:
+            raise ValueError(
+                "Base-policy observation dimensions must be positive, got "
+                f"{(height, width)}."
+            )
+        if self._base_policy_observation_size == (height, width):
+            return
+        self._base_policy_observation_size = (height, width)
+        self._base_policy_visual_obs = None
+
+    def get_base_policy_observation(self) -> dict[str, torch.Tensor]:
+        """Return the latest same-step visual cache for a frozen base policy."""
+
+        if self._base_policy_visual_obs is None:
+            raise RuntimeError(
+                "Base-policy visual observation is unavailable; configure the "
+                "source resolution before resetting the environment."
+            )
+        return self._base_policy_visual_obs
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict[str, Any]] = None):
         del options
@@ -163,6 +214,26 @@ class RoboTwinEnv(gym.Env):
                     img = obs.get(key)
                     imgs.append(zero_img if img is None else _resize_image(img, self.cfg.image_size))
                 out[key] = torch.as_tensor(np.stack(imgs), dtype=torch.uint8, device=self.device)
+
+        if self._base_policy_observation_size is not None:
+            base_h, base_w = self._base_policy_observation_size
+            base_zero_img = np.zeros((base_h, base_w, 3), dtype=np.uint8)
+            base_visual_obs: dict[str, torch.Tensor] = {}
+            for key in self._visual_observation_keys:
+                imgs = []
+                for obs in raw_obs:
+                    img = obs.get(key)
+                    imgs.append(
+                        base_zero_img
+                        if img is None
+                        else _resize_image(img, self._base_policy_observation_size)
+                    )
+                base_visual_obs[key] = torch.as_tensor(
+                    np.stack(imgs),
+                    dtype=torch.uint8,
+                    device=self.device,
+                )
+            self._base_policy_visual_obs = base_visual_obs
         return out
 
     def _handle_auto_reset(self, dones: torch.Tensor, obs, infos):
@@ -191,12 +262,20 @@ class RoboTwinEnv(gym.Env):
             infos["success"] = success
             self.success_once = torch.logical_or(self.success_once, success)
         episode_len = torch.clamp(self.elapsed_steps, min=1)
-        infos["episode"] = {
+        episode = {
             "return": self.returns.clone(),
             "episode_len": episode_len.clone(),
             "reward": self.returns / episode_len,
             "success_once": self.success_once.clone(),
         }
+        for name, component_sum in self.reward_component_sums.items():
+            key = f"reward_component/{name}"
+            if key in infos:
+                component_sum += _to_tensor(
+                    infos[key], dtype=torch.float32, device=self.device
+                )
+            episode[key] = component_sum / episode_len
+        infos["episode"] = episode
         return infos
 
     def _reset_metrics(self, env_idx: Optional[list[int]] = None) -> None:
@@ -210,6 +289,8 @@ class RoboTwinEnv(gym.Env):
         self.fail_once[mask] = False
         self.returns[mask] = 0
         self.elapsed_steps[mask] = 0
+        for component_sum in self.reward_component_sums.values():
+            component_sum[mask] = 0
 
     def _task_args(self) -> dict[str, Any]:
         args = dict(self.cfg.task_config)

@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 
 
 ControlMode = Literal["delta_joint_pos", "joint_pos", "delta_ee"]
+ObservationMode = Literal["state", "rgb"]
 RewardMode = Literal["dense", "sparse"]
 RewardShapingMode = Literal["absolute", "relative", "potential", "hybrid"]
 
@@ -38,6 +39,7 @@ class RoboTwinEnvConfig:
     group_size: int = 1
     use_fixed_reset_state_ids: bool = False
     record_metrics: bool = True
+    executor_timeout_seconds: float = 180.0
 
     # Profiling.
     profile_timing: bool = False
@@ -56,6 +58,7 @@ class RoboTwinEnvConfig:
 
     # Observation/action behavior. RoboTwin-native end-effector delta control is
     # named "delta_ee" to match RoboTwin's take_action(action_type=...).
+    obs_mode: ObservationMode = "rgb"
     include_wrist_cameras: bool = True
     image_size: tuple[int, int] = (224, 224)
     head_camera_type: str = "D435"
@@ -66,6 +69,15 @@ class RoboTwinEnvConfig:
     ee_delta_pos_scale: float = 0.03
     ee_delta_rot_scale: float = 0.15
     gripper_delta_scale: float = 0.2
+
+    # Delta-EE executor settings forwarded to Base_Task.
+    delta_ee_command_reference: bool = False
+    delta_ee_command_reanchor: bool = False
+    delta_ee_planner_type: Optional[str] = None
+    delta_ee_command_reanchor_position_tolerance: float = 0.005
+    delta_ee_command_reanchor_rotation_tolerance: float = 0.03490658503988659
+    delta_ee_terminal_settle_tolerance: float = 0.0005
+    delta_ee_terminal_settle_max_ticks: int = 250
 
     # Reward behavior.
     reward_mode: RewardMode = "dense"
@@ -92,13 +104,20 @@ class RoboTwinEnvConfig:
     def __post_init__(self) -> None:
         if self.control_mode == "delta_ee" and self.action_dim != 14:
             raise ValueError("delta_ee control mode requires action_dim=14.")
+        if self.clear_cache_freq < 1:
+            raise ValueError("clear_cache_freq must be at least 1.")
+        if self.executor_timeout_seconds <= 0:
+            raise ValueError("executor_timeout_seconds must be positive.")
         if self.reward_mode not in {"dense", "sparse"}:
             raise ValueError(
                 f"Unsupported reward_mode={self.reward_mode!r}; "
                 "expected 'dense' or 'sparse'."
             )
         if self.reward_shaping_mode not in {
-            "absolute", "relative", "potential", "hybrid"
+            "absolute",
+            "relative",
+            "potential",
+            "hybrid",
         }:
             raise ValueError(
                 f"Unsupported reward_shaping_mode={self.reward_shaping_mode!r}."

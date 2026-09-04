@@ -5,7 +5,7 @@ residual action from features concatenated with the normalized base action.
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -32,8 +32,20 @@ class ResidualSACPolicy(SACPolicy):
         critic_impl: CriticImpl = "vmap",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
+        actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
+        log_std_mode: Literal["clamp", "tanh"] = "clamp",
+        log_std_min: float = LOG_STD_MIN,
+        log_std_max: float = LOG_STD_MAX,
+        residual_actor_zero_init: bool = True,
+        residual_log_std_init: float = -3.0,
     ) -> None:
+        if not log_std_min <= residual_log_std_init <= log_std_max:
+            raise ValueError(
+                "residual_log_std_init must be within the configured "
+                f"log-std range [{log_std_min}, {log_std_max}], got "
+                f"{residual_log_std_init}."
+            )
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
@@ -44,7 +56,11 @@ class ResidualSACPolicy(SACPolicy):
             critic_impl=critic_impl,
             actor_feature_dim=actor_feature_dim,
             critic_spatial_emb_dim=critic_spatial_emb_dim,
+            actor_use_layer_norm=actor_use_layer_norm,
             critic_use_layer_norm=critic_use_layer_norm,
+            log_std_mode=log_std_mode,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
         )
         # Rebuild actor: base_actions are appended after the adapter (if any).
         actor_arch, _ = get_actor_critic_arch(net_arch)
@@ -53,10 +69,32 @@ class ResidualSACPolicy(SACPolicy):
             self._actor_fd + action_dim,  # post-adapter dim + base_action_dim
             action_space,
             hidden_dims=actor_arch,
-            log_std_mode="tanh",
-            log_std_min=LOG_STD_MIN,
-            log_std_max=LOG_STD_MAX,
+            use_layer_norm=actor_use_layer_norm,
+            log_std_mode=log_std_mode,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
         )
+        if residual_actor_zero_init:
+            torch.nn.init.zeros_(self.actor.fc_mean.weight)
+            torch.nn.init.zeros_(self.actor.fc_mean.bias)
+
+        if self.actor.fc_logstd is not None:
+            raw_log_std_init = residual_log_std_init
+            if log_std_mode == "tanh":
+                normalized = (
+                    2.0
+                    * (residual_log_std_init - log_std_min)
+                    / (log_std_max - log_std_min)
+                    - 1.0
+                )
+                raw_log_std_init = float(
+                    np.arctanh(np.clip(normalized, -0.999999, 0.999999))
+                )
+            torch.nn.init.zeros_(self.actor.fc_logstd.weight)
+            torch.nn.init.constant_(
+                self.actor.fc_logstd.bias,
+                raw_log_std_init,
+            )
 
     def predict(
         self,

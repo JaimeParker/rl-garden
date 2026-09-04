@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import importlib
 import logging
 import os
@@ -21,6 +22,12 @@ from rl_garden.envs.robotwin.rewards import build_task_reward
 
 LOGGER = logging.getLogger(__name__)
 UNSTABLE_RETRY_WARNING_INTERVAL = 20
+
+
+def _clear_sapien_cache_after_task_release() -> None:
+    """Clear renderer caches only after all adapter task references are gone."""
+    from sapien.render import clear_cache
+    clear_cache()
 
 
 @dataclass
@@ -91,16 +98,27 @@ class RoboTwinTaskAdapter:
         self.last_dense_reward = 0.0
         self.last_reward_components = self._empty_reward_components()
         self._eval_video_index = 0
+        # Match RoboTwin's VectorEnv lifecycle: cache cleanup frequency is
+        # counted in resets, not in control steps from the previous episode.
+        self.reset_count = 0
+        self.clear_cache_freq = max(1, int(self.cfg.clear_cache_freq))
 
     def reset(self, env_seed: Optional[int] = None) -> dict[str, Any]:
         if env_seed is not None:
             self.env_seed = int(env_seed)
-        self.close(
-            clear_cache=(
-                self.elapsed_steps > 0
-                and self.elapsed_steps % self.cfg.clear_cache_freq == 0
+        if self.task is not None:
+            self.reset_count += 1
+            should_clear_cache = (
+                self.reset_count % self.clear_cache_freq == 0
             )
-        )
+            self.close(clear_cache=should_clear_cache)
+            LOGGER.debug(
+                "RoboTwin reset cleanup env_id=%s reset_count=%s "
+                "clear_cache=%s",
+                self.env_id,
+                self.reset_count,
+                should_clear_cache,
+            )
         self.task = make_task(self.task_name, self.cfg.robotwin_root)
         args = dict(self.task_args)
         args.setdefault(
@@ -265,9 +283,22 @@ class RoboTwinTaskAdapter:
 
     def close(self, clear_cache: bool = True) -> None:
         if self.task is not None:
+            task = self.task
             self._stop_eval_video_if_needed()
-            self.task.close_env(clear_cache=clear_cache)
+            # Base_Task.close_env clears renderer globals before the adapter
+            # releases its task.  Task-specific actor attributes can therefore
+            # still retain SAPIEN objects during that early clear.  Drop the
+            # adapter reference first, let Python release those objects, and
+            # only then clear the global SAPIEN render cache.
             self.task = None
+            try:
+                task.close_env(clear_cache=False)
+            finally:
+                del task
+                gc.collect()
+                if clear_cache:
+                    _clear_sapien_cache_after_task_release()
+                    gc.collect()
 
     def _to_robotwin_action(self, action: np.ndarray) -> np.ndarray:
         action = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -537,6 +568,35 @@ class RoboTwinTaskAdapter:
         return getattr(self.task, "instruction", None)
 
 
+def _canonicalize_robotwin_joint_state(
+    state: Any,
+) -> np.ndarray:
+    """Match online angular state to the RoboTwin demonstration convention."""
+    canonical = np.asarray(
+        state,
+        dtype=np.float32,
+    ).copy()
+
+    if canonical.ndim == 0 or canonical.shape[-1] != 14:
+        return canonical
+
+    # State layout:
+    # left arm joints [0:6], left gripper [6],
+    # right arm joints [7:13], right gripper [13].
+    # SAPIEN may report an equivalent continuous-joint angle
+    # as q +/- 2*pi, while the demonstrations use principal angles.
+    arm_joint_indices = np.asarray(
+        (0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12),
+        dtype=np.intp,
+    )
+    arm_state = canonical[..., arm_joint_indices]
+    canonical[..., arm_joint_indices] = (
+        arm_state + np.pi
+    ) % (2.0 * np.pi) - np.pi
+
+    return canonical
+
+
 def _extract_robotwin_obs(
     raw_obs: dict[str, Any], instruction: Optional[str]
 ) -> dict[str, Any]:
@@ -556,7 +616,7 @@ def _extract_robotwin_obs(
         "rgb": head.get("rgb"),
         "rgb_left_wrist": left.get("rgb"),
         "rgb_right_wrist": right.get("rgb"),
-        "state": np.asarray(state, dtype=np.float32),
+        "state": _canonicalize_robotwin_joint_state(state),
         "instruction": instruction,
     }
 

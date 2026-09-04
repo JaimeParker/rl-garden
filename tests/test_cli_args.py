@@ -85,6 +85,9 @@ def test_residual_sac_defaults_match_existing_cli() -> None:
     assert args.env_id == "PickCube-v1"
     assert args.obs_mode == "rgb"
     assert args.residual_action_scale == 0.1
+    assert args.residual_warmup_scale == 0.0
+    assert args.residual_actor_zero_init is True
+    assert args.residual_log_std_init == -3.0
     assert args.debug is False
     assert args.base_policy == "act"
     assert args.base_ckpt_path == "act-peg-only"
@@ -213,6 +216,7 @@ def _make_rt_req(
     capture_video: bool = False,
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
+    obs_mode: str = "rgb",
 ):
     from rl_garden.envs.backend_registry import EnvRequest
 
@@ -220,7 +224,7 @@ def _make_rt_req(
         env_id="place_shoe",
         num_envs=num_envs,
         num_eval_envs=num_eval_envs,
-        obs_mode="rgb",
+        obs_mode=obs_mode,
         control_mode="delta_joint_pos",
         render_mode="rgb_array",
         seed=1,
@@ -306,7 +310,6 @@ def test_robotwin_config_defaults() -> None:
     assert rt.device == "auto"
     assert rt.joint_delta_scale == 0.05
     assert rt.gripper_delta_scale == 0.2
-    assert rt.disable_topp is False
     assert rt.random_light is False
 
 
@@ -337,6 +340,7 @@ def test_robotwin_backend_make_cfg_64px() -> None:
     cfg = RoboTwinBackend._make_cfg(req, is_eval=True)
 
     assert cfg.num_envs == 3
+    assert cfg.obs_mode == "rgb"
     assert cfg.image_size == (64, 64)
     assert cfg.include_wrist_cameras is True
     assert cfg.render_every_control_step is False
@@ -372,6 +376,18 @@ def test_robotwin_backend_make_cfg_device() -> None:
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
 
 
+def test_robotwin_backend_forwards_state_observation_mode() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    rt = RoboTwinConfig()
+    req = _make_rt_req(rt, num_envs=1, obs_mode="state")
+
+    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
+
+    assert cfg.obs_mode == "state"
+
+
 def test_robotwin_backend_disable_wrist_cameras() -> None:
     from rl_garden.common.env_args import RoboTwinConfig
     from rl_garden.envs.backends.robotwin import RoboTwinBackend
@@ -394,6 +410,7 @@ def test_robotwin_backend_forwards_all_options() -> None:
         profile_interval=7,
         render_every_control_step=True,
         control_step_cap=16,
+        clear_cache_freq=1,
         random_light=True,
         crazy_random_light_rate=0.1,
         head_camera_type="Train_D435_128x96",
@@ -406,6 +423,8 @@ def test_robotwin_backend_forwards_all_options() -> None:
     assert cfg.profile_interval == 7
     assert cfg.render_every_control_step is True
     assert cfg.control_step_cap == 16
+    assert cfg.clear_cache_freq == 1
+    assert cfg.task_config["clear_cache_freq"] == 1
     assert cfg.random_light is True
     assert cfg.crazy_random_light_rate == 0.1
     assert cfg.head_camera_type == "Train_D435_128x96"
@@ -416,14 +435,11 @@ def test_robotwin_backend_forwards_all_options() -> None:
     assert cfg.reward_bias == -1.0
 
 
-def test_robotwin_backend_disable_topp() -> None:
+def test_robotwin_backend_rejects_removed_disable_topp_option() -> None:
     from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    rt = RoboTwinConfig(disable_topp=True)
-    req = _make_rt_req(rt, num_envs=2)
-
-    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
+    with pytest.raises(TypeError, match="disable_topp"):
+        RoboTwinConfig(disable_topp=True)
 
 
 def test_peg_defaults_require_no_backend_config_overrides() -> None:

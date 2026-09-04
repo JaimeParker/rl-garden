@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import sys
 import types
+import weakref
 
 import numpy as np
 import pytest
 import torch
 
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
+import rl_garden.envs.robotwin.executor as robotwin_executor
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
 from rl_garden.envs.robotwin.rewards import build_task_reward, supported_reward_tasks
@@ -206,6 +208,17 @@ class _FakeFFmpeg:
         self.stdin = object()
 
 
+def test_robotwin_executor_timeout_config_defaults_and_validates():
+    cfg = RoboTwinEnvConfig()
+    assert cfg.executor_timeout_seconds == 180.0
+
+    configured = RoboTwinEnvConfig(executor_timeout_seconds=600)
+    assert configured.executor_timeout_seconds == 600.0
+
+    with pytest.raises(ValueError, match="executor_timeout_seconds"):
+        RoboTwinEnvConfig(executor_timeout_seconds=0)
+
+
 def test_robotwin_env_reset_step_and_auto_reset_contract():
     cfg = RoboTwinEnvConfig(num_envs=2, device="cpu", image_size=(8, 8), max_episode_steps=10)
     env = RoboTwinEnv(cfg, executor=FakeExecutor(num_envs=2))
@@ -257,6 +270,114 @@ class _RetryTask:
 
     def get_instruction(self):
         return "retry task"
+
+
+class _ResetLifecycleTask:
+    close_calls = []
+
+    def setup_demo(self, **kwargs):
+        self.step_lim = kwargs["step_lim"]
+        self.take_action_cnt = 0
+        self.run_steps = 0
+        self.reward_step = 0
+        self.eval_success = False
+
+    def close_env(self, clear_cache=True):
+        self.close_calls.append(bool(clear_cache))
+
+    def get_obs(self):
+        return {
+            "observation": {
+                "head_camera": {
+                    "rgb": np.zeros((8, 8, 3), dtype=np.uint8)
+                }
+            },
+            "joint_action": {"vector": np.zeros(14, dtype=np.float32)},
+        }
+
+    def get_instruction(self):
+        return "reset lifecycle task"
+
+
+def test_robotwin_adapter_clears_cache_by_reset_count(monkeypatch):
+    _ResetLifecycleTask.close_calls = []
+    monkeypatch.setattr(
+        robotwin_adapter,
+        "make_task",
+        lambda *args, **kwargs: _ResetLifecycleTask(),
+    )
+    cache_clears = []
+    monkeypatch.setattr(
+        robotwin_adapter,
+        "_clear_sapien_cache_after_task_release",
+        lambda: cache_clears.append(True),
+    )
+
+    cfg = RoboTwinEnvConfig(
+        device="cpu",
+        reward_mode="sparse",
+        clear_cache_freq=2,
+        task_config={
+            "left_robot_file": "/tmp/left",
+            "right_robot_file": "/tmp/right",
+        },
+    )
+    adapter = RoboTwinTaskAdapter(0, cfg, cfg.task_config, env_seed=10)
+
+    for seed in range(10, 15):
+        adapter.reset(env_seed=seed)
+
+    assert adapter.reset_count == 4
+    assert _ResetLifecycleTask.close_calls == [False, False, False, False]
+    assert cache_clears == [True, True]
+
+
+def test_robotwin_adapter_releases_task_before_clearing_cache(monkeypatch):
+    events = []
+
+    class ReleaseOrderTask(_ResetLifecycleTask):
+        def close_env(self, clear_cache=True):
+            events.append(("close", bool(clear_cache)))
+
+        def __del__(self):
+            events.append(("released", None))
+
+    monkeypatch.setattr(
+        robotwin_adapter,
+        "make_task",
+        lambda *args, **kwargs: ReleaseOrderTask(),
+    )
+    monkeypatch.setattr(
+        robotwin_adapter,
+        "_clear_sapien_cache_after_task_release",
+        lambda: events.append(("clear", None)),
+    )
+
+    cfg = RoboTwinEnvConfig(
+        device="cpu",
+        reward_mode="sparse",
+        clear_cache_freq=1,
+        task_config={
+            "left_robot_file": "/tmp/left",
+            "right_robot_file": "/tmp/right",
+        },
+    )
+    adapter = RoboTwinTaskAdapter(0, cfg, cfg.task_config, env_seed=10)
+    adapter.reset(env_seed=10)
+    old_task = weakref.ref(adapter.task)
+    adapter.reset(env_seed=11)
+
+    assert old_task() is None
+    assert events[:3] == [
+        ("close", False),
+        ("released", None),
+        ("clear", None),
+    ]
+
+
+def test_robotwin_config_rejects_nonpositive_clear_cache_frequency():
+    with pytest.raises(ValueError, match="clear_cache_freq"):
+        RoboTwinEnvConfig(clear_cache_freq=0)
 
 
 def test_robotwin_adapter_retries_unstable_reset_seeds(monkeypatch):
@@ -434,6 +555,11 @@ def test_open_laptop_sparse_adapter_initializes_arm_tag(monkeypatch):
     monkeypatch.setitem(sys.modules, "envs", envs)
     monkeypatch.setitem(sys.modules, "envs.utils", utils)
     monkeypatch.setattr(robotwin_adapter, "make_task", lambda *args, **kwargs: task)
+    monkeypatch.setattr(
+        robotwin_adapter,
+        "_clear_sapien_cache_after_task_release",
+        lambda: None,
+    )
 
     cfg = RoboTwinEnvConfig(
         task_name="open_laptop",
@@ -503,6 +629,33 @@ def test_robotwin_backend_eval_env_wires_video_dir(tmp_path):
     assert "eval_video_save_dir" not in train_cfg
 
 
+def test_robotwin_base_policy_visual_cache_keeps_replay_resolution_small():
+    cfg = RoboTwinEnvConfig(
+        task_name="place_shoe",
+        num_envs=1,
+        device="cpu",
+        image_size=(4, 5),
+        include_wrist_cameras=True,
+    )
+    env = RoboTwinEnv(cfg, executor=FakeExecutor(1))
+    env.configure_base_policy_observation((12, 16))
+
+    obs, _ = env.reset(seed=7)
+    base_visual_obs = env.get_base_policy_observation()
+
+    assert obs["rgb"].shape == (1, 4, 5, 3)
+    assert obs["rgb_left_wrist"].shape == (1, 4, 5, 3)
+    assert base_visual_obs["rgb"].shape == (1, 12, 16, 3)
+    assert base_visual_obs["rgb_left_wrist"].shape == (1, 12, 16, 3)
+    assert "state" not in base_visual_obs
+    assert env.single_observation_space["rgb"].shape == (4, 5, 3)
+
+    env.configure_base_policy_observation((12, 16))
+    assert env.get_base_policy_observation() is base_visual_obs
+
+    env.close()
+
+
 def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
     task = _VideoTask()
     popen_calls = []
@@ -518,6 +671,11 @@ def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
     monkeypatch.setattr(robotwin_adapter, "make_task", fake_make_task)
     monkeypatch.setattr(robotwin_adapter, "_ffmpeg_executable", lambda: "ffmpeg")
     monkeypatch.setattr(robotwin_adapter.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        robotwin_adapter,
+        "_clear_sapien_cache_after_task_release",
+        lambda: None,
+    )
 
     cfg = RoboTwinEnvConfig(
         task_name="place_shoe",
@@ -546,3 +704,15 @@ def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
     adapter.close()
     assert task.closed_video is True
     assert task.closed_env is True
+
+
+def test_executor_timeout_hard_exits_instead_of_deadlocking_cleanup(monkeypatch, capsys):
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(robotwin_executor.os, "_exit", fake_exit)
+    with pytest.raises(SystemExit) as exc_info:
+        robotwin_executor._terminate_process_after_executor_timeout("step env 0", 600.0)
+
+    assert exc_info.value.code == 124
+    assert "step env 0 exceeded executor_timeout_seconds=600" in capsys.readouterr().err
