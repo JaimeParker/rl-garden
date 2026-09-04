@@ -14,6 +14,10 @@ from rl_garden.buffers.mc_buffer import (
     MCReplayBufferSample,
     MCTensorReplayBuffer,
 )
+from rl_garden.buffers.metaworld_dataset import (
+    infer_specs_from_metaworld,
+    load_metaworld_dataset_to_replay_buffer,
+)
 from rl_garden.buffers.h5_dataset import (
     infer_box_specs_from_h5,
     infer_specs_from_h5,
@@ -86,6 +90,7 @@ __all__ = [
     "infer_dataset_specs",
     "infer_specs_from_d4rl_legacy",
     "infer_specs_from_h5",
+    "infer_specs_from_metaworld",
     "infer_specs_from_minari",
     "infer_specs_from_ogbench",
     "infer_specs_from_rlbench",
@@ -93,6 +98,7 @@ __all__ = [
     "load_dataset",
     "load_h5_dataset_to_replay_buffer",
     "load_d4rl_legacy_dataset_to_replay_buffer",
+    "load_metaworld_dataset_to_replay_buffer",
     "load_minari_dataset_to_replay_buffer",
     "load_ogbench_dataset_to_replay_buffer",
     "load_rlbench_dataset_to_replay_buffer",

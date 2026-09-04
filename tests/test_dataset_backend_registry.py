@@ -118,5 +118,5 @@ def test_every_shipped_backend_is_registered():
     import rl_garden.buffers  # noqa: F401 -- triggers registration.
     from rl_garden.buffers import dataset_backend_registry
 
-    for name in ("h5", "minari", "d4rl_legacy", "robomimic", "ogbench", "rlbench"):
+    for name in ("h5", "minari", "d4rl_legacy", "robomimic", "ogbench", "rlbench", "metaworld"):
         assert name in dataset_backend_registry._REGISTRY

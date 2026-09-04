@@ -186,6 +186,23 @@ class RLBenchConfig:
 
 
 @dataclass
+class MetaWorldConfig:
+    """Meta-World-specific env settings. CLI prefix: ``--metaworld.<field>``"""
+
+    device: str = "cpu"
+    # "sync" (single process) or "async" (one OS process per env).
+    vectorization: str = "sync"
+    # Appends a one-hot task id to the observation. Only consulted when
+    # --env_id is "MT10"/"MT50".
+    use_one_hot: bool = True
+    # Fixed camera used when --obs_mode rgb (single-task env_id only; every
+    # Meta-World v3 task scene defines the same 6 cameras: "corner",
+    # "corner2", "corner3", "corner4", "behindGripper", "gripperPOV").
+    camera: str = "corner2"
+    image_size: tuple[int, int] = (84, 84)
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -205,6 +222,7 @@ class EnvBackendArgs:
     robomimic: RobomimicConfig = field(default_factory=RobomimicConfig)
     ogbench: OGBenchConfig = field(default_factory=OGBenchConfig)
     rlbench: RLBenchConfig = field(default_factory=RLBenchConfig)
+    metaworld: MetaWorldConfig = field(default_factory=MetaWorldConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

@@ -22,7 +22,11 @@ dependencies = [
 [project.optional-dependencies]
 maniskill = ["mani_skill"]
 robotwin = ["pillow", "pyyaml"]
-minari = ["minari", "gymnasium-robotics"]
+# [hf] is required to actually download a hosted dataset (minari.load_dataset(...,
+# download=True)) -- confirmed by reproducing the failure end to end: plain
+# `pip install minari` raises "ImportError: huggingface_hub is not installed"
+# the first time a real download is attempted.
+minari = ["minari[hf]", "gymnasium-robotics"]
 d4rl-legacy = [
     "gym==0.23.1",
     "mujoco-py==2.1.2.14",
@@ -59,6 +63,7 @@ d4rl-legacy-manip = [
     "d4rl @ git+https://github.com/nakamotoo/D4RL.git@d234792d5562b738b12b78e9074a2d6c7e23b01f",
 ]
 ogbench = ["ogbench"]
+metaworld = ["metaworld"]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
 
