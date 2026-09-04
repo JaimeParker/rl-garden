@@ -19,6 +19,7 @@ from rl_garden.algorithms.explore import ExPLORe
 from rl_garden.algorithms.hilp import HILP
 from rl_garden.algorithms.idql import IDQL
 from rl_garden.algorithms.iql import IQL
+from rl_garden.algorithms.jsrl import JSRL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
     OfflinePretrainResult,
@@ -82,6 +83,7 @@ __all__ = [
     "HILP",
     "IDQL",
     "IQL",
+    "JSRL",
     "OfflineEnvSpec",
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",

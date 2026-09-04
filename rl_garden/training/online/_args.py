@@ -57,6 +57,19 @@ class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
 
 
 @dataclass
+class JSRLTrainingArgs(SACTrainingArgs):
+    """JSRL adds a frozen guide policy on top of SAC's own args. State obs only."""
+
+    guide_checkpoint: str = ""
+    guide_algorithm: Literal["iql", "calql", "wsrl", "awac"] = "iql"
+    max_horizon: int = 0
+    n_curriculum_stages: int = 10
+    tolerance: float = 0.0
+    window_size: int = 1
+    guide_std_parameterization: Literal["exp", "uniform"] = "exp"
+
+
+@dataclass
 class RecurrentSACTrainingArgs(SACTrainingArgs):
     rnn_type: Literal["lstm", "gru"] = "lstm"
     rnn_hidden_size: int = 256
