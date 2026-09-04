@@ -1,6 +1,7 @@
 """WSRL offline-to-online training registration."""
 
 from dataclasses import dataclass
+from typing import Literal
 
 from rl_garden.common.cli_args import (
     image_encoder_factory_from_args,
@@ -19,6 +20,25 @@ from rl_garden.training.off2on._registry import registry
 class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     """WSRL args; visual defaults. For state obs pass --obs_mode state."""
 
+    # net_arch defaults to [256, 256, 256] (both actor/critic) when unset --
+    # these let a config pick an asymmetric depth (e.g. WSRL's own AntMaze
+    # recipe: 2-layer actor, 4-layer critic) without touching net_arch
+    # directly. Same pattern as CalQLOff2OnArgs.
+    hidden_dim: int = 256
+    actor_hidden_layers: int = 3
+    critic_hidden_layers: int = 3
+    # Not exposed by build_wsrl() before this field existed -- always fell
+    # back to the WSRL algorithm's own "auto" default (approx -action_dim),
+    # never the WSRL paper's own antmaze setting of 0.0.
+    target_entropy: float | str = "auto"
+    # Not exposed before this field existed -- always fell back to the WSRL
+    # algorithm's own "always" default, which bootstraps through every
+    # terminal (never stops on true done). Harmless for AntMaze/Adroit,
+    # which had no true online termination to begin with, but Kitchen's new
+    # success-termination (_KitchenTerminalWrapper) needs "truncated" so the
+    # TD target actually stops bootstrapping at a solved episode.
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+
 
 def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import WSRL
@@ -35,6 +55,11 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
             image_fusion_mode=args.image_fusion_mode,
             **vit_sac_kwargs_from_args(args, image_keys),
         )
+
+    net_arch = {
+        "pi": [args.hidden_dim] * args.actor_hidden_layers,
+        "qf": [args.hidden_dim] * args.critic_hidden_layers,
+    }
 
     agent = construct_agent(
         WSRL,
@@ -93,6 +118,9 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         std_parameterization=args.std_parameterization,
+        net_arch=net_arch,
+        target_entropy=args.target_entropy,
+        bootstrap_at_done=args.bootstrap_at_done,
         online_cql_alpha=args.online_cql_alpha,
         online_use_cql_loss=args.online_use_cql_loss,
         initial_training_phase=initial_training_phase_from_args(args),

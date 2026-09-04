@@ -71,6 +71,26 @@ class _AdroitBinaryTermination(gym.Wrapper):
         return obs, reward, terminated or goal_achieved, truncated, info
 
 
+# d4rl.kitchen.KitchenBase (TERMINATE_ON_TASK_COMPLETE=False) never reports
+# done on success -- reward is a monotonic count of solved subtasks (capped
+# at 4, per its ref_max_score=4.0 registration kwarg), so episodes only end
+# via the 1000-step TimeLimit unless we terminate here ourselves. Mirrors
+# WSRL's own KitchenTerminalWrapper (3rd_party/wsrl/wsrl/envs/wrappers/
+# kitchen.py). Must run before reward_scale/bias are applied (those are
+# applied to the vector adapter in make_d4rl_legacy_env, not per-sub-env),
+# so this always sees the raw 0-4 reward regardless of reward_bias.
+_KITCHEN_MAX_STAGES = 4.0
+
+
+class _KitchenTerminalWrapper(gym.Wrapper):
+    """Terminate a Kitchen episode once all subtasks are solved."""
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        solved = float(np.asarray(reward).reshape(-1)[0]) >= _KITCHEN_MAX_STAGES
+        return obs, reward, terminated or solved, truncated, info
+
+
 class _D4RLEpisodeMetrics(gym.Wrapper):
     """Attach task-family metrics to terminal episode statistics."""
 
@@ -137,6 +157,8 @@ def _make_env_fn(env_id: str):
         env: gym.Env = _GymV21Adapter(legacy_env)
         if "binary" in env_id.lower():
             env = _AdroitBinaryTermination(env)
+        elif "kitchen" in env_id.lower():
+            env = _KitchenTerminalWrapper(env)
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         return _D4RLEpisodeMetrics(env, env_id, legacy_env)

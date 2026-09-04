@@ -1,0 +1,110 @@
+# WSRL on Kitchen-Partial-v0 (D4RL legacy). Parameters reconciled from three
+# sources: (1) rl-garden's own proven CalQL kitchen recipe
+# (configs/off2on/calql_kitchen_partial_v0_paper.yaml), (2) WSRL's official
+# JAX repo (3rd_party/wsrl): offline pretrain =
+# experiments/scripts/kitchen/launch_calql_finetune.sh, online fine-tune =
+# launch_wsrl_finetune.sh (agent=sac, resumed from the offline checkpoint,
+# no data retention), (3) the Q-Contrast research decision record (Obsidian
+# DEC-004 / ANA-004), which ran a clean reward_bias single-variable isolation
+# on this exact task. See chat/expnote for the full reconciliation.
+#
+# Deliberate deviations from the two paper-style sources (chosen, not
+# accidental):
+# - num_offline_steps: 500,000, matching rl-garden's own Cal-QL kitchen
+#   budget (not WSRL's own shorter 250,000). Training-schedule choice, not
+#   an environment-config one -- explicit user decision.
+# - reward_bias: -4.0 (not rl-garden's existing Cal-QL kitchen value of 0.0).
+#   ANA-004's reward_bias single-variable isolation (run `sywn0f26`, same
+#   500K/1.25M budget, only `reward_bias` changed 0.0->-4.0) found this is
+#   what eliminates kitchen-partial-v0's apparent "WSRL flagship failure"
+#   pattern: 0.0 oscillates in 0-37.5 all run; -4.0 has no online-switch
+#   collapse and stabilizes at 75-100. -4.0 also matches WSRL's own launch
+#   script and is the same per-domain convention as AntMaze's -5.0 / Adroit's
+#   +5.0 (one reward contract per domain, not per task variant).
+# - Added a Kitchen success-termination wrapper (`_KitchenTerminalWrapper` in
+#   rl_garden/envs/d4rl_legacy/env.py, mirroring WSRL's own
+#   KitchenTerminalWrapper): upstream D4RL Kitchen
+#   (TERMINATE_ON_TASK_COMPLETE=False) never sets done on success, so this is
+#   a genuine behavior addition (also applies to the existing CalQL kitchen
+#   configs, not just this one). `bootstrap_at_done: truncated` below is
+#   newly required for this to matter: without it, WSRL's default
+#   ("always") bootstraps straight through a solved episode's terminal state.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: kitchen-partial-v0
+offline_dataset: kitchen-partial-v0
+obs_mode: state
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 500000
+num_online_steps: 500000
+utd: 4.0
+batch_size: 1024
+buffer_size: 1000000
+warmup_steps: 5000
+
+reward_scale: 1.0
+reward_bias: -4.0
+
+# Architecture: WSRL's own kitchen recipe (3-layer actor/critic, 512-wide,
+# exp std parameterization -- rl-garden's own default, unlike AntMaze's
+# uniform override) -- matches train_config.py:kitchen_wsrl exactly. No
+# kernel_init override either: kitchen_wsrl doesn't set kernel_scale_final,
+# unlike antmaze_wsrl.
+hidden_dim: 512
+actor_hidden_layers: 3
+critic_hidden_layers: 3
+
+# REDQ ensemble + LayerNorm: already WSRLOff2OnArgs's own defaults
+# (n_critics=10, critic_subsample_size=2, actor/critic_use_layer_norm=true),
+# matching kitchen_wsrl's use_layer_norm=true. Listed explicitly since
+# they're structurally load-bearing for this algorithm.
+n_critics: 10
+critic_subsample_size: 2
+actor_use_layer_norm: true
+critic_use_layer_norm: true
+backup_entropy: false
+target_entropy: 0.0
+bootstrap_at_done: truncated
+
+# Offline CQL pretraining, reconciled with calql_kitchen_partial_v0_paper.yaml
+# (cql_importance_sample/clip_diff) -- unlike AntMaze, kitchen_cql does NOT
+# override cql_autotune_alpha/cql_target_action_gap, so those stay at
+# WSRLOff2OnArgs's own defaults (false/1.0).
+use_cql_loss: true
+cql_alpha: 5.0
+cql_importance_sample: false
+cql_clip_diff_min: -200.0
+cql_clip_diff_max: 200.0
+
+# Online phase: WSRL's defining behavior -- no data retention, no CQL
+# penalty online (already WSRLOff2OnArgs's own defaults: online_replay_mode
+# empty, offline_data_ratio 0.0, online_use_cql_loss false). Listed
+# explicitly for documentation.
+online_replay_mode: empty
+offline_data_ratio: 0.0
+online_cql_alpha: 0.0
+online_use_cql_loss: false
+
+policy_lr: 0.0001
+q_lr: 0.0003
+alpha_lr: 0.0001
+cql_alpha_lr: 0.0003
+policy_frequency: 1
+target_network_frequency: 1
+
+# WSRLOff2OnArgs has no num_eval_episodes/eval_episode_horizon derivation
+# (that's CalQL-only) -- set the step budget directly, same as the antmaze
+# wsrl configs: 20 episodes x 1000-step horizon. Note: now that Kitchen
+# terminates on success (see header), a policy that solves reliably will
+# finish well over 20 episodes inside this budget -- that's expected, not
+# a bug.
+num_eval_steps: 20000
+eval_freq: 0
+offline_eval_freq: 50000
+online_eval_freq: 2000
+
+capture_video: false
+log_type: wandb
+seed: 0

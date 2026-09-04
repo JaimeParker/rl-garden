@@ -1,0 +1,69 @@
+# WSRL on Kitchen-Complete-v0 (D4RL legacy). Same reconciliation and
+# deviations as configs/off2on/wsrl_kitchen_partial_v0_paper.yaml -- see that
+# file's header for the full source list and rationale. Summary of open
+# evidence specific to this task:
+#
+# - No reward_bias=-4.0 data exists for this task at all (the Q-Contrast
+#   isolation only ran on kitchen-partial-v0). Its only known-stable recipe
+#   is reward_bias=0.0 + CalQL-paper budget (`etp2agv0`: 500K/1.25M, reaches
+#   92.5-95). reward_bias=-4.0 is used here purely for domain-level
+#   consistency with kitchen-partial-v0/kitchen-mixed-v0 (one reward
+#   contract per domain), carried over from a single-task isolation, not
+#   task-specific evidence. This is the least-validated of the three Kitchen
+#   configs -- watch it first.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: kitchen-complete-v0
+offline_dataset: kitchen-complete-v0
+obs_mode: state
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 500000
+num_online_steps: 500000
+utd: 4.0
+batch_size: 1024
+buffer_size: 1000000
+warmup_steps: 5000
+
+reward_scale: 1.0
+reward_bias: -4.0
+
+hidden_dim: 512
+actor_hidden_layers: 3
+critic_hidden_layers: 3
+
+n_critics: 10
+critic_subsample_size: 2
+actor_use_layer_norm: true
+critic_use_layer_norm: true
+backup_entropy: false
+target_entropy: 0.0
+bootstrap_at_done: truncated
+
+use_cql_loss: true
+cql_alpha: 5.0
+cql_importance_sample: false
+cql_clip_diff_min: -200.0
+cql_clip_diff_max: 200.0
+
+online_replay_mode: empty
+offline_data_ratio: 0.0
+online_cql_alpha: 0.0
+online_use_cql_loss: false
+
+policy_lr: 0.0001
+q_lr: 0.0003
+alpha_lr: 0.0001
+cql_alpha_lr: 0.0003
+policy_frequency: 1
+target_network_frequency: 1
+
+num_eval_steps: 20000
+eval_freq: 0
+offline_eval_freq: 50000
+online_eval_freq: 2000
+
+capture_video: false
+log_type: wandb
+seed: 0

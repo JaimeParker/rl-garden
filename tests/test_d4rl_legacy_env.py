@@ -213,6 +213,71 @@ def test_kitchen_reports_completed_stages(monkeypatch):
     env.close()
 
 
+class _FakeKitchenEnv(_FakeLegacyEnv):
+    """Mimics d4rl.kitchen.KitchenBase: reward is a monotonic solved-stage
+    count capped at 4, and `done` is never set on success
+    (TERMINATE_ON_TASK_COMPLETE=False upstream)."""
+
+    def __init__(self):
+        super().__init__()
+        self.spec = SimpleNamespace(max_episode_steps=10)
+
+    def step(self, action):
+        self.steps += 1
+        reward = float(min(self.steps, 4))
+        return np.full(3, self.steps, dtype=np.float64), reward, False, {}
+
+
+def test_kitchen_terminates_once_all_stages_solved(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeKitchenEnv(),
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(env_id="kitchen-partial-v0", num_envs=1, device="cpu")
+    )
+
+    env.reset()
+    for _ in range(3):
+        _, _, terminated, truncated, _ = env.step(torch.zeros((1, 1)))
+        assert terminated.tolist() == [False]
+        assert truncated.tolist() == [False]
+    _, reward, terminated, truncated, _ = env.step(torch.zeros((1, 1)))
+
+    assert reward.tolist() == [4.0]
+    assert terminated.tolist() == [True]
+    assert truncated.tolist() == [False]
+    env.close()
+
+
+def test_kitchen_termination_uses_raw_reward_under_reward_bias(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.envs.d4rl_legacy.env._make_legacy_env",
+        lambda env_id: _FakeKitchenEnv(),
+    )
+    env = make_d4rl_legacy_env(
+        D4RLLegacyEnvConfig(
+            env_id="kitchen-partial-v0",
+            num_envs=1,
+            device="cpu",
+            reward_scale=1.0,
+            reward_bias=-4.0,
+        )
+    )
+
+    env.reset()
+    for _ in range(3):
+        env.step(torch.zeros((1, 1)))
+    _, reward, terminated, _, _ = env.step(torch.zeros((1, 1)))
+
+    # reward_bias is applied downstream of termination (to the vector
+    # adapter, not the per-env wrapper) -- biased reward is 0.0 here, but
+    # termination must still fire off the raw (unbiased) reward of 4.0.
+    assert reward.tolist() == [0.0]
+    assert terminated.tolist() == [True]
+    env.close()
+
+
 class _FakeStandardAdroitEnv(_FakeLegacyEnv):
     def get_normalized_score(self, value):
         return value / 10.0

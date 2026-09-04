@@ -1,0 +1,74 @@
+# WSRL on Kitchen-Mixed-v0 (D4RL legacy). Same reconciliation and deviations
+# as configs/off2on/wsrl_kitchen_partial_v0_paper.yaml -- see that file's
+# header for the full source list and rationale. Summary of open evidence
+# specific to this task:
+#
+# - Unlike kitchen-partial-v0, this task has no clean reward_bias=0.0 vs
+#   -4.0 single-variable isolation. The only -4.0 data point (`uobsvgxy`)
+#   used WSRL's short budget (250K/400K) at the same time, confounding
+#   budget length with reward_bias -- it matched WSRL's paper endpoint
+#   (~70) but was much noisier (two collapse/recovery cycles) than the
+#   reward_bias=0.0 + CalQL-paper-budget recipe (`guz2a6yh`, stable, reaches
+#   98.75). reward_bias=-4.0 is still used here for consistency with the
+#   rest of the Kitchen domain (one reward contract per domain, matching
+#   AntMaze/Adroit's own convention, and the only clean isolation we do have
+#   is kitchen-partial-v0's, which supports -4.0) -- not because this task's
+#   own evidence independently confirms it. Flag if kitchen-mixed-v0 WSRL
+#   runs look unstable; reward_bias=0.0 is the fallback with real (CalQL)
+#   precedent for this specific task.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: kitchen-mixed-v0
+offline_dataset: kitchen-mixed-v0
+obs_mode: state
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 500000
+num_online_steps: 500000
+utd: 4.0
+batch_size: 1024
+buffer_size: 1000000
+warmup_steps: 5000
+
+reward_scale: 1.0
+reward_bias: -4.0
+
+hidden_dim: 512
+actor_hidden_layers: 3
+critic_hidden_layers: 3
+
+n_critics: 10
+critic_subsample_size: 2
+actor_use_layer_norm: true
+critic_use_layer_norm: true
+backup_entropy: false
+target_entropy: 0.0
+bootstrap_at_done: truncated
+
+use_cql_loss: true
+cql_alpha: 5.0
+cql_importance_sample: false
+cql_clip_diff_min: -200.0
+cql_clip_diff_max: 200.0
+
+online_replay_mode: empty
+offline_data_ratio: 0.0
+online_cql_alpha: 0.0
+online_use_cql_loss: false
+
+policy_lr: 0.0001
+q_lr: 0.0003
+alpha_lr: 0.0001
+cql_alpha_lr: 0.0003
+policy_frequency: 1
+target_network_frequency: 1
+
+num_eval_steps: 20000
+eval_freq: 0
+offline_eval_freq: 50000
+online_eval_freq: 2000
+
+capture_video: false
+log_type: wandb
+seed: 0

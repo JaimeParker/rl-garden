@@ -40,6 +40,8 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     dataset_backend: str = "h5"
     offline_dataset: Optional[str] = None
     offline_num_traj: Optional[int] = None
+    action_low: float = -1.0
+    action_high: float = 1.0
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
     offline_data_ratio: float | str = 0.0
     buffer_size: int = 1_000_000

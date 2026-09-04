@@ -1,0 +1,91 @@
+# WSRL on AntMaze-Large-Play-v2 (D4RL legacy). Parameters reconciled from
+# two sources: (1) rl-garden's own proven CalQL antmaze off2on recipe
+# (configs/off2on/calql_antmaze_large_diverse_v2_paper.yaml), (2) WSRL's
+# official JAX repo (3rd_party/wsrl): offline pretrain =
+# experiments/scripts/antmaze/launch_calql_finetune.sh --use_redq (actually
+# plain CQL, use_calql=False upstream -- kept True here, see below), online
+# fine-tune = launch_wsrl_finetune.sh (agent=sac, resumed from the offline
+# checkpoint, no data retention). See chat/expnote for the full
+# parameter-by-parameter reconciliation and open decisions.
+#
+# Deliberate deviations from the official WSRL JAX antmaze recipe (chosen,
+# not accidental):
+# - use_calql: true (official upstream uses false, i.e. plain CQL, not
+#   Cal-QL's MC-return lower bound). Kept true to match rl-garden's own
+#   proven CalQL antmaze setting; the lower bound is a low-risk safety net.
+# - num_online_steps: 500,000, matching WSRL's own default (not rl-garden's
+#   1,000,000 "noret" full-budget CalQL variant).
+# - utd/batch_size: 4.0/1024 for the *whole* run. Official WSRL uses
+#   utd=1/batch=256 offline and utd=4/batch=1024 online; rl-garden's off2on
+#   framework has one utd/batch_size for the entire run, so the online
+#   (harder-to-stabilize) values were kept throughout.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: antmaze-large-play-v2
+offline_dataset: antmaze-large-play-v2
+obs_mode: state
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 1000000
+num_online_steps: 500000
+utd: 4.0
+batch_size: 1024
+buffer_size: 1000000
+
+reward_scale: 10.0
+reward_bias: -5.0
+sparse_reward_mc: true
+sparse_negative_reward: -5.0
+
+# Architecture: WSRL's own antmaze recipe (2-layer actor, 4-layer critic,
+# 256-wide, uniform std parameterization) -- matches the official repo's
+# train_config.py:antmaze_wsrl/antmaze_cql exactly.
+hidden_dim: 256
+actor_hidden_layers: 2
+critic_hidden_layers: 4
+std_parameterization: uniform
+kernel_init: orthogonal_near_zero_output
+
+# REDQ ensemble + LayerNorm: already WSRLOff2OnArgs's own defaults
+# (n_critics=10, critic_subsample_size=2, actor/critic_use_layer_norm=true),
+# matching WSRL's --use_redq offline pretrain and online recipe. Listed
+# explicitly since they're structurally load-bearing for this algorithm.
+n_critics: 10
+critic_subsample_size: 2
+actor_use_layer_norm: true
+critic_use_layer_norm: true
+backup_entropy: false
+target_entropy: 0.0
+
+# Offline CQL/Cal-QL pretraining (antmaze_cql overrides on top of cql_config.py).
+use_cql_loss: true
+cql_alpha: 5.0
+cql_autotune_alpha: true
+cql_target_action_gap: 0.8
+
+# Online phase: WSRL's defining behavior -- no data retention, no CQL
+# penalty online (already WSRLOff2OnArgs's own defaults: online_replay_mode
+# empty, offline_data_ratio 0.0, online_use_cql_loss false, warmup_steps
+# 5000). Listed explicitly for documentation.
+online_replay_mode: empty
+offline_data_ratio: 0.0
+online_cql_alpha: 0.0
+online_use_cql_loss: false
+warmup_steps: 5000
+
+policy_lr: 0.0001
+q_lr: 0.0003
+alpha_lr: 0.0001
+cql_alpha_lr: 0.0003
+policy_frequency: 1
+target_network_frequency: 1
+
+offline_eval_freq: 50000
+online_eval_freq: 2000
+eval_freq: 0
+num_eval_steps: 20000
+
+capture_video: false
+log_type: wandb
+seed: 0
