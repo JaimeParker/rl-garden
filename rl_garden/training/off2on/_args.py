@@ -207,6 +207,38 @@ class SPOTOff2OnTrainingArgs(Off2OnCommonArgs, SPOTOff2OnHyperparamArgs):
     """
 
 
+@dataclass
+class SO2Off2OnHyperparamArgs:
+    """SO2-only off2on hyperparameters (not shared with IQL/CQL/AWAC/SPOT off2on)."""
+
+    policy_lr: float = 3e-4
+    q_lr: float = 3e-4
+    alpha_lr: Optional[float] = None
+    policy_frequency: int = 10  # upstream's actor_update_freq
+    target_network_frequency: int = 1
+    target_smoothing_noise_std: float = 0.3
+    target_smoothing_noise_clip_min: float = -0.6
+    target_smoothing_noise_clip_max: float = 0.6
+
+
+@dataclass
+class SO2Off2OnTrainingArgs(Off2OnCommonArgs, SO2Off2OnHyperparamArgs):
+    """SO2 off2on args: ``Off2OnCommonArgs`` + SO2-specific hyperparameters.
+
+    SO2 is Box-observation only (no vision variant); pass ``--obs_mode state``
+    (the ``EnvRunArgs`` default is ``rgb``). Overrides two ``Off2OnCommonArgs``
+    defaults to match upstream's plain-MLP critic ensemble with a
+    full-ensemble (not REDQ-style subsampled) min target: ``critic_subsample_size``
+    (``None`` -- min over the entire ensemble) and ``actor_use_layer_norm``/
+    ``critic_use_layer_norm`` (``False`` -- upstream's ``ensemble_qac`` model
+    uses no normalization at all).
+    """
+
+    critic_subsample_size: Optional[int] = None
+    actor_use_layer_norm: bool = False
+    critic_use_layer_norm: bool = False
+
+
 def initial_training_phase_from_args(
     args: Off2OnCommonArgs,
 ) -> Optional[InitialTrainingPhase]:

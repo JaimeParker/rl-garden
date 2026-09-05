@@ -50,6 +50,8 @@ from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sac_flow import SACFlow
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
+from rl_garden.algorithms.so2 import SO2
+from rl_garden.algorithms.off2on_so2 import Off2OnSO2
 from rl_garden.algorithms.spot import SPOT
 from rl_garden.algorithms.supe import SUPE
 from rl_garden.algorithms.td3 import TD3
@@ -109,6 +111,8 @@ __all__ = [
     "SACFlow",
     "SequencePPO",
     "SequenceSAC",
+    "SO2",
+    "Off2OnSO2",
     "SPOT",
     "SUPE",
     "TD3",

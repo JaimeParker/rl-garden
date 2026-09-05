@@ -130,7 +130,7 @@ def test_phase_registries_discover_expected_algorithms():
         "bcq",
         "plas",
     }
-    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot"}
+    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot", "so2"}
 
 
 def test_logging_environment_variables_are_not_configuration(monkeypatch):
