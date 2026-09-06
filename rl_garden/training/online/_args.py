@@ -236,6 +236,27 @@ class VisionPPOTrainingArgs(PPOTrainingArgs, VisionArgs):
 
 
 @dataclass
+class GAILTrainingArgs(PPOTrainingArgs):
+    """GAIL adds an adversarial discriminator + expert demonstrations on top
+    of PPOTrainingArgs's own fields.
+
+    ``critic_backbone_type`` is normally a ``VisionArgs`` field, but
+    ``_ppo_common_kwargs`` (reused from ``training/online/ppo.py``) reads it
+    unconditionally -- GAIL is state-only (no ``VisionArgs``), so it is
+    declared directly here instead of pulling in the rest of VisionArgs.
+    """
+
+    critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
+    demo_env_id: str = ""
+    demo_dataset_backend: str = "d4rl_legacy"
+    demo_buffer_size: int = 1_000_000
+    demo_batch_size: int = 1024
+    n_disc_updates_per_round: int = 4
+    disc_net_arch: tuple[int, ...] = (32, 32)
+    disc_lr: float = 3e-4
+
+
+@dataclass
 class RecurrentPPOTrainingArgs(PPOTrainingArgs):
     rnn_type: Literal["lstm", "gru"] = "lstm"
     rnn_hidden_size: int = 256

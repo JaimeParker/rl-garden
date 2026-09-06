@@ -104,6 +104,7 @@ def test_phase_registries_discover_expected_algorithms():
         "tdmpc2",
         "dagger",
         "policy_distillation",
+        "gail",
     }
     assert set(offline.entries()) == {
         "a2a_bc",

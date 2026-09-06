@@ -16,6 +16,7 @@ from rl_garden.algorithms.diffusion_bc import DiffusionBC
 from rl_garden.algorithms.dppo import DPPO
 from rl_garden.algorithms.edac import EDAC
 from rl_garden.algorithms.explore import ExPLORe
+from rl_garden.algorithms.gail import GAIL
 from rl_garden.algorithms.hilp import HILP
 from rl_garden.algorithms.idql import IDQL
 from rl_garden.algorithms.iql import IQL
@@ -82,6 +83,7 @@ __all__ = [
     "DPPO",
     "EDAC",
     "ExPLORe",
+    "GAIL",
     "HILP",
     "IDQL",
     "IQL",
