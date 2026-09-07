@@ -65,6 +65,7 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
         batch_size=args.batch_size,
         gamma=args.gamma,
         tau=args.tau,
+        bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
         policy_lr=args.policy_lr,

@@ -41,7 +41,7 @@ class SO2Off2OnArgs(SO2Off2OnTrainingArgs, EnvBackendArgs):
     online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
     # 1 - concat_online_ratio (upstream's default concat_online_ratio=0.1).
     offline_data_ratio: float | str = 0.9
-    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     num_eval_episodes: int | None = None
 
 

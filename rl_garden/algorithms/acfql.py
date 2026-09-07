@@ -302,7 +302,7 @@ class _ACFQLRolloutTrainingShell(Off2OnReplayMixin, ACFQLCore, OffPolicyAlgorith
         gamma: float = 0.99,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         online_episodes_per_iteration: Optional[int] = None,
         stats_window_size: Optional[int] = None,
         tau: float = 0.005,

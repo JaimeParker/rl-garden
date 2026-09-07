@@ -351,7 +351,7 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
         gamma: float = 0.99,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         tau: float = 5e-3,
         actor_lr: float = 3e-4,

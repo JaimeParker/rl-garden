@@ -38,7 +38,7 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
         tau: float = 0.005,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         actor_lr: float = 3e-4,
         critic_value_lr: float = 3e-4,

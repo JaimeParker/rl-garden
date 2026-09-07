@@ -54,6 +54,7 @@ def _sac_common_kwargs(
         gamma=args.gamma,
         nstep=args.nstep,
         tau=args.tau,
+        bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
         policy_lr=args.policy_lr,

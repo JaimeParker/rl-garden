@@ -65,6 +65,7 @@ def build_td3(args, env, eval_env, logger, checkpoint_dir):
         batch_size=args.batch_size,
         gamma=args.gamma,
         tau=args.tau,
+        bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
         policy_lr=args.policy_lr,
@@ -161,6 +162,7 @@ class TD3Args(EnvRunArgs, CheckpointArgs, EnvBackendArgs):
     # --- DDPG ---
     gamma: float = 0.99
     tau: float = 0.01
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     training_freq: int = 32
     utd: float = 0.5
     policy_lr: float = 1e-4

@@ -852,7 +852,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         tau: float = 0.005,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         online_episodes_per_iteration: Optional[int] = None,
         stats_window_size: Optional[int] = None,
         # Optimizers

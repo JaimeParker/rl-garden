@@ -37,7 +37,7 @@ class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     # which had no true online termination to begin with, but Kitchen's new
     # success-termination (_KitchenTerminalWrapper) needs "truncated" so the
     # TD target actually stops bootstrapping at a solved episode.
-    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
 
 
 def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):

@@ -42,7 +42,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         tau: float = 0.01,
         training_freq: int = 64,
         utd: float = 0.5,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,

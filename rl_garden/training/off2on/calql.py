@@ -45,7 +45,7 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     critic_hidden_layers: int = 2
     policy_log_std_multiplier: float | None = None
     policy_log_std_offset: float | None = None
-    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     online_episodes_per_iteration: int | None = None
     stats_window_size: int | None = None
     num_eval_episodes: int | None = None

@@ -39,7 +39,7 @@ class Off2OnSPOT(_SPOTRolloutTrainingShell):
         gamma: float = 0.99,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
         tau: float = 0.005,
         actor_lr: float = 1e-4,

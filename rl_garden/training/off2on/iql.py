@@ -33,7 +33,7 @@ class IQLOff2OnArgs(VisionIQLOff2OnTrainingArgs, EnvBackendArgs):
     warmup_steps: int = 0
     online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
     offline_data_ratio: float | str = "auto"
-    bootstrap_at_done: Literal["always", "never", "truncated"] = "always"
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     num_eval_episodes: int | None = None
 
 
