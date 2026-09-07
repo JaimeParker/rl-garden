@@ -125,6 +125,13 @@ class CQLOff2OnArgs:
     sparse_reward_mc: bool = False
     sparse_negative_reward: float = 0.0
     success_threshold: float = 0.5
+    # SARSA/FQE reference-value network (Cal-QL's fix for continuing tasks,
+    # e.g. D4RL locomotion, where MC return-to-go is truncation-biased).
+    # Opt-in only -- default reproduces today's MC-return-based behavior
+    # exactly. See rl_garden/algorithms/calql.py:CalQLCore.
+    use_sarsa_reference: bool = False
+    sarsa_hidden_dims: tuple[int, ...] = (256, 256)
+    sarsa_lr: float = 3e-4
 
 
 @dataclass

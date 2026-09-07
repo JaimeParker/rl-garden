@@ -6,10 +6,13 @@ the replay sample. The rest of the SAC/REDQ/CQL update path is inherited from
 """
 from __future__ import annotations
 
+import copy
+import dataclasses
 import warnings
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from gymnasium import spaces
 
@@ -17,6 +20,26 @@ from rl_garden.algorithms.cql import CQL, _CQLRolloutTrainingShell
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
+from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
+from rl_garden.common.optim import make_optimizer
+from rl_garden.networks.mlp import create_mlp
+
+
+class _SarsaReferenceQ(nn.Module):
+    """Standalone ``Q(s, a) -> scalar`` network for Cal-QL's SARSA/FQE
+    reference value on continuing tasks (see module docstring and
+    ``CalQLCore._cql_regularizer``). Not part of ``SACPolicy``/
+    ``EnsembleQCritic`` -- those are built for the main critic ensemble
+    (vmap, subsampling, RGBD encoders) and are unneeded overhead for a
+    single reference network. Flat (non-Dict) observations only.
+    """
+
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: Sequence[int]) -> None:
+        super().__init__()
+        self.net = create_mlp(obs_dim + action_dim, 1, list(hidden_dims))
+
+    def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        return self.net(torch.cat([obs, action], dim=-1))
 
 
 class CalQLCore:
@@ -30,12 +53,18 @@ class CalQLCore:
         sparse_reward_mc: bool = False,
         sparse_negative_reward: float = 0.0,
         success_threshold: float = 0.5,
+        use_sarsa_reference: bool = False,
+        sarsa_hidden_dims: Sequence[int] = (256, 256),
+        sarsa_lr: float = 3e-4,
     ) -> None:
         self.use_calql = use_calql
         self.calql_bound_random_actions = calql_bound_random_actions
         self.sparse_reward_mc = sparse_reward_mc
         self.sparse_negative_reward = sparse_negative_reward
         self.success_threshold = success_threshold
+        self.use_sarsa_reference = use_sarsa_reference
+        self.sarsa_hidden_dims = tuple(sarsa_hidden_dims)
+        self.sarsa_lr = sarsa_lr
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
@@ -45,7 +74,40 @@ class CalQLCore:
             "sparse_reward_mc": self.sparse_reward_mc,
             "sparse_negative_reward": self.sparse_negative_reward,
             "success_threshold": self.success_threshold,
+            "use_sarsa_reference": self.use_sarsa_reference,
+            "sarsa_hidden_dims": self.sarsa_hidden_dims,
+            "sarsa_lr": self.sarsa_lr,
         }
+
+    def _setup_model(self) -> None:
+        if self.use_sarsa_reference and isinstance(
+            self.env.single_observation_space, spaces.Dict
+        ):
+            raise ValueError(
+                "use_sarsa_reference=True does not support Dict observation "
+                "spaces -- it is scoped to flat-Box locomotion tasks. Use "
+                "the default MC-return reference value for image/dict-obs "
+                "environments."
+            )
+        super()._setup_model()
+        if not self.use_sarsa_reference:
+            self.sarsa_q_net = None
+            self.sarsa_q_target = None
+            self.sarsa_q_optimizer = None
+            return
+        obs_space = self.env.single_observation_space
+        obs_dim = obs_space.shape[0]
+        action_dim = self.env.single_action_space.shape[0]
+        self.sarsa_q_net = _SarsaReferenceQ(
+            obs_dim, action_dim, self.sarsa_hidden_dims
+        ).to(self.device)
+        self.sarsa_q_target = copy.deepcopy(self.sarsa_q_net).to(self.device)
+        for param in self.sarsa_q_target.parameters():
+            param.requires_grad_(False)
+        self.sarsa_q_optimizer = make_optimizer(
+            list(self.sarsa_q_net.parameters()), lr=self.sarsa_lr
+        )
+        self._extra_batch_slice_keys = ("next_actions", "next_action_valid")
 
     def _build_replay_buffer(self):
         obs_space = self.env.single_observation_space
@@ -61,6 +123,8 @@ class CalQLCore:
             "sparse_negative_reward": self.sparse_negative_reward,
             "success_threshold": self.success_threshold,
         }
+        if self.use_sarsa_reference:
+            return SarsaMCTensorReplayBuffer(**kwargs)
         if isinstance(obs_space, spaces.Dict):
             return MCDictReplayBuffer(**kwargs)
         return MCTensorReplayBuffer(**kwargs)
@@ -105,6 +169,56 @@ class CalQLCore:
         bound_rate = (q_ood < mc_lower_bound).float().mean().detach()
         return torch.maximum(q_ood, mc_lower_bound), bound_rate
 
+    def _optimizer_names(self) -> tuple[str, ...]:
+        return (*super()._optimizer_names(), "sarsa_q_optimizer")
+
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        state = super()._extra_checkpoint_state()
+        if self.use_sarsa_reference:
+            state["sarsa_q_net"] = self.sarsa_q_net.state_dict()
+            state["sarsa_q_target"] = self.sarsa_q_target.state_dict()
+        return state
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        if self.use_sarsa_reference and "sarsa_q_net" in state:
+            self.sarsa_q_net.load_state_dict(state["sarsa_q_net"])
+            self.sarsa_q_target.load_state_dict(state["sarsa_q_target"])
+
+    def _cql_regularizer(
+        self, data, q_pred: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if self.use_sarsa_reference:
+            with torch.no_grad():
+                reference = self.sarsa_q_net(data.obs, data.actions).squeeze(-1)
+            data = dataclasses.replace(data, mc_returns=reference)
+        return super()._cql_regularizer(data, q_pred)
+
+    def _post_critic_update(
+        self, data, critic_info: dict[str, torch.Tensor]
+    ) -> None:
+        super()._post_critic_update(data, critic_info)
+        if not self.use_sarsa_reference:
+            return
+        valid = data.next_action_valid
+        if valid.sum() == 0:
+            return
+        with torch.no_grad():
+            target_q = self.sarsa_q_target(data.next_obs, data.next_actions)
+            y = data.rewards.reshape(-1, 1) + self.gamma * target_q
+        q_pred = self.sarsa_q_net(data.obs, data.actions)
+        sarsa_loss = F.mse_loss(q_pred[valid], y[valid])
+        self.sarsa_q_optimizer.zero_grad()
+        sarsa_loss.backward()
+        self.sarsa_q_optimizer.step()
+        critic_info["sarsa_loss"] = sarsa_loss.detach()
+        if self._global_update % self.target_network_frequency == 0:
+            with torch.no_grad():
+                for param, target_param in zip(
+                    self.sarsa_q_net.parameters(), self.sarsa_q_target.parameters()
+                ):
+                    target_param.data.lerp_(param.data, self.tau)
+
 
 class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTrainingShell):
     """Internal rollout/eval shell that wires ``CalQLCore`` into ``OffPolicyAlgorithm``.
@@ -133,6 +247,9 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         sparse_reward_mc: bool = False,
         sparse_negative_reward: float = 0.0,
         success_threshold: float = 0.5,
+        use_sarsa_reference: bool = False,
+        sarsa_hidden_dims: Sequence[int] = (256, 256),
+        sarsa_lr: float = 3e-4,
         online_cql_alpha: float = 0.0,
         online_use_cql_loss: bool = False,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
@@ -145,6 +262,9 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
             sparse_reward_mc=sparse_reward_mc,
             sparse_negative_reward=sparse_negative_reward,
             success_threshold=success_threshold,
+            use_sarsa_reference=use_sarsa_reference,
+            sarsa_hidden_dims=sarsa_hidden_dims,
+            sarsa_lr=sarsa_lr,
         )
         super().__init__(*args, **kwargs)
         self.use_calql = use_calql
@@ -178,7 +298,10 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         )
         if already_online or online_replay_mode != "empty" or self.use_cql_loss:
             return
-        if isinstance(self.replay_buffer, (MCDictReplayBuffer, MCTensorReplayBuffer)):
+        if isinstance(
+            self.replay_buffer,
+            (MCDictReplayBuffer, MCTensorReplayBuffer, SarsaMCTensorReplayBuffer),
+        ):
             self.replay_buffer = self._build_plain_replay_buffer()
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
@@ -194,7 +317,8 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         truncations: torch.Tensor,
     ) -> dict[str, Any]:
         if not isinstance(
-            self.replay_buffer, (MCDictReplayBuffer, MCTensorReplayBuffer)
+            self.replay_buffer,
+            (MCDictReplayBuffer, MCTensorReplayBuffer, SarsaMCTensorReplayBuffer),
         ):
             return super()._replay_buffer_step_kwargs(terminations, truncations)
         # The MC buffer needs the true episode boundary (termination |
@@ -262,6 +386,9 @@ class CalQL(CalQLCore, CQL):
         sparse_reward_mc: bool = False,
         sparse_negative_reward: float = 0.0,
         success_threshold: float = 0.5,
+        use_sarsa_reference: bool = False,
+        sarsa_hidden_dims: Sequence[int] = (256, 256),
+        sarsa_lr: float = 3e-4,
         **kwargs: Any,
     ) -> None:
         self._init_calql_params(
@@ -270,6 +397,9 @@ class CalQL(CalQLCore, CQL):
             sparse_reward_mc=sparse_reward_mc,
             sparse_negative_reward=sparse_negative_reward,
             success_threshold=success_threshold,
+            use_sarsa_reference=use_sarsa_reference,
+            sarsa_hidden_dims=sarsa_hidden_dims,
+            sarsa_lr=sarsa_lr,
         )
         super().__init__(*args, **kwargs)
         self.use_calql = use_calql

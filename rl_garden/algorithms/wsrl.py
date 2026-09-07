@@ -117,6 +117,11 @@ class WSRL(_CalQLRolloutTrainingShell):
         sparse_reward_mc: bool = False,
         sparse_negative_reward: float = 0.0,
         success_threshold: float = 0.5,
+        # SARSA/FQE reference-value network (fixes MC-return's truncation
+        # bias on continuing tasks, e.g. D4RL locomotion). Opt-in only.
+        use_sarsa_reference: bool = False,
+        sarsa_hidden_dims: Sequence[int] = (256, 256),
+        sarsa_lr: float = 3e-4,
         # General
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
@@ -213,6 +218,9 @@ class WSRL(_CalQLRolloutTrainingShell):
             sparse_reward_mc=sparse_reward_mc,
             sparse_negative_reward=sparse_negative_reward,
             success_threshold=success_threshold,
+            use_sarsa_reference=use_sarsa_reference,
+            sarsa_hidden_dims=sarsa_hidden_dims,
+            sarsa_lr=sarsa_lr,
             use_td_loss=use_td_loss,
             online_cql_alpha=online_cql_alpha,
             online_use_cql_loss=online_use_cql_loss,

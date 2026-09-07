@@ -89,6 +89,72 @@ class TestOff2OnCalQLDefaults:
         )
 
 
+def _sarsa_agent(simple_env, **overrides):
+    kwargs = dict(
+        env=simple_env,
+        buffer_size=100,
+        buffer_device="cpu",
+        learning_starts=10,
+        batch_size=8,
+        gamma=0.99,
+        tau=0.005,
+        training_freq=4,
+        utd=1.0,
+        net_arch={"pi": [32, 32], "qf": [32, 32]},
+        n_critics=4,
+        critic_subsample_size=2,
+        use_cql_loss=True,
+        cql_n_actions=4,
+        cql_alpha=1.0,
+        cql_autotune_alpha=False,
+        use_calql=True,
+        calql_bound_random_actions=False,
+        sarsa_hidden_dims=(16,),
+        device="cpu",
+        seed=42,
+    )
+    kwargs.update(overrides)
+    return Off2OnCalQL(**kwargs)
+
+
+class TestOff2OnCalQLSarsaReferenceCheckpoint:
+    def test_sarsa_reference_checkpoint_roundtrips(self, simple_env):
+        source = _sarsa_agent(simple_env, use_sarsa_reference=True)
+        _fill_buffer(source.replay_buffer, num_steps=8)
+        source.train(1)
+
+        sd = source.state_dict()
+        assert "sarsa_q_net" in sd["extra"]
+
+        target = _sarsa_agent(simple_env, use_sarsa_reference=True)
+        target.load_state_dict(sd)
+
+        for src_p, tgt_p in zip(
+            source.sarsa_q_net.parameters(), target.sarsa_q_net.parameters()
+        ):
+            assert torch.equal(src_p, tgt_p)
+
+    def test_old_checkpoint_without_sarsa_loads_into_sarsa_enabled_agent(self, simple_env):
+        """Backward compatibility: a checkpoint saved before this feature
+        existed (use_sarsa_reference=False, no sarsa_q_net keys) must load
+        cleanly into a use_sarsa_reference=True agent, leaving the freshly
+        initialized SARSA net untouched rather than raising."""
+        old = _sarsa_agent(simple_env, use_sarsa_reference=False)
+        _fill_buffer(old.replay_buffer, num_steps=8)
+        old.train(1)
+        sd = old.state_dict()
+        assert "sarsa_q_net" not in sd["extra"]
+        assert "sarsa_q_optimizer" not in sd["optimizers"]
+
+        target = _sarsa_agent(simple_env, use_sarsa_reference=True)
+        before = [p.clone() for p in target.sarsa_q_net.parameters()]
+        target.load_state_dict(sd)
+        after = list(target.sarsa_q_net.parameters())
+
+        for b, a in zip(before, after):
+            assert torch.equal(b, a)
+
+
 class TestOff2OnCalQLMixedBatchSampling:
     """Mixed-batch online sampling, including the adaptive ("auto") ratio."""
 

@@ -22,6 +22,9 @@ def build_calql(args, env_spec, logger, eval_env=None):
         sparse_reward_mc=args.sparse_reward_mc,
         sparse_negative_reward=args.sparse_negative_reward,
         success_threshold=args.success_threshold,
+        use_sarsa_reference=args.use_sarsa_reference,
+        sarsa_hidden_dims=args.sarsa_hidden_dims,
+        sarsa_lr=args.sarsa_lr,
     )
 
 

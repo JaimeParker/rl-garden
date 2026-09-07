@@ -50,6 +50,26 @@ class MCReplayBufferSample(ReplayBufferSample):
 
 
 @dataclass
+class SarsaMCReplayBufferSample(MCReplayBufferSample):
+    """``MCReplayBufferSample`` plus the dataset's next-step action, for
+    fitting a SARSA/FQE reference-value network (Cal-QL's fix for continuing
+    tasks like D4RL locomotion, where MC return-to-go is truncation-biased).
+
+    ``next_actions[i]`` is the action actually taken at ``next_obs[i]``,
+    read via the same index-shift as ``ReBRACReplayBufferSample`` -- but
+    unlike that class, ``next_action_valid[i]`` is also provided and is
+    ``False`` wherever the shift would spill into the following episode
+    (i.e. wherever this row is an ``episode_end``). Locomotion's ``dones``
+    (TD mask) is terminations-only and almost always 0, so ReBRAC's
+    downstream ``(1-dones)`` masking would not catch this spillover here;
+    callers must mask by ``next_action_valid`` instead.
+    """
+
+    next_actions: Optional[torch.Tensor] = None
+    next_action_valid: Optional[torch.Tensor] = None
+
+
+@dataclass
 class ReBRACReplayBufferSample(ReplayBufferSample):
     """Replay buffer sample with the dataset's next-step action, for
     ReBRAC's critic-side BC penalty (``rebrac.py:498``, ``next_actions``).

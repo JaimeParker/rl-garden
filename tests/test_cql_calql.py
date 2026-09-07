@@ -389,6 +389,88 @@ def test_calql_train_step_logs_bound_rate():
     assert "calql_bound_rate" in info
 
 
+def test_calql_default_does_not_build_sarsa_reference_network():
+    agent = CalQL(env=_offline_env(), **_offline_kwargs())
+
+    assert agent.use_sarsa_reference is False
+    assert agent.sarsa_q_net is None
+    assert agent.sarsa_q_target is None
+    assert agent.sarsa_q_optimizer is None
+    assert agent._extra_batch_slice_keys == ()
+    assert isinstance(agent.replay_buffer, MCTensorReplayBuffer)
+
+
+def test_calql_sarsa_reference_builds_network_and_uses_sarsa_buffer():
+    from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
+
+    agent = CalQL(
+        env=_offline_env(),
+        use_sarsa_reference=True,
+        sarsa_hidden_dims=(16,),
+        **_offline_kwargs(),
+    )
+
+    assert agent.sarsa_q_net is not None
+    assert agent.sarsa_q_target is not None
+    assert agent.sarsa_q_optimizer is not None
+    assert agent._extra_batch_slice_keys == ("next_actions", "next_action_valid")
+    assert isinstance(agent.replay_buffer, SarsaMCTensorReplayBuffer)
+
+
+def test_calql_sarsa_reference_dict_obs_raises():
+    with pytest.raises(ValueError, match="Dict observation"):
+        CalQL(
+            env=_dict_offline_env(),
+            image_keys=("rgb",),
+            use_sarsa_reference=True,
+            **_offline_kwargs(),
+        )
+
+
+def test_calql_sarsa_reference_train_step_updates_sarsa_net_and_logs_loss():
+    agent = CalQL(
+        env=_offline_env(),
+        use_sarsa_reference=True,
+        sarsa_hidden_dims=(16,),
+        **_offline_kwargs(),
+    )
+    _fill(agent)
+    before = [p.clone() for p in agent.sarsa_q_net.parameters()]
+
+    info = agent.train(1, compute_info=True)
+
+    after = list(agent.sarsa_q_net.parameters())
+    assert any(not torch.equal(b, a) for b, a in zip(before, after))
+    assert "sarsa_loss" in info
+    assert torch.isfinite(torch.tensor(info["sarsa_loss"]))
+    assert "calql_bound_rate" in info
+
+
+def test_calql_sarsa_reference_regularizer_uses_sarsa_net_not_mc_returns():
+    agent = CalQL(
+        env=_offline_env(),
+        use_sarsa_reference=True,
+        sarsa_hidden_dims=(16,),
+        **_offline_kwargs(),
+    )
+    _fill(agent)
+    data = agent.replay_buffer.sample(agent.batch_size)
+    q_pred = agent._critic_forward(data.obs, data.actions, target=False)
+
+    # Corrupt mc_returns; the SARSA path must ignore it entirely.
+    import dataclasses
+
+    corrupted = dataclasses.replace(
+        data, mc_returns=torch.full_like(data.mc_returns, 1e6)
+    )
+    torch.manual_seed(0)
+    loss_normal, _ = agent._cql_regularizer(data, q_pred)
+    torch.manual_seed(0)
+    loss_corrupted, _ = agent._cql_regularizer(corrupted, q_pred)
+
+    assert torch.allclose(loss_normal, loss_corrupted)
+
+
 def test_cql_dict_obs_train_step_and_checkpoint(tmp_path):
     agent = CQL(
         env=_dict_offline_env(),

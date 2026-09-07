@@ -61,6 +61,7 @@ from rl_garden.buffers.robomimic_dataset import (
     infer_specs_from_robomimic,
     load_robomimic_dataset_to_replay_buffer,
 )
+from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
 from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 
 __all__ = [
@@ -83,6 +84,7 @@ __all__ = [
     "RecurrentRolloutBufferSample",
     "RolloutBuffer",
     "RolloutBufferSample",
+    "SarsaMCTensorReplayBuffer",
     "TensorReplayBuffer",
     "TransformerReplayBuffer",
     "TransformerReplayBufferSample",
