@@ -26,9 +26,32 @@ import os
 from typing import Any
 
 import gymnasium as gym
+import numpy as np
 
 from rl_garden.envs.ogbench.config import OGBenchEnvConfig
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+
+
+class _OGBenchEpisodeMetrics(gym.Wrapper):
+    """Attach ``success_at_end`` to terminal episode statistics.
+
+    Every OGBench task family sets a scalar ``info["success"]`` on every step
+    (verified directly in ``ogbench``'s ``locomaze``/``manipspace`` env
+    source), but ``gymnasium.wrappers.RecordEpisodeStatistics`` only tracks
+    return/length, so it never reaches ``run_exact_episode_eval``'s
+    ``episode`` dict without this -- mirrors
+    ``rl_garden.envs.d4rl_legacy.env._D4RLEpisodeMetrics`` /
+    ``rl_garden.envs.robomimic.env._RobomimicEpisodeMetrics``.
+    """
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        if (terminated or truncated) and "episode" in info:
+            info = dict(info)
+            episode = dict(info["episode"])
+            episode["success_at_end"] = np.float32(info["success"])
+            info["episode"] = episode
+        return obs, reward, terminated, truncated, info
 
 
 class _SeededOGBenchVecEnv(TorchVectorEnvAdapter):
@@ -60,7 +83,8 @@ def _make_env_fn(env_id: str, env_kwargs: dict[str, Any]):
 
         from gymnasium.wrappers import RecordEpisodeStatistics
 
-        return RecordEpisodeStatistics(gym.make(env_id, **env_kwargs))
+        env = RecordEpisodeStatistics(gym.make(env_id, **env_kwargs))
+        return _OGBenchEpisodeMetrics(env)
 
     return _env_fn
 

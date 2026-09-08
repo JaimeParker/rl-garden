@@ -46,6 +46,11 @@ one encoder trained by critic loss, actor path detached. ``"separate"``
 matches FQL's own JAX reference exactly (three independent encoder
 instances). See ``FQLPolicy``'s docstring for the full gradient-isolation
 argument per mode.
+
+``_critic_loss`` averages (not sums) the per-critic MSE across the ensemble,
+matching the reference's ``mean((q - target_q)**2)`` over the full
+``(n_critics, batch)`` array -- summing would scale the critic gradient by
+``n_critics`` relative to the reference.
 """
 from __future__ import annotations
 
@@ -315,11 +320,13 @@ class FQLCore:
 
     @staticmethod
     def _critic_loss(q_all: torch.Tensor, target_q: torch.Tensor) -> torch.Tensor:
+        # Mean over the critic ensemble, matching the reference's single
+        # `mean((q - target_q)**2)` over the full (n_critics, batch) array --
+        # summing here instead would scale the critic gradient by n_critics.
         expanded_target = target_q.unsqueeze(0).expand_as(q_all)
-        return sum(
-            F.mse_loss(q_pred, q_target)
-            for q_pred, q_target in zip(q_all, expanded_target)
-        )
+        return torch.stack(
+            [F.mse_loss(q_pred, q_target) for q_pred, q_target in zip(q_all, expanded_target)]
+        ).mean()
 
     def _aggregate_target_q(self, q_all: torch.Tensor) -> torch.Tensor:
         if self.q_agg == "min":
