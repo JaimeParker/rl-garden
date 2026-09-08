@@ -130,6 +130,8 @@ def test_phase_registries_discover_expected_algorithms():
         "spot",
         "bcq",
         "plas",
+        "bppo",
+        "unio4",
     }
     assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot", "so2"}
 

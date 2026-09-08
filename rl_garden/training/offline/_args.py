@@ -782,3 +782,64 @@ class OfflineSPOTArgs(OfflineDeterministicActorCriticArgs):
     iwae: bool = False
     lambd_cool: bool = False
     lambd_end: float = 0.2
+
+
+@dataclass
+class OfflineBPPOArgs:
+    """BPPO hyperparameters. Defaults match ``3rd_party/BPPO/main.py``.
+
+    ``critic_warmup_steps`` (Phase A, V/Q via MC-return/SARSA) and the actor
+    phase (Phase B, PPO-clip) share one ``--num_offline_steps`` budget --
+    ``run_bppo`` asserts ``num_offline_steps > critic_warmup_steps`` so the
+    actor phase is never silently skipped. ``bc_checkpoint`` (optional) warm-
+    starts the actor from a ``BC`` pretrained checkpoint via
+    ``BPPO.load_actor_from`` -- not the generic ``--load_checkpoint`` path,
+    which would pollute BPPO's own step counters with BC's unrelated
+    training length.
+    """
+
+    bc_checkpoint: Optional[str] = None
+    critic_warmup_steps: int = 2_000_000
+    value_lr: float = 1e-4
+    q_lr: float = 1e-4
+    target_update_freq: int = 2
+    value_hidden_dims: tuple[int, ...] = (512, 512, 512)
+    q_hidden_dims: tuple[int, ...] = (1024, 1024)
+    actor_lr: float = 1e-4
+    actor_hidden_dims: tuple[int, ...] = (1024, 1024)
+    clip_ratio: float = 0.25
+    clip_decay: float = 0.96
+    clip_decay_steps: int = 200
+    entropy_weight: float = 0.0
+    omega: float = 0.9
+
+
+@dataclass
+class OfflineUniO4Args:
+    """Uni-O4 hyperparameters. Defaults match ``3rd_party/Uni-O4/main.py``
+    (a separate default config from BPPO's own script -- note
+    ``actor_hidden_dims``/``omega`` differ from ``OfflineBPPOArgs``'s
+    defaults on purpose).
+
+    Shares one critic across the ensemble (see ``rl_garden/algorithms
+    /unio4.py``'s module docstring), so there is no per-member value/Q
+    config here -- ``critic_warmup_steps``/``value_lr``/etc. below configure
+    that one shared critic, identical in shape to ``OfflineBPPOArgs``'s.
+    """
+
+    critic_warmup_steps: int = 2_000_000
+    value_lr: float = 1e-4
+    q_lr: float = 1e-4
+    target_update_freq: int = 2
+    value_hidden_dims: tuple[int, ...] = (512, 512, 512)
+    q_hidden_dims: tuple[int, ...] = (1024, 1024)
+    num_policies: int = 4
+    bc_ensemble_steps: int = 400_000
+    alpha_bc: float = 0.1
+    actor_lr: float = 1e-4
+    actor_hidden_dims: tuple[int, ...] = (256, 256, 256)
+    clip_ratio: float = 0.25
+    clip_decay: float = 0.96
+    clip_decay_steps: int = 200
+    entropy_weight: float = 0.0
+    omega: float = 0.7
