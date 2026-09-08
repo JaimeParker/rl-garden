@@ -344,6 +344,56 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
+class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
+    """FlowPPO: online PPO fine-tuning for flow-matching policies. Its own
+    sibling dataclass, not a ``DPPOTrainingArgs``/``PPOTrainingArgs``
+    subclass -- FlowPPO's hyperparameters (SDE schedule, flow-step count,
+    a single scalar ``clip_coef``, no denoising-chain schedule) are a
+    different set from both. State-only (Box observations); no
+    ``VisionArgs``. Trains ``actor``/``critic`` from scratch, no BC
+    checkpoint warm-start (see ``rl_garden/algorithms/flow_ppo.py``'s module
+    docstring)."""
+
+    total_timesteps: int = 3_000_000
+    num_steps: int = 50
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    horizon_length: int = 1
+    flow_steps: int = 10
+    actor_activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
+    critic_activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    sde_type: Literal["sde", "cps"] = "cps"
+    noise_level: float = 0.7
+    clip_std_min: float = 0.0067
+    sigma_safe_max: float = 0.9
+    logprob_mode: Literal["gaussian", "pseudo"] = "gaussian"
+    actor_lr: float = 3e-4
+    critic_lr: float = 1e-3
+    weight_decay: float = 0.0
+    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
+    lr_warmup_steps: int = 0
+    lr_decay_steps: int = 0
+    lr_min_ratio: float = 0.0
+    grad_clip_norm: Optional[float] = None
+    critic_warmup_updates: int = 0
+    update_epochs: int = 5
+    update_batch_size: int = 50_000
+    norm_adv: bool = True
+    clip_coef: float = 0.2
+    clip_vloss_coef: Optional[float] = None
+    clip_advantage_lower_quantile: float = 0.0
+    clip_advantage_upper_quantile: float = 1.0
+    vf_coef: float = 0.5
+    target_kl: Optional[float] = 1.0
+    finite_horizon_gae: bool = False
+    eval_freq: int = 25
+    num_eval_steps: int = 50
+
+
+@dataclass
 class DiffusionCMDistillOnlineTrainingArgs(DPPOTrainingArgs):
     """DiffusionCMDistillOnline: DPPO's online PPO fine-tuning fused with a
     per-iteration LCM one-step distillation step

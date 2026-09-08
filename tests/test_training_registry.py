@@ -89,6 +89,7 @@ def test_phase_registries_discover_expected_algorithms():
         "ppo",
         "dppo",
         "diffusion_cm_distill_online",
+        "flow_ppo",
         "recurrent_ppo",
         "recurrent_sac",
         "transformer_ppo",
@@ -133,6 +134,7 @@ def test_phase_registries_discover_expected_algorithms():
         "plas",
         "bppo",
         "unio4",
+        "unio4_ope",
     }
     assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot", "so2"}
 

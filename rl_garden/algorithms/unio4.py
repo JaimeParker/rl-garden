@@ -432,6 +432,16 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         super()._log_eval_metrics(metrics, step)
         if self._phase_step < self._improve_phase_start:
             return  # no actor improvement to gate yet
+        self._maybe_sync_old_actors_from_eval(metrics, step)
+
+    def _maybe_sync_old_actors_from_eval(
+        self, metrics: dict[str, float], step: int
+    ) -> None:
+        """Real-env-eval-gated ``old_actors`` sync. Factored out of
+        ``_log_eval_metrics`` as a pure extraction (identical behavior, same
+        call site) so ``UniO4OPE`` can override it as a no-op -- real-env
+        eval keeps running/logging via ``_log_eval_metrics``'s own
+        ``super()`` call regardless, only the sync decision changes."""
         for i in range(self.num_policies):
             score = self._first_metric(metrics, (f"return_{i}",))
             if score != score:  # NaN: eval produced no completed episodes

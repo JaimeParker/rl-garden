@@ -843,3 +843,26 @@ class OfflineUniO4Args:
     clip_decay_steps: int = 200
     entropy_weight: float = 0.0
     omega: float = 0.7
+
+
+@dataclass
+class OfflineUniO4OPEArgs(OfflineUniO4Args):
+    """UniO4OPE: Uni-O4 with dynamics-model OPE gating (Milestone A, see
+    ``rl_garden/algorithms/unio4_ope.py``). Dynamics hyperparameters default
+    to ``3rd_party/Uni-O4/transition_model/configs/gym/default.py``'s values
+    (shared across halfcheetah/hopper/walker2d -- task configs there only
+    ever override ``rollout_length``/``penalty_coef``, both dead for this
+    call path, see ``unio4_ope.py``'s module docstring)."""
+
+    dynamics_hidden_dims: tuple[int, ...] = (200, 200, 200, 200)
+    dynamics_n_ensemble: int = 7
+    dynamics_n_elites: int = 5
+    dynamics_lr: float = 1e-3
+    dynamics_weight_decay: tuple[float, ...] = (2.5e-5, 5e-5, 7.5e-5, 7.5e-5, 1e-4)
+    dynamics_max_epochs_since_update: int = 5
+    dynamics_max_epochs: Optional[int] = None
+    dynamics_batch_size: int = 256
+    dynamics_holdout_ratio: float = 0.2
+    ope_rollout_length: int = 1000
+    ope_rollout_batch_size: int = 512
+    ope_gating_freq: int = 100

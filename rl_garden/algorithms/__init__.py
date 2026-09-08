@@ -8,6 +8,7 @@ from rl_garden.algorithms.bcq import BCQ
 from rl_garden.algorithms.bppo import BPPO
 from rl_garden.algorithms.flash_sac import FlashSAC
 from rl_garden.algorithms.flow_bc import FlowBC
+from rl_garden.algorithms.flow_ppo import FlowPPO
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.cql import CQL
@@ -64,6 +65,7 @@ from rl_garden.algorithms.tdmpc2.multitask import TDMPC2Multitask
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.unio4 import UniO4
+from rl_garden.algorithms.unio4_ope import UniO4OPE
 from rl_garden.algorithms.vision_diffusion_bc import VisionDiffusionBC
 from rl_garden.algorithms.wsrl import WSRL
 
@@ -79,6 +81,7 @@ __all__ = [
     "CalQL",
     "FlashSAC",
     "FlowBC",
+    "FlowPPO",
     "FQL",
     "CQL",
     "DAgger",
@@ -129,6 +132,7 @@ __all__ = [
     "TransformerPPO",
     "TransformerSAC",
     "UniO4",
+    "UniO4OPE",
     "VisionDiffusionBC",
     "WSRL",
     "infer_box_specs_from_h5",
