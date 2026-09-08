@@ -1,0 +1,19 @@
+# Offline Cal-QL on D4RL locomotion (continuing task, no true terminal).
+# No official Cal-QL hyperparameters exist for this task family (paper Table 3
+# only covers antmaze/kitchen/adroit) -- values below are CalQLCore/CQLCore
+# defaults plus the env/eval overrides needed to point at this dataset.
+# use_sarsa_reference is intentionally left unset here (defaults to False);
+# pass --use_sarsa_reference on the CLI to enable the SARSA/FQE reference
+# network for the locomotion MC-return truncation-bias fix.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: halfcheetah-medium-v2
+offline_dataset: halfcheetah-medium-v2
+obs_mode: state
+num_offline_steps: 1000000
+eval_freq: 25000
+num_eval_episodes: 10
+eval_episode_horizon: 1000
+checkpoint_freq: 200000
+log_type: wandb
+seed: 0

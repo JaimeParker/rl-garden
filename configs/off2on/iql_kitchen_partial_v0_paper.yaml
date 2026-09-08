@@ -1,0 +1,74 @@
+# IQL on Kitchen-Partial-v0 (D4RL legacy). Architecture/expectile/temperature
+# reconciled against three sources that all agree here (unlike AntMaze, where
+# JAX/CORL and WSRL diverge): official IQL JAX repo
+# (implicit_q_learning/configs/kitchen_config.py: expectile=0.7,
+# temperature=0.5, hidden_dims=(256,256), dropout_rate=0.1 -- rl-garden's own
+# (256,256) default already matches, no override needed) and WSRL's own
+# kitchen_iql config (3rd_party/wsrl/experiments/configs/train_config.py),
+# which uses the same expectile/temperature/hidden_dims. actor_distribution
+# and std_parameterization carry over the AntMaze IQL recipe's own findings
+# (docs/design/iql-overview.md): official IQL hardcodes
+# tanh_squash_distribution=False/state_dependent_std=False globally, not per
+# domain, so this is not an AntMaze-only setting.
+#
+# reward_bias and the training budget have no official-paper precedent for
+# Kitchen (official IQL's train_offline.py only special-cases AntMaze/
+# locomotion reward; Kitchen online fine-tuning with IQL exists nowhere
+# except WSRL's own launch_iql_finetune.sh). Explicit user decisions:
+# - reward_bias: -4.0, for domain-level consistency with the existing
+#   calql_kitchen_*/wsrl_kitchen_* configs (one reward contract per Kitchen
+#   domain, per Q-Contrast DEC-004/ANA-004), not because IQL itself has been
+#   shown to need it -- IQL has no CQL-style conservative penalty, so the
+#   online-switch instability ANA-004 found for CalQL/kitchen-partial may not
+#   even apply here. Watch this task first.
+# - num_offline_steps/num_online_steps: 500,000/500,000, matching rl-garden's
+#   own WSRL-algorithm Kitchen budget (configs/off2on/wsrl_kitchen_*_paper.
+#   yaml) rather than WSRL repo's own IQL script (250,000/500,000 via
+#   finetune.py defaults), for cross-algorithm comparability on this task set.
+#
+# Kitchen success-termination (_KitchenTerminalWrapper in
+# rl_garden/envs/d4rl_legacy/env.py) and bootstrap_at_done=truncated below
+# are required for the same reason as the WSRL kitchen configs: upstream
+# D4RL Kitchen never sets done on success.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: kitchen-partial-v0
+offline_dataset: kitchen-partial-v0
+obs_mode: state
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 500000
+num_online_steps: 500000
+batch_size: 256
+buffer_size: 1000000
+training_freq: 1
+utd: 1.0
+
+reward_scale: 1.0
+reward_bias: -4.0
+
+expectile: 0.7
+temperature: 0.5
+actor_lr: 0.0003
+critic_value_lr: 0.0003
+actor_distribution: unsquashed
+std_parameterization: uniform
+actor_dropout_rate: 0.1
+
+n_critics: 2
+critic_subsample_size: 2
+actor_use_layer_norm: false
+critic_use_layer_norm: false
+value_use_layer_norm: false
+bootstrap_at_done: truncated
+
+num_eval_episodes: 20
+eval_episode_horizon: 1000
+eval_freq: 0
+offline_eval_freq: 50000
+online_eval_freq: 2000
+
+capture_video: false
+log_type: wandb
+seed: 0

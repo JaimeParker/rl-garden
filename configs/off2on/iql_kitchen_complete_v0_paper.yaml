@@ -1,0 +1,48 @@
+# IQL on Kitchen-Complete-v0 (D4RL legacy). Same reconciliation as
+# configs/off2on/iql_kitchen_partial_v0_paper.yaml -- see that file's header
+# for the full source list and rationale. Least-validated of the three: no
+# reward_bias=-4.0 evidence exists for this task at all (the Q-Contrast
+# isolation only ran on kitchen-partial-v0 CalQL), and this is IQL, not
+# CalQL. reward_bias=-4.0 is used purely for domain-level consistency.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: kitchen-complete-v0
+offline_dataset: kitchen-complete-v0
+obs_mode: state
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 500000
+num_online_steps: 500000
+batch_size: 256
+buffer_size: 1000000
+training_freq: 1
+utd: 1.0
+
+reward_scale: 1.0
+reward_bias: -4.0
+
+expectile: 0.7
+temperature: 0.5
+actor_lr: 0.0003
+critic_value_lr: 0.0003
+actor_distribution: unsquashed
+std_parameterization: uniform
+actor_dropout_rate: 0.1
+
+n_critics: 2
+critic_subsample_size: 2
+actor_use_layer_norm: false
+critic_use_layer_norm: false
+value_use_layer_norm: false
+bootstrap_at_done: truncated
+
+num_eval_episodes: 20
+eval_episode_horizon: 1000
+eval_freq: 0
+offline_eval_freq: 50000
+online_eval_freq: 2000
+
+capture_video: false
+log_type: wandb
+seed: 0

@@ -59,10 +59,27 @@ backup_entropy: false
 target_entropy: 0.0
 
 # Offline CQL/Cal-QL pretraining (antmaze_cql overrides on top of cql_config.py).
+# cql_alpha_lagrange_init/cql_alpha_param/cql_diff_clip_mode/cql_penalty_scale
+# were previously left at CQLCore's class defaults (1.0/softplus/
+# skip_when_autotune/lagrange_only) instead of rl-garden's own proven CalQL
+# antmaze values below -- with cql_autotune_alpha=true, skip_when_autotune
+# meant the CQL Q-diff term was never clipped, which is the likely cause of
+# offline Cal-QL pretraining collapsing to 0 success across all 4 antmaze
+# tasks (see ExpNote runs wsrl_antmaze_large_diverse/large_play/medium_diverse/
+# medium_play_v2_s0_20260904_6017). cql_importance_sample/cql_max_target_backup/
+# cql_temp already matched the CalQL defaults and are listed here only for
+# explicitness per PLAN-005's Protocol Contract.
 use_cql_loss: true
 cql_alpha: 5.0
 cql_autotune_alpha: true
 cql_target_action_gap: 0.8
+cql_alpha_lagrange_init: 2.718281828459045
+cql_alpha_param: exp_clip
+cql_diff_clip_mode: always
+cql_penalty_scale: lagrange_times_alpha
+cql_importance_sample: true
+cql_max_target_backup: true
+cql_temp: 1.0
 
 # Online phase: WSRL's defining behavior -- no data retention, no CQL
 # penalty online (already WSRLOff2OnArgs's own defaults: online_replay_mode
