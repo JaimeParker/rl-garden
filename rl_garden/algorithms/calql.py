@@ -12,7 +12,6 @@ import warnings
 from typing import Any, Literal, Optional, Sequence
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from gymnasium import spaces
 
@@ -22,24 +21,7 @@ from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
 from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
 from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
 from rl_garden.common.optim import make_optimizer
-from rl_garden.networks.mlp import create_mlp
-
-
-class _SarsaReferenceQ(nn.Module):
-    """Standalone ``Q(s, a) -> scalar`` network for Cal-QL's SARSA/FQE
-    reference value on continuing tasks (see module docstring and
-    ``CalQLCore._cql_regularizer``). Not part of ``SACPolicy``/
-    ``EnsembleQCritic`` -- those are built for the main critic ensemble
-    (vmap, subsampling, RGBD encoders) and are unneeded overhead for a
-    single reference network. Flat (non-Dict) observations only.
-    """
-
-    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: Sequence[int]) -> None:
-        super().__init__()
-        self.net = create_mlp(obs_dim + action_dim, 1, list(hidden_dims))
-
-    def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return self.net(torch.cat([obs, action], dim=-1))
+from rl_garden.networks.value import ScalarQNetwork
 
 
 class CalQLCore:
@@ -98,7 +80,7 @@ class CalQLCore:
         obs_space = self.env.single_observation_space
         obs_dim = obs_space.shape[0]
         action_dim = self.env.single_action_space.shape[0]
-        self.sarsa_q_net = _SarsaReferenceQ(
+        self.sarsa_q_net = ScalarQNetwork(
             obs_dim, action_dim, self.sarsa_hidden_dims
         ).to(self.device)
         self.sarsa_q_target = copy.deepcopy(self.sarsa_q_net).to(self.device)

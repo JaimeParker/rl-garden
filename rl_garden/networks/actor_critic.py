@@ -419,6 +419,11 @@ class UnsquashedGaussianActor(nn.Module):
         normal = torch.distributions.Normal(mean, log_std.exp())
         return normal.log_prob(actions).sum(-1, keepdim=True)
 
+    def entropy(self, features: torch.Tensor) -> torch.Tensor:
+        _, log_std = self(features)
+        normal = torch.distributions.Normal(torch.zeros_like(log_std), log_std.exp())
+        return normal.entropy().sum(-1, keepdim=True)
+
     def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
         mean, _ = self(features)
         return mean.clamp(self.action_low, self.action_high)

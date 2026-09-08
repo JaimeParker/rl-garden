@@ -26,6 +26,23 @@ from rl_garden.networks.actor_critic import gaussian_kl_divergence
 from rl_garden.policies.ppo_policy import PPOPolicy
 
 
+def ppo_clip_policy_loss(
+    advantages: torch.Tensor,
+    ratio: torch.Tensor,
+    clip_coef: float,
+) -> torch.Tensor:
+    """PPO's clipped surrogate objective: ``mean(max(-adv*ratio, -adv*clip(ratio)))``.
+
+    Shared between ``PPO._policy_loss`` and ``BPPOCore`` (``bppo.py``) --
+    BPPO reuses only this formula, not ``_ppo_minibatch_update``, since it
+    normalizes/omega-weights advantages in a different order and has no
+    rollout buffer or value-clipping to hook into.
+    """
+    pg_loss1 = -advantages * ratio
+    pg_loss2 = -advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
+    return torch.max(pg_loss1, pg_loss2).mean()
+
+
 class PPO(OnPolicyAlgorithm):
     """SB3/ManiSkill-style PPO with rl-garden feature extractors."""
 
@@ -559,11 +576,7 @@ class PPO(OnPolicyAlgorithm):
         ratio: torch.Tensor,
         clip_coef: float,
     ) -> torch.Tensor:
-        # TODO(agent): BPPO/Uni-O4 can override this hook to inject behavior-policy
-        # advantages, asymmetric advantage weighting, or KL regularization.
-        pg_loss1 = -advantages * ratio
-        pg_loss2 = -advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-        return torch.max(pg_loss1, pg_loss2).mean()
+        return ppo_clip_policy_loss(advantages, ratio, clip_coef)
 
     def _ppo_minibatch_update(
         self,

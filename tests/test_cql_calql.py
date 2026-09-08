@@ -471,6 +471,38 @@ def test_calql_sarsa_reference_regularizer_uses_sarsa_net_not_mc_returns():
     assert torch.allclose(loss_normal, loss_corrupted)
 
 
+def test_calql_sarsa_reference_checkpoint_roundtrip(tmp_path):
+    """Regression for the ``_SarsaReferenceQ`` -> ``ScalarQNetwork``
+    promotion (rl_garden/networks/value.py): the extraction only moved the
+    class, so ``sarsa_q_net``'s state-dict keys (all under its ``net.``
+    submodule) must be unchanged and a checkpoint saved by one agent must
+    still load cleanly into a fresh one with matching parameters."""
+    agent = CalQL(
+        env=_offline_env(),
+        use_sarsa_reference=True,
+        sarsa_hidden_dims=(16,),
+        checkpoint_dir=str(tmp_path),
+        **_offline_kwargs(),
+    )
+    _fill(agent)
+    agent.train(1, compute_info=False)
+
+    sd = agent.sarsa_q_net.state_dict()
+    assert sd and all(key.startswith("net.") for key in sd)
+
+    ckpt = agent.save(tmp_path / "calql_sarsa.pt")
+    fresh = CalQL(
+        env=_offline_env(),
+        use_sarsa_reference=True,
+        sarsa_hidden_dims=(16,),
+        **_offline_kwargs(),
+    )
+    fresh.load(ckpt, load_replay_buffer=False)
+
+    for key, value in sd.items():
+        assert torch.equal(fresh.sarsa_q_net.state_dict()[key], value)
+
+
 def test_cql_dict_obs_train_step_and_checkpoint(tmp_path):
     agent = CQL(
         env=_dict_offline_env(),

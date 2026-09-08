@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from rl_garden.networks.actor_critic import BackboneType, _build_trunk
-from rl_garden.networks.mlp import Activation, KernelInit
+from rl_garden.networks.mlp import Activation, KernelInit, create_mlp
 
 
 class ValueNetwork(nn.Module):
@@ -43,3 +43,20 @@ class ValueNetwork(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         return self.head(self.trunk(features))
+
+
+class ScalarQNetwork(nn.Module):
+    """Standalone ``Q(s, a) -> scalar`` network for a single reference/target
+    value, not an ensemble critic. Used where a full ``SACPolicy``/
+    ``EnsembleQCritic`` (vmap, subsampling, RGBD encoders) is unneeded
+    overhead for one network -- e.g. Cal-QL's SARSA/FQE reference value
+    (``CalQLCore``) and BPPO's SARSA-fit Q (``BPPOCore``). Flat (non-Dict)
+    observations only.
+    """
+
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: Sequence[int]) -> None:
+        super().__init__()
+        self.net = create_mlp(obs_dim + action_dim, 1, list(hidden_dims))
+
+    def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        return self.net(torch.cat([obs, action], dim=-1))
