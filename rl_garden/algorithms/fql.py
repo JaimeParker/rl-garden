@@ -75,6 +75,7 @@ from rl_garden.encoders.combined import (
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
 from rl_garden.policies.fql_policy import EncoderSharing, FQLPolicy
 
 
@@ -412,12 +413,10 @@ class FQLCore:
             bc_flow_loss = F.mse_loss(pred_vel, vel_target)
 
             noises = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
-            with torch.no_grad():
-                target_flow_actions = self.policy.compute_flow_actions(
-                    bc_features, noises, self.flow_steps
-                )
             actor_actions = self.policy.actor_onestep_flow(onestep_features, noises)
-            distill_loss = F.mse_loss(actor_actions, target_flow_actions)
+            distill_loss = flow_onestep_distill_loss(
+                self.policy.actor_bc_flow, actor_actions, bc_features, noises, self.flow_steps
+            )
 
             clipped_actions = actor_actions.clamp(
                 self.policy.action_low, self.policy.action_high

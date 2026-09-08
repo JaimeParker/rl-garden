@@ -14,6 +14,7 @@ from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.dagger import DAgger
 from rl_garden.algorithms.ddpg import DDPG
 from rl_garden.algorithms.diffusion_bc import DiffusionBC
+from rl_garden.algorithms.diffusion_cm_distill import DiffusionCMDistillOnline
 from rl_garden.algorithms.dppo import DPPO
 from rl_garden.algorithms.edac import EDAC
 from rl_garden.algorithms.explore import ExPLORe
@@ -83,6 +84,7 @@ __all__ = [
     "DAgger",
     "DDPG",
     "DiffusionBC",
+    "DiffusionCMDistillOnline",
     "DPPO",
     "EDAC",
     "ExPLORe",

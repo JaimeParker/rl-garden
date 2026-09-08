@@ -88,6 +88,7 @@ def test_phase_registries_discover_expected_algorithms():
         "sac_flow",
         "ppo",
         "dppo",
+        "diffusion_cm_distill_online",
         "recurrent_ppo",
         "recurrent_sac",
         "transformer_ppo",

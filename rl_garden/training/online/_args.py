@@ -344,6 +344,23 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
+class DiffusionCMDistillOnlineTrainingArgs(DPPOTrainingArgs):
+    """DiffusionCMDistillOnline: DPPO's online PPO fine-tuning fused with a
+    per-iteration LCM one-step distillation step
+    (``rl_garden/algorithms/diffusion_cm_distill.py``). A genuine superset of
+    ``DPPOTrainingArgs`` (every DPPO field plus the CM student/target/
+    optimizer's own), unlike ``DPPOTrainingArgs``'s own deliberate
+    non-inheritance from ``PPOTrainingArgs``."""
+
+    cm_mlp_dims: Optional[tuple[int, ...]] = None
+    cm_lr: float = 1e-4
+    cm_ema_decay: float = 0.95
+    cm_grad_clip_norm: Optional[float] = 1.0
+    cm_sigma_data: float = 0.5
+    cm_timestep_scaling: float = 0.1
+
+
+@dataclass
 class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, VisionArgs):
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64

@@ -289,20 +289,21 @@ def test_distill_loss_target_is_detached_from_teacher():
 
 
 def test_train_computes_distill_target_without_grad(monkeypatch):
-    """Regression guard on the production call site in FQLCore.train():
-    accidentally dropping the torch.no_grad() around compute_flow_actions
-    must fail this test, not just a standalone no_grad() written by hand."""
+    """Regression guard on the production call site in FQLCore.train()
+    (now routed through ``flow_onestep_distill_loss``'s no_grad teacher
+    rollout): accidentally dropping the torch.no_grad() there must fail
+    this test, not just a standalone no_grad() written by hand."""
     agent = _make_agent()
     _fill(agent)
 
     seen_grad_enabled = []
-    original = agent.policy.compute_flow_actions
+    original = agent.policy.actor_bc_flow.integrate
 
     def spy(*args, **kwargs):
         seen_grad_enabled.append(torch.is_grad_enabled())
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(agent.policy, "compute_flow_actions", spy)
+    monkeypatch.setattr(agent.policy.actor_bc_flow, "integrate", spy)
     agent.train(1)
 
     assert seen_grad_enabled

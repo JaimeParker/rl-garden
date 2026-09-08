@@ -21,6 +21,7 @@ from typing import Optional, Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from rl_garden.networks.mlp import Activation, KernelInit, create_mlp, resolve_activation
 
@@ -96,3 +97,21 @@ class ActorVectorField(nn.Module):
         if low is not None and high is not None:
             x = x.clamp(low, high)
         return x
+
+
+def flow_onestep_distill_loss(
+    teacher: ActorVectorField,
+    student_action: torch.Tensor,
+    features: torch.Tensor,
+    noise: torch.Tensor,
+    num_steps: int,
+    *,
+    low: Optional[torch.Tensor] = None,
+    high: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """One-step flow-matching distillation loss (FQL's ``distill_loss``):
+    MSE between a one-step student action and a no-grad multi-step Euler
+    unroll of the time-conditioned `teacher`."""
+    with torch.no_grad():
+        target = teacher.integrate(features, noise, num_steps, low=low, high=high)
+    return F.mse_loss(student_action, target)
