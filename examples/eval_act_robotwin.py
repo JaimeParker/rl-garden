@@ -32,7 +32,7 @@ class EvalACTRoboTwinArgs:
     base_act_image_width: Optional[int] = None
     base_act_image_height: Optional[int] = None
     num_eval_envs: int = 1
-    num_eval_episodes: int = 10
+    num_eval_episodes: int = 100
     seed: int = 1
     camera_width: int = 320
     camera_height: int = 240
@@ -47,7 +47,7 @@ class EvalACTRoboTwinArgs:
     device: str = "auto"
     log_type: Literal["wandb", "none"] = "none"
     exp_name: Optional[str] = None
-    wandb_project: str = "rl-garden"
+    wandb_project: str = "robotwin-delta_ee-open_laptop"
     wandb_entity: Optional[str] = None
     robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
 
@@ -82,7 +82,7 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--base-act-image-width", type=int, default=None)
     parser.add_argument("--base-act-image-height", type=int, default=None)
     parser.add_argument("--num-eval-envs", type=int, default=1)
-    parser.add_argument("--num-eval-episodes", type=int, default=10)
+    parser.add_argument("--num-eval-episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--camera-width", type=int, default=320)
     parser.add_argument("--camera-height", type=int, default=240)
@@ -97,7 +97,10 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--log-type", choices=["wandb", "none"], default="none")
     parser.add_argument("--exp-name", default=None)
-    parser.add_argument("--wandb-project", default="rl-garden")
+    parser.add_argument(
+        "--wandb-project",
+        default="robotwin-delta_ee-open_laptop",
+    )
     parser.add_argument("--wandb-entity", default=None)
 
     parser.add_argument("--robotwin.robotwin-root", dest="robotwin_root", default=None)
@@ -119,6 +122,47 @@ def parse_args() -> EvalACTRoboTwinArgs:
     parser.add_argument("--robotwin.gripper-delta-scale", dest="gripper_delta_scale", type=float, default=0.2)
     parser.add_argument("--robotwin.ee-delta-pos-scale", dest="ee_delta_pos_scale", type=float, default=0.03)
     parser.add_argument("--robotwin.ee-delta-rot-scale", dest="ee_delta_rot_scale", type=float, default=0.15)
+    parser.add_argument(
+        "--robotwin.delta-ee-command-reference",
+        dest="delta_ee_command_reference",
+        type=_str_to_bool,
+        default=True,
+    )
+    parser.add_argument(
+        "--robotwin.delta-ee-command-reanchor",
+        dest="delta_ee_command_reanchor",
+        type=_str_to_bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--robotwin.delta-ee-planner-type",
+        dest="delta_ee_planner_type",
+        default="mplib_screw",
+    )
+    parser.add_argument(
+        "--robotwin.delta-ee-command-reanchor-position-tolerance",
+        dest="delta_ee_command_reanchor_position_tolerance",
+        type=float,
+        default=0.005,
+    )
+    parser.add_argument(
+        "--robotwin.delta-ee-command-reanchor-rotation-tolerance",
+        dest="delta_ee_command_reanchor_rotation_tolerance",
+        type=float,
+        default=0.03490658503988659,
+    )
+    parser.add_argument(
+        "--robotwin.delta-ee-terminal-settle-tolerance",
+        dest="delta_ee_terminal_settle_tolerance",
+        type=float,
+        default=0.0005,
+    )
+    parser.add_argument(
+        "--robotwin.delta-ee-terminal-settle-max-ticks",
+        dest="delta_ee_terminal_settle_max_ticks",
+        type=int,
+        default=250,
+    )
     parser.add_argument("--robotwin.profile-timing", dest="profile_timing", action="store_true")
     parser.add_argument("--robotwin.profile-interval", dest="profile_interval", type=int, default=100)
     parser.add_argument("--robotwin.no-include-wrist-cameras", dest="include_wrist_cameras", action="store_false")
@@ -153,6 +197,21 @@ def parse_args() -> EvalACTRoboTwinArgs:
         gripper_delta_scale=ns.gripper_delta_scale,
         ee_delta_pos_scale=ns.ee_delta_pos_scale,
         ee_delta_rot_scale=ns.ee_delta_rot_scale,
+        delta_ee_command_reference=ns.delta_ee_command_reference,
+        delta_ee_command_reanchor=ns.delta_ee_command_reanchor,
+        delta_ee_planner_type=ns.delta_ee_planner_type,
+        delta_ee_command_reanchor_position_tolerance=(
+            ns.delta_ee_command_reanchor_position_tolerance
+        ),
+        delta_ee_command_reanchor_rotation_tolerance=(
+            ns.delta_ee_command_reanchor_rotation_tolerance
+        ),
+        delta_ee_terminal_settle_tolerance=(
+            ns.delta_ee_terminal_settle_tolerance
+        ),
+        delta_ee_terminal_settle_max_ticks=(
+            ns.delta_ee_terminal_settle_max_ticks
+        ),
     )
     return EvalACTRoboTwinArgs(
         env_id=ns.env_id,
@@ -494,10 +553,45 @@ def evaluate(args: EvalACTRoboTwinArgs, logger: Logger) -> dict[str, float]:
             if done.any():
                 done_ids = torch.where(done)[0]
                 for env_id in done_ids.detach().cpu().tolist():
-                    returns.append(_scalar(episode_returns[env_id]))
-                    lengths.append(int(episode_lengths[env_id].detach().cpu().item()))
-                    successes.append(bool(success[env_id].detach().cpu().item()))
+                    episode_return = _scalar(
+                        episode_returns[env_id]
+                    )
+                    episode_length = int(
+                        episode_lengths[env_id]
+                        .detach()
+                        .cpu()
+                        .item()
+                    )
+                    episode_success = bool(
+                        success[env_id].detach().cpu().item()
+                    )
+                    returns.append(episode_return)
+                    lengths.append(episode_length)
+                    successes.append(episode_success)
                     completed += 1
+                    print(
+                        "ACT_EPISODE_RESULT "
+                        f"episode={completed}/{args.num_eval_episodes} "
+                        f"success={episode_success} "
+                        f"return={episode_return:.6f} "
+                        f"length={episode_length}",
+                        flush=True,
+                    )
+                    logger.add_scalar(
+                        "eval/episode_success",
+                        float(episode_success),
+                        completed,
+                    )
+                    logger.add_scalar(
+                        "eval/episode_return",
+                        episode_return,
+                        completed,
+                    )
+                    logger.add_scalar(
+                        "eval/episode_length",
+                        float(episode_length),
+                        completed,
+                    )
                     if completed >= args.num_eval_episodes:
                         break
                 provider.reset(env_ids=done_ids)
@@ -531,7 +625,10 @@ def evaluate(args: EvalACTRoboTwinArgs, logger: Logger) -> dict[str, float]:
 
 def main() -> None:
     args = parse_args()
-    run_name = args.exp_name or f"act_only_{args.env_id}_s{args.seed}_{args.num_eval_episodes}ep"
+    run_name = args.exp_name or (
+        f"robotwin-delta_ee-{args.env_id}-"
+        f"eval_s{args.seed}_{args.num_eval_episodes}ep"
+    )
     logger = Logger.create(
         log_type=args.log_type,
         log_dir="runs",

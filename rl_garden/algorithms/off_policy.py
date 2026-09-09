@@ -395,7 +395,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self._on_training_start(total_timesteps)
         obs, _ = self.env.reset(seed=self.seed)
         self._on_env_reset(obs)
-        learning_has_started = False
+        # A loaded checkpoint may already be well past learning_starts.  Do not
+        # emit one rollout of warm-up exploration after every process restart.
+        learning_has_started = self._global_step >= self.learning_starts
         cumulative = defaultdict(float)
         global_steps_per_iteration = self.num_envs * self.steps_per_env
 

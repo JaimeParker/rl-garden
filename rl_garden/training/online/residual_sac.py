@@ -42,6 +42,18 @@ def _make_base_action_provider(args, env):
     from rl_garden.policies.base_policies import make_base_policy
 
     base_policy = _effective_base_policy(args)
+    source_width = args.base_act_observation_width
+    source_height = args.base_act_observation_height
+    if (source_width is None) != (source_height is None):
+        raise ValueError(
+            "--base-act-observation-width and "
+            "--base-act-observation-height must be set together."
+        )
+    source_image_size = (
+        None
+        if source_width is None
+        else (int(source_height), int(source_width))
+    )
     provider = make_base_policy(
         base_policy=base_policy,
         observation_space=env.single_observation_space,
@@ -51,6 +63,7 @@ def _make_base_action_provider(args, env):
         base_act_stats_path=args.base_act_stats_path,
         base_act_temporal_agg=args.base_act_temporal_agg,
         base_act_temporal_agg_k=args.base_act_temporal_agg_k,
+        base_act_source_image_size=source_image_size,
         base_sac_encoder=args.base_sac_encoder,
         base_sac_encoder_features_dim=args.base_sac_encoder_features_dim,
         base_sac_image_fusion_mode=args.base_sac_image_fusion_mode,
@@ -62,7 +75,8 @@ def _make_base_action_provider(args, env):
             f"ckpt={provider.checkpoint_path} "
             f"state_dim={provider.spec.state_dim} "
             f"action_dim={provider.spec.action_dim} "
-            f"num_queries={provider.config.num_queries}",
+            f"num_queries={provider.config.num_queries} "
+            f"source_image_size={source_image_size}",
             flush=True,
         )
     elif base_policy == "sac":
@@ -119,6 +133,14 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         eval_env=eval_env,
         base_action_provider=base_action_provider,
         residual_action_scale=args.residual_action_scale,
+        residual_gripper_action_scale=args.residual_gripper_action_scale,
+        residual_warmup_scale=args.residual_warmup_scale,
+        residual_actor_zero_init=args.residual_actor_zero_init,
+        residual_log_std_init=args.residual_log_std_init,
+        residual_warmup_policy_checkpoint=args.residual_warmup_policy_checkpoint,
+        residual_warmup_policy_probability=(
+            args.residual_warmup_policy_probability
+        ),
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
@@ -214,12 +236,20 @@ class ResidualSACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """
 
     residual_action_scale: float = 0.1
+    residual_gripper_action_scale: Optional[float] = None
+    residual_warmup_scale: float = 0.0
+    residual_actor_zero_init: bool = True
+    residual_log_std_init: float = -3.0
+    residual_warmup_policy_checkpoint: Optional[str] = None
+    residual_warmup_policy_probability: float = 0.5
     debug: bool = False
     base_policy: Literal["act", "sac", "zero"] = "act"
     base_ckpt_path: Optional[str] = "act-peg-only"
     base_act_stats_path: Optional[str] = None
     base_act_temporal_agg: bool = True
     base_act_temporal_agg_k: float = 0.01
+    base_act_observation_width: Optional[int] = None
+    base_act_observation_height: Optional[int] = None
     base_sac_encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
     base_sac_encoder_features_dim: int = 256
     base_sac_image_fusion_mode: Optional[Literal["stack_channels", "per_key"]] = None

@@ -39,10 +39,20 @@ class VisionArgs:
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64
     encoder: Literal[
-        "plain_conv", "resnet10", "resnet18", "vit", "drqv2_conv", "cnn3d"
+        "plain_conv",
+        "resnet10",
+        "resnet18",
+        "vit",
+        "drqv2_conv",
+        "drqv2_multiview_stem",
+        "drqv2_spatial_late_fusion",
+        "drqv2_independent_late_fusion",
+        "cnn3d",
     ] = "plain_conv"
     encoder_features_dim: int = 256
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
+    image_fusion_mode: Literal[
+        "stack_channels", "per_key", "shared_gated"
+    ] = "stack_channels"
     vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
     vit_embed_dim: int = 128
     vit_depth: int = 1
@@ -204,6 +214,24 @@ def _drqv2_conv_factory(args: VisionArgs):
     return drq_v2_encoder_factory()
 
 
+def _drqv2_multiview_stem_factory(args: VisionArgs):
+    from rl_garden.encoders import drq_v2_multiview_stem_encoder_factory
+
+    return drq_v2_multiview_stem_encoder_factory()
+
+
+def _drqv2_spatial_late_fusion_factory(args: VisionArgs):
+    from rl_garden.encoders import drq_v2_spatial_late_fusion_encoder_factory
+
+    return drq_v2_spatial_late_fusion_encoder_factory()
+
+
+def _drqv2_independent_late_fusion_factory(args: VisionArgs):
+    from rl_garden.encoders import drq_v2_independent_late_fusion_encoder_factory
+
+    return drq_v2_independent_late_fusion_encoder_factory()
+
+
 def _cnn3d_factory(args: VisionArgs):
     from rl_garden.encoders import cnn3d_encoder_factory
 
@@ -252,6 +280,21 @@ ENCODER_REGISTRY: dict[str, EncoderSpec] = {
     "resnet18": EncoderSpec(_resnet_factory, _no_sac_kwargs, allows_resnet_weights=True),
     "vit": EncoderSpec(_vit_factory, _vit_sac_kwargs, allows_resnet_weights=False),
     "drqv2_conv": EncoderSpec(_drqv2_conv_factory, _no_sac_kwargs, allows_resnet_weights=False),
+    "drqv2_multiview_stem": EncoderSpec(
+        _drqv2_multiview_stem_factory,
+        _no_sac_kwargs,
+        allows_resnet_weights=False,
+    ),
+    "drqv2_spatial_late_fusion": EncoderSpec(
+        _drqv2_spatial_late_fusion_factory,
+        _no_sac_kwargs,
+        allows_resnet_weights=False,
+    ),
+    "drqv2_independent_late_fusion": EncoderSpec(
+        _drqv2_independent_late_fusion_factory,
+        _no_sac_kwargs,
+        allows_resnet_weights=False,
+    ),
     "cnn3d": EncoderSpec(_cnn3d_factory, _no_sac_kwargs, allows_resnet_weights=False),
 }
 

@@ -29,6 +29,7 @@ class RoboTwinBackend(EnvBackend):
         render_every = rt.render_every_control_step if rt is not None else False
         step_cap = rt.control_step_cap if rt is not None else None
         step_lim = rt.step_lim if rt is not None else 400
+        clear_cache_freq = rt.clear_cache_freq if rt is not None else 8
         planner = rt.planner_backend if rt is not None else "mplib"
         embodiment = rt.embodiment if rt is not None else ["aloha-agilex"]
 
@@ -43,6 +44,7 @@ class RoboTwinBackend(EnvBackend):
             "render_freq": 0,
             "render_every_control_step": render_every,
             "episode_num": 100,
+            "clear_cache_freq": clear_cache_freq,
             "use_seed": False,
             "save_freq": 15,
             "camera": {
@@ -65,6 +67,32 @@ class RoboTwinBackend(EnvBackend):
             "collect_data": False,
             "eval_video_log": bool(is_eval and req.capture_video),
         }
+        if rt is not None:
+            task_cfg.update(
+                {
+                    "delta_ee_command_reference": (
+                        rt.delta_ee_command_reference
+                    ),
+                    "delta_ee_command_reanchor": (
+                        rt.delta_ee_command_reanchor
+                    ),
+                    "delta_ee_planner_type": (
+                        rt.delta_ee_planner_type
+                    ),
+                    "delta_ee_command_reanchor_position_tolerance": (
+                        rt.delta_ee_command_reanchor_position_tolerance
+                    ),
+                    "delta_ee_command_reanchor_rotation_tolerance": (
+                        rt.delta_ee_command_reanchor_rotation_tolerance
+                    ),
+                    "delta_ee_terminal_settle_tolerance": (
+                        rt.delta_ee_terminal_settle_tolerance
+                    ),
+                    "delta_ee_terminal_settle_max_ticks": (
+                        rt.delta_ee_terminal_settle_max_ticks
+                    ),
+                }
+            )
         if step_cap is not None:
             task_cfg["control_step_cap"] = step_cap
         if is_eval and req.capture_video and req.eval_record_dir:
@@ -74,22 +102,79 @@ class RoboTwinBackend(EnvBackend):
             task_name=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
             seed=req.seed,
+            obs_mode=req.obs_mode,  # type: ignore[arg-type]
             robotwin_root=rt.robotwin_root if rt is not None else None,
             assets_path=rt.assets_path if rt is not None else None,
             seeds_path=rt.seeds_path if rt is not None else None,
             step_lim=step_lim,
             max_episode_steps=step_lim,
+            clear_cache_freq=clear_cache_freq,
+            executor_timeout_seconds=(
+                rt.executor_timeout_seconds
+                if rt is not None else 180.0
+            ),
             task_config=task_cfg,
             planner_backend=planner,
             embodiment=embodiment,
             reward_mode=rt.reward_mode if rt is not None else "dense",  # type: ignore[arg-type]
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
+            reward_shaping_mode=(
+                rt.reward_shaping_mode if rt is not None else "absolute"
+            ),
+            use_relative_reward=(
+                rt.use_relative_reward if rt is not None else False
+            ),
+            dense_success_reward=(
+                rt.dense_success_reward if rt is not None else 1.0
+            ),
+            potential_discount=(
+                rt.potential_discount if rt is not None else 0.99
+            ),
+            potential_weight=rt.potential_weight if rt is not None else 5.0,
+            dense_weight=rt.dense_weight if rt is not None else 0.03,
+            relative_weight=rt.relative_weight if rt is not None else 3.0,
+            step_penalty=rt.step_penalty if rt is not None else 0.003,
+            stall_threshold=(
+                rt.stall_threshold if rt is not None else 1e-4
+            ),
+            stall_penalty=rt.stall_penalty if rt is not None else 0.035,
+            backtrack_penalty=(
+                rt.backtrack_penalty if rt is not None else 0.06
+            ),
             control_mode=req.control_mode or "delta_joint_pos",  # type: ignore[arg-type]
             joint_delta_scale=rt.joint_delta_scale if rt is not None else 0.05,
             gripper_delta_scale=rt.gripper_delta_scale if rt is not None else 0.2,
             ee_delta_pos_scale=rt.ee_delta_pos_scale if rt is not None else 0.03,
             ee_delta_rot_scale=rt.ee_delta_rot_scale if rt is not None else 0.15,
+            delta_ee_command_reference=(
+                rt.delta_ee_command_reference
+                if rt is not None else False
+            ),
+            delta_ee_command_reanchor=(
+                rt.delta_ee_command_reanchor
+                if rt is not None else False
+            ),
+            delta_ee_planner_type=(
+                rt.delta_ee_planner_type
+                if rt is not None else None
+            ),
+            delta_ee_command_reanchor_position_tolerance=(
+                rt.delta_ee_command_reanchor_position_tolerance
+                if rt is not None else 0.005
+            ),
+            delta_ee_command_reanchor_rotation_tolerance=(
+                rt.delta_ee_command_reanchor_rotation_tolerance
+                if rt is not None else 0.03490658503988659
+            ),
+            delta_ee_terminal_settle_tolerance=(
+                rt.delta_ee_terminal_settle_tolerance
+                if rt is not None else 0.0005
+            ),
+            delta_ee_terminal_settle_max_ticks=(
+                rt.delta_ee_terminal_settle_max_ticks
+                if rt is not None else 250
+            ),
             profile_timing=rt.profile_timing if rt is not None else False,
             profile_interval=rt.profile_interval if rt is not None else 100,
             render_every_control_step=render_every,

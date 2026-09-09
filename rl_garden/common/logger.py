@@ -73,16 +73,22 @@ class Logger:
 
         tags = cls._parse_keywords(log_keywords)
         wandb_name = run_name
-        if start_time:
+        if start_time and not os.getenv("WANDB_RUN_ID"):
             wandb_name = f"{wandb_name}__{start_time}"
         if tags:
             wandb_name = f"{wandb_name}__{'-'.join(tags)}"
 
+        run_id = os.getenv("WANDB_RUN_ID")
+        resume = os.getenv("WANDB_RESUME")
         init_kwargs: dict[str, Any] = {
             "project": wandb_project,
             "name": wandb_name,
             "config": config or {},
         }
+        if run_id:
+            init_kwargs["id"] = run_id
+        if resume:
+            init_kwargs["resume"] = resume
         if wandb_entity:
             init_kwargs["entity"] = wandb_entity
         if wandb_group:
@@ -175,12 +181,21 @@ class Logger:
         if metric_namespaces is None:
             metric_namespaces = self.METRIC_NAMESPACES
 
+        payload: dict[str, float] = {}
         for key, value in metrics.items():
             if not isinstance(value, (int, float)):
                 continue
             # Use explicit mapping or default namespace
             full_path = metric_namespaces.get(key, f"{default_namespace}/{key}")
-            self.add_scalar(full_path, value, step)
+            payload[full_path] = value
+
+        # W&B commits one history row per log() call.  Commit the whole metric
+        # group together instead of generating many sparse rows for one step.
+        if self.wandb_run is not None and payload:
+            self.wandb_run.log(payload, step=step)
+        if self.writer is not None:
+            for full_path, value in payload.items():
+                self.writer.add_scalar(full_path, value, step)
 
     @staticmethod
     def format_metrics(

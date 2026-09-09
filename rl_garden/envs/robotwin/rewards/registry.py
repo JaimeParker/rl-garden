@@ -13,6 +13,7 @@ from typing import Any
 from rl_garden.envs.robotwin.reward import (
     Contact,
     Endpose,
+    OpenArticulation,
     Pick,
     Place,
     Reward,
@@ -138,6 +139,29 @@ def build_move_can_pot(task):
                 Success(),
             ],
             "transition_rewards": [1, 3],
+        }
+    )
+
+
+def build_open_laptop(task):
+    return Reward.build_top(
+        {
+            "type": "Serial",
+            "subtasks": [
+                OpenArticulation(
+                    base=task,
+                    max_reward=4,
+                    entity=task.laptop,
+                    joint_idx=0,
+                    contact_point_idx=1,
+                    target_fraction=0.4,
+                    arm_tag=task.arm_tag,
+                    c_d=1,
+                    c_qpos=3,
+                ),
+                Success(),
+            ],
+            "transition_rewards": [0],
         }
     )
 
@@ -268,6 +292,7 @@ REWARD_BUILDERS: dict[str, RewardBuilder] = {
     "handover_block": build_handover_block,
     "lift_pot": build_lift_pot,
     "move_can_pot": build_move_can_pot,
+    "open_laptop": build_open_laptop,
     "pick_dual_bottles": build_pick_dual_bottles,
     "place_container_plate": build_place_container_plate,
     "place_empty_cup": build_place_empty_cup,

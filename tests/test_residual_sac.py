@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -68,6 +69,30 @@ class RawActionVecEnv:
     def step(self, actions):
         self.last_actions = actions.detach().clone()
         obs = torch.ones(self.num_envs, *self.single_observation_space.shape)
+        rewards = torch.ones(self.num_envs)
+        terminations = torch.zeros(self.num_envs, dtype=torch.bool)
+        truncations = torch.zeros(self.num_envs, dtype=torch.bool)
+        return obs, rewards, terminations, truncations, {}
+
+
+class StateDictVecEnv(RawActionVecEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.single_observation_space = spaces.Dict(
+            {
+                "state": spaces.Box(
+                    low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+                )
+            }
+        )
+
+    def reset(self, seed: int | None = None):
+        del seed
+        return {"state": torch.zeros(self.num_envs, 3)}, {}
+
+    def step(self, actions):
+        self.last_actions = actions.detach().clone()
+        obs = {"state": torch.ones(self.num_envs, 3)}
         rewards = torch.ones(self.num_envs)
         terminations = torch.zeros(self.num_envs, dtype=torch.bool)
         truncations = torch.zeros(self.num_envs, dtype=torch.bool)
@@ -210,6 +235,108 @@ def test_residual_critic_configuration_is_forwarded_to_policy():
     assert agent.policy.n_critics == 4
     assert agent.policy.critic_subsample_size == 2
     assert agent.policy.critic.critic_impl == "legacy"
+
+
+def test_residual_actor_configuration_is_forwarded_and_base_preserving():
+    agent = _agent(
+        residual_action_scale=0.1,
+        residual_warmup_scale=0.0,
+        residual_log_std_init=-4.0,
+        actor_log_std_min=-5.0,
+        actor_log_std_mode="clamp",
+        actor_use_layer_norm=True,
+        critic_use_layer_norm=False,
+    )
+    obs, _ = agent.env.reset()
+    base_actions = agent._base_naction(obs)
+
+    stored_action, env_action, context = agent._rollout_action(
+        obs,
+        learning_has_started=False,
+    )
+    mean, log_std = agent.policy.actor(
+        torch.cat(
+            [
+                agent.policy._transform_features_for_actor(
+                    agent.policy.extract_features(obs)
+                ),
+                base_actions,
+            ],
+            dim=-1,
+        )
+    )
+
+    torch.testing.assert_close(stored_action, base_actions)
+    torch.testing.assert_close(env_action, agent.action_scaler.unscale(base_actions))
+    torch.testing.assert_close(context["base_actions"], base_actions)
+    torch.testing.assert_close(mean, torch.zeros_like(mean))
+    torch.testing.assert_close(log_std, torch.full_like(log_std, -4.0))
+    assert any(
+        isinstance(module, torch.nn.LayerNorm)
+        for module in agent.policy.actor.modules()
+    )
+    assert not any(
+        isinstance(module, torch.nn.LayerNorm)
+        for module in agent.policy.critic.modules()
+    )
+
+
+def test_residual_warmup_checkpoint_mixes_checkpoint_and_base_policy(tmp_path):
+    env = StateDictVecEnv()
+    source = _agent(
+        env=env,
+        residual_action_scale=0.1,
+        residual_warmup_scale=0.0,
+    )
+    with torch.no_grad():
+        source.policy.actor.fc_mean.weight.zero_()
+        source.policy.actor.fc_mean.bias.fill_(float(np.arctanh(0.4)))
+    checkpoint = tmp_path / "state_residual.pt"
+    source.save(checkpoint)
+
+    checkpoint_target = _agent(
+        env=StateDictVecEnv(),
+        residual_action_scale=0.1,
+        residual_warmup_policy_checkpoint=checkpoint,
+        residual_warmup_policy_probability=1.0,
+    )
+    obs, _ = checkpoint_target.env.reset()
+    checkpoint_target._on_env_reset(obs)
+    base = checkpoint_target._base_naction(obs)
+    stored_action, _, _ = checkpoint_target._rollout_action(
+        obs, learning_has_started=False
+    )
+    torch.testing.assert_close(stored_action, base + 0.04)
+
+    base_target = _agent(
+        env=StateDictVecEnv(),
+        residual_action_scale=0.1,
+        residual_warmup_policy_checkpoint=checkpoint,
+        residual_warmup_policy_probability=0.0,
+    )
+    obs, _ = base_target.env.reset()
+    base_target._on_env_reset(obs)
+    base = base_target._base_naction(obs)
+    stored_action, _, _ = base_target._rollout_action(
+        obs, learning_has_started=False
+    )
+    torch.testing.assert_close(stored_action, base)
+
+
+def test_residual_warmup_checkpoint_rejects_box_observation_env(tmp_path):
+    source = _agent(
+        env=StateDictVecEnv(),
+        residual_action_scale=0.1,
+        residual_warmup_scale=0.0,
+    )
+    checkpoint = tmp_path / "state_residual.pt"
+    source.save(checkpoint)
+
+    with pytest.raises(ValueError, match="Dict observation with state"):
+        _agent(
+            residual_action_scale=0.1,
+            residual_warmup_policy_checkpoint=checkpoint,
+        )
 
 
 def test_residual_eval_q_mc_uses_normalized_final_action_for_critic():

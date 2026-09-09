@@ -19,8 +19,10 @@ from rl_garden.buffers.residual_h5 import (
     load_residual_h5_to_replay_buffer,
 )
 from rl_garden.common.action_scaler import ActionScaler
+from rl_garden.common.checkpoint import load_checkpoint_file, space_metadata
 from rl_garden.common.types import ResidualReplayBufferSample
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import CombinedExtractor
 from rl_garden.policies.base_policies import BasePolicyProvider
 from rl_garden.policies.residual_policy import ResidualSACPolicy
 
@@ -42,6 +44,12 @@ class ResidualSAC(SAC):
         *,
         base_action_provider: BasePolicyProvider,
         residual_action_scale: float = 0.1,
+        residual_gripper_action_scale: Optional[float] = None,
+        residual_warmup_scale: float = 0.0,
+        residual_actor_zero_init: bool = True,
+        residual_log_std_init: float = -3.0,
+        residual_warmup_policy_checkpoint: Optional[str | Path] = None,
+        residual_warmup_policy_probability: float = 0.5,
         action_scaler: Optional[ActionScaler] = None,
         **kwargs,
     ) -> None:
@@ -51,6 +59,44 @@ class ResidualSAC(SAC):
             )
         self.base_action_provider = base_action_provider
         self.residual_action_scale = float(residual_action_scale)
+        if (
+            residual_gripper_action_scale is not None
+            and residual_gripper_action_scale < 0
+        ):
+            raise ValueError(
+                "residual_gripper_action_scale must be non-negative, got "
+                f"{residual_gripper_action_scale}."
+            )
+        self.residual_gripper_action_scale = (
+            None
+            if residual_gripper_action_scale is None
+            else float(residual_gripper_action_scale)
+        )
+        if self.residual_gripper_action_scale is not None and env.single_action_space.shape != (14,):
+            raise ValueError("Per-gripper residual scale requires a 14D action space.")
+        if not 0.0 <= residual_warmup_scale <= 1.0:
+            raise ValueError(
+                "residual_warmup_scale must be in [0, 1], got "
+                f"{residual_warmup_scale}."
+            )
+        self.residual_warmup_scale = float(residual_warmup_scale)
+        self.residual_actor_zero_init = bool(residual_actor_zero_init)
+        self.residual_log_std_init = float(residual_log_std_init)
+        if not 0.0 <= residual_warmup_policy_probability <= 1.0:
+            raise ValueError(
+                "residual_warmup_policy_probability must be in [0, 1], got "
+                f"{residual_warmup_policy_probability}."
+            )
+        self.residual_warmup_policy_checkpoint = (
+            None
+            if residual_warmup_policy_checkpoint is None
+            else str(residual_warmup_policy_checkpoint)
+        )
+        self.residual_warmup_policy_probability = float(
+            residual_warmup_policy_probability
+        )
+        self._warmup_policy: Optional[ResidualSACPolicy] = None
+        self._warmup_use_policy: Optional[torch.Tensor] = None
         self.action_scaler = action_scaler
         self._cached_base_actions: Optional[torch.Tensor] = None
         self.offline_replay_buffer = None
@@ -62,17 +108,134 @@ class ResidualSAC(SAC):
             dtype=np.float32,
         )
         super().__init__(env=env, **kwargs)
+        if self.residual_warmup_policy_checkpoint is not None:
+            self._warmup_policy = self._load_state_warmup_policy(
+                self.residual_warmup_policy_checkpoint
+            )
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = super()._checkpoint_metadata()
         meta.update(
             {
                 "residual_action_scale": self.residual_action_scale,
+                "residual_gripper_action_scale": (
+                    self.residual_gripper_action_scale
+                ),
+                "residual_warmup_scale": self.residual_warmup_scale,
+                "residual_actor_zero_init": self.residual_actor_zero_init,
+                "residual_log_std_init": self.residual_log_std_init,
+                "residual_warmup_policy_checkpoint": (
+                    self.residual_warmup_policy_checkpoint
+                ),
+                "residual_warmup_policy_probability": (
+                    self.residual_warmup_policy_probability
+                ),
                 "action_scaler_low": self.action_scaler.low.detach().cpu().tolist(),
                 "action_scaler_high": self.action_scaler.high.detach().cpu().tolist(),
             }
         )
         return meta
+
+    def _load_state_warmup_policy(self, path: str) -> ResidualSACPolicy:
+        checkpoint = load_checkpoint_file(path, map_location=self.device)
+        metadata = checkpoint.get("metadata", {})
+        if metadata.get("algorithm_class") != "ResidualSAC":
+            raise ValueError(
+                "Warmup policy checkpoint must be a ResidualSAC checkpoint, got "
+                f"{metadata.get('algorithm_class')!r}."
+            )
+        obs_space = self.env.single_observation_space
+        if not isinstance(obs_space, spaces.Dict) or "state" not in obs_space.spaces:
+            raise ValueError(
+                "Warmup ResidualSAC checkpoint requires a Dict observation with state."
+            )
+        state_obs_space = spaces.Dict({"state": obs_space.spaces["state"]})
+        expected_obs = space_metadata(state_obs_space)
+        if metadata.get("observation_space") != expected_obs:
+            raise ValueError(
+                "Warmup ResidualSAC checkpoint observation space is not state-only "
+                "and compatible with the current state observation."
+            )
+        expected_action = space_metadata(self.env.single_action_space)
+        if metadata.get("action_space") != expected_action:
+            raise ValueError(
+                "Warmup ResidualSAC checkpoint action space does not match the "
+                "current environment."
+            )
+
+        hparams = metadata.get("hyperparameters", {})
+        cuda_devices = []
+        if self.device.type == "cuda":
+            cuda_devices = [self.device.index or torch.cuda.current_device()]
+        with torch.random.fork_rng(devices=cuda_devices):
+            features_extractor = CombinedExtractor(
+                state_obs_space,
+                image_keys=hparams.get("image_keys", ("rgb", "depth")),
+                state_key=hparams.get("state_key", "state"),
+                proprio_latent_dim=int(hparams.get("proprio_latent_dim", 64)),
+                use_proprio=bool(hparams.get("use_proprio", True)),
+                fusion_mode=hparams.get("image_fusion_mode", "stack_channels"),
+                enable_stacking=bool(hparams.get("enable_stacking", False)),
+                image_augmentation="none",
+            )
+            policy = ResidualSACPolicy(
+                observation_space=state_obs_space,
+                action_space=self._residual_action_space,
+                features_extractor=features_extractor,
+                net_arch=hparams.get(
+                    "net_arch", {"pi": [256, 256, 256], "qf": [256, 256, 256]}
+                ),
+                n_critics=int(hparams.get("n_critics", 2)),
+                critic_subsample_size=hparams.get("critic_subsample_size"),
+                critic_impl=hparams.get("critic_impl", "vmap"),
+                actor_use_layer_norm=bool(
+                    hparams.get("actor_use_layer_norm", False)
+                ),
+                critic_use_layer_norm=bool(
+                    hparams.get("critic_use_layer_norm", False)
+                ),
+                log_std_mode=hparams.get("actor_log_std_mode", "clamp"),
+                log_std_min=float(hparams.get("actor_log_std_min", -5.0)),
+                residual_actor_zero_init=bool(
+                    hparams.get("residual_actor_zero_init", True)
+                ),
+                residual_log_std_init=float(
+                    hparams.get("residual_log_std_init", -3.0)
+                ),
+            ).to(self.device)
+
+        source = checkpoint["state"]["policy"]
+        target = policy.state_dict()
+        prefixes = ("features_extractor.", "actor.", "_actor_adapter.")
+        source_actor = {
+            key: value for key, value in source.items() if key.startswith(prefixes)
+        }
+        target_actor = {
+            key: value for key, value in target.items() if key.startswith(prefixes)
+        }
+        if set(source_actor) != set(target_actor):
+            missing = sorted(set(target_actor) - set(source_actor))
+            extra = sorted(set(source_actor) - set(target_actor))
+            raise ValueError(
+                "Warmup policy actor/encoder keys do not match: "
+                f"missing={missing}, extra={extra}."
+            )
+        mismatched = [
+            key
+            for key in target_actor
+            if tuple(source_actor[key].shape) != tuple(target_actor[key].shape)
+        ]
+        if mismatched:
+            raise ValueError(
+                "Warmup policy actor/encoder tensor shapes do not match: "
+                + ", ".join(mismatched)
+            )
+        target.update(source_actor)
+        policy.load_state_dict(target, strict=True)
+        policy.eval()
+        for parameter in policy.parameters():
+            parameter.requires_grad_(False)
+        return policy
 
     def _build_replay_buffer(self):
         return self._make_residual_replay_buffer(self.buffer_size)
@@ -192,7 +355,12 @@ class ResidualSAC(SAC):
             critic_impl=self.critic_impl,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            critic_use_layer_norm=True,
+            actor_use_layer_norm=self.actor_use_layer_norm,
+            critic_use_layer_norm=self.critic_use_layer_norm,
+            log_std_min=self.actor_log_std_min,
+            log_std_mode=self.actor_log_std_mode,
+            residual_actor_zero_init=self.residual_actor_zero_init,
+            residual_log_std_init=self.residual_log_std_init,
         )
 
     def _setup_model(self) -> None:
@@ -215,10 +383,19 @@ class ResidualSAC(SAC):
             base_action = self._call_base_action_provider(policy_obs)
             return self.action_scaler.scale(base_action).clamp(-1.0, 1.0).detach()
 
+    def _residual_scale_tensor(self, reference: torch.Tensor) -> torch.Tensor:
+        scales = torch.full_like(reference, self.residual_action_scale)
+        if self.residual_gripper_action_scale is not None:
+            scales[..., 6] = self.residual_gripper_action_scale
+            scales[..., 13] = self.residual_gripper_action_scale
+        return scales
+
     def _combine_base_residual(
         self, base_actions: torch.Tensor, unit_residual_actions: torch.Tensor
     ) -> torch.Tensor:
-        residual_actions = unit_residual_actions * self.residual_action_scale
+        residual_actions = (
+            unit_residual_actions * self._residual_scale_tensor(unit_residual_actions)
+        )
         return torch.clamp(base_actions + residual_actions, -1.0, 1.0)
 
     def _residual_actor_action_log_prob(
@@ -261,6 +438,24 @@ class ResidualSAC(SAC):
         del obs
         self._reset_base_action_provider()
         self._cached_base_actions = None
+        self._sample_warmup_policy_selection()
+
+    def _sample_warmup_policy_selection(
+        self, env_ids: Optional[torch.Tensor] = None
+    ) -> None:
+        if self._warmup_policy is None:
+            self._warmup_use_policy = None
+            return
+        if self._warmup_use_policy is None:
+            self._warmup_use_policy = torch.zeros(
+                self.num_envs, dtype=torch.bool, device=self.device
+            )
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        draws = torch.rand(env_ids.numel(), device=self.device)
+        self._warmup_use_policy[env_ids] = (
+            draws < self.residual_warmup_policy_probability
+        )
 
     def _rollout_action(
         self, obs, learning_has_started: bool
@@ -271,8 +466,27 @@ class ResidualSAC(SAC):
             base_actions = self._cached_base_actions
             self._cached_base_actions = None
         if not learning_has_started:
-            shape = (self.num_envs,) + self.env.single_action_space.shape
-            unit_residual = 2 * torch.rand(shape, dtype=torch.float32, device=self.device) - 1
+            if self._warmup_policy is not None:
+                if self._warmup_use_policy is None:
+                    self._sample_warmup_policy_selection()
+                assert self._warmup_use_policy is not None
+                with torch.no_grad():
+                    checkpoint_residual = self._warmup_policy.predict(
+                        {"state": self._obs_to_policy_device(obs)["state"]},
+                        base_actions=base_actions,
+                        deterministic=True,
+                    )
+                unit_residual = torch.where(
+                    self._warmup_use_policy[:, None],
+                    checkpoint_residual,
+                    torch.zeros_like(checkpoint_residual),
+                )
+            else:
+                shape = (self.num_envs,) + self.env.single_action_space.shape
+                unit_residual = self.residual_warmup_scale * (
+                    2 * torch.rand(shape, dtype=torch.float32, device=self.device)
+                    - 1
+                )
         else:
             with torch.no_grad():
                 unit_residual = self.policy.predict(
@@ -313,8 +527,10 @@ class ResidualSAC(SAC):
         del action_context, infos
         done = terminations | truncations
         if done.any():
-            self._reset_base_action_provider(torch.where(done)[0])
+            done_ids = torch.where(done)[0]
+            self._reset_base_action_provider(done_ids)
             self._cached_base_actions = None
+            self._sample_warmup_policy_selection(done_ids)
 
     def get_action(
         self,
@@ -336,7 +552,9 @@ class ResidualSAC(SAC):
         return env_action, {
             "base_actions": base_actions,
             "unit_residual_actions": unit_residual,
-            "residual_actions": unit_residual * self.residual_action_scale,
+            "residual_actions": (
+                unit_residual * self._residual_scale_tensor(unit_residual)
+            ),
             "final_actions": final_naction,
         }
 

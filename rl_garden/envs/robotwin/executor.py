@@ -2,14 +2,38 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 import numpy as np
 
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
 from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
+
+
+_EXECUTOR_TIMEOUT_EXIT_CODE = 124
+
+
+def _terminate_process_after_executor_timeout(operation: str, timeout_seconds: float) -> NoReturn:
+    """Hard-exit when a native RoboTwin call ignores cancellation.
+
+    A timed-out MPLib/SAPIEN call can remain inside C++ while holding a SubEnv
+    lock. Normal exception unwinding then deadlocks in ``close()`` while trying
+    to acquire that same lock. A process boundary is the only reliable way to
+    reclaim those native resources; the outer launcher may resume from the
+    latest complete checkpoint/replay pair.
+    """
+    print(
+        "[robotwin-executor-fatal] "
+        f"RoboTwin {operation} exceeded executor_timeout_seconds={timeout_seconds:g}; "
+        f"hard-exiting with code {_EXECUTOR_TIMEOUT_EXIT_CODE} because native cleanup may deadlock.",
+        file=sys.stderr,
+        flush=True,
+    )
+    os._exit(_EXECUTOR_TIMEOUT_EXIT_CODE)
 
 
 class SubEnv:
@@ -59,6 +83,7 @@ class ThreadedRoboTwinExecutor:
         self.cfg = cfg
         self.num_envs = cfg.num_envs
         self.global_lock = threading.Lock()
+        self.timeout_seconds = float(cfg.executor_timeout_seconds)
         self.pool = ThreadPoolExecutor(max_workers=cfg.num_envs)
         self.envs = [
             SubEnv(i, cfg, task_args, env_seeds[i] if i < len(env_seeds) else None, self.global_lock)
@@ -72,14 +97,23 @@ class ThreadedRoboTwinExecutor:
             seed = None if env_seeds is None else env_seeds[offset]
             futures[idx] = self.pool.submit(self.envs[idx].reset, seed)
         for idx in indices:
-            futures[idx].result(timeout=180)
+            self._wait(futures[idx], operation=f"reset env {idx}")
         return self.get_obs()
 
     def step(self, actions: np.ndarray) -> list[StepResult]:
         if actions.shape[0] != self.num_envs:
             raise ValueError(f"Expected {self.num_envs} actions, got {actions.shape[0]}.")
         futures = [self.pool.submit(self.envs[i].step, actions[i]) for i in range(self.num_envs)]
-        return [future.result(timeout=180) for future in futures]
+        return [
+            self._wait(future, operation=f"step env {idx}")
+            for idx, future in enumerate(futures)
+        ]
+
+    def _wait(self, future, *, operation: str):
+        try:
+            return future.result(timeout=self.timeout_seconds)
+        except TimeoutError:
+            _terminate_process_after_executor_timeout(operation, self.timeout_seconds)
 
     def get_obs(self) -> list[dict[str, Any]]:
         return [env.get_obs() for env in self.envs]
