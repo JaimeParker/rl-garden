@@ -42,7 +42,7 @@ ACT base action [B,14] + scaled residual [B,14]
 
 这里要区分两个不同上限：`delta_ee_terminal_settle_max_ticks=100` 限制一条 delta-EE 命令完成后的物理收敛等待；`step_lim=500` 限制一个 episode 的高层策略步数。不过两个上限叠加起来一定程度上降低了训练速度。
 
-上述到位判定、空轨迹保护、command reference/reanchor、规划终点校验和 SRDF allowed collision matrix 位于当前配套 RoboTwin runtime（记录的目标 runtime 为 Git commit `964a4e4b1c434d62a5d106a8fbc543210641a8d9`）；rl-garden 负责产生 14 维动作、把相关参数传到 task config，并确保训练与评估走同一配置。为避免只提交 rl-garden 而漏掉真正的执行器修正，本次提交已把 RoboTwin 外部补丁放在 [`patches/robotwin/delta-ee-executor/`](../patches/robotwin/delta-ee-executor/README.md)：其中 `robotwin-delta-ee-executor.patch` 是可应用补丁，`files/envs/_base_task.py` 和 `files/envs/robot/planner.py` 是目标源码副本，`MANIFEST.json` 记录 base/target 文件哈希。
+上述到位判定、空轨迹保护、command reference/reanchor、规划终点校验和 SRDF allowed collision matrix 由独立的 [RoboTwin fork](https://github.com/Nole326/RoboTwin) 提供，固定使用 commit [`77ed01b786767dc1f912ff8e1cf0148ed7a7aae2`](https://github.com/Nole326/RoboTwin/tree/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2)。其中两个执行器源码文件与此前交付的补丁目标逐字节一致；本次只调整源码归属和依赖交付方式，不改变执行器行为或实验配置。rl-garden 仍负责产生 14 维动作、传递 task config 和组织训练/评估，不再随仓库分发 RoboTwin 补丁及源码副本。详细说明见 fork 中的 [Delta-EE executor integration](https://github.com/Nole326/RoboTwin/blob/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2/docs/DELTA_EE_EXECUTOR.md)。
 
 #### 超时保护只作为执行器异常边界
 
@@ -56,7 +56,8 @@ ACT base action [B,14] + scaled residual [B,14]
 - [`rl_garden/envs/robotwin/config.py`](../rl_garden/envs/robotwin/config.py)：保存环境配置，并校验 delta-EE 的 14 维动作、正数 timeout、reset/cache 和 reward 约束。
 - [`rl_garden/envs/robotwin/adapter.py`](../rl_garden/envs/robotwin/adapter.py)：把归一化 14 维策略动作转换为 RoboTwin 16 维 delta-EE 指令，调用 `take_action`，并把连续关节角规范化到与演示数据一致的主值范围。
 - [`rl_garden/envs/robotwin/executor.py`](../rl_garden/envs/robotwin/executor.py)：并行调度各 sub-env 的 `step/reset`；仅在 native 调用超过等待边界且无法安全取消时记录错误并以退出码 `124` 终止进程。
-- [`patches/robotwin/delta-ee-executor/`](../patches/robotwin/delta-ee-executor/README.md)：交付外部 RoboTwin runtime 的两文件补丁。`envs/_base_task.py` 包含 command reference、reanchor、近零/空轨迹 hold、除零保护和 terminal settle；`envs/robot/planner.py` 包含 SRDF allowed collision matrix、`mplib_screw` 候选步长、完整 articulation qpos 和终点 FK 校验。
+- 外部 RoboTwin fork 的 [`envs/_base_task.py`](https://github.com/Nole326/RoboTwin/blob/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2/envs/_base_task.py)：包含 command reference、reanchor、近零/空轨迹 hold、除零保护和 terminal settle。
+- 外部 RoboTwin fork 的 [`envs/robot/planner.py`](https://github.com/Nole326/RoboTwin/blob/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2/envs/robot/planner.py)：包含 SRDF allowed collision matrix、`mplib_screw` 候选步长、完整 articulation qpos 和终点 FK 校验。
 
 ### 2. Reward 构建优化
 
@@ -210,6 +211,24 @@ Conv 18->18, kernel=3, stride=1, padding=0, ReLU   27 -> 25
 
 融合器是 `1x1` 卷积，三个 trunk 不共享参数；卷积权重正交初始化，bias 为零。
 
+## 配套 RoboTwin 依赖
+
+当前 `open_laptop` delta-EE 路径使用 [Nole326/RoboTwin](https://github.com/Nole326/RoboTwin) 的 `fix/delta-ee-executor` 分支，运行时固定到 `77ed01b786767dc1f912ff8e1cf0148ed7a7aae2`，不要用移动分支或最新 upstream `main` 替代该版本。
+
+在新的源码目录中获取固定版本，不覆盖正在运行的 checkout：
+
+```bash
+git clone --branch fix/delta-ee-executor https://github.com/Nole326/RoboTwin.git RoboTwin-delta-ee
+git -C RoboTwin-delta-ee checkout --detach 77ed01b786767dc1f912ff8e1cf0148ed7a7aae2
+git -C RoboTwin-delta-ee rev-parse HEAD
+```
+
+最后一条命令应输出上述完整 commit。该 fork 已包含执行器修正，不需要另行应用补丁。克隆仅获取源码，不下载 assets、演示数据或模型，也不安装运行依赖；请沿用已核验的运行环境和资源版本。
+
+下方 residual launcher 的 `ROBOTWIN_ROOT` 应指向这个固定版本的本地目录，`ROBOTWIN_ASSETS_PATH` 继续指向已有 assets 目录，两者可以不同。其他入口若使用 `--robotwin.robotwin-root` 或 `RLG_ROBOTWIN_ROOT`，也应按相应入口指向同一 checkout；这些是既有路径接口，不是新增算法参数。文档中的地址不会自动下载依赖或切换服务器上的运行任务。
+
+本次迁移不调整 reward、bootstrap、residual scale、encoder、reset 或训练/评估参数。各值仍以下方原配置和现有 launcher 为准。
+
 ## 参考训练配置
 
 |              项目              |                   值                   |
@@ -231,7 +250,7 @@ Conv 18->18, kernel=3, stride=1, padding=0, ReLU   27 -> 25
 训练启动脚本 [`train_residual_sac_robotwin_open_laptop_independent_late_fusion.sh`](../scripts/train_residual_sac_robotwin_open_laptop_independent_late_fusion.sh) 使用仓库相对入口，并通过环境变量传入四个本机资源位置：RoboTwin checkout、RoboTwin assets、ACT checkpoint 和 residual warmup checkpoint。脚本显式列出当前配置所用的训练超参数、模型结构参数和 RoboTwin 环境参数；实际运行时必须指向正确的源码、RoboTwin runtime、assets 和 checkpoint。
 
 ```bash
-ROBOTWIN_ROOT=/path/to/RoboTwin \
+ROBOTWIN_ROOT=/path/to/RoboTwin-delta-ee \
 ROBOTWIN_ASSETS_PATH=/path/to/RoboTwin \
 ACT_CHECKPOINT=/path/to/act/final.pt \
 RESIDUAL_WARMUP_CHECKPOINT=/path/to/state-residual/final.pt \
