@@ -61,6 +61,8 @@ ACT base action [B,14] + scaled residual [B,14]
 
 ### 2. Reward 构建优化
 
+完整公式、各奖励项、启用方式和源码文件说明见 [Open-Laptop Reward](ROBOTWIN_OPEN_LAPTOP_REWARD.md)。
+
 Reward 构建相关代码已在此前提交完成，本次不重复提交 reward 文件：
 
 - [reward commit `ef29090e5f5e7dc0406cb26d7f584a195f41ba24`](https://github.com/Nole326/rl-garden/commit/ef29090e5f5e7dc0406cb26d7f584a195f41ba24)
