@@ -114,6 +114,7 @@ def test_phase_registries_discover_expected_algorithms():
         "diffusion_bc",
         "vision_diffusion_bc",
         "flow_bc",
+        "mean_flow_bc",
         "fql",
         "hilp",
         "idql",

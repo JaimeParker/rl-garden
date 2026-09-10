@@ -24,6 +24,7 @@ from rl_garden.algorithms.hilp import HILP
 from rl_garden.algorithms.idql import IDQL
 from rl_garden.algorithms.iql import IQL
 from rl_garden.algorithms.jsrl import JSRL
+from rl_garden.algorithms.mean_flow_bc import MeanFlowBC
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
     OfflinePretrainResult,
@@ -96,6 +97,7 @@ __all__ = [
     "IDQL",
     "IQL",
     "JSRL",
+    "MeanFlowBC",
     "OfflineEnvSpec",
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",

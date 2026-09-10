@@ -500,6 +500,32 @@ class OfflineFlowBCArgs:
 
 
 @dataclass
+class OfflineMeanFlowBCArgs:
+    """MeanFlowBC-specific network/training knobs. Same rationale as
+    ``OfflineFlowBCArgs`` for not building on ``OfflineActorArgs``."""
+
+    actor_lr: float = 3e-4
+    net_arch: tuple[int, ...] = (512, 512, 512, 512)
+    num_sample_steps: int = 1
+    mode: Literal["meanflow", "i-meanflow"] = "i-meanflow"
+    time_dist_mu: float = 0.4
+    time_dist_sigma: float = 1.0
+    adaptive_l2_gamma: float = 0.0
+    adaptive_l2_c: float = 1e-2
+    actor_use_layer_norm: bool = False
+    kernel_init: Optional[
+        Literal[
+            "xavier_uniform",
+            "xavier_normal",
+            "orthogonal",
+            "kaiming_uniform",
+            "orthogonal_near_zero_output",
+        ]
+    ] = None
+    activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
+
+
+@dataclass
 class OfflineWSRLArgs:
     training_freq: int = 64
 
