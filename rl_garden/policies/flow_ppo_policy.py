@@ -12,6 +12,15 @@ follows FQL/ACFQL's convention, not DPPO's: a chunk of ``horizon_length``
 future actions is denoised jointly as one flat ``action_dim =
 horizon_length * base_action_dim`` vector (no separate per-timestep
 ``horizon_steps`` axis inside the network).
+
+Box or Dict (CNN-based vision, via ``CombinedExtractor``) observations.
+``_features(obs)`` is the single seam where obs becomes conditioning --
+mirrors ``DPPOPolicy._cond``'s own docstring note: rollout collection
+(``FlowPPO._rollout_step``) and training (``FlowPPO._flow_ppo_loss``) both
+call it once per env-step/minibatch and reuse the resulting tensor across
+the whole K-step SDE trajectory. Gradient isolation (critic trains the
+encoder, actor path detaches) is implemented at the
+``FlowPPO._flow_ppo_loss`` call site, not inside this method.
 """
 from __future__ import annotations
 
@@ -22,6 +31,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.common.types import Obs
+from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_vector_field import ActorVectorField, flow_logprob, flow_sde_step
 from rl_garden.networks.value import ValueNetwork
@@ -31,9 +41,10 @@ from rl_garden.policies.base import BasePolicy
 class FlowPPOPolicy(BasePolicy):
     def __init__(
         self,
-        observation_space: spaces.Box,
+        observation_space: spaces.Box | spaces.Dict,
         action_space: spaces.Box,
         *,
+        features_extractor: BaseFeaturesExtractor,
         flow_steps: int,
         horizon_length: int = 1,
         actor_mlp_dims: Sequence[int] = (256, 256, 256),
@@ -50,14 +61,15 @@ class FlowPPOPolicy(BasePolicy):
         super().__init__()
         assert isinstance(action_space, spaces.Box), "FlowPPOPolicy requires a Box action space."
         assert isinstance(
-            observation_space, spaces.Box
-        ), "FlowPPOPolicy is state-only (Box observations); vision is out of scope."
+            observation_space, (spaces.Box, spaces.Dict)
+        ), "FlowPPOPolicy supports Box or Dict observation spaces only."
         if flow_steps <= 0:
             raise ValueError(f"flow_steps must be positive, got {flow_steps}.")
         if horizon_length < 1:
             raise ValueError(f"horizon_length must be >= 1, got {horizon_length}.")
 
         self.observation_space = observation_space
+        self.features_extractor = features_extractor
         # `action_space` is the RAW per-step Box (shape (base_action_dim,)),
         # matching DPPOPolicy's convention -- the caller strips any
         # ActionChunkWrapper horizon axis before constructing this policy.
@@ -72,10 +84,10 @@ class FlowPPOPolicy(BasePolicy):
 
         self.base_action_dim = int(np.prod(action_space.shape))
         self.action_dim = self.base_action_dim * horizon_length
-        self.obs_dim = int(np.prod(observation_space.shape))
+        fd = features_extractor.features_dim
 
         self.actor = ActorVectorField(
-            features_dim=self.obs_dim,
+            features_dim=fd,
             action_dim=self.action_dim,
             hidden_dims=actor_mlp_dims,
             use_time_conditioning=True,
@@ -83,7 +95,7 @@ class FlowPPOPolicy(BasePolicy):
             activation_fn=actor_activation_fn,
         )
         self.critic = ValueNetwork(
-            self.obs_dim,
+            fd,
             critic_mlp_dims,
             kernel_init=kernel_init,
             activation_fn=critic_activation_fn,
@@ -96,8 +108,8 @@ class FlowPPOPolicy(BasePolicy):
         self.register_buffer("action_low", low)
         self.register_buffer("action_high", high)
 
-    def _features(self, obs: torch.Tensor) -> torch.Tensor:
-        return obs.reshape(obs.shape[0], -1)
+    def _features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
+        return self._extract_features(obs, stop_gradient=stop_gradient)
 
     def to_chunk_shape(self, flat_action: torch.Tensor) -> torch.Tensor:
         """``(N, action_dim) -> (N, horizon_length, base_action_dim)``, the
@@ -120,7 +132,7 @@ class FlowPPOPolicy(BasePolicy):
         )
 
     def sample_rollout_chain(
-        self, obs: torch.Tensor, deterministic: bool = False
+        self, obs: Obs, deterministic: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """No-grad sampling. ``deterministic=False`` (rollout collection):
         full stochastic SDE trajectory. ``deterministic=True`` (evaluation):
@@ -176,11 +188,10 @@ class FlowPPOPolicy(BasePolicy):
         mean, std = self._sde_step(velocity, chains_prev, tau)
         return flow_logprob(chains_next, mean, std, mode=self.logprob_mode)
 
-    def predict_values(self, obs: torch.Tensor) -> torch.Tensor:
+    def predict_values(self, obs: Obs) -> torch.Tensor:
         return self.critic(self._features(obs)).view(-1)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        assert isinstance(obs, torch.Tensor)
         _, _, action = self.sample_rollout_chain(obs, deterministic=deterministic)
         return self.to_chunk_shape(action)
 

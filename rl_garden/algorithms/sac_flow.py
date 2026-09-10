@@ -9,8 +9,13 @@ this subclass only swaps the actor network (`FlowMatchingActor`, see
 loss, target Q, actor loss, alpha tuning, train loop) is inherited from `SAC`
 unmodified, same shape as `SequenceSAC` swapping in a recurrent actor.
 
-Flat Box observations only for this version -- Dict/RGBD structured obs are
-rejected, mirroring `SequenceSAC._build_policy`'s guard.
+Box observations, and Dict/RGBD observations via a CNN-based (non-ViT)
+``CombinedExtractor`` (`SAC`'s own vision pipeline, inherited unmodified), are
+supported. A raw ViT token extractor is rejected below -- it installs a
+structured features extractor (`structured_feature_config() is not None`)
+that `FlowMatchingActor` (a plain features_dim-generic MLP trunk) has not
+been verified against; that combination is out of scope for this port,
+mirroring `SequenceSAC._build_policy`'s own guard shape.
 """
 from __future__ import annotations
 
@@ -47,7 +52,9 @@ class SACFlow(SAC):
         if features_extractor.structured_feature_config() is not None:
             raise NotImplementedError(
                 f"{type(self).__name__} only supports flat-latent feature "
-                "extractors this round (Dict/RGBD structured obs untested)."
+                "extractors (Box, or Dict/RGBD via CombinedExtractor); a "
+                "structured (ViT token) extractor is untested against "
+                "FlowMatchingActor and not supported this round."
             )
         return SACFlowPolicy(
             observation_space=self.env.single_observation_space,

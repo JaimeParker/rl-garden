@@ -87,10 +87,17 @@ import torch.nn.functional as F
 from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
+from rl_garden.buffers.chunked_dict_replay_buffer import ChunkedDictReplayBuffer
 from rl_garden.buffers.chunked_replay_buffer import ChunkedTensorReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
+from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import (
+    CombinedExtractor,
+    ImageEncoderFactory,
+    default_image_encoder_factory,
+)
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
@@ -132,6 +139,7 @@ class QGFCore:
         actor_num_samples: int = 32,
         robust_critic_lr: float = 3e-4,
         robust_critic_t_emb_size: int = 16,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
         net_arch: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -182,6 +190,7 @@ class QGFCore:
         self.actor_num_samples = actor_num_samples
         self.robust_critic_lr = robust_critic_lr
         self.robust_critic_t_emb_size = robust_critic_t_emb_size
+        self.image_encoder_factory = image_encoder_factory
         self.net_arch: list[int] = (
             list(net_arch) if net_arch is not None else [512, 512, 512, 512]
         )
@@ -252,10 +261,45 @@ class QGFCore:
         high = np.tile(np.asarray(raw.high, dtype=np.float32).reshape(-1), self.horizon_length)
         return spaces.Box(low=low, high=high, dtype=np.float32)
 
-    def _build_replay_buffer(self) -> ChunkedTensorReplayBuffer:
+    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
         obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Box):
+            return FlattenExtractor
+        return CombinedExtractor
+
+    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        if isinstance(self.env.single_observation_space, spaces.Dict):
+            return {
+                "image_encoder_factory": (
+                    self.image_encoder_factory or default_image_encoder_factory()
+                ),
+            }
+        return {}
+
+    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+        cls = self._default_features_extractor_class()
+        return cls(
+            observation_space=self.env.single_observation_space,
+            **self._default_features_extractor_kwargs(),
+        )
+
+    def _build_replay_buffer(self):
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Dict):
+            return ChunkedDictReplayBuffer(
+                observation_space=obs_space,
+                action_space=self.env.single_action_space,
+                num_envs=self.num_envs,
+                buffer_size=self.buffer_size,
+                horizon_length=self.horizon_length,
+                gamma=self.gamma,
+                storage_device=self.buffer_device,
+                sample_device=self.device,
+            )
         if not isinstance(obs_space, spaces.Box):
-            raise TypeError("QGF is state-only (Box observations); vision is out of scope.")
+            raise TypeError(
+                f"QGF supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
         return ChunkedTensorReplayBuffer(
             observation_space=obs_space,
             action_space=self.env.single_action_space,
@@ -269,9 +313,11 @@ class QGFCore:
 
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError("QGF is state-only (Box observations); vision is out of scope.")
-        features_extractor = FlattenExtractor(observation_space=obs_space)
+        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
+            raise TypeError(
+                f"QGF supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
+        features_extractor = self._build_features_extractor()
         self.policy = QGFPolicy(
             observation_space=obs_space,
             action_space=self._policy_action_space(),
@@ -513,6 +559,7 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         actor_num_samples: int = 32,
         robust_critic_lr: float = 3e-4,
         robust_critic_t_emb_size: int = 16,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
         net_arch: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -579,6 +626,7 @@ class QGF(QGFCore, OfflineRLAlgorithm):
             actor_num_samples=actor_num_samples,
             robust_critic_lr=robust_critic_lr,
             robust_critic_t_emb_size=robust_critic_t_emb_size,
+            image_encoder_factory=image_encoder_factory,
             net_arch=net_arch,
             actor_use_layer_norm=actor_use_layer_norm,
             critic_use_layer_norm=critic_use_layer_norm,
@@ -589,7 +637,7 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         )
 
         obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(f"QGF supports only Box observation spaces, got {type(obs_space)}")
+        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
+            raise TypeError(f"QGF supports Box or Dict observation spaces, got {type(obs_space)}")
 
         self._setup_model()

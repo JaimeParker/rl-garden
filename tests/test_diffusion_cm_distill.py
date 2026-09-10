@@ -13,10 +13,18 @@ from gymnasium.vector.utils import batch_space
 
 from rl_garden.algorithms import DiffusionBC, DiffusionCMDistillOnline, OfflineEnvSpec
 from rl_garden.algorithms.diffusion_cm_distill import _scalings_for_boundary_conditions
+from rl_garden.encoders.combined import default_image_encoder_factory
 from rl_garden.envs.wrappers import ActionChunkWrapper
 
 OBS_DIM = 5
 ACTION_DIM = 2
+# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
+# images without PlainConv's flatten-layer size mismatch. Mirrors
+# tests/test_fql_core.py's own vision-test image encoder factory.
+IMG_SIZE = 16
+_test_image_encoder_factory = default_image_encoder_factory(
+    features_dim=16, plain_conv_pooling="gap"
+)
 EPISODE_LEN = 6
 
 
@@ -61,6 +69,59 @@ class _FakeEnv(gym.Env):
 
 def _make_env(num_envs: int, act_steps: int) -> ActionChunkWrapper:
     return ActionChunkWrapper(_FakeEnv(num_envs), act_steps=act_steps)
+
+
+class _FakeVisionEnv(gym.Env):
+    """Dict/RGBD-obs sibling of _FakeEnv, matching test_dppo_smoke.py's own
+    vision fixture."""
+
+    def __init__(self, num_envs: int = 4) -> None:
+        self.num_envs = num_envs
+        self._step_count = torch.zeros(num_envs, dtype=torch.long)
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+                "state": spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
+            }
+        )
+        self.observation_space = batch_space(self.single_observation_space, num_envs)
+        self.single_action_space = spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32)
+        self.action_space = batch_space(self.single_action_space, num_envs)
+
+    def _obs(self):
+        return {
+            "rgb": torch.randint(
+                0, 256, (self.num_envs, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8
+            ),
+            "state": torch.randn(self.num_envs, OBS_DIM),
+        }
+
+    def reset(self, *, seed=None, options=None):
+        del seed, options
+        self._step_count.zero_()
+        return self._obs(), {}
+
+    def step(self, action):
+        del action
+        self._step_count += 1
+        done = self._step_count >= EPISODE_LEN
+        reward = torch.ones(self.num_envs)
+        info = {}
+        if done.any():
+            info = {
+                "final_observation": self._obs(),
+                "_final_observation": done.clone(),
+                "final_info": {"episode": {"return": (self._step_count.float() * reward)}},
+                "_final_info": done.clone(),
+            }
+            self._step_count[done] = 0
+        terminated = done.clone()
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool)
+        return self._obs(), reward, terminated, truncated, info
+
+
+def _make_vision_env(num_envs: int, act_steps: int) -> ActionChunkWrapper:
+    return ActionChunkWrapper(_FakeVisionEnv(num_envs), act_steps=act_steps)
 
 
 def _make_agent(**overrides):
@@ -156,6 +217,24 @@ def test_scalings_for_boundary_conditions_timestep_scaling_grades_the_curve():
 def test_learn_and_train_runs_and_produces_finite_losses():
     torch.manual_seed(0)
     agent = _make_agent()
+    agent.learn(total_timesteps=3 * 4 * 2)
+    losses = agent.train()
+    for key, value in losses.items():
+        assert np.isfinite(value), (key, value)
+    assert "cm_distill_loss" in losses
+
+
+def test_vision_learn_and_train_runs_and_produces_finite_losses():
+    """Confirms the inherited-from-DPPO vision path (DPPOPolicy._cond, fixed
+    in Milestone 4) actually works end to end for this subclass too -- not
+    just "should work by inheritance." cm_student's cond_dim now comes from
+    self.policy.features_extractor.features_dim (see _setup_model), so this
+    also exercises that fix."""
+    torch.manual_seed(0)
+    agent = _make_agent(
+        env=_make_vision_env(num_envs=4, act_steps=2),
+        image_encoder_factory=_test_image_encoder_factory,
+    )
     agent.learn(total_timesteps=3 * 4 * 2)
     losses = agent.train()
     for key, value in losses.items():

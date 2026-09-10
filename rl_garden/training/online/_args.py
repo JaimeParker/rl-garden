@@ -115,13 +115,32 @@ class VisionTransformerSACTrainingArgs(TransformerSACTrainingArgs, VisionArgs):
 
 @dataclass
 class SACFlowTrainingArgs(SACTrainingArgs):
-    """SACFlow -- flow-matching actor. State-obs only in this version."""
+    """SACFlow -- flow-matching actor. State observations (use
+    ``VisionSACFlowTrainingArgs`` for Dict/RGBD)."""
 
     denoising_steps: int = 4
     noise_std: float = 0.3
     flow_hidden_dim: int = 256
     flow_hidden_layers: int = 3
     flow_use_layer_norm: bool = False
+
+
+@dataclass
+class VisionSACFlowTrainingArgs(SACFlowTrainingArgs, VisionArgs):
+    """SACFlow, state-obs by default (unlike plain ``SAC``'s visual-by-
+    default ``VisionSACTrainingArgs``) -- pass ``--obs_mode rgb`` to opt into
+    Dict/RGBD observations (CNN-based encoders only; see ``SACFlow``'s own
+    docstring for why ``--encoder vit`` and ``--critic-encoder`` are not
+    supported this round). Defaulting to state-obs, and leaving
+    ``buffer_size``/``batch_size``/``utd`` at ``SACFlowTrainingArgs``'s
+    existing (state-tuned) values rather than mirroring
+    ``VisionSACTrainingArgs``'s smaller visual-tuned defaults, preserves
+    ``sac_flow``'s existing CLI behavior byte-for-byte for every current
+    caller that doesn't pass ``--obs_mode`` -- a visual run should pass
+    ``--buffer_size``/``--batch_size``/``--utd`` explicitly if the 1M-buffer
+    state default isn't appropriate for image observations."""
+
+    obs_mode: str = "state"
 
 
 @dataclass

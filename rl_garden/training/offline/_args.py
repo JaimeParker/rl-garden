@@ -626,7 +626,7 @@ class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
 @dataclass
 class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
-    State-only (Box observations) -- no vision support in v1."""
+    Box or Dict (vision) observations."""
 
     horizon_length: int = 1
     actor_lr: float = 3e-4
@@ -664,10 +664,10 @@ class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
 @dataclass
 class OfflineQAMArgs(OfflineDeterministicActorCriticArgs):
     """QAM (Q-learning with Adjoint Matching) hyperparameters. Defaults
-    match qam's get_config(). State-only (Box observations) -- no vision
-    support in v1. `edit_scale`'s network construction is a best-effort
-    reconstruction of upstream-missing code (see rl_garden/policies/
-    qam_policy.py's docstring)."""
+    match qam's get_config(). Box or Dict (vision) observations.
+    `edit_scale`'s network construction is a best-effort reconstruction of
+    upstream-missing code (see rl_garden/policies/qam_policy.py's
+    docstring)."""
 
     horizon_length: int = 1
     actor_lr: float = 3e-4

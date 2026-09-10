@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from gymnasium import spaces
+
 from rl_garden.training.offline._args import (
     OfflineCommonArgs,
     OfflineDeviceArgs,
@@ -25,13 +27,13 @@ class QGFArgs(
     OfflineDiscountArgs,
     OfflineQGFArgs,
 ):
-    """QGF (Q-Guided Flow) offline pretraining. Box (state) observations only."""
+    """QGF (Q-Guided Flow) offline pretraining. Box or Dict (vision) observations."""
 
 
 def _qgf_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    return {
+    kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
@@ -82,6 +84,11 @@ def _qgf_kwargs(
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
     }
+    if isinstance(env_spec.single_observation_space, spaces.Dict):
+        from rl_garden.common.cli_args import image_encoder_factory_from_args
+
+        kwargs["image_encoder_factory"] = image_encoder_factory_from_args(args)
+    return kwargs
 
 
 def build_qgf(args, env_spec, logger, eval_env=None):

@@ -123,7 +123,7 @@ class DiffusionCMDistillOnline(DPPO):
         self.cm_student = DiffusionMLP(
             action_dim=self.policy.action_dim,
             horizon_steps=self.horizon_steps,
-            cond_dim=self.policy.obs_dim,
+            cond_dim=self.policy.features_extractor.features_dim,
             time_dim=self.time_dim,
             mlp_dims=mlp_dims,
             activation_fn=self.actor_activation_fn,
@@ -222,7 +222,12 @@ class DiffusionCMDistillOnline(DPPO):
         below is under ``torch.no_grad()`` so this step cannot leak gradient
         into the PPO-trained teacher (``actor``/``actor_ft``)."""
         obs_flat = flatten_leading_dims(self.rollout_buffer.obs)
-        cond = self.policy._cond(obs_flat)
+        # Detached: this distillation step must not train the shared
+        # features_extractor (only the critic loss does, see DPPO._dppo_loss's
+        # own comment) -- cm_optimizer doesn't include it anyway (so this was
+        # harmless-but-wasted compute, not a correctness bug), but detaching
+        # here makes that explicit rather than relying on optimizer-grouping.
+        cond = self.policy._cond(obs_flat, stop_gradient=True)
         latents = self._chain_buffer.chains[:, :, -1].reshape(
             -1, self.horizon_steps, self.policy.action_dim
         )

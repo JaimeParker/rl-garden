@@ -9,8 +9,11 @@ Gaussian-specific, e.g. ``behavior_log_prob``) or ``DiffusionPolicy`` (single
 inheritance can't compose both) -- the critic/value and actor/diffusion
 halves are each a direct, unmodified reuse of the *network classes*
 (``EnsembleQCritic``, ``ValueNetwork``, ``DiffusionMLP``) those policies
-already use, assembled fresh here. State-based (Box observations) only,
-matching ``DiffusionMLP``'s own scope.
+already use, assembled fresh here. Box or Dict (CNN-based vision, via
+``CombinedExtractor``) observations -- ``DiffusionMLP`` only ever sees
+``features_extractor.features_dim``-wide vectors through ``cond["state"]``,
+so it does not care whether those features came from raw state or an image
+encoder.
 """
 from __future__ import annotations
 
@@ -37,7 +40,7 @@ from rl_garden.policies.base import BasePolicy
 class IDQLPolicy(DiffusionProcess, BasePolicy):
     def __init__(
         self,
-        observation_space: spaces.Box,
+        observation_space: spaces.Box | spaces.Dict,
         action_space: spaces.Box,
         features_extractor: BaseFeaturesExtractor,
         *,
@@ -65,8 +68,8 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         super().__init__()
         assert isinstance(action_space, spaces.Box), "IDQLPolicy requires a Box action space."
         assert isinstance(
-            observation_space, spaces.Box
-        ), "IDQLPolicy is state-only (Box observations); vision is out of scope."
+            observation_space, (spaces.Box, spaces.Dict)
+        ), "IDQLPolicy supports Box or Dict observation spaces only."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
         self.observation_space = observation_space

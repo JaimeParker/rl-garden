@@ -84,6 +84,13 @@ from rl_garden.buffers.rollout_buffer import RolloutBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import (
+    CombinedExtractor,
+    ImageEncoderFactory,
+    default_image_encoder_factory,
+)
+from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.policies.flow_ppo_policy import FlowPPOPolicy
 
@@ -238,6 +245,7 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         clip_advantage_upper_quantile: float = 1.0,
         vf_coef: float = 0.5,
         target_kl: Optional[float] = 1.0,
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -251,10 +259,11 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         save_final_checkpoint: bool = True,
     ) -> None:
         obs_space = env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
+        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
             raise TypeError(
-                f"FlowPPO is state-only (Box observations); got {type(obs_space)}."
+                f"FlowPPO supports Box or Dict observation spaces, got {type(obs_space)}."
             )
+        self.image_encoder_factory = image_encoder_factory
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -316,6 +325,28 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
 
         self._setup_model()
 
+    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
+        obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Box):
+            return FlattenExtractor
+        return CombinedExtractor
+
+    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
+        if isinstance(self.env.single_observation_space, spaces.Dict):
+            return {
+                "image_encoder_factory": (
+                    self.image_encoder_factory or default_image_encoder_factory()
+                ),
+            }
+        return {}
+
+    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+        cls = self._default_features_extractor_class()
+        return cls(
+            observation_space=self.env.single_observation_space,
+            **self._default_features_extractor_kwargs(),
+        )
+
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
         raw_action_space = spaces.Box(
@@ -324,8 +355,10 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
             shape=self.env.single_action_space.shape[1:],
             dtype=self.env.single_action_space.dtype,
         )
+        features_extractor = self._build_features_extractor()
         self.policy = FlowPPOPolicy(
             observation_space=obs_space,
+            features_extractor=features_extractor,
             action_space=raw_action_space,
             flow_steps=self.flow_steps,
             horizon_length=self.horizon_length,
@@ -348,7 +381,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
             use_adamw=True,
         )
         self.critic_optimizer = make_optimizer(
-            list(self.policy.critic.parameters()),
+            list(self.policy.critic.parameters())
+            + list(self.policy.features_extractor.parameters()),
             lr=self.critic_lr,
             weight_decay=self.weight_decay,
             use_adamw=True,
@@ -517,8 +551,15 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         advantages_b: torch.Tensor,
         logprobs_b: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
+        # Gradient isolation: features_b is grad-enabled (the critic loss
+        # below, `self.policy.critic(features_b)`, trains the shared
+        # features_extractor -- SACPolicy's own convention, mirrors
+        # DPPO._dppo_loss's identical comment). The actor's log-prob path
+        # must not also backprop into it -- detach the copy fed to the actor
+        # rather than re-running the (possibly image) encoder a second time.
+        features_actor = features_b.detach()
         newlogprobs = self.policy.get_logprobs_subsample(
-            features_b, chains_prev_b, chains_next_b, flow_step_inds_b
+            features_actor, chains_prev_b, chains_next_b, flow_step_inds_b
         ).mean(dim=-1)
         oldlogprobs = logprobs_b.mean(dim=-1)
 

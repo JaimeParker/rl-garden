@@ -65,11 +65,13 @@ from rl_garden.algorithms._chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.fql import FQLCore
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
+from rl_garden.buffers.chunked_dict_replay_buffer import ChunkedDictReplayBuffer
 from rl_garden.buffers.chunked_replay_buffer import ChunkedTensorReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.utils import polyak_update
+from rl_garden.encoders.combined import ImageEncoderFactory
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.policies.acfql_policy import ACFQLPolicy, ActorType, EncoderSharing
@@ -94,10 +96,23 @@ class ACFQLCore(FQLCore):
         high = np.tile(np.asarray(raw.high, dtype=np.float32).reshape(-1), self.horizon_length)
         return spaces.Box(low=low, high=high, dtype=np.float32)
 
-    def _build_replay_buffer(self) -> ChunkedTensorReplayBuffer:
+    def _build_replay_buffer(self):
         obs_space = self.env.single_observation_space
+        if isinstance(obs_space, spaces.Dict):
+            return ChunkedDictReplayBuffer(
+                observation_space=obs_space,
+                action_space=self.env.single_action_space,
+                num_envs=self.num_envs,
+                buffer_size=self.buffer_size,
+                horizon_length=self.horizon_length,
+                gamma=self.gamma,
+                storage_device=self.buffer_device,
+                sample_device=self.device,
+            )
         if not isinstance(obs_space, spaces.Box):
-            raise TypeError("ACFQL is state-only (Box observations); vision is out of scope.")
+            raise TypeError(
+                f"ACFQL supports Box or Dict observation spaces, got {type(obs_space)}"
+            )
         return ChunkedTensorReplayBuffer(
             observation_space=obs_space,
             action_space=self.env.single_action_space,
@@ -332,6 +347,14 @@ class _ACFQLRolloutTrainingShell(Off2OnReplayMixin, ACFQLCore, OffPolicyAlgorith
         activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: EncoderSharing = "shared",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        # Dict observation encoding (see Off2OnReplayMixin._configure_observation_kwargs)
+        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        image_keys: Optional[tuple[str, ...]] = None,
+        state_key: Optional[str] = None,
+        use_proprio: Optional[bool] = None,
+        proprio_latent_dim: Optional[int] = None,
+        image_fusion_mode: Optional[str] = None,
+        enable_stacking: Optional[bool] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -345,7 +368,16 @@ class _ACFQLRolloutTrainingShell(Off2OnReplayMixin, ACFQLCore, OffPolicyAlgorith
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
-        self._configure_observation_kwargs(env)
+        self._configure_observation_kwargs(
+            env,
+            image_encoder_factory=image_encoder_factory,
+            image_keys=image_keys,
+            state_key=state_key,
+            use_proprio=use_proprio,
+            proprio_latent_dim=proprio_latent_dim,
+            image_fusion_mode=image_fusion_mode,
+            enable_stacking=enable_stacking,
+        )
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -405,6 +437,7 @@ class _ACFQLRolloutTrainingShell(Off2OnReplayMixin, ACFQLCore, OffPolicyAlgorith
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
+            image_encoder_factory=image_encoder_factory,
         )
         self._init_off2on_params(offline_sampling=offline_sampling)
         self._setup_model()

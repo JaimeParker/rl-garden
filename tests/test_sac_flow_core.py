@@ -7,8 +7,17 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import SACFlow
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.combined import default_image_encoder_factory
 from rl_garden.networks import FlowMatchingActor
 from rl_garden.policies.sac_flow_policy import SACFlowPolicy
+
+# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
+# images without PlainConv's flatten-layer size mismatch. Mirrors
+# tests/test_fql_core.py's own vision-test image encoder factory.
+_TEST_IMAGE_SIZE = 16
+_test_image_encoder_factory = default_image_encoder_factory(
+    features_dim=16, plain_conv_pooling="gap"
+)
 
 
 class DummyVecEnv:
@@ -40,7 +49,18 @@ class DummyVecEnv:
         return None
 
     def _obs(self):
-        return torch.randn(self.num_envs, *self.single_observation_space.shape)
+        obs_space = self.single_observation_space
+        if isinstance(obs_space, spaces.Dict):
+            return {
+                "rgb": torch.randint(
+                    0,
+                    256,
+                    (self.num_envs, *obs_space["rgb"].shape),
+                    dtype=torch.uint8,
+                ),
+                "state": torch.randn(self.num_envs, *obs_space["state"].shape),
+            }
+        return torch.randn(self.num_envs, *obs_space.shape)
 
 
 class StructuredFeaturesExtractor(BaseFeaturesExtractor):
@@ -63,6 +83,17 @@ def _state_space() -> spaces.Box:
 
 def _action_space() -> spaces.Box:
     return spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+
+
+def _vision_space() -> spaces.Dict:
+    return spaces.Dict(
+        {
+            "rgb": spaces.Box(
+                low=0, high=255, shape=(_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
+            ),
+            "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+        }
+    )
 
 
 def _sac_flow_kwargs() -> dict[str, object]:
@@ -107,6 +138,27 @@ def test_sac_flow_rejects_token_and_prop_features():
             policy_kwargs={"features_extractor_class": StructuredFeaturesExtractor},
             **_sac_flow_kwargs(),
         )
+
+
+def test_sac_flow_vision_smoke():
+    """Dict/RGBD obs via CombinedExtractor (CNN, not ViT) -- the milestone-1
+    vision path. Mirrors tests/test_fql_core.py's own vision smoke test
+    shape, adapted for SACFlow's online rollout-based construction (no
+    replay-buffer pre-fill needed; ``learn()`` collects real transitions)."""
+    env = DummyVecEnv(_vision_space(), _action_space())
+    agent = SACFlow(env=env, image_encoder_factory=_test_image_encoder_factory, **_sac_flow_kwargs())
+
+    agent.learn(total_timesteps=40)
+
+    assert agent._global_step == 40
+    obs = env._obs()
+    with torch.no_grad():
+        action = agent.policy.predict(obs)
+    assert action.shape == (env.num_envs, 2)
+    low = torch.as_tensor(agent.policy.action_space.low)
+    high = torch.as_tensor(agent.policy.action_space.high)
+    assert torch.all(action >= low - 1e-4)
+    assert torch.all(action <= high + 1e-4)
 
 
 def test_sac_flow_checkpoint_roundtrip(tmp_path):

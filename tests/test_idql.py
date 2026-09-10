@@ -7,12 +7,36 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import IDQL, OfflineEnvSpec
+from rl_garden.encoders.combined import default_image_encoder_factory
 from rl_garden.policies._diffusion_process import DiffusionProcess
+
+# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
+# images without PlainConv's flatten-layer size mismatch. Mirrors
+# tests/test_fql_core.py's own vision-test image encoder factory.
+_TEST_IMAGE_SIZE = 16
+_test_image_encoder_factory = default_image_encoder_factory(
+    features_dim=16, plain_conv_pooling="gap"
+)
 
 
 def _state_env(num_envs: int = 2) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _vision_env(num_envs: int = 2) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "rgb": spaces.Box(
+                    low=0, high=255, shape=(_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
+                ),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+            }
+        ),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=num_envs,
     )
@@ -45,6 +69,50 @@ def _fill(agent: IDQL, steps: int = 8) -> None:
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
         agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+
+
+def _fill_vision(agent: IDQL, steps: int = 8) -> None:
+    env = agent.env
+    obs_space = env.single_observation_space
+    img_shape = (_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3)
+    for _ in range(steps):
+        obs = {
+            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, *obs_space["state"].shape),
+        }
+        next_obs = {
+            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, *obs_space["state"].shape),
+        }
+        actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
+        rewards = torch.randn(env.num_envs)
+        dones = torch.zeros(env.num_envs)
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+
+
+def test_vision_smoke():
+    """Dict/RGBD obs via CombinedExtractor -- the milestone-2 vision path.
+    Mirrors tests/test_fql_core.py's own vision smoke test shape."""
+    agent = _make_agent(
+        env=_vision_env(), image_encoder_factory=_test_image_encoder_factory
+    )
+    _fill_vision(agent)
+    metrics = agent.train(1)
+    for key in ("loss", "actor_loss", "critic_loss", "value_loss"):
+        assert key in metrics
+        assert np.isfinite(metrics[key]), (key, metrics[key])
+
+    obs = {
+        "rgb": torch.randint(
+            0, 256, (1, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=torch.uint8
+        ),
+        "state": torch.randn(1, 4),
+    }
+    with torch.no_grad():
+        action = agent.policy.predict(obs)
+    assert action.shape == (1, 2)
+    assert torch.all(action >= agent.policy.action_low)
+    assert torch.all(action <= agent.policy.action_high)
 
 
 def test_value_and_critic_losses_match_iql_formulas():

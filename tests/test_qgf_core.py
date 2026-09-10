@@ -7,11 +7,35 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import OfflineEnvSpec
 from rl_garden.algorithms.qgf import QGF
+from rl_garden.encoders.combined import default_image_encoder_factory
+
+# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
+# images without PlainConv's flatten-layer size mismatch. Mirrors
+# tests/test_fql_core.py's own vision-test image encoder factory.
+_TEST_IMAGE_SIZE = 16
+_test_image_encoder_factory = default_image_encoder_factory(
+    features_dim=16, plain_conv_pooling="gap"
+)
 
 
 def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32),
+        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "rgb": spaces.Box(
+                    low=0, high=255, shape=(_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
+                ),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32),
+            }
+        ),
         spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
         num_envs=num_envs,
     )
@@ -59,6 +83,48 @@ def test_gradient_step_produces_finite_losses():
     for key in ("critic_loss", "value_loss", "bc_loss"):
         assert key in metrics
         assert np.isfinite(metrics[key]), (key, metrics[key])
+
+
+def test_vision_smoke():
+    """Dict/RGBD obs via CombinedExtractor + ChunkedDictReplayBuffer -- the
+    milestone-3 vision path. Mirrors tests/test_fql_core.py's own vision
+    smoke test shape."""
+    agent = _make_agent(
+        env=_vision_env(), image_encoder_factory=_test_image_encoder_factory
+    )
+    env = agent.env
+    obs_space = env.single_observation_space
+    img_shape = (_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3)
+    for _ in range(64):
+        obs = {
+            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, *obs_space["state"].shape),
+        }
+        next_obs = {
+            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, *obs_space["state"].shape),
+        }
+        actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
+        rewards = torch.randn(env.num_envs)
+        dones = torch.zeros(env.num_envs)
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+
+    metrics = agent.train(1, compute_info=True)
+    for key in ("critic_loss", "value_loss", "bc_loss"):
+        assert key in metrics
+        assert np.isfinite(metrics[key]), (key, metrics[key])
+
+    obs = {
+        "rgb": torch.randint(
+            0, 256, (1, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=torch.uint8
+        ),
+        "state": torch.randn(1, 6),
+    }
+    with torch.no_grad():
+        action = agent.policy.predict(obs)
+    assert action.shape == (1, 3)
+    assert torch.all(action >= -1.0 - 1e-4)
+    assert torch.all(action <= 1.0 + 1e-4)
 
 
 def test_all_networks_update_every_step():
