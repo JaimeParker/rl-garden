@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import torch
 from gymnasium import spaces
 
 from rl_garden.buffers._dataset_common import _add_flat_transitions, _mc_returns, _to_tensor
@@ -115,6 +116,10 @@ def load_ogbench_dataset_to_replay_buffer(
         obs = _to_tensor(dataset["observations"], storage_device)
         next_obs = _to_tensor(dataset["next_observations"], storage_device)
         actions = _to_tensor(dataset["actions"], storage_device).float()
+        # Mirror the official FQL/floq loaders' `action_clip_eps=1e-5`.
+        low = torch.as_tensor(env.action_space.low, dtype=actions.dtype, device=actions.device)
+        high = torch.as_tensor(env.action_space.high, dtype=actions.dtype, device=actions.device)
+        actions = actions.clamp(low + 1e-5, high - 1e-5)
 
         successes = dones if hasattr(buffer, "_step_success") else None
         mc_returns = (

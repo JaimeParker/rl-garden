@@ -117,6 +117,7 @@ def test_phase_registries_discover_expected_algorithms():
         "flow_bc",
         "mean_flow_bc",
         "fql",
+        "floq",
         "hilp",
         "idql",
         "opal",
@@ -138,7 +139,16 @@ def test_phase_registries_discover_expected_algorithms():
         "unio4",
         "unio4_ope",
     }
-    assert set(off2on.entries()) == {"wsrl", "calql", "iql", "awac", "acfql", "spot", "so2"}
+    assert set(off2on.entries()) == {
+        "wsrl",
+        "calql",
+        "iql",
+        "awac",
+        "acfql",
+        "floq",
+        "spot",
+        "so2",
+    }
 
 
 def test_logging_environment_variables_are_not_configuration(monkeypatch):

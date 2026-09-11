@@ -9,6 +9,7 @@ from rl_garden.algorithms.bppo import BPPO
 from rl_garden.algorithms.flash_sac import FlashSAC
 from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.flow_ppo import FlowPPO
+from rl_garden.algorithms.floq import FloQ, Off2OnFloQ
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.consistency_distill_bc import ConsistencyDistillBC
@@ -85,6 +86,7 @@ __all__ = [
     "FlashSAC",
     "FlowBC",
     "FlowPPO",
+    "FloQ",
     "FQL",
     "CQL",
     "DAgger",
@@ -106,6 +108,7 @@ __all__ = [
     "OfflineSAC",
     "Off2OnAWAC",
     "Off2OnCalQL",
+    "Off2OnFloQ",
     "Off2OnIQL",
     "Off2OnSPOT",
     "OffPolicyAlgorithm",

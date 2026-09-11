@@ -167,6 +167,30 @@ def test_load_ogbench_dataset_rejects_goal_conditioned_dataset(monkeypatch):
         load_ogbench_dataset_to_replay_buffer(buffer, "antmaze-large-navigate-v0")
 
 
+def test_load_ogbench_dataset_clips_saturated_actions(monkeypatch):
+    dataset = _singletask_dataset()
+    saturated = np.ones((5, _ACTION_DIM), dtype=np.float32)
+    saturated[::2] = -1.0  # alternate rows at the lower bound, rest at the upper bound.
+    dataset["actions"] = saturated
+    _install_fake_ogbench(monkeypatch, dataset)
+
+    buffer = TensorReplayBuffer(
+        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+        action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=10,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    loaded = load_ogbench_dataset_to_replay_buffer(buffer, "antmaze-large-navigate-singletask-v0")
+
+    assert loaded == 5
+    stored_actions = buffer.actions[:5, 0]
+    assert (stored_actions >= -1.0 + 1e-5).all()
+    assert (stored_actions <= 1.0 - 1e-5).all()
+
+
 def test_load_ogbench_dataset_closes_throwaway_env(monkeypatch):
     captured = {}
     train_dataset = _singletask_dataset()

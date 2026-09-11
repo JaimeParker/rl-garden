@@ -1,0 +1,59 @@
+# FloQ (Farebrother et al., arXiv 2509.06863) offline-to-online on OGBench
+# cube-single-play-singletask-v0. Reference command (3rd_party/floq/README.md,
+# "Offline-to-online RL" -> "floq"):
+#   python main.py --env_name=cube-single-play-singletask-v0 \
+#     --offline_steps=1000000 --online_steps=2000000 --agent=agents/floq.py \
+#     --agent.alpha=300 --agent.block_depth=2
+#
+# env_id vs offline_dataset: OGBench's dataset name keeps the dataset-type
+# word ("play") immediately before "singletask"; the env id drops it -- see
+# docs/guides/ogbench-integration.md's "env-id vs dataset-name" section.
+#
+# block_depth=2 maps to critic_flow_net_arch: this reference floq field
+# sizes only the flow-critic velocity network (block_width x block_depth);
+# rl-garden's FloQOff2OnArgs exposes it as an explicit net_arch list
+# instead of width/depth, so [512, 512] (width 512, depth 2) is the
+# equivalent.
+#
+# online_replay_mode: append (not Off2OnCommonArgs's own "empty" default):
+# floq keeps one buffer across offline pretraining and online fine-tuning
+# and appends new online transitions to it, it does not discard the offline
+# data at the offline/online boundary.
+#
+# num_eval_steps is set explicitly because FloQOff2OnArgs has no
+# num_eval_episodes field to auto-derive a budget from (unlike the offline
+# entrypoint's OfflineEvalArgs) -- sized as
+# eval_episode_horizon * 50 episodes / num_eval_envs (1) to comfortably
+# finish ~50 eval episodes per evaluation call.
+#
+# Left at FloQOff2OnArgs defaults for explicitness (match floq's own
+# reference config for this task otherwise): gamma=0.99, q_agg=mean,
+# batch_size=256, critic_flow_steps=8, noise_coverage=0.1, noise_samples=8,
+# flow_num_ensembles=2. reward_scale=1.0/reward_bias=0.0 are also left at
+# default: OGBench singletask rewards are already in [-1, 0], and
+# r_min=-1.0/r_max=0.0 (FloQOff2OnArgs defaults) depend on that un-rescaled
+# range.
+env_backend: ogbench
+dataset_backend: ogbench
+env_id: cube-single-singletask-v0
+offline_dataset: cube-single-play-singletask-v0
+
+num_envs: 1
+num_eval_envs: 1
+
+num_offline_steps: 1000000
+num_online_steps: 2000000
+
+online_replay_mode: append
+
+alpha: 300.0
+critic_flow_net_arch: [512, 512]
+
+eval_episode_horizon: 200
+num_eval_steps: 10000
+offline_eval_freq: 20000
+online_eval_freq: 20000
+
+capture_video: false
+log_type: wandb
+seed: 0

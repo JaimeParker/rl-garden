@@ -680,6 +680,33 @@ class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
 
 
 @dataclass
+class OfflineFloQArgs(OfflineFQLArgs):
+    """FloQ hyperparameters (Farebrother et al., arXiv 2509.06863). Extends
+    FQL's actor/BC-flow recipe with a flow-matching TD critic."""
+
+    # OGBench singletask sparse-reward defaults; explicit CLI args rather
+    # than read from dataset statistics (see rl_garden/algorithms/floq.py).
+    r_min: float = -1.0
+    r_max: float = 0.0
+    flow_num_ensembles: int = 2
+    noise_samples: int = 8
+    noise_coverage: float = 0.1
+    critic_flow_steps: int = 8
+    train_at_zero_only: bool = False
+    embed_time: bool = True
+    time_embed_dim: int = 64
+    use_prob_embed: bool = True
+    num_bins: int = 51
+    sigma: float = 16.0
+    reward_offset: float = 0.01
+    # Flow-critic velocity network width/depth. None falls back to net_arch
+    # (the shared 512x4 default) -- the reference floq's block_width/
+    # block_depth size only this network; actor and distilled critic stay
+    # at net_arch (512x4), matching the README's cube presets (block_depth=2).
+    critic_flow_net_arch: Optional[list[int]] = None
+
+
+@dataclass
 class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
     Box or Dict (vision) observations."""

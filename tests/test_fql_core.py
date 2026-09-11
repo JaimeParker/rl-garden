@@ -310,6 +310,34 @@ def test_train_computes_distill_target_without_grad(monkeypatch):
     assert not any(seen_grad_enabled)
 
 
+def test_actor_update_passes_action_bounds_to_distill_loss():
+    """Reference parity (3rd_party/fql/agents/fql.py `compute_flow_actions`):
+    the teacher's Euler-unroll distill target is clamped to the action
+    bounds. `FQLCore._actor_update` must forward `low`/`high` into
+    `flow_onestep_distill_loss` so that clamp actually happens -- omitting
+    it silently leaves the distill target unclamped."""
+    import rl_garden.algorithms.fql as fql_module
+
+    agent = _make_agent()
+    _fill(agent)
+
+    seen_kwargs = []
+    original = fql_module.flow_onestep_distill_loss
+
+    def spy(*args, **kwargs):
+        seen_kwargs.append(kwargs)
+        return original(*args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fql_module, "flow_onestep_distill_loss", spy)
+        agent.train(1)
+
+    assert seen_kwargs
+    for kwargs in seen_kwargs:
+        assert torch.equal(kwargs["low"], agent.policy.action_low)
+        assert torch.equal(kwargs["high"], agent.policy.action_high)
+
+
 def test_q_agg_min_is_not_silently_ignored():
     """q_agg='min' must actually change the critic target, not collapse to
     rl-garden's usual 'mean'/'min' default silently."""

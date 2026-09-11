@@ -1,0 +1,36 @@
+# FloQ (Farebrother et al., arXiv 2509.06863) offline on OGBench
+# puzzle-3x3-play-singletask-v0. Reference command (3rd_party/floq/README.md,
+# "floq on state-based OGBench (default tasks)"):
+#   python main.py --env_name=puzzle-3x3-play-singletask-v0 \
+#     --agent=agents/floq.py --agent.alpha=1000
+#
+# env_id vs offline_dataset: OGBench's dataset name keeps the dataset-type
+# word ("play") immediately before "singletask"; the env id drops it -- see
+# docs/guides/ogbench-integration.md's "env-id vs dataset-name" section.
+#
+# Left at FloQArgs/OfflineFQLArgs defaults for explicitness (match floq's
+# own reference config for this task, including no block_depth override --
+# that's cube-single/cube-double-only): gamma=0.99, batch_size=256,
+# q_agg=mean, critic_flow_steps=8, noise_coverage=0.1, noise_samples=8,
+# flow_num_ensembles=2, critic_flow_net_arch=None. reward_scale=1.0/
+# reward_bias=0.0 are also left at default: OGBench singletask rewards are
+# already in [-1, 0], and r_min=-1.0/r_max=0.0 (FloQArgs defaults) depend on
+# that un-rescaled range.
+env_backend: ogbench
+dataset_backend: ogbench
+env_id: puzzle-3x3-singletask-v0
+offline_dataset: puzzle-3x3-play-singletask-v0
+obs_mode: state
+
+# floq's own train script offline budget for this task family; not
+# OfflineDatasetArgs's own 100_000 default.
+num_offline_steps: 1000000
+
+alpha: 1000.0
+
+num_eval_episodes: 50
+eval_episode_horizon: 500
+eval_freq: 20000
+
+log_type: wandb
+seed: 0

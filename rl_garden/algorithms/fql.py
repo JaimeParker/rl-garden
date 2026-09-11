@@ -339,7 +339,121 @@ class FQLCore:
             return
         torch.nn.utils.clip_grad_norm_(list(params), self.grad_clip_norm)
 
+    def _critic_update(self, data, obs_features: torch.Tensor) -> dict[str, float]:
+        with torch.no_grad():
+            next_features_critic = self.policy.extract_features(data.next_obs)
+            if self.encoder_sharing == "separate":
+                next_features_actor = self.policy.extract_actor_onestep_features(
+                    data.next_obs
+                )
+            else:
+                next_features_actor = next_features_critic
+            next_noise = self.policy.sample_noise(
+                next_features_actor.shape[0],
+                device=next_features_actor.device,
+                dtype=next_features_actor.dtype,
+            )
+            next_action = self.policy.actor_onestep_flow(next_features_actor, next_noise)
+            next_action = next_action.clamp(
+                self.policy.action_low, self.policy.action_high
+            )
+            target_q_all = self.policy.q_values_all(
+                next_features_critic, next_action, target=True
+            )
+            next_q = self._aggregate_target_q(target_q_all)
+            target_q = data.rewards.unsqueeze(-1) + self.gamma * (
+                1.0 - data.dones.unsqueeze(-1)
+            ) * next_q
+
+        q_all = self.policy.q_values_all(obs_features, data.actions, target=False)
+        critic_loss = self._critic_loss(q_all, target_q)
+
+        self.critic_optimizer.zero_grad(set_to_none=True)
+        critic_loss.backward()
+        self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
+        self.critic_optimizer.step()
+        if self._lr_schedulers[0] is not None:
+            self._lr_schedulers[0].step()
+
+        return {"critic_loss": float(critic_loss.detach().item())}
+
+    def _actor_update(self, data, obs_features: torch.Tensor) -> dict[str, float]:
+        # In "shared" mode bc/onestep/q features all alias one detached
+        # forward through the shared encoder (today's behavior). In
+        # "separate" mode each is a fresh, grad-enabled forward through
+        # that network's own encoder -- q_features in particular cannot
+        # reuse `obs_features` above: its graph was already consumed by
+        # critic_loss.backward(), so PyTorch would raise on a second
+        # backward through it. See FQLPolicy.extract_actor_loss_features.
+        bc_features, onestep_features, q_features = self.policy.extract_actor_loss_features(
+            data.obs, critic_features=obs_features
+        )
+        batch_size = data.actions.shape[0]
+        action_dim = data.actions.shape[-1]
+        device, dtype = bc_features.device, bc_features.dtype
+
+        x_0 = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
+        t = torch.rand(batch_size, 1, device=device, dtype=dtype)
+        x_t = (1 - t) * x_0 + t * data.actions
+        vel_target = data.actions - x_0
+        pred_vel = self.policy.actor_bc_flow(bc_features, x_t, t)
+        bc_flow_loss = F.mse_loss(pred_vel, vel_target)
+
+        noises = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
+        actor_actions = self.policy.actor_onestep_flow(onestep_features, noises)
+        distill_loss = flow_onestep_distill_loss(
+            self.policy.actor_bc_flow,
+            actor_actions,
+            bc_features,
+            noises,
+            self.flow_steps,
+            low=self.policy.action_low,
+            high=self.policy.action_high,
+        )
+
+        clipped_actions = actor_actions.clamp(
+            self.policy.action_low, self.policy.action_high
+        )
+        q_all_pi = self.policy.q_values_all(
+            q_features, clipped_actions, target=False
+        )
+        q_pi = q_all_pi.mean(dim=0)  # actor loss always averages the ensemble
+        q_loss = -q_pi.mean()
+        if self.normalize_q_loss:
+            lam = (1.0 / q_pi.abs().mean()).detach()
+            q_loss = lam * q_loss
+
+        actor_loss = bc_flow_loss + self.alpha * distill_loss + q_loss
+
+        self.actor_optimizer.zero_grad(set_to_none=True)
+        actor_loss.backward()
+        self._clip_grad_norm(self.policy.actor_parameters())
+        self.actor_optimizer.step()
+        if self._lr_schedulers[1] is not None:
+            self._lr_schedulers[1].step()
+
+        return {
+            "actor_loss": float(actor_loss.detach().item()),
+            "bc_flow_loss": float(bc_flow_loss.detach().item()),
+            "distill_loss": float(distill_loss.detach().item()),
+            "q_loss": float(q_loss.detach().item()),
+        }
+
+    def _update_targets(self) -> None:
+        polyak_update(
+            self.policy.critic.parameters(),
+            self.policy.critic_target.parameters(),
+            self.tau,
+        )
+
     def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
+        """Run ``gradient_steps`` FQL updates.
+
+        Per step: sample a batch, encode obs once (grad-enabled), then run
+        the three overridable seams in order -- ``_critic_update``,
+        ``_actor_update``, ``_update_targets`` -- and accumulate their
+        returned metrics.
+        """
         if gradient_steps <= 0:
             raise ValueError(f"gradient_steps must be positive, got {gradient_steps}.")
         metrics_sum: dict[str, float] = {}
@@ -354,104 +468,11 @@ class FQLCore:
             # in both encoder_sharing modes; only the actor's encoder(s) differ).
             obs_features = self.policy.extract_features(data.obs)
 
-            # --- critic ---
-            with torch.no_grad():
-                next_features_critic = self.policy.extract_features(data.next_obs)
-                if self.encoder_sharing == "separate":
-                    next_features_actor = self.policy.extract_actor_onestep_features(
-                        data.next_obs
-                    )
-                else:
-                    next_features_actor = next_features_critic
-                next_noise = self.policy.sample_noise(
-                    next_features_actor.shape[0],
-                    device=next_features_actor.device,
-                    dtype=next_features_actor.dtype,
-                )
-                next_action = self.policy.actor_onestep_flow(next_features_actor, next_noise)
-                next_action = next_action.clamp(
-                    self.policy.action_low, self.policy.action_high
-                )
-                target_q_all = self.policy.q_values_all(
-                    next_features_critic, next_action, target=True
-                )
-                next_q = self._aggregate_target_q(target_q_all)
-                target_q = data.rewards.unsqueeze(-1) + self.gamma * (
-                    1.0 - data.dones.unsqueeze(-1)
-                ) * next_q
+            critic_metrics = self._critic_update(data, obs_features)
+            actor_metrics = self._actor_update(data, obs_features)
+            self._update_targets()
 
-            q_all = self.policy.q_values_all(obs_features, data.actions, target=False)
-            critic_loss = self._critic_loss(q_all, target_q)
-
-            self.critic_optimizer.zero_grad(set_to_none=True)
-            critic_loss.backward()
-            self._clip_grad_norm(self.policy.critic_and_encoder_parameters())
-            self.critic_optimizer.step()
-            if self._lr_schedulers[0] is not None:
-                self._lr_schedulers[0].step()
-
-            # --- actor (every step -- FQL has no policy_freq-style delay) ---
-            # In "shared" mode bc/onestep/q features all alias one detached
-            # forward through the shared encoder (today's behavior). In
-            # "separate" mode each is a fresh, grad-enabled forward through
-            # that network's own encoder -- q_features in particular cannot
-            # reuse `obs_features` above: its graph was already consumed by
-            # critic_loss.backward(), so PyTorch would raise on a second
-            # backward through it. See FQLPolicy.extract_actor_loss_features.
-            bc_features, onestep_features, q_features = self.policy.extract_actor_loss_features(
-                data.obs, critic_features=obs_features
-            )
-            batch_size = data.actions.shape[0]
-            action_dim = data.actions.shape[-1]
-            device, dtype = bc_features.device, bc_features.dtype
-
-            x_0 = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
-            t = torch.rand(batch_size, 1, device=device, dtype=dtype)
-            x_t = (1 - t) * x_0 + t * data.actions
-            vel_target = data.actions - x_0
-            pred_vel = self.policy.actor_bc_flow(bc_features, x_t, t)
-            bc_flow_loss = F.mse_loss(pred_vel, vel_target)
-
-            noises = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
-            actor_actions = self.policy.actor_onestep_flow(onestep_features, noises)
-            distill_loss = flow_onestep_distill_loss(
-                self.policy.actor_bc_flow, actor_actions, bc_features, noises, self.flow_steps
-            )
-
-            clipped_actions = actor_actions.clamp(
-                self.policy.action_low, self.policy.action_high
-            )
-            q_all_pi = self.policy.q_values_all(
-                q_features, clipped_actions, target=False
-            )
-            q_pi = q_all_pi.mean(dim=0)  # actor loss always averages the ensemble
-            q_loss = -q_pi.mean()
-            if self.normalize_q_loss:
-                lam = (1.0 / q_pi.abs().mean()).detach()
-                q_loss = lam * q_loss
-
-            actor_loss = bc_flow_loss + self.alpha * distill_loss + q_loss
-
-            self.actor_optimizer.zero_grad(set_to_none=True)
-            actor_loss.backward()
-            self._clip_grad_norm(self.policy.actor_parameters())
-            self.actor_optimizer.step()
-            if self._lr_schedulers[1] is not None:
-                self._lr_schedulers[1].step()
-
-            polyak_update(
-                self.policy.critic.parameters(),
-                self.policy.critic_target.parameters(),
-                self.tau,
-            )
-
-            for key, value in (
-                ("critic_loss", float(critic_loss.detach().item())),
-                ("actor_loss", float(actor_loss.detach().item())),
-                ("bc_flow_loss", float(bc_flow_loss.detach().item())),
-                ("distill_loss", float(distill_loss.detach().item())),
-                ("q_loss", float(q_loss.detach().item())),
-            ):
+            for key, value in {**critic_metrics, **actor_metrics}.items():
                 metrics_sum[key] = metrics_sum.get(key, 0.0) + value
                 counts[key] = counts.get(key, 0) + 1
 
