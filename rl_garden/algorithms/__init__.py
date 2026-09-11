@@ -11,6 +11,7 @@ from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.flow_ppo import FlowPPO
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.calql import CalQL
+from rl_garden.algorithms.consistency_distill_bc import ConsistencyDistillBC
 from rl_garden.algorithms.cql import CQL
 from rl_garden.algorithms.dagger import DAgger
 from rl_garden.algorithms.ddpg import DDPG
@@ -80,6 +81,7 @@ __all__ = [
     "BCQ",
     "BPPO",
     "CalQL",
+    "ConsistencyDistillBC",
     "FlashSAC",
     "FlowBC",
     "FlowPPO",

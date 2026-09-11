@@ -1,19 +1,16 @@
-"""Diffusion BC pretraining run function (DPPO phase 1).
+"""ConsistencyDistillBC run function: fully offline LCM-style consistency
+distillation of a frozen ``DiffusionBC`` teacher into a one/few-step student.
 
-Does not reuse ``rl_garden.training.offline._runner.run_offline``: that
-runner populates ``agent.replay_buffer`` via ``load_offline_dataset``, but
-``DiffusionBC`` has no replay buffer -- its dataset is a fixed set of
-``(obs_history, action_chunk)`` windows loaded directly in the constructor
-(see ``rl_garden.buffers.chunked_dataset``). Mirrors
-``tdmpc2_multitask.py``'s bespoke-runner shape (same reasoning: a
-non-replay-buffer dataset doesn't fit the shared runner), but simpler since
-there is no separate dataset-loading step to run after agent construction.
+Does not reuse ``rl_garden.training.offline._runner.run_offline`` for the
+same reason ``training/offline/diffusion_bc.py`` doesn't: ``ConsistencyDistillBC``
+has no replay buffer -- its dataset is a fixed set of ``(obs_history,
+action_chunk)`` windows loaded directly in the constructor. Mirrors that
+module's bespoke-runner shape exactly.
 """
 
 from __future__ import annotations
 
 import time
-import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,45 +27,47 @@ from rl_garden.training.inspection import (
     prepare_standalone,
     run_preflight,
 )
-from rl_garden.training.offline._args import DiffusionBCTrainingArgs
+from rl_garden.training.offline._args import ConsistencyDistillBCTrainingArgs
 from rl_garden.training.offline._registry import registry
 
 
 @dataclass
-class DiffusionBCArgs(DiffusionBCTrainingArgs):
-    """Diffusion BC pretraining (DPPO phase 1). Requires ``--dataset_path``
-    (H5 trajectory file, state-only). With the default ``--net_backbone mlp``,
-    produces the EMA checkpoint that ``dppo``'s ``--bc_checkpoint`` loads
-    into ``actor``/``actor_ft``. ``--net_backbone unet`` is NOT compatible
-    with that path -- ``DPPOPolicy``'s actor is a fixed ``DiffusionMLP``, so
-    loading a unet-backbone checkpoint there raises a state-dict key-mismatch
-    ``RuntimeError``; use ``--net_backbone unet`` only for standalone
-    ``diffusion_bc``/``consistency_distill_bc`` use, not as a DPPO teacher."""
+class ConsistencyDistillBCArgs(ConsistencyDistillBCTrainingArgs):
+    """Offline consistency distillation of a frozen ``DiffusionBC`` teacher.
+    Requires ``--dataset_path`` (H5 trajectory file, state-only, same
+    dataset the teacher was trained on) and ``--bc_checkpoint`` (a
+    ``diffusion_bc`` checkpoint -- ``horizon_steps``/``cond_steps``/
+    ``net_backbone``/``unet_*`` must match what that checkpoint was trained
+    with)."""
 
 
-def run_diffusion_bc(args: DiffusionBCArgs) -> None:
+def run_consistency_distill_bc(args: ConsistencyDistillBCArgs) -> None:
     cleanup: list[Callable[[], None]] = []
     try:
-        _run_diffusion_bc(args, cleanup)
+        _run_consistency_distill_bc(args, cleanup)
     finally:
         for callback in reversed(cleanup):
             callback()
 
 
-def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) -> None:
-    from rl_garden.algorithms import DiffusionBC, OfflineEnvSpec
+def _run_consistency_distill_bc(
+    args: ConsistencyDistillBCArgs, cleanup: list[Callable[[], None]]
+) -> None:
+    from rl_garden.algorithms import ConsistencyDistillBC, OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
     from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
-            args, registry=registry, training_phase="offline", algorithm="diffusion_bc"
+            args, registry=registry, training_phase="offline", algorithm="consistency_distill_bc"
         )
         with config_session(preflight, dry_run=False):
-            return _run_diffusion_bc(normalized_args, cleanup)
+            return _run_consistency_distill_bc(normalized_args, cleanup)
 
     if not args.dataset_path:
-        raise SystemExit("--dataset_path is required for diffusion_bc.")
+        raise SystemExit("--dataset_path is required for consistency_distill_bc.")
+    if not args.bc_checkpoint:
+        raise SystemExit("--bc_checkpoint is required for consistency_distill_bc.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
 
@@ -77,7 +76,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     obs_space, action_space = infer_box_specs_from_h5(args.dataset_path)
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    run_name = args.exp_name or f"diffusion_bc__{args.seed}__{int(time.time())}"
+    run_name = args.exp_name or f"consistency_distill_bc__{args.seed}__{int(time.time())}"
     checkpoint_dir = None
     if args.checkpoint_dir is not None:
         checkpoint_dir = args.checkpoint_dir
@@ -102,7 +101,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
             log_keywords=args.log_keywords,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
-            log_group=args.log_group or "diffusion_bc",
+            log_group=args.log_group or "consistency_distill_bc",
         )
     cleanup.append(logger.close)
 
@@ -113,13 +112,6 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     if args.net_backbone == "unet":
         from rl_garden.networks import DiffusionUNet1D
 
-        warnings.warn(
-            "--net_backbone unet produces a checkpoint that dppo's "
-            "--bc_checkpoint cannot load (DPPOPolicy's actor is a fixed "
-            "DiffusionMLP) -- only use this checkpoint standalone or with "
-            "consistency_distill_bc's --bc_checkpoint.",
-            stacklevel=2,
-        )
         net_cls = DiffusionUNet1D
         net_kwargs = dict(
             down_dims=args.unet_down_dims,
@@ -130,9 +122,10 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
 
     env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
     agent = construct_agent(
-        DiffusionBC,
+        ConsistencyDistillBC,
         env=env,
         dataset_path=args.dataset_path,
+        bc_checkpoint=args.bc_checkpoint,
         horizon_steps=args.horizon_steps,
         cond_steps=args.cond_steps,
         denoising_steps=args.denoising_steps,
@@ -146,17 +139,13 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
         min_sampling_denoising_std=args.min_sampling_denoising_std,
         net_cls=net_cls,
         net_kwargs=net_kwargs,
-        actor_lr=args.actor_lr,
+        cm_lr=args.cm_lr,
         weight_decay=args.weight_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
+        cm_ema_decay=args.cm_ema_decay,
+        cm_grad_clip_norm=args.cm_grad_clip_norm,
+        cm_sigma_data=args.cm_sigma_data,
+        cm_timestep_scaling=args.cm_timestep_scaling,
         batch_size=args.batch_size,
-        ema_decay=args.ema_decay,
-        ema_update_every=args.ema_update_every,
-        ema_start_step=args.ema_start_step,
         num_traj=args.offline_num_traj,
         seed=args.seed,
         device=args.device,
@@ -171,12 +160,12 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
         if args.std_log:
-            print(f"[diffusion_bc] resumed_from={args.load_checkpoint}", flush=True)
+            print(f"[consistency_distill_bc] resumed_from={args.load_checkpoint}", flush=True)
 
     materialized_derived = {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
     if dry_run:
         emit_materialized_config(
-            env_request={"dataset_path": args.dataset_path},
+            env_request={"dataset_path": args.dataset_path, "bc_checkpoint": args.bc_checkpoint},
             env=env,
             eval_env=None,
             agent=agent,
@@ -184,7 +173,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
         )
         return
     materialized = materialize_config(
-        env_request={"dataset_path": args.dataset_path},
+        env_request={"dataset_path": args.dataset_path, "bc_checkpoint": args.bc_checkpoint},
         env=env,
         eval_env=None,
         agent=agent,
@@ -194,7 +183,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     logger.update_config(json_value(materialized))
     if args.std_log:
         print(
-            f"[diffusion_bc] dataset_size={agent._dataset_size} "
+            f"[consistency_distill_bc] dataset_size={agent._dataset_size} "
             f"obs={obs_space.shape} action={action_space.shape}",
             flush=True,
         )
@@ -204,14 +193,14 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
         num_steps=args.num_offline_steps,
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
-        save_filename="diffusion_bc_offline_pretrained.pt",
+        save_filename="consistency_distill_bc_offline.pt",
         save_replay_buffer=False,
         save_final_checkpoint=args.save_final_checkpoint,
         log_freq=args.log_freq,
         std_log=args.std_log,
         eval_freq=0,
-        desc="diffusion-bc-offline",
+        desc="consistency-distill-bc-offline",
     )
 
 
-registry.register("diffusion_bc", DiffusionBCArgs, run_diffusion_bc)
+registry.register("consistency_distill_bc", ConsistencyDistillBCArgs, run_consistency_distill_bc)

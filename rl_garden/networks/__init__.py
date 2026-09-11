@@ -14,6 +14,7 @@ from rl_garden.networks.behavior_vae import BehaviorVAE
 from rl_garden.networks.bigru_sequence_encoder import BiGRUSequenceEncoder
 from rl_garden.networks.conditional_vae import ConditionalVAE
 from rl_garden.networks.diffusion_mlp import DiffusionMLP, build_diffusion_mlp_head
+from rl_garden.networks.diffusion_unet import DiffusionUNet1D
 from rl_garden.networks.flash_sac_layers import (
     EnsembleCategoricalValue,
     EnsembleFlashSACBlock,
@@ -61,6 +62,7 @@ __all__ = [
     "DeterministicTanhActor",
     "DiagGaussianActor",
     "DiffusionMLP",
+    "DiffusionUNet1D",
     "EnsembleCategoricalValue",
     "EnsembleFlashSACBlock",
     "EnsembleFlashSACEmbedder",

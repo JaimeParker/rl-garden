@@ -182,6 +182,11 @@ class DiffusionBCTrainingArgs(CheckpointArgs, LoggingArgs):
     randn_clip_value: float = 10.0
     final_action_clip_value: Optional[float] = None
     min_sampling_denoising_std: float = 0.1
+    net_backbone: Literal["mlp", "unet"] = "mlp"
+    unet_down_dims: tuple[int, ...] = (256, 512, 1024)
+    unet_kernel_size: int = 5
+    unet_n_groups: int = 8
+    unet_cond_predict_scale: bool = False
     actor_lr: float = 1e-3
     weight_decay: float = 1e-6
     lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
@@ -193,6 +198,57 @@ class DiffusionBCTrainingArgs(CheckpointArgs, LoggingArgs):
     ema_decay: float = 0.995
     ema_update_every: int = 10
     ema_start_step: int = 0
+    seed: int = 1
+    device: str = "auto"
+
+
+@dataclass
+class ConsistencyDistillBCTrainingArgs(CheckpointArgs, LoggingArgs):
+    """Fully offline LCM-style consistency distillation of a frozen
+    ``DiffusionBC`` teacher into a one/few-step ``ConsistencyDistillBC``
+    student. Same "no ``OfflineCommonArgs``, no replay buffer" reasoning as
+    ``DiffusionBCTrainingArgs`` -- dataset is loaded directly, bespoke runner.
+
+    ``horizon_steps``/``cond_steps``/``denoising_steps``/``net_backbone``+
+    ``unet_*``/``time_dim``/``kernel_init`` must match whatever the
+    ``--bc_checkpoint`` teacher was trained with: student/target networks are
+    warm-started from its EMA state dict.
+    ``ConsistencyDistillBC._setup_model`` validates the teacher-matching
+    fields against the checkpoint's own recorded hyperparameters before
+    loading and raises ``ValueError`` naming every mismatch (a `net_cls`
+    mismatch alone would also fail via a state-dict shape error, but fields
+    like ``denoising_steps``/``activation_fn`` carry no parameters and would
+    otherwise load silently wrong)."""
+
+    dataset_path: str = ""
+    bc_checkpoint: str = ""
+    num_offline_steps: int = 100_000
+    offline_num_traj: Optional[int] = None
+    horizon_steps: int = 4
+    cond_steps: int = 1
+    denoising_steps: int = 20
+    activation_fn: Literal["relu", "gelu", "mish"] = "relu"
+    residual_style: bool = True
+    time_dim: int = 16
+    kernel_init: Optional[
+        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+    ] = None
+    denoised_clip_value: Optional[float] = 1.0
+    randn_clip_value: float = 10.0
+    final_action_clip_value: Optional[float] = None
+    min_sampling_denoising_std: float = 0.1
+    net_backbone: Literal["mlp", "unet"] = "mlp"
+    unet_down_dims: tuple[int, ...] = (256, 512, 1024)
+    unet_kernel_size: int = 5
+    unet_n_groups: int = 8
+    unet_cond_predict_scale: bool = False
+    cm_lr: float = 1e-4
+    weight_decay: float = 1e-6
+    cm_ema_decay: float = 0.95
+    cm_grad_clip_norm: Optional[float] = 1.0
+    cm_sigma_data: float = 0.5
+    cm_timestep_scaling: float = 0.1
+    batch_size: int = 128
     seed: int = 1
     device: str = "auto"
 

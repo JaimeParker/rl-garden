@@ -35,7 +35,7 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.networks import Activation, KernelInit
+from rl_garden.networks import Activation, DiffusionMLP, KernelInit
 from rl_garden.policies.diffusion_policy import DiffusionPolicy
 
 
@@ -70,6 +70,8 @@ class DiffusionBC(OfflineRLAlgorithm):
         randn_clip_value: float = 10.0,
         final_action_clip_value: Optional[float] = None,
         min_sampling_denoising_std: float = 0.1,
+        net_cls: type[nn.Module] = DiffusionMLP,
+        net_kwargs: Optional[dict[str, Any]] = None,
         actor_lr: float = 1e-3,
         weight_decay: float = 1e-6,
         lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
@@ -132,6 +134,8 @@ class DiffusionBC(OfflineRLAlgorithm):
         self.randn_clip_value = randn_clip_value
         self.final_action_clip_value = final_action_clip_value
         self.min_sampling_denoising_std = min_sampling_denoising_std
+        self.net_cls = net_cls
+        self.net_kwargs = dict(net_kwargs) if net_kwargs is not None else None
         self.actor_lr = actor_lr
         self.weight_decay = weight_decay
         self.lr_schedule: ScheduleType = lr_schedule
@@ -172,6 +176,8 @@ class DiffusionBC(OfflineRLAlgorithm):
             "mlp_dims": self.mlp_dims,
             "activation_fn": self.activation_fn,
             "residual_style": self.residual_style,
+            "net_cls": self.net_cls.__name__,
+            "net_kwargs": self.net_kwargs,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -211,6 +217,8 @@ class DiffusionBC(OfflineRLAlgorithm):
             randn_clip_value=self.randn_clip_value,
             final_action_clip_value=self.final_action_clip_value,
             min_sampling_denoising_std=self.min_sampling_denoising_std,
+            net_cls=self.net_cls,
+            net_kwargs=self.net_kwargs,
         ).to(self.device)
         self.ema_policy = copy.deepcopy(self.policy)
         for p in self.ema_policy.parameters():

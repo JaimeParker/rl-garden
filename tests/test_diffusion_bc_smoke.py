@@ -6,6 +6,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import DiffusionBC, OfflineEnvSpec
+from rl_garden.networks import DiffusionUNet1D
 
 
 def _write_h5_dataset(path, *, num_traj: int, steps_per_traj: int, obs_dim: int, action_dim: int) -> None:
@@ -129,3 +130,84 @@ def test_predict_returns_action_chunk_within_bounds():
         action_chunk = policy.predict(obs, deterministic=True)
     assert action_chunk.shape == (4, 3, action_dim)
     assert (action_chunk >= -1.0 - 1e-5).all() and (action_chunk <= 1.0 + 1e-5).all()
+
+
+def test_unet_backbone_trains_and_checkpoint_roundtrips(tmp_path):
+    obs_dim, action_dim = 4, 2
+    path = tmp_path / "bc_dataset.h5"
+    _write_h5_dataset(path, num_traj=8, steps_per_traj=20, obs_dim=obs_dim, action_dim=action_dim)
+
+    net_kwargs = dict(down_dims=(8, 16), kernel_size=3, n_groups=4)
+    agent = DiffusionBC(
+        env=_env_spec(obs_dim, action_dim),
+        dataset_path=str(path),
+        horizon_steps=2,
+        cond_steps=1,
+        denoising_steps=10,
+        net_cls=DiffusionUNet1D,
+        net_kwargs=net_kwargs,
+        batch_size=16,
+        actor_lr=1e-3,
+        device="cpu",
+    )
+    assert isinstance(agent.policy.net, DiffusionUNet1D)
+
+    metrics = agent.train(5)
+    assert torch.isfinite(torch.tensor(metrics["loss"]))
+
+    ckpt_path = agent.save(tmp_path / "diffusion_bc_unet.pt")
+    ema_state_before = {
+        k: v.clone() for k, v in agent.ema_policy.net.state_dict().items()
+    }
+
+    # Reloading always needs net_cls/net_kwargs passed explicitly again --
+    # the saved "net_cls"/"net_kwargs" checkpoint metadata is informational
+    # only (matches every other algorithm's checkpoint-metadata convention
+    # in this repo, e.g. MeanFlowBC), not consulted by `load()` to rebuild
+    # the network shape.
+    agent2 = DiffusionBC(
+        env=_env_spec(obs_dim, action_dim),
+        dataset_path=str(path),
+        horizon_steps=2,
+        cond_steps=1,
+        denoising_steps=10,
+        net_cls=DiffusionUNet1D,
+        net_kwargs=net_kwargs,
+        batch_size=16,
+        device="cpu",
+    )
+    agent2.load(ckpt_path)
+    for k, v in agent2.ema_policy.net.state_dict().items():
+        assert torch.allclose(v, ema_state_before[k])
+
+
+def test_kernel_init_is_forwarded_to_non_default_backbone():
+    """Regression test: DiffusionPolicy's net_cls dispatch (`build_diffusion_net`)
+    must forward kernel_init to non-DiffusionMLP backbones too, not only the
+    default DiffusionMLP path."""
+    from rl_garden.policies.diffusion_policy import DiffusionPolicy
+
+    obs_dim, action_dim = 4, 2
+    net_kwargs = dict(down_dims=(8, 16), kernel_size=3, n_groups=4)
+
+    def build(kernel_init):
+        torch.manual_seed(0)
+        return DiffusionPolicy(
+            observation_space=spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32),
+            action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
+            horizon_steps=2,
+            cond_steps=1,
+            denoising_steps=10,
+            net_cls=DiffusionUNet1D,
+            net_kwargs=net_kwargs,
+            kernel_init=kernel_init,
+        )
+
+    default_init = build(None)
+    xavier_init = build("xavier_uniform")
+
+    differs = any(
+        not torch.allclose(v, xavier_init.net.state_dict()[k])
+        for k, v in default_init.net.state_dict().items()
+    )
+    assert differs, "kernel_init should change DiffusionUNet1D's initial parameters"

@@ -82,3 +82,87 @@ def test_diffusion_bc_cli_trains_and_saves_checkpoint(tmp_path):
     )
 
     assert (checkpoint_dir / "diffusion_bc_offline_pretrained.pt").exists()
+
+
+def test_diffusion_bc_cli_unet_backbone_trains_and_saves_checkpoint(tmp_path):
+    from rl_garden.training.offline import registry
+
+    dataset_path = tmp_path / "bc.h5"
+    _write_h5_dataset(dataset_path, num_traj=4, steps_per_traj=10, obs_dim=3, action_dim=2)
+    checkpoint_dir = tmp_path / "ckpt"
+
+    registry.run_cli(
+        [
+            "diffusion_bc",
+            "--dataset_path",
+            str(dataset_path),
+            "--horizon_steps",
+            "2",
+            "--cond_steps",
+            "1",
+            "--denoising_steps",
+            "5",
+            "--device",
+            "cpu",
+            "--num_offline_steps",
+            "5",
+            "--batch_size",
+            "8",
+            "--log_type",
+            "none",
+            "--log_dir",
+            str(tmp_path / "runs"),
+            "--checkpoint_dir",
+            str(checkpoint_dir),
+            "--net_backbone",
+            "unet",
+            "--unet_down_dims",
+            "8",
+            "16",
+            "--unet_n_groups",
+            "4",
+        ]
+    )
+
+    assert (checkpoint_dir / "diffusion_bc_offline_pretrained.pt").exists()
+
+
+def test_diffusion_bc_cli_unet_backbone_warns_about_dppo_incompatibility(tmp_path):
+    import pytest
+
+    from rl_garden.training.offline import registry
+
+    dataset_path = tmp_path / "bc.h5"
+    _write_h5_dataset(dataset_path, num_traj=4, steps_per_traj=10, obs_dim=3, action_dim=2)
+
+    with pytest.warns(UserWarning, match="dppo"):
+        registry.run_cli(
+            [
+                "diffusion_bc",
+                "--dataset_path",
+                str(dataset_path),
+                "--horizon_steps",
+                "2",
+                "--cond_steps",
+                "1",
+                "--denoising_steps",
+                "5",
+                "--device",
+                "cpu",
+                "--num_offline_steps",
+                "1",
+                "--batch_size",
+                "8",
+                "--log_type",
+                "none",
+                "--log_dir",
+                str(tmp_path / "runs"),
+                "--net_backbone",
+                "unet",
+                "--unet_down_dims",
+                "8",
+                "16",
+                "--unet_n_groups",
+                "4",
+            ]
+        )
