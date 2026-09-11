@@ -118,6 +118,7 @@ def test_phase_registries_discover_expected_algorithms():
         "mean_flow_bc",
         "fql",
         "floq",
+        "value_flows",
         "hilp",
         "idql",
         "opal",
@@ -146,6 +147,7 @@ def test_phase_registries_discover_expected_algorithms():
         "awac",
         "acfql",
         "floq",
+        "value_flows",
         "spot",
         "so2",
     }

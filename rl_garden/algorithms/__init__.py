@@ -11,6 +11,7 @@ from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.flow_ppo import FlowPPO
 from rl_garden.algorithms.floq import FloQ, Off2OnFloQ
 from rl_garden.algorithms.fql import FQL
+from rl_garden.algorithms.value_flows import ValueFlows, Off2OnValueFlows
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.consistency_distill_bc import ConsistencyDistillBC
 from rl_garden.algorithms.cql import CQL
@@ -88,6 +89,7 @@ __all__ = [
     "FlowPPO",
     "FloQ",
     "FQL",
+    "ValueFlows",
     "CQL",
     "DAgger",
     "DDPG",
@@ -109,6 +111,7 @@ __all__ = [
     "Off2OnAWAC",
     "Off2OnCalQL",
     "Off2OnFloQ",
+    "Off2OnValueFlows",
     "Off2OnIQL",
     "Off2OnSPOT",
     "OffPolicyAlgorithm",

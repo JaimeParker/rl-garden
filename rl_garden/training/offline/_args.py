@@ -707,6 +707,25 @@ class OfflineFloQArgs(OfflineFQLArgs):
 
 
 @dataclass
+class OfflineValueFlowsArgs(OfflineFQLArgs):
+    """Value Flows hyperparameters (Dong et al., arXiv 2510.07650). Extends
+    FQL's actor/BC-flow recipe with twin flow-matching critics over the
+    return distribution (no separate scalar critic)."""
+
+    # Dataset-derived in the reference; explicit CLI args here, same
+    # simplification as FloQ's r_min/r_max (see rl_garden/algorithms/value_flows.py).
+    min_reward: float = -1.0
+    max_reward: float = 0.0
+    ret_agg: Literal["mean", "min"] = "mean"
+    confidence_weight_temp: float = 0.3
+    dcfm_lambda: float = 1.0
+    bcfm_lambda: float = 1.0
+    clip_flow_returns: bool = True
+    num_samples: int = 16
+    policy_extraction: Literal["rs", "rpg"] = "rs"
+
+
+@dataclass
 class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
     Box or Dict (vision) observations."""
