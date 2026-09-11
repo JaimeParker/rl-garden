@@ -55,8 +55,7 @@ this repository.
 |---|---|---|---|
 | BC | `algorithms/bc.py` | Canonical behavioral cloning (no single source paper) | rl-garden-native |
 | FlowBC | `algorithms/flow_bc.py` | Flow matching: Lipman et al. 2023, [arXiv:2210.02747](https://arxiv.org/abs/2210.02747) | rl-garden-native (hand-rolled CondOT loss, no external flow-matching library dependency) |
-| DiffusionBC | `algorithms/diffusion_bc.py` | Diffusion Policy, Chi et al. 2023, [arXiv:2303.04137](https://arxiv.org/abs/2303.04137) | Ported from [dppo](https://github.com/irom-princeton/dppo) |
-| VisionDiffusionBC | `algorithms/vision_diffusion_bc.py` | Same as DiffusionBC, vision-conditioned | Sibling of `DiffusionBC`; vision-conditioning precedent also present locally at [diffusion_policy](https://github.com/real-stanford/diffusion_policy) |
+| DiffusionBC | `algorithms/diffusion_bc.py` | Diffusion Policy, Chi et al. 2023, [arXiv:2303.04137](https://arxiv.org/abs/2303.04137) | Ported from [dppo](https://github.com/irom-princeton/dppo); also supports Dict (vision) observations via `CombinedExtractor`, same convention as `FlowBC` |
 | A2ABC | `algorithms/a2a_bc.py` | A2A (Action-to-Action flow matching), [arXiv:2602.07322](https://arxiv.org/abs/2602.07322) | Ported from [A2A_Flow_Matching](https://github.com/JIAjindou/A2A_Flow_Matching) |
 | BCQ | `algorithms/bcq.py` | Fujimoto et al. 2019, [arXiv:1812.02900](https://arxiv.org/abs/1812.02900) | Ported from `sfujim/BCQ/continuous_BCQ/BCQ.py` (official reference, not vendored) |
 | PLAS | `algorithms/plas.py` | Zhou et al. 2020, [arXiv:2011.07213](https://arxiv.org/abs/2011.07213) | Ported from `Wenxuan-Zhou/PLAS/algos.py` (official reference, not vendored) |

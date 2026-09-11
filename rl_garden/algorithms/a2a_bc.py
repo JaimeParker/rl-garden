@@ -1,6 +1,6 @@
 """A2A ("Action-to-Action") flow-matching BC pretraining.
 
-Standalone sibling of ``VisionDiffusionBC`` (``rl_garden/algorithms/vision_diffusion_bc.py``),
+Standalone sibling of ``DiffusionBC`` (``rl_garden/algorithms/diffusion_bc.py``),
 not a modification of it -- same overall shape (``OfflineRLAlgorithm``,
 dataset loaded directly via ``load_h5_dataset_as_chunks``, no replay buffer,
 step-based training loop), but with **no EMA**: A2A's reference has no EMA

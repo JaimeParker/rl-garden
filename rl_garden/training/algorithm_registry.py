@@ -293,7 +293,6 @@ class BaseAlgorithmRegistry:
                     raise ConfigError("--mmap_dir is required for tdmpc2_multitask.")
             elif command.algorithm in (
                 "diffusion_bc",
-                "vision_diffusion_bc",
                 "consistency_distill_bc",
                 "a2a_bc",
                 "hilp",

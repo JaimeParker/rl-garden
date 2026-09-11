@@ -20,7 +20,7 @@ building blocks unmodified:
   ``future_action_latents`` instead of noise/raw actions.
 - The "fold cond_steps into batch, encode once, reshape back" trick for
   running a single-frame ``CombinedExtractor`` over a history window is
-  ``VisionDiffusionPolicy._encode_obs_history``'s trick, reused here for the
+  ``DiffusionPolicy``'s Dict-obs ``_cond_from_obs_history`` trick, reused here for the
   vision-only conditioning branch (``CombinedExtractor(use_proprio=False)``).
 
 New pieces: ``CNNSequenceEncoder`` (state-history and action-chunk encoding,

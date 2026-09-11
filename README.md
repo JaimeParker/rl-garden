@@ -93,7 +93,7 @@ argument selects the algorithm:
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
 | Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `vision_diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `acfql` |
 
 Every registered algorithm's exact args and defaults can be listed with

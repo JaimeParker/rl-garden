@@ -158,13 +158,18 @@ class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
 
 
 @dataclass
-class DiffusionBCTrainingArgs(CheckpointArgs, LoggingArgs):
+class DiffusionBCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
     """Diffusion BC pretraining (DPPO phase 1). Deliberately does NOT inherit
     ``OfflineCommonArgs``: ``run_offline`` assumes a ``agent.replay_buffer``
     populated via ``load_offline_dataset``, but ``DiffusionBC`` loads
     ``(obs_history, action_chunk)`` windows directly in its constructor (see
     ``rl_garden.buffers.chunked_dataset``) and has no replay buffer at all --
-    same reasoning as ``TDMPC2MultitaskTrainingArgs``."""
+    same reasoning as ``TDMPC2MultitaskTrainingArgs``. Adds ``OfflineVisionArgs``
+    (absorbed from the former standalone ``VisionDiffusionBCTrainingArgs``) so
+    a single ``diffusion_bc`` CLI surface covers both Box and Dict (vision)
+    observation spaces, matching ``DiffusionBC``'s in-class
+    ``isinstance(obs_space, spaces.Box/Dict)`` branch -- most of these fields
+    are no-ops for Box-obs datasets."""
 
     dataset_path: str = ""
     num_offline_steps: int = 200_000
@@ -254,45 +259,6 @@ class ConsistencyDistillBCTrainingArgs(CheckpointArgs, LoggingArgs):
 
 
 @dataclass
-class VisionDiffusionBCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
-    """Vision-conditioned Diffusion BC pretraining. A standalone sibling of
-    ``DiffusionBCTrainingArgs`` (not built on it) -- mirrors its field set
-    exactly, plus ``OfflineVisionArgs`` for image-encoder config, since
-    ``VisionDiffusionBC`` is itself a standalone sibling of ``DiffusionBC``.
-    Same reasoning as that class for not inheriting ``OfflineCommonArgs``."""
-
-    dataset_path: str = ""
-    num_offline_steps: int = 200_000
-    offline_num_traj: Optional[int] = None
-    horizon_steps: int = 4
-    cond_steps: int = 1
-    denoising_steps: int = 20
-    activation_fn: Literal["relu", "gelu", "mish"] = "relu"
-    residual_style: bool = True
-    time_dim: int = 16
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    denoised_clip_value: Optional[float] = 1.0
-    randn_clip_value: float = 10.0
-    final_action_clip_value: Optional[float] = None
-    min_sampling_denoising_std: float = 0.1
-    actor_lr: float = 1e-3
-    weight_decay: float = 1e-6
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-    batch_size: int = 128
-    ema_decay: float = 0.995
-    ema_update_every: int = 10
-    ema_start_step: int = 0
-    seed: int = 1
-    device: str = "auto"
-
-
-@dataclass
 class HILPTrainingArgs(CheckpointArgs, LoggingArgs):
     """HILP pretraining. Deliberately does NOT inherit ``OfflineCommonArgs``:
     ``run_offline`` assumes an ``agent.replay_buffer`` populated via
@@ -348,7 +314,7 @@ class OPALTrainingArgs(CheckpointArgs, LoggingArgs):
 @dataclass
 class A2ABCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
     """A2A flow-matching BC pretraining. A standalone sibling of
-    ``VisionDiffusionBCTrainingArgs`` (not built on it) -- swaps
+    ``DiffusionBCTrainingArgs`` (not built on it) -- swaps
     diffusion-specific fields (``denoising_steps``, ``ema_*``,
     ``residual_style``, ``time_dim``) for A2A's flow-in-latent-space fields.
     ``include_state`` must stay True (enforced in the entrypoint) -- the

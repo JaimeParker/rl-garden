@@ -249,6 +249,18 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
 
     def _setup_model(self) -> None:
         checkpoint = load_checkpoint_file(self.bc_checkpoint, map_location=self.device)
+        # Dict (vision) DiffusionBC checkpoints record image_keys in their
+        # hyperparameters; this class's teacher/student networks are Box-only
+        # (self.env.single_observation_space.shape[0] is indexed unconditionally
+        # below), so reject early with a clear message instead of an
+        # AttributeError on a Dict observation space.
+        if checkpoint["metadata"]["hyperparameters"].get("image_keys") is not None:
+            raise ValueError(
+                "--bc_checkpoint was trained with Dict (vision) observations "
+                "(its recorded hyperparameters include image_keys); "
+                "ConsistencyDistillBC's --bc_checkpoint path requires a "
+                "Box-trained DiffusionBC checkpoint."
+            )
         self._validate_teacher_config(checkpoint["metadata"]["hyperparameters"])
 
         self.policy = DiffusionPolicy(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
@@ -312,3 +313,74 @@ def test_dppo_bc_checkpoint_loads_into_actor_and_actor_ft(tmp_path):
         assert torch.allclose(pa, pf)
     assert not any(p.requires_grad for p in agent.policy.actor.parameters())
     assert all(p.requires_grad for p in agent.policy.actor_ft.parameters())
+
+
+def test_dppo_rejects_dict_trained_bc_checkpoint(tmp_path):
+    """Risk-1 guard: a Dict (vision) trained DiffusionBC checkpoint must be
+    rejected with a clear ValueError before DPPO attempts to load it into its
+    Box-only actor (rather than an unfriendly load_state_dict shape error)."""
+    import h5py
+    from gymnasium import spaces as gym_spaces
+
+    from rl_garden.algorithms import DiffusionBC, OfflineEnvSpec
+
+    rng = np.random.default_rng(0)
+    path = tmp_path / "vision_bc.h5"
+    with h5py.File(path, "w") as f:
+        for i in range(4):
+            g = f.create_group(f"traj_{i}")
+            obs = g.create_group("obs")
+            obs.create_dataset(
+                "rgb",
+                data=rng.integers(0, 256, (21, IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+            )
+            obs.create_dataset(
+                "state", data=rng.standard_normal((21, OBS_DIM)).astype(np.float32)
+            )
+            g.create_dataset(
+                "actions", data=(rng.random((20, ACTION_DIM)).astype(np.float32) * 2 - 1)
+            )
+            g.create_dataset("rewards", data=np.zeros(20, dtype=np.float32))
+            dones = np.zeros(20, dtype=np.float32)
+            dones[-1] = 1.0
+            g.create_dataset("dones", data=dones)
+
+    bc_env = OfflineEnvSpec(
+        gym_spaces.Dict(
+            {
+                "rgb": gym_spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+                "state": gym_spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
+            }
+        ),
+        gym_spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32),
+    )
+    bc_agent = DiffusionBC(
+        env=bc_env,
+        dataset_path=str(path),
+        horizon_steps=2,
+        cond_steps=1,
+        denoising_steps=5,
+        mlp_dims=[16, 16, 16],
+        batch_size=8,
+        device="cpu",
+        image_encoder_factory=_test_image_encoder_factory,
+        image_keys=("rgb",),
+        state_key="state",
+    )
+    bc_agent.train(5)
+    bc_ckpt = bc_agent.save(tmp_path / "bc_dict_ckpt.pt")
+
+    env = _make_env(num_envs=2, act_steps=2)
+    with pytest.raises(ValueError, match=r"(image_keys|Dict)"):
+        DPPO(
+            env=env,
+            bc_checkpoint=str(bc_ckpt),
+            num_steps=2,
+            horizon_steps=2,
+            act_steps=2,
+            denoising_steps=5,
+            ft_denoising_steps=2,
+            actor_mlp_dims=[16, 16, 16],
+            critic_mlp_dims=[16, 16, 16],
+            device="cpu",
+        )

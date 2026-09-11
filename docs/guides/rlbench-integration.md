@@ -143,10 +143,10 @@ BC/FlowBC/A2ABC/TD3BC/BCQ (and every other algorithm in
 shared lifecycle (`rl_garden/training/offline/_runner.py`), which already
 builds an eval env from `--env_id`/`--env_backend` whenever one is requested
 — RLBench eval needs no extra wiring beyond registering this backend.
-`diffusion_bc`/`vision_diffusion_bc` are standalone scripts hardcoded to the
-H5 dataset format (never pluggable by `--dataset_backend`) and never build
+`diffusion_bc` is a standalone script hardcoded to the
+H5 dataset format (never pluggable by `--dataset_backend`) and never builds
 an eval env for *any* backend — pre-existing gaps, not RLBench-specific, so
-RLBench demos aren't consumable by either without a separate H5 conversion
+RLBench demos aren't consumable by it without a separate H5 conversion
 step (out of scope here).
 
 DAgger (`rl_garden/training/online/dagger.py`) is online imitation learning
@@ -264,8 +264,8 @@ without `live_demos=True`, and `infer_specs_from_rlbench`) needs no
   `rlbench.gym.RLBenchEnv` has the same limitation (its own `reset()` has a
   `TODO` to use `self.np_random` instead), mirrored here rather than
   invented.
-- `vision_diffusion_bc` builds no eval env for any backend today
-  (pre-existing gap).
+- `diffusion_bc` builds no eval env for any backend today (including its
+  Dict-obs path) (pre-existing gap).
 - Real verification so far covers one task (`reach_target`) with
   `SyncVectorEnv` only — an `AsyncVectorEnv`/`vectorization=async` smoke
   test and every other task family are architecturally identical (same

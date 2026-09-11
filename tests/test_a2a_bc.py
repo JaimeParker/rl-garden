@@ -1,5 +1,5 @@
 """Tests for A2ABC/A2APolicy: A2A flow-matching BC pretraining, standalone
-sibling of VisionDiffusionBC/VisionDiffusionPolicy (neither existing class is
+sibling of DiffusionBC/DiffusionPolicy (neither existing class is
 modified)."""
 from __future__ import annotations
 

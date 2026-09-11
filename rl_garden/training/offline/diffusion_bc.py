@@ -8,6 +8,13 @@ runner populates ``agent.replay_buffer`` via ``load_offline_dataset``, but
 ``tdmpc2_multitask.py``'s bespoke-runner shape (same reasoning: a
 non-replay-buffer dataset doesn't fit the shared runner), but simpler since
 there is no separate dataset-loading step to run after agent construction.
+
+Handles both Box and Dict (vision) H5 datasets -- ``DiffusionBC`` itself
+absorbed the former standalone ``VisionDiffusionBC``, and this entrypoint
+follows suit: ``infer_specs_from_h5`` (not the Box-only
+``infer_box_specs_from_h5``) infers the observation space from the dataset,
+and the Dict-only kwargs (image encoder, fusion mode, ...) are built the
+same way ``flow_bc.py``'s ``_flow_bc_kwargs`` does.
 """
 
 from __future__ import annotations
@@ -17,8 +24,11 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from rl_garden.buffers.h5_dataset import infer_box_specs_from_h5
+from gymnasium import spaces
+
+from rl_garden.buffers.h5_dataset import infer_specs_from_h5
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.effective_config import json_value, persist_effective_config
 from rl_garden.training.inspection import (
@@ -37,13 +47,36 @@ from rl_garden.training.offline._registry import registry
 @dataclass
 class DiffusionBCArgs(DiffusionBCTrainingArgs):
     """Diffusion BC pretraining (DPPO phase 1). Requires ``--dataset_path``
-    (H5 trajectory file, state-only). With the default ``--net_backbone mlp``,
-    produces the EMA checkpoint that ``dppo``'s ``--bc_checkpoint`` loads
-    into ``actor``/``actor_ft``. ``--net_backbone unet`` is NOT compatible
-    with that path -- ``DPPOPolicy``'s actor is a fixed ``DiffusionMLP``, so
-    loading a unet-backbone checkpoint there raises a state-dict key-mismatch
-    ``RuntimeError``; use ``--net_backbone unet`` only for standalone
-    ``diffusion_bc``/``consistency_distill_bc`` use, not as a DPPO teacher."""
+    (H5 trajectory file, Box state-only or Dict vision). With the default
+    ``--net_backbone mlp``, a Box-obs run produces the EMA checkpoint that
+    ``dppo``'s ``--bc_checkpoint`` loads into ``actor``/``actor_ft``.
+    ``--net_backbone unet`` is NOT compatible with that path -- ``DPPOPolicy``'s
+    actor is a fixed ``DiffusionMLP``, so loading a unet-backbone checkpoint
+    there raises a state-dict key-mismatch ``RuntimeError``; use
+    ``--net_backbone unet`` only for standalone
+    ``diffusion_bc``/``consistency_distill_bc`` use, not as a DPPO teacher.
+    A Dict (vision) obs run is likewise never a valid ``dppo``/
+    ``consistency_distill_bc`` ``--bc_checkpoint`` teacher (both require a
+    Box-trained checkpoint; see the guards in ``DPPO.__init__``/
+    ``ConsistencyDistillBC._setup_model``). Most ``OfflineVisionArgs`` fields
+    are no-ops for a Box-shaped dataset."""
+
+
+def _diffusion_bc_kwargs(args: DiffusionBCArgs, obs_space: Any) -> dict:
+    from rl_garden.common.cli_args import image_encoder_factory_from_args
+    from rl_garden.encoders import discover_image_keys
+
+    kwargs: dict = {}
+    if isinstance(obs_space, spaces.Dict):
+        kwargs.update(
+            image_encoder_factory=image_encoder_factory_from_args(args),
+            image_keys=discover_image_keys(obs_space),
+            state_key="state",
+            use_proprio=args.include_state,
+            image_fusion_mode=args.image_fusion_mode,
+            enable_stacking=False,
+        )
+    return kwargs
 
 
 def run_diffusion_bc(args: DiffusionBCArgs) -> None:
@@ -74,7 +107,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
 
     seed_everything(args.seed)
 
-    obs_space, action_space = infer_box_specs_from_h5(args.dataset_path)
+    obs_space, action_space = infer_specs_from_h5(args.dataset_path)
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = args.exp_name or f"diffusion_bc__{args.seed}__{int(time.time())}"
@@ -146,6 +179,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
         min_sampling_denoising_std=args.min_sampling_denoising_std,
         net_cls=net_cls,
         net_kwargs=net_kwargs,
+        **_diffusion_bc_kwargs(args, obs_space),
         actor_lr=args.actor_lr,
         weight_decay=args.weight_decay,
         lr_schedule=args.lr_schedule,
@@ -193,11 +227,20 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     persist_effective_config(materialized, config_path)
     logger.update_config(json_value(materialized))
     if args.std_log:
-        print(
-            f"[diffusion_bc] dataset_size={agent._dataset_size} "
-            f"obs={obs_space.shape} action={action_space.shape}",
-            flush=True,
-        )
+        if isinstance(obs_space, spaces.Dict):
+            from rl_garden.encoders import discover_image_keys
+
+            print(
+                f"[diffusion_bc] dataset_size={agent._dataset_size} "
+                f"image_keys={discover_image_keys(obs_space)} action={action_space.shape}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[diffusion_bc] dataset_size={agent._dataset_size} "
+                f"obs={obs_space.shape} action={action_space.shape}",
+                flush=True,
+            )
 
     run_offline_pretraining(
         agent,

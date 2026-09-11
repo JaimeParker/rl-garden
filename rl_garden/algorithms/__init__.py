@@ -71,7 +71,6 @@ from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.unio4 import UniO4
 from rl_garden.algorithms.unio4_ope import UniO4OPE
-from rl_garden.algorithms.vision_diffusion_bc import VisionDiffusionBC
 from rl_garden.algorithms.wsrl import WSRL
 
 __all__ = [
@@ -146,7 +145,6 @@ __all__ = [
     "TransformerSAC",
     "UniO4",
     "UniO4OPE",
-    "VisionDiffusionBC",
     "WSRL",
     "infer_box_specs_from_h5",
     "infer_specs_from_h5",

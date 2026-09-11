@@ -85,7 +85,7 @@ class MyAlgo(OffPolicyAlgorithm):
 ### 3. Minimal chunked-dataset imitation skeleton
 
 For the no-replay-buffer imitation family (`BC`, `DiffusionBC`, `FlowBC`,
-`MeanFlowBC`, `VisionDiffusionBC`, `A2ABC`, `ConsistencyDistillBC`, `DAgger`):
+`MeanFlowBC`, `A2ABC`, `ConsistencyDistillBC`, `DAgger`):
 same class shape as `MyAlgo` above (`__init__` → `_setup_model()` → `train()`,
 `_optimizer_names()`), but on `OfflineRLAlgorithm` with an `OfflineEnvSpec`
 (exposes only `single_observation_space`/`single_action_space`/`num_envs`, built
@@ -157,10 +157,9 @@ Two separate paths — do not mix them:
   (`rl_garden/encoders/combined.py`). Plain `OffPolicyAlgorithm` classes not
   using `Off2OnReplayMixin` do the equivalent Box/Dict branch inline (see
   `SAC`).
-- **Imitation family**: either a sibling vision class in its own file (e.g.
-  `VisionDiffusionBC` next to `DiffusionBC` — "expand, don't modify") or an
-  in-class `isinstance(obs_space, spaces.Box/Dict)` branch (e.g. `FlowBC`).
-  Follow the existing convention for that algorithm's siblings.
+- **Imitation family**: vision is just a different observation — Dict-obs
+  support is always an in-class `isinstance(obs_space, spaces.Box/Dict)`
+  branch, never a `Vision*` sibling class (see `FlowBC` and `DiffusionBC`).
 
 Run-file helpers that build image kwargs from CLI args: online/off2on use
 `image_encoder_factory_from_args`, `image_keys_from_env`,
@@ -321,7 +320,7 @@ None and should_create_eval_env(args)`, builds an optional eval env.
 ### Bespoke-runner shape (`offline/diffusion_bc.py`)
 
 For algorithms with **no replay buffer** — the chunked-dataset imitation family
-(`diffusion_bc`, `consistency_distill_bc`, `vision_diffusion_bc`, `a2a_bc`,
+(`diffusion_bc`, `consistency_distill_bc`, `a2a_bc`,
 `hilp`, `opal`, `tdmpc2_multitask`). `run_offline` assumes `agent.replay_buffer`
 populated by `load_offline_dataset`, which these algorithms don't have, so the
 run file inlines the same config-session and logging setup `run_offline` would
@@ -371,11 +370,11 @@ there is no shared runner to call.
 
 `_validate_config` (`algorithm_registry.py`) hardcodes which offline algorithms
 require which CLI flag. `tdmpc2_multitask` has its own branch (`--dataset_dir` +
-`--mmap_dir`). A separate tuple — `("diffusion_bc", "vision_diffusion_bc",
+`--mmap_dir`). A separate tuple — `("diffusion_bc",
 "consistency_distill_bc", "a2a_bc", "hilp", "opal")` — requires
 `--dataset_path`; everything else (the generic-runner shape) requires
 `--offline_dataset`. If your new bespoke-runner algorithm uses `--dataset_path`,
-add its name to that six-element tuple.
+add its name to that five-element tuple.
 
 ---
 

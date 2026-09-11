@@ -28,7 +28,7 @@ gradient-step loop doesn't fit env-interleaved training either.
 The student is a plain ``BCPolicy`` (actor-only, no critic -- exactly the
 shape a distillation student needs, zero new policy class required), built
 via the same Dict-obs dispatch (``CombinedExtractor``) that ``BC``/
-``FlowBC``/``VisionDiffusionBC`` each already copy independently, sliced to
+``FlowBC``/``DiffusionBC`` each already copy independently, sliced to
 ``student_obs_keys``. The teacher is accepted as an already-built,
 already-frozen ``BasePolicy`` object -- ``PolicyDistillation`` never
 constructs or loads it itself, which is what actually makes "any rl-garden

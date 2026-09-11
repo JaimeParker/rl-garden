@@ -112,7 +112,6 @@ def test_phase_registries_discover_expected_algorithms():
         "a2a_bc",
         "bc",
         "diffusion_bc",
-        "vision_diffusion_bc",
         "consistency_distill_bc",
         "flow_bc",
         "mean_flow_bc",

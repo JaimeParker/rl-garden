@@ -47,6 +47,7 @@ demos/
 docs/superpowers/
 pretrained/*
 !pretrained/README.md
+temp/
 
 # 默认忽略模型权重文件
 *.pt

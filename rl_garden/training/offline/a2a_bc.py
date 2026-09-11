@@ -1,6 +1,6 @@
 """A2A flow-matching BC pretraining run function.
 
-Standalone sibling of ``training/offline/vision_diffusion_bc.py`` (not built
+Standalone sibling of ``training/offline/diffusion_bc.py`` (not built
 on it) -- mirrors its shape for the same reason: no replay buffer, dataset is
 loaded directly in the constructor, so ``training/offline/_runner.py::run_offline``
 doesn't apply.
@@ -36,7 +36,7 @@ class A2ABCArgs(A2ABCTrainingArgs):
     """A2A flow-matching BC pretraining. Requires ``--dataset_path`` (H5
     trajectory file with nested ``obs/<key>`` groups, e.g. ``obs/rgb``/
     ``obs/state``). Vision conditioning is mandatory -- unlike
-    ``vision_diffusion_bc``, ``--include_state=False`` is rejected: the
+    ``diffusion_bc``'s Dict-obs path, ``--include_state=False`` is rejected: the
     state-history window is the flow's source, not optional."""
 
 

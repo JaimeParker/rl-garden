@@ -321,6 +321,16 @@ class DPPO(DPPOCore, OnPolicyAlgorithm):
         self._setup_model()
         if bc_checkpoint is not None:
             checkpoint = load_checkpoint_file(bc_checkpoint, map_location=self.device)
+            # Dict (vision) DiffusionBC checkpoints record image_keys in their
+            # hyperparameters; DPPOPolicy's actor is Box-only, so reject early
+            # with a clear message instead of a load_state_dict shape error.
+            if checkpoint["metadata"]["hyperparameters"].get("image_keys") is not None:
+                raise ValueError(
+                    "--bc_checkpoint was trained with Dict (vision) observations "
+                    "(its recorded hyperparameters include image_keys); DPPO's "
+                    "--bc_checkpoint path requires a Box-trained DiffusionBC "
+                    "checkpoint."
+                )
             ema_net_state_dict = checkpoint["state"]["extra"]["ema_net_state_dict"]
             self.policy.load_actor_weights(ema_net_state_dict)
 

@@ -56,7 +56,7 @@ critic_subsample_size: 2
 actor_use_layer_norm: true
 critic_use_layer_norm: true
 backup_entropy: false
-target_entropy: 0.0
+target_entropy: auto
 
 # Offline CQL/Cal-QL pretraining (antmaze_cql overrides on top of cql_config.py).
 # cql_alpha_lagrange_init/cql_alpha_param/cql_diff_clip_mode/cql_penalty_scale

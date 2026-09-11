@@ -65,7 +65,7 @@ critic_subsample_size: 2
 actor_use_layer_norm: true
 critic_use_layer_norm: true
 backup_entropy: false
-target_entropy: 0.0
+target_entropy: auto
 bootstrap_at_done: truncated
 
 # Offline CQL pretraining, reconciled with calql_kitchen_partial_v0_paper.yaml
