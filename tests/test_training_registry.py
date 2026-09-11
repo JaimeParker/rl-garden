@@ -119,6 +119,7 @@ def test_phase_registries_discover_expected_algorithms():
         "fql",
         "floq",
         "value_flows",
+        "fino",
         "hilp",
         "idql",
         "opal",
@@ -148,6 +149,7 @@ def test_phase_registries_discover_expected_algorithms():
         "acfql",
         "floq",
         "value_flows",
+        "fino",
         "spot",
         "so2",
     }

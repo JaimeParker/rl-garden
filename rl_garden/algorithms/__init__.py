@@ -10,6 +10,7 @@ from rl_garden.algorithms.flash_sac import FlashSAC
 from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.flow_ppo import FlowPPO
 from rl_garden.algorithms.floq import FloQ, Off2OnFloQ
+from rl_garden.algorithms.fino import FINO, Off2OnFINO
 from rl_garden.algorithms.fql import FQL
 from rl_garden.algorithms.value_flows import ValueFlows, Off2OnValueFlows
 from rl_garden.algorithms.calql import CalQL
@@ -88,6 +89,7 @@ __all__ = [
     "FlowBC",
     "FlowPPO",
     "FloQ",
+    "FINO",
     "FQL",
     "ValueFlows",
     "CQL",
@@ -111,6 +113,7 @@ __all__ = [
     "Off2OnAWAC",
     "Off2OnCalQL",
     "Off2OnFloQ",
+    "Off2OnFINO",
     "Off2OnValueFlows",
     "Off2OnIQL",
     "Off2OnSPOT",

@@ -726,6 +726,17 @@ class OfflineValueFlowsArgs(OfflineFQLArgs):
 
 
 @dataclass
+class OfflineFINOArgs(OfflineFQLArgs):
+    """FINO hyperparameters (Shin et al., ICLR 2026). Extends FQL's
+    actor/BC-flow recipe with noise-injected BC-flow training and
+    rejection-sampled (argmax/Boltzmann) inference."""
+
+    noise_scale: float = 0.1
+    beta: float = 10.0
+    num_samples: Optional[int] = None
+
+
+@dataclass
 class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
     Box or Dict (vision) observations."""
