@@ -1,10 +1,10 @@
 # Adding a New Environment Backend
 
-This document is the authoritative guide for adding a new simulator or real-robot
-backend to rl-garden. Read it before touching `rl_garden/envs/`, `rl_garden/common/env_args.py`,
-or any file that calls `register_env_backend`.
+This document is the authoritative guide for adding a new simulator or
+real-robot backend to rl-garden. Read it before touching `rl_garden/envs/`,
+`rl_garden/common/env_args.py`, or any file that calls `register_env_backend`.
 
-## Overview
+## 1. Overview
 
 The backend system decouples training code from simulators. A run function fills
 a backend-neutral `EnvRequest`; the registry translates it into
@@ -20,21 +20,45 @@ run_online(args, make_env_request=..., build_agent=...)
            └─ _get_backend("my_backend")               ← auto-discovered on first call
                   │
                   ├─ MyBackend.make_train_env(req)
-                  └─ MyBackend.make_eval_env(req)
+                  └─ MyBackend.make_eval_env(req)       ← only if req.create_eval_env
 ```
 
-**Discovery mechanism:** `discover_env_backends()` (called lazily on first
-`make_training_envs` / `make_evaluation_env`) uses `pkgutil.iter_modules` to
-import every non-`_`-prefixed module under `rl_garden/envs/backends/`. Each
-module's top-level `register_env_backend(...)` call fires as a side-effect of
-the import. No explicit import elsewhere is required.
+Offline algorithms never call `make_train_env` — spaces come from the dataset
+via `OfflineEnvSpec`, and the backend is only touched for an optional live eval
+env through `make_evaluation_env` (see §8).
 
----
+## 2. Discovery
 
-## Step 1 — Backend adapter (`rl_garden/envs/backends/my_backend.py`)
+`discover_env_backends()` (`rl_garden/envs/backend_registry.py`) runs lazily on
+the first `make_training_envs` / `make_evaluation_env` call and does two things:
+
+1. `pkgutil.iter_modules` over `rl_garden/envs/backends/` imports every
+   non-`_`-prefixed module in that package. Each module's top-level
+   `register_env_backend(...)` call fires as an import side effect — no explicit
+   import elsewhere is required. **`rl_garden/envs/backends/__init__.py` stays a
+   docstring-only file; nothing is imported there.**
+2. `importlib.metadata.entry_points(group="rlgarden.env_backends")` loads every
+   entry point in that group, letting a backend live entirely outside
+   `rl_garden` — the real example is `franka_real`, registered by the separate
+   `rlgarden-real-world` repo (see
+   [`.agents/rules/repository-map.md`](repository-map.md)) via its own
+   `pyproject.toml`:
+
+```toml
+[project.entry-points."rlgarden.env_backends"]
+franka_real = "rlgarden_real_world.backend_module"
+```
+
+`rlgarden_real_world.backend_module` calls `register_env_backend(...)` at import
+time, same as an in-tree module does. Use this path only when the backend
+depends on hardware or code that must not live in `rl_garden` itself; otherwise
+add an in-tree module as in Step 1.
+
+## 3. Step 1 — Backend adapter (`rl_garden/envs/backends/my_backend.py`)
 
 Create a new file in `rl_garden/envs/backends/`. The file name becomes the
-backend key users pass to `--env_backend`.
+backend key users pass to `--env_backend`. `rl_garden/envs/backends/custom.py`
+is the reference to copy.
 
 ```python
 """MyBackend env backend — registered as ``"my_backend"``."""
@@ -45,20 +69,19 @@ from rl_garden.envs.backend_registry import EnvBackend, EnvRequest, register_env
 
 class MyBackend(EnvBackend):
     api_version = 2
-    config_field = "my_backend"   # must match the field name on EnvBackendArgs
+    config_field = "my_backend"   # must equal the registry name below
 
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
-        from rl_garden.envs.my_backend import MyBackendConfig
+        from rl_garden.envs.my_backend.config import MyBackendConfig
 
+        mb = req.backend_config  # MyBackendConfig or None
         return MyBackendConfig(
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
-            obs_mode=req.obs_mode,
+            seed=req.seed,
+            device=mb.device if mb is not None else "cpu",
             # ... translate every relevant EnvRequest field
-            backend_specific_knob=req.backend_config.backend_specific_knob
-            if req.backend_config is not None
-            else None,
         )
 
     @classmethod
@@ -77,101 +100,127 @@ class MyBackend(EnvBackend):
 register_env_backend("my_backend", MyBackend)   # ← fires on import
 ```
 
+`register_env_backend` enforces API v2 exactly, at discovery time, before any
+simulator is touched:
+- `cls.__dict__.get("api_version") == 2` — declared directly on the class, not
+  inherited from another backend.
+- `cls.__dict__.get("config_field")` is a `str` and `cls.config_field == name` —
+  the registry key passed to `register_env_backend(...)`.
+- `resolve_config`, `make_train_env`, `make_eval_env` are each present in
+  `cls.__dict__` — defined directly in the class body. Inheriting one from
+  another `EnvBackend` subclass does not satisfy the check; subclassing an
+  existing backend is not a shortcut for a new one.
+
+`EnvBackend.config_from_args(args)` (base class, not overridden per backend)
+does `getattr(args, cls.config_field)` — what `resolve_backend_config()` on
+`EnvBackendArgs` calls to fetch your backend's CLI config.
+
 **Rules:**
-- The `config_field` string must match the attribute name you add to
-  `EnvBackendArgs` in Step 3.
-- Backend API v2 is mandatory: declare `api_version = 2` and implement
-  `resolve_config`, `make_train_env`, and `make_eval_env` directly on the class.
-  Registration rejects incomplete adapters during discovery, before environment
-  construction.
-- `resolve_config` must be side-effect-free. It translates `EnvRequest` into the
-  concrete train/eval config used by dry-run without initializing a simulator.
-- `make_train_env` / `make_eval_env` must return a vectorised env that exposes
-  `env.num_envs`, `env.single_observation_space`, `env.single_action_space`,
-  and `step` / `reset` returning **GPU torch tensors** (or CPU tensors for
-  CPU-backed backends; transfer cost must not enter the hot path invisibly).
-- Keep the import of the backend library inside the classmethods — not at module
-  level. This preserves lazy loading: importing `rl_garden.envs` must not fail
-  when the backend is not installed.
+- `resolve_config` must be side-effect-free: it builds the concrete train/eval
+  config used by `--print-config`/`--dry-run` without initializing a simulator.
+- `make_train_env`/`make_eval_env` must return a vectorised env exposing
+  `num_envs`, `single_observation_space`, `single_action_space`, and
+  `step`/`reset` returning **GPU torch tensors** (or CPU tensors for CPU-backed
+  backends; transfer cost must not enter the hot path invisibly).
+- Keep the backend library import inside the classmethods, not module level —
+  importing `rl_garden.envs` must not fail when the backend isn't installed.
 
----
+**Escape hatch:** `make_eval_env` may raise `NotImplementedError` when the
+backend cannot run two live instances at once — `isaaclab.py` does this because
+`AppLauncher` only supports one Isaac Sim per process, telling the user to pass
+`--eval_freq 0`. Document the requirement in the module docstring like isaaclab
+does.
 
-## Step 2 — Backend implementation package (`rl_garden/envs/my_backend/`)
+## 4. Step 2 — Backend implementation package (`rl_garden/envs/my_backend/`)
 
-Create a sub-package that holds the config dataclass and the env factory. The
-maniskill package (`rl_garden/envs/maniskill/`) is the minimal reference wrapping
-an existing simulator; robotwin (`rl_garden/envs/robotwin/`) is a heavier example
-with a threading executor. If you're authoring a brand-new environment that
-doesn't wrap any existing simulator, copy `rl_garden/envs/custom/` instead — a
-runnable, fully-wired template (`--env_backend custom --env_id PointReach-v0`)
-showing the standard-gymnasium-authoring-then-vectorize-with-`TorchVectorEnvAdapter`
-shape end to end (see that package's `__init__.py` docstring).
-
-### `rl_garden/envs/my_backend/__init__.py`
+Create a sub-package holding the config dataclass and the env factory. Three
+reference tiers, pick the closest: `rl_garden/envs/maniskill/` (minimal — wraps
+an existing GPU simulator with a thin config-translation + wrapper-application
+layer), `rl_garden/envs/robotwin/` (heavier — wraps a simulator behind a
+threaded executor), or `rl_garden/envs/custom/` for a brand-new environment
+authored from scratch. Copy `custom/` whole to start; it's a runnable,
+fully-wired template (`--env_backend custom --env_id PointReach-v0`) — see its
+`__init__.py` docstring.
 
 ```python
+# rl_garden/envs/my_backend/config.py
+from dataclasses import dataclass
+
+@dataclass
+class MyBackendConfig:
+    env_id: str
+    num_envs: int
+    seed: int
+    device: str = "cpu"
+    reward_scale: float = 1.0
+    reward_bias: float = 0.0
+    # ... all fields the factory needs
+
+# rl_garden/envs/my_backend/__init__.py
 from rl_garden.envs.my_backend.config import MyBackendConfig
 from rl_garden.envs.my_backend.env import make_my_backend_env
 
 __all__ = ["MyBackendConfig", "make_my_backend_env"]
 ```
 
-### `rl_garden/envs/my_backend/config.py`
+### Wrapping a numpy gymnasium env
+
+When the new environment is a standard, single-instance, numpy-based
+`gymnasium.Env` (the `custom` package's shape — `point_reach_env.py` authors a
+plain `gym.Env`; `env.py` does the rest), the factory follows one fixed
+pipeline, `rl_garden/envs/custom/env.py`:
 
 ```python
-from dataclasses import dataclass, field
-from typing import Optional
+def _make_env_fn():
+    def _env_fn():
+        # Import here, not at module scope: under AsyncVectorEnv + spawn,
+        # workers don't inherit the parent's imports, so gym.register(...)
+        # must run fresh in whichever process calls gym.make().
+        import gymnasium as gym
 
-@dataclass
-class MyBackendConfig:
-    env_id: str
-    num_envs: int
-    obs_mode: str
-    control_mode: str
-    render_mode: str
-    seed: int
-    # ... all fields the factory needs
-    record_dir: Optional[str] = None
-    save_video: bool = False
-    video_fps: int = 30
-    max_steps_per_video: Optional[int] = None
-    # backend-specific knobs:
-    backend_specific_knob: Optional[str] = None
-```
+        import rl_garden.envs.my_backend.my_task_env  # noqa: F401
 
-### `rl_garden/envs/my_backend/env.py`
+        return gym.make("MyTask-v0")
 
-```python
+    return _env_fn
+
+
 def make_my_backend_env(cfg: MyBackendConfig):
-    import my_simulator  # lazy — do not import at module level
+    from gymnasium.vector import AutoresetMode, SyncVectorEnv  # or AsyncVectorEnv (process isolation)
+    from rl_garden.envs.vector_env import TorchVectorEnvAdapter
 
-    env = my_simulator.make(cfg.env_id, num_envs=cfg.num_envs, ...)
+    env_fns = [_make_env_fn() for _ in range(cfg.num_envs)]
+    vec_env = SyncVectorEnv(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
+    adapter = TorchVectorEnvAdapter(vec_env, device=cfg.device)
 
-    # Apply standard wrappers where they fit:
-    from rl_garden.envs.wrappers.frame_stack import ImageFrameStackWrapper
-    from rl_garden.envs.wrappers.per_camera_rgbd import PerCameraRGBDWrapper
-    from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
-
-    if cfg.frame_stack > 1:
-        env = ImageFrameStackWrapper(env, cfg.frame_stack)
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        env = RewardScaleBiasWrapper(env, cfg.reward_scale, cfg.reward_bias)
+        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
 
-    return env
+        adapter = RewardScaleBiasVectorWrapper(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
+
+    return adapter
 ```
 
----
+**Env contract** — algorithms depend on this surface regardless of backend,
+checked by `tests/test_vector_env_contract.py`:
+- `num_envs`, `single_observation_space`, `single_action_space`, and a batched
+  `action_space` (off-policy's random-exploration phase reads its `.shape`
+  directly, not `single_action_space`)
+- `reset(seed=...) -> (obs, info)`
+- `step(action) -> (obs, reward, terminated, truncated, infos)`, all of
+  `obs`/`reward`/`terminated`/`truncated` torch tensors (or a dict of torch
+  tensors for Dict obs) on the backend's configured device
+- `metadata["autoreset_mode"] = AutoresetMode.SAME_STEP`
+- `infos["final_observation"]`/`"_final_observation"`/`"final_info"`/`"_final_info"`
+  — matching `ManiSkillVectorEnv`'s key set exactly
 
-## Step 3 — Register the config in `EnvBackendArgs`
+`TorchVectorEnvAdapter` provides all of this for free once handed a numpy
+`gymnasium.vector.VectorEnv`; skip it only if the backend already returns torch
+tensors natively (e.g. ManiSkill).
+
+## 5. Step 3 — Register the config in `EnvBackendArgs`
 
 Edit `rl_garden/common/env_args.py`:
-
-1. Add a `MyBackendConfig` dataclass (CLI-facing, cross-task backend knobs only —
-   e.g. `sim_backend`, `render_backend`). Keep its import **lazy inside the
-   field's `default_factory`** or add it as a direct import — but guard it so
-   the file can be imported without the backend installed.
-
-2. Add the field to `EnvBackendArgs`:
 
 ```python
 # rl_garden/common/env_args.py
@@ -179,14 +228,22 @@ Edit `rl_garden/common/env_args.py`:
 @dataclass
 class MyBackendConfig:
     """MyBackend-specific env settings. CLI prefix: ``--my-backend.<field>``"""
+    device: str = "cpu"
+    # JSON-encoded dict forwarded verbatim to the task constructor — escape
+    # hatch for task-specific kwargs without adding a named field per task.
+    env_kwargs_json: str = "{}"
+    # Only for CPU gymnasium-vector backends: "sync" (single process) or
+    # "async" (one OS process per env, e.g. for isolated render contexts).
+    vectorization: str = "sync"
     backend_specific_knob: Optional[str] = None
-    # add only settings that users should be able to tune via CLI
+
 
 @dataclass
 class EnvBackendArgs:
     env_backend: str = "maniskill"
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
-    robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
+    # ... existing backends (robotwin, minari, d4rl_legacy, mujoco,
+    # mujoco_warp, isaaclab, custom, robomimic, ogbench, rlbench, metaworld)
     my_backend: MyBackendConfig = field(default_factory=MyBackendConfig)  # ← add
 
     def resolve_backend_config(self):
@@ -196,34 +253,48 @@ class EnvBackendArgs:
 
 **Rules:**
 - The field name (`my_backend`) must match `MyBackend.config_field`.
-- All fields must have defaults so the dataclass can be constructed without
-  the backend installed (lazy loading invariant).
+- All fields must have defaults so the dataclass can be constructed without the
+  backend installed (lazy loading invariant).
+- `device` and `env_kwargs_json: str = "{}"` are the standing conventions for a
+  device or task-kwargs passthrough (see `ManiSkillConfig`, `OGBenchConfig`,
+  `IsaacLabConfig`, etc.); `vectorization: "sync" | "async"` is the convention
+  for CPU gymnasium-vector backends (`MujocoConfig`, `OGBenchConfig`,
+  `RLBenchConfig`, `MetaWorldConfig`).
 - Backend config in `EnvBackendArgs` is for **CLI-tuneable, cross-task** knobs
-  only. Task-specific values (e.g. one task's fixed object pose or robot
-  variant) do not belong here, even as `Optional` fields defaulting to `None`
-  — they belong either in the implementation-layer config's own field defaults
-  (e.g. the vendored task's own constructor defaults), or behind a generic
-  passthrough field already on the implementation-layer config (e.g.
-  `env_kwargs`), never as a new named field on the CLI-facing config.
+  only. Task-specific values (one task's fixed object pose, a robot variant)
+  don't belong here, even as `Optional` fields defaulting to `None` — put them
+  in the implementation-layer config's own field defaults, or behind a generic
+  passthrough already on that config (`env_kwargs_json`), never as a new named
+  field on the CLI-facing config.
+- The CLI accepts both dash and underscore field names for a sub-config
+  (`--maniskill.sim-backend` and `--maniskill.sim_backend` both parse).
 
----
+## 6. Step 4 — Wrappers
 
-## Step 4 — Wrappers (optional)
-
-The following wrappers in `rl_garden/envs/wrappers/` are available for reuse:
+**Backend-owned** — applied inside `make_my_backend_env()`, before the registry
+gets the env:
 
 | Wrapper | When to use |
 |---------|-------------|
 | `ImageFrameStackWrapper` | Visual obs with `frame_stack > 1` |
 | `PerCameraRGBDWrapper` | Multi-camera envs where each camera feeds a separate encoder |
-| `RewardScaleBiasWrapper` | Dense reward normalisation (`r * scale + bias`) |
+| `RewardScaleBiasWrapper` | Dense reward normalisation (`r * scale + bias`) on a single-env `gym.Wrapper` chain, pre-vectorization |
+| `RewardScaleBiasVectorWrapper` | Same, applied to a `TorchVectorEnvAdapter` output post-vectorization |
 
-Wrappers are applied inside `make_my_backend_env()` — the backend owns its
-wrapper stack. Run functions and algorithms are unaware of wrappers.
+**Algorithm-owned** — applied in the run file's `build_*` function, after the
+registry returns the env, since they encode algorithm-specific semantics the
+backend shouldn't know about:
 
----
+| Wrapper | When to use |
+|---------|-------------|
+| `ActionChunkWrapper` | Action-chunking algorithms (e.g. `rl_garden/training/online/dppo.py`'s `build_dppo`) |
+| `SkillActionWrapper` | Skill-conditioned action spaces |
 
-## `EnvRequest` field reference
+Other reusable wrappers under `rl_garden/envs/wrappers/`, by name only:
+`RewardClassifierWrapper`, `MultiStageBinaryRewardClassifierWrapper`,
+`GAILRewardWrapper`, `FWBWResetFreeWrapper`.
+
+## 7. `EnvRequest` field reference
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -246,9 +317,29 @@ wrapper stack. Run functions and algorithms are unaware of wrappers.
 | `create_eval_env` | `bool` | `False` → `make_training_envs` returns `(train_env, None)` |
 | `backend_config` | `Any` | Passed through from `args.resolve_backend_config()` |
 
----
+## 8. Offline-only path
 
-## Verification
+Offline algorithms (`OfflineRLAlgorithm`) never build a train env from a backend
+— observation/action spaces come from the dataset via
+`OfflineEnvSpec(observation_space, action_space, num_envs)`
+(`rl_garden/algorithms/offline.py`), which has no `reset`/`step`. The backend is
+touched only for an optional live eval env, gated on both
+(`rl_garden/training/offline/_runner.py`):
+
+```python
+if args.env_id is not None and should_create_eval_env(args):
+    eval_env = make_evaluation_env(args.env_backend, _eval_env_request(args))
+```
+
+`should_create_eval_env(args)` (`rl_garden/envs/backend_registry.py`) is the
+shared "was periodic evaluation actually requested" check, used identically by
+online, offline, and off2on.
+
+Offline **dataset** loading (not env construction) has its own separate
+registry, `rl_garden/buffers/dataset_backend_registry.py`
+(`register_dataset_backend`).
+
+## 9. Verification
 
 ```bash
 # Config inspection (no env created):
@@ -274,3 +365,34 @@ python examples/train_online.py sac \
     --num_envs 2 \
     --num_eval_envs 2
 ```
+
+Add `tests/test_my_backend_env.py` following `tests/test_custom_env_backend.py`,
+whose five tests are the checklist:
+`test_point_reach_env_satisfies_gymnasium_api` (gymnasium API conformance for
+the single-instance env),
+`test_make_custom_env_returns_torch_tensors_on_configured_device`,
+`test_backend_registers_with_api_version_2`,
+`test_resolve_config_is_side_effect_free_and_splits_train_eval_num_envs`, and
+`test_make_train_and_eval_env_construct_working_vectorized_envs`. Keep
+`tests/test_training_registry.py::test_help_does_not_import_simulator_backends`
+and `::test_backend_discovery_validates_v2_without_importing_simulators` green —
+they enforce the lazy-import invariant across every backend.
+
+## 10. Current backends
+
+| Backend | Guide |
+|---------|-------|
+| `custom` | — (this doc's own template, `rl_garden/envs/custom/`) |
+| `d4rl_legacy` | [`docs/guides/d4rl-legacy-expansion.md`](../../docs/guides/d4rl-legacy-expansion.md) |
+| `isaaclab` | [`docs/guides/isaaclab-custom-tasks.md`](../../docs/guides/isaaclab-custom-tasks.md) |
+| `maniskill` | — |
+| `metaworld` | [`docs/guides/metaworld-integration.md`](../../docs/guides/metaworld-integration.md) |
+| `minari` | — |
+| `mujoco` | — |
+| `mujoco_warp` | — |
+| `ogbench` | [`docs/guides/ogbench-integration.md`](../../docs/guides/ogbench-integration.md) |
+| `rlbench` | [`docs/guides/rlbench-integration.md`](../../docs/guides/rlbench-integration.md) |
+| `robomimic` | [`docs/guides/robomimic-integration.md`](../../docs/guides/robomimic-integration.md) |
+| `robotwin` | [`docs/guides/robotwin.md`](../../docs/guides/robotwin.md) |
+| `franka_real` (external, `rlgarden-real-world` repo, entry-point registered) | — |
+

@@ -23,8 +23,10 @@ algorithm registration, environment backends, or replay/device behavior.
 - Add a backend in `rl_garden/envs/backends/<name>.py` by subclassing `EnvBackend`,
   implementing `make_train_env(req)` and `make_eval_env(req)`, and calling
   `register_env_backend("<name>", MyBackend)`.
-- Import the backend module from `rl_garden/envs/backends/__init__.py` and add its
-  config dataclass to `EnvBackendArgs` in `rl_garden/common/env_args.py`.
+- The backend module is auto-discovered by `discover_env_backends()` via
+  `pkgutil` — nothing is imported from `rl_garden/envs/backends/__init__.py`.
+  Only add the config dataclass field on `EnvBackendArgs` in
+  `rl_garden/common/env_args.py`.
 - Training run functions access backend-specific settings through
   `EnvRequest.backend_config`; they must not call `make_maniskill_env()` directly.
 - Extend `ManiSkillEnvConfig` and `make_maniskill_env()` for shared ManiSkill
