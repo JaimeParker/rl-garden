@@ -44,6 +44,10 @@ this repository.
 | SACDDP | `algorithms/sac_ddp.py` | rl-garden extension | Single-node multi-GPU DDP wrapper around `SAC`; no external port |
 | DAgger | `algorithms/dagger.py` | Ross, Gordon & Bagnell 2011, AISTATS (no arXiv preprint) | rl-garden-native; compared during design against [imitation](https://github.com/HumanCompatibleAI/imitation) |
 | PolicyDistillation | `algorithms/policy_distillation.py` | Teacher-student distillation pattern used in legged-robot sim-to-real RL | Ported from [rsl_rl](https://github.com/leggedrobotics/rsl_rl) |
+| GAIL | `algorithms/gail.py` | Ho & Ermon 2016, [arXiv:1606.03476](https://arxiv.org/abs/1606.03476) | Ported from [imitation](https://github.com/HumanCompatibleAI/imitation)'s `algorithms/adversarial/{gail,common}.py`; only the algorithm is ported, not the SB3-coupled code |
+| JSRL | `algorithms/jsrl.py` | Uchendu et al. 2022, [arXiv:2204.02372](https://arxiv.org/abs/2204.02372) | Ported from [jumpstart-rl](https://github.com/steventango/jumpstart-rl)'s `src/jsrl/jsrl.py`; built on rl-garden's own `SAC` |
+| FlowPPO | `algorithms/flow_ppo.py` | RL-100, Lei et al. 2025, [arXiv:2510.14830](https://arxiv.org/abs/2510.14830) | Ported from [RL-100](https://github.com/Lei-Kun/RL-100)'s `unidpg/diffusion_policy/diffusers_patch/flow_match_scheduler.py::FlowMatchSchedulerExtended` + `unidpg/uni_ppo.py` |
+| DiffusionCMDistillOnline | `algorithms/diffusion_cm_distill.py` | RL-100, Lei et al. 2025, [arXiv:2510.14830](https://arxiv.org/abs/2510.14830) (LCM-style self-consistency distillation; no separate arXiv preprint found in repo for the underlying Latent Consistency Model formulation) | Ported from [RL-100](https://github.com/Lei-Kun/RL-100)'s `unidpg/uni_ppo.py::distill_update` -> `policy/rl100_3d.py::compute_ddim2cm_loss`; built on rl-garden's own `DPPO` |
 
 ## Offline RL and Imitation Learning
 
@@ -71,6 +75,14 @@ this repository.
 | QGF | `algorithms/qgf.py` | [arXiv:2606.11087](https://arxiv.org/abs/2606.11087) | Ported from [qgf](https://github.com/zhouzypaul/qgf) |
 | QAM | `algorithms/qam.py` | [arXiv:2601.14234](https://arxiv.org/abs/2601.14234), building on Adjoint Matching (Domingo-Enrich et al. 2024, [arXiv:2409.08861](https://arxiv.org/abs/2409.08861)) | Ported from [qgf](https://github.com/zhouzypaul/qgf) and standalone [qam](https://github.com/ColinQiyangLi/qam) |
 | TDMPC2 (multitask) | `algorithms/tdmpc2/multitask/` | Same as online TDMPC2 | Same as online TDMPC2 |
+| BPPO | `algorithms/bppo.py` | Zhuang et al. 2023, ICLR, [arXiv:2302.11312](https://arxiv.org/abs/2302.11312) | Ported from [BPPO](https://github.com/Dragon-Zhuang/BPPO); critic phase shared with rl-garden's own `UniO4` via `BPPOCriticMixin` |
+| UniO4 | `algorithms/unio4.py` | Lei et al. 2024, ICLR, [arXiv:2311.03351](https://arxiv.org/abs/2311.03351) | Ported from [Uni-O4](https://github.com/Lei-Kun/Uni-O4); builds on rl-garden's own `BPPO` |
+| UniO4OPE | `algorithms/unio4_ope.py` | Same as UniO4 (dynamics-model OPE gating variant) | Built on rl-garden's own `UniO4`; OPE gating ported from [Uni-O4](https://github.com/Lei-Kun/Uni-O4)'s `main.py:280-330`, `abppo.py:314-322`, `dynamics_eval.py::rollout` |
+| MeanFlowBC | `algorithms/mean_flow_bc.py` | MeanFlow, Geng et al. 2025, [arXiv:2505.13447](https://arxiv.org/abs/2505.13447) | Ported from [MeanFlow](https://github.com/haidog-yaqub/MeanFlow) (unofficial PyTorch implementation); sibling of rl-garden's own `FlowBC` |
+| ConsistencyDistillBC | `algorithms/consistency_distill_bc.py` | LCM-style consistency distillation (no arXiv preprint found in repo for the underlying paper) | Reuses rl-garden's own `DiffusionCMDistillOnline` LCM math (boundary-condition/DDIM-step formulas), itself ported from [RL-100](https://github.com/Lei-Kun/RL-100)'s `compute_ddim2cm_loss` |
+| FloQ | `algorithms/floq.py` | Farebrother et al. 2025, [arXiv:2509.06863](https://arxiv.org/abs/2509.06863) | Ported from [floq](https://github.com/CMU-AIRe/floq), a fork of the official FQL code; built on rl-garden's own `FQL` |
+| FINO | `algorithms/fino.py` | Shin et al., "Flow Matching with Injected Noise for Offline-to-Online RL", ICLR 2026, [OpenReview 6wd38R8L0Z](https://openreview.net/forum?id=6wd38R8L0Z) (no arXiv preprint found) | Ported from [FINO](https://github.com/CTID282/FINO), a fork of the official FQL code; built on rl-garden's own `FQL` |
+| ValueFlows | `algorithms/value_flows.py` | Dong et al. 2025, [arXiv:2510.07650](https://arxiv.org/abs/2510.07650) | Ported from [value-flows](https://github.com/chongyi-zheng/value-flows), an independent fork of the official FQL code; built on rl-garden's own `FQL` |
 
 ## Offline-to-Online
 
@@ -82,6 +94,10 @@ this repository.
 | Off2OnAWAC | `algorithms/off2on_awac.py` | Nair et al. 2020, [arXiv:2006.09359](https://arxiv.org/abs/2006.09359) | Built on rl-garden's own `AWAC` |
 | Off2OnSPOT | `algorithms/off2on_spot.py` | Wu et al. 2022, [arXiv:2202.06239](https://arxiv.org/abs/2202.06239) | Off2on switch behavior confirmed against [CORL](https://github.com/tinkoff-ai/CORL) |
 | ACFQL | `algorithms/acfql.py` | Q-chunking, Li et al. 2025, [arXiv:2507.07969](https://arxiv.org/abs/2507.07969) + FQL, Park et al. 2025, [arXiv:2502.02538](https://arxiv.org/abs/2502.02538) | Ported from [QC](https://github.com/ColinQiyangLi/qc) |
+| Off2OnFloQ | `algorithms/floq.py` | Farebrother et al. 2025, [arXiv:2509.06863](https://arxiv.org/abs/2509.06863) | Off2on wiring follows `ACFQL`'s pattern (no action chunking); built on rl-garden's own `FloQ` |
+| Off2OnFINO | `algorithms/fino.py` | Shin et al., "Flow Matching with Injected Noise for Offline-to-Online RL", ICLR 2026, [OpenReview 6wd38R8L0Z](https://openreview.net/forum?id=6wd38R8L0Z) (no arXiv preprint found) | Off2on wiring follows `Off2OnFloQ`'s pattern; built on rl-garden's own `FINO` |
+| Off2OnValueFlows | `algorithms/value_flows.py` | Dong et al. 2025, [arXiv:2510.07650](https://arxiv.org/abs/2510.07650) | Off2on wiring follows `FQL`/`FloQ`'s pattern (no action chunking); built on rl-garden's own `ValueFlows` |
+| SO2 / Off2OnSO2 | `algorithms/so2.py` | Zhang et al. 2024, [arXiv:2312.07685](https://arxiv.org/abs/2312.07685), "A Perspective of Q-value Estimation on Offline-to-Online RL" | Ported from [SO2](https://github.com/opendilab/SO2)'s `origin/code` branch (`ding/policy/edac.py`); built on rl-garden's own `SAC`/`OfflineSAC` |
 
 ## Shared infrastructure (not algorithm-specific)
 
