@@ -1,35 +1,14 @@
-"""FlashSAC run function."""
+"""FlashSAC run function.
+
+``FlashSAC`` is state-only by design (see its module docstring and
+``ObservationContractError`` guard) -- ``FlashSACPolicy`` has no encoder
+mixin/Dict handling. ``FlashSACArgs`` still carries ``ObservationArgs`` for
+CLI/config uniformity (``--obs.state`` parses), but ``build_flash_sac`` never
+wires an encoder; ``--obs.rgb``/``--obs.depth`` reach the env, then fail fast
+at agent construction rather than being silently ignored.
+"""
 
 from __future__ import annotations
-
-
-def _flash_sac_env_request(args, run_name):
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    backend_config = args.resolve_backend_config()
-    eval_record_dir = (
-        f"{args.log_dir}/{run_name}/videos" if args.capture_video else None
-    )
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=None,
-        camera_height=None,
-        include_state=True,
-        per_camera_rgbd=False,
-        frame_stack=1,
-        num_eval_envs=args.num_eval_envs,
-        create_eval_env=should_create_eval_env(args),
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=backend_config,
-    )
 
 
 def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
@@ -89,12 +68,13 @@ def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_flash_sac(args: FlashSACArgs) -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
     run_online(
         args,
         obs_tag="state",
-        make_env_request=_flash_sac_env_request,
+        make_env_request=make_env_request,
         build_agent=build_flash_sac,
     )
 
@@ -105,14 +85,15 @@ def run_flash_sac(args: FlashSACArgs) -> None:
 
 from dataclasses import dataclass
 
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online._args import FlashSACTrainingArgs
 from rl_garden.training.online._registry import registry
 
 
 @dataclass
-class FlashSACArgs(FlashSACTrainingArgs, EnvBackendArgs):
-    """FlashSAC with multi-env backend support (state-only).
+class FlashSACArgs(FlashSACTrainingArgs, ObservationArgs, EnvBackendArgs):
+    """FlashSAC with multi-env backend support (state-only by design).
 
     ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.
     """

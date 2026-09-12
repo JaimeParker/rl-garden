@@ -1,42 +1,18 @@
 """JSRL run function.
 
-State observations only. Requires ``--guide_checkpoint`` (a frozen policy
-from another algorithm's offline-pretrained checkpoint, see
-``rl_garden/algorithms/jsrl.py``).
+Requires ``--guide_checkpoint`` (a frozen policy from another algorithm's
+offline-pretrained checkpoint, see ``rl_garden/algorithms/jsrl.py``). JSRL
+forwards its constructor kwargs to ``SAC`` (see ``JSRL.__init__``'s
+``**sac_kwargs``), so it takes ``--obs.*``/``--encoder.*``/``--obs_groups.*``
+like plain SAC.
 """
 
 from __future__ import annotations
 
 
-def _jsrl_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=None,
-        camera_height=None,
-        include_state=True,
-        per_camera_rgbd=False,
-        frame_stack=1,
-        num_eval_envs=args.num_eval_envs,
-        create_eval_env=should_create_eval_env(args),
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=args.resolve_backend_config(),
-    )
-
-
 def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import JSRL
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
@@ -44,6 +20,13 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         JSRL,
@@ -94,6 +77,7 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -101,14 +85,16 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_jsrl(args: "JSRLArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
     if not args.guide_checkpoint:
         raise SystemExit("--guide_checkpoint is required for jsrl")
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
-        obs_tag="state",
-        make_env_request=_jsrl_env_request,
+        obs_tag=obs_tag,
+        make_env_request=make_env_request,
         build_agent=build_jsrl,
         post_learn=lambda agent: getattr(agent.replay_buffer, "flush", lambda: None)(),
     )
@@ -120,17 +106,20 @@ def run_jsrl(args: "JSRLArgs") -> None:
 
 from dataclasses import dataclass  # noqa: E402
 
+from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.training.online._args import JSRLTrainingArgs  # noqa: E402
 from rl_garden.training.online._registry import registry  # noqa: E402
 
 
 @dataclass
-class JSRLArgs(JSRLTrainingArgs, EnvBackendArgs):
+class JSRLArgs(JSRLTrainingArgs, ObservationArgs, EnvBackendArgs):
     """JSRL (Jump-Start RL) -- SAC jump-started by a frozen guide policy.
 
     Requires ``--guide_checkpoint`` and ``--guide_algorithm``
-    (``iql``/``calql``/``wsrl``/``awac``). State observations only.
+    (``iql``/``calql``/``wsrl``/``awac``). State-only by default; pass
+    ``--obs.rgb <camera>`` for Dict/RGBD observations (forwarded straight
+    to SAC, same as plain ``sac``).
     """
 
 

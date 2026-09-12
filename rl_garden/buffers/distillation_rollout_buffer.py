@@ -18,7 +18,7 @@ from typing import Iterator, Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.buffers.replay_buffer import DictArray
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
 

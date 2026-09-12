@@ -24,6 +24,8 @@ from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import ConditionalVAE, EnsembleQCritic, KernelInit, PerturbationActor
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObservationSchema
+from rl_garden.observations.schema import ObservationContractError
 from rl_garden.policies.base import BasePolicy
 
 _N_CRITICS = 2
@@ -34,7 +36,7 @@ class BCQPolicy(ObsNormalizingMixin, BasePolicy):
 
     def __init__(
         self,
-        observation_space: spaces.Box,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         features_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (400, 300),
@@ -52,15 +54,18 @@ class BCQPolicy(ObsNormalizingMixin, BasePolicy):
         vae_latent_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
-        assert isinstance(observation_space, spaces.Box), (
-            "BCQPolicy requires a Box observation space."
-        )
         assert isinstance(action_space, spaces.Box), "BCQ requires a Box action space."
+        if not ObservationSchema.from_space(observation_space).has_state:
+            raise ObservationContractError(
+                "BCQPolicy requires a 'state' key in the observation space "
+                "-- CORL's normalize_states semantics normalize the raw "
+                "state entry, not the post-encoder features."
+            )
 
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_extractor = features_extractor
-        self._register_obs_normalizer(int(observation_space.shape[0]))
+        self._register_obs_normalizer(int(observation_space.spaces["state"].shape[0]))
 
         fd = features_extractor.features_dim
         net_arch = list(net_arch)
@@ -102,8 +107,9 @@ class BCQPolicy(ObsNormalizingMixin, BasePolicy):
             p.requires_grad_(False)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        obs = self._normalize_obs(obs)
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        normalized_obs = dict(obs)
+        normalized_obs["state"] = self._normalize_obs(obs["state"])
+        return self._extract_features(normalized_obs, stop_gradient=stop_gradient)
 
     def q_values(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False

@@ -2,7 +2,6 @@ env_backend: d4rl_legacy
 dataset_backend: d4rl_legacy
 env_id: relocate-human-v1
 offline_dataset: relocate-human-v1
-obs_mode: state
 num_envs: 1
 num_eval_envs: 1
 num_offline_steps: 1000000

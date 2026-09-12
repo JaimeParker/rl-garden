@@ -4,21 +4,14 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
-from rl_garden.common.cli_args import (
-    ENCODER_REGISTRY,
-    VisionArgs,
-    critic_features_extractor_kwargs_from_args,
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    image_keys_from_obs_mode,
-    resolve_num_eval_steps,
-    vit_sac_kwargs_from_args,
-    warn_if_eval_budget_undersized,
-)
+from rl_garden.common.cli_args import resolve_num_eval_steps, warn_if_eval_budget_undersized
 from rl_garden.common.effective_config import inactive_config_paths
-from rl_garden.training.offline._args import OfflineVisionArgs, TDMPC2MultitaskTrainingArgs
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObservationConfig
+from rl_garden.training.offline._args import TDMPC2MultitaskTrainingArgs
 from rl_garden.training.offline.awac import AWACArgs
 from rl_garden.training.offline.td3_bc import TD3BCArgs
 from rl_garden.training.off2on._args import (
@@ -28,7 +21,6 @@ from rl_garden.training.off2on._args import (
 )
 from rl_garden.training.off2on.awac import AWACOff2OnArgs
 from rl_garden.training.online._args import (
-    DrQv2TrainingArgs,
     FlashSACTrainingArgs,
     SACTrainingArgs,
     TDMPC2TrainingArgs,
@@ -60,12 +52,15 @@ def test_tdmpc2_defaults_require_single_env() -> None:
     assert args.seed_steps is None
 
 
-def test_vision_tdmpc2_defaults_shrink_buffer() -> None:
+def test_vision_tdmpc2_defaults_are_state_only() -> None:
+    # ObservationArgs defaults to state-only for every algorithm now
+    # (algorithm-specific "visual by default" presets move to YAML, not
+    # code); only buffer_size stays TDMPC2-specific here.
     args = VisionTDMPC2TrainingArgs()
 
     assert args.num_envs == 1
     assert args.buffer_size == 200_000
-    assert args.obs_mode == "rgb"
+    assert args.obs == ObservationConfig()
 
 
 def test_td3_bc_defaults_match_corl_trainconfig() -> None:
@@ -133,21 +128,17 @@ def test_state_sac_defaults_match_existing_cli() -> None:
     assert args.gamma == 0.8
 
 
-def test_rgbd_sac_defaults_match_existing_cli() -> None:
+def test_sac_args_defaults_match_existing_cli() -> None:
     from rl_garden.training.online.sac import SACArgs
     args = SACArgs()
 
     assert args.env_id == "PickCube-v1"
-    assert args.obs_mode == "rgb"
-    assert args.include_state is True
-    assert args.frame_stack == 1
-    assert args.camera_width == 64
-    assert args.camera_height == 64
+    assert args.obs == ObservationConfig()
+    assert args.encoder.backbone == "plain_conv"
     assert args.buffer_size == 200_000
     assert args.batch_size == 512
     assert args.utd == 0.25
     assert args.nstep == 1
-    assert args.encoder == "plain_conv"
     assert args.n_critics == 2
     assert args.critic_subsample_size is None
     assert args.actor_use_layer_norm is False
@@ -161,22 +152,17 @@ def test_rgbd_sac_defaults_match_existing_cli() -> None:
     assert args.critic_only_freeze_encoder is True
     assert args.critic_only_random_action_prob == 0.0
     assert args.load_actor_checkpoint is None
-    assert args.plain_conv_weight_init == "kaiming_uniform"
-    assert args.plain_conv_last_act is True
-    assert args.plain_conv_pooling == "flatten"
-    assert args.image_augmentation == "none"
-    assert args.image_random_shift_pad == 4
+    assert args.encoder.plain_conv_weight_init == "kaiming_uniform"
+    assert args.encoder.plain_conv_last_act is True
+    assert args.encoder.plain_conv_pooling == "flatten"
+    assert args.encoder.image_augmentation == "none"
+    assert args.encoder.image_random_shift_pad == 4
     assert args.q_landscape_diagnostics is False
 
 
-def test_online_specialized_args_keep_existing_defaults() -> None:
-    drq = DrQv2TrainingArgs()
+def test_flash_sac_args_keep_existing_defaults() -> None:
     flash = FlashSACTrainingArgs()
 
-    assert drq.obs_mode == "rgbd"
-    assert drq.batch_size == 256
-    assert drq.hidden_dim == 1024
-    assert drq.load_replay_buffer is False
     assert flash.num_envs == 512
     assert flash.batch_size == 2048
     assert flash.capture_video is False
@@ -282,6 +268,7 @@ def _make_rt_req(
     capture_video: bool = False,
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
+    rgb: tuple = ("head", "left_wrist", "right_wrist"),
 ):
     from rl_garden.envs.backend_registry import EnvRequest
 
@@ -289,12 +276,10 @@ def _make_rt_req(
         env_id="place_shoe",
         num_envs=num_envs,
         num_eval_envs=num_eval_envs,
-        obs_mode="rgb",
+        observation=ObservationConfig(rgb=rgb),
         control_mode="delta_joint_pos",
         render_mode="rgb_array",
         seed=1,
-        camera_width=64,
-        camera_height=64,
         capture_video=capture_video,
         reward_scale=reward_scale,
         reward_bias=reward_bias,
@@ -309,12 +294,10 @@ def _make_ms_req(ms):
         env_id="PickCube-v1",
         num_envs=2,
         num_eval_envs=3,
-        obs_mode="rgb",
+        observation=ObservationConfig(rgb=("base_camera",), image_size=(64, 64)),
         control_mode="pd_ee_delta_pose",
         render_mode="rgb_array",
         seed=1,
-        camera_width=64,
-        camera_height=64,
         capture_video=True,
         backend_config=ms,
     )
@@ -367,29 +350,30 @@ def _make_mujoco_req(mj, *, num_envs: int = 2, num_eval_envs: int = 3):
         env_id="HalfCheetah-v4",
         num_envs=num_envs,
         num_eval_envs=num_eval_envs,
-        obs_mode="state",
+        observation=ObservationConfig(),
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
         backend_config=mj,
     )
 
 
-def _make_isaaclab_req(il, *, obs_mode: str = "state"):
+def _make_isaaclab_req(il, *, is_visual: bool = False, frame_stack: int = 1):
     from rl_garden.envs.backend_registry import EnvRequest
 
+    observation = (
+        ObservationConfig(rgb=("camera",), frame_stack=frame_stack)
+        if is_visual
+        else ObservationConfig(frame_stack=frame_stack)
+    )
     return EnvRequest(
         env_id="Isaac-Cartpole-v0",
         num_envs=4,
         num_eval_envs=4,
-        obs_mode=obs_mode,
+        observation=observation,
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
         backend_config=il,
     )
 
@@ -467,19 +451,38 @@ def test_mujoco_backend_make_cfg_is_eval_swaps_num_envs() -> None:
     assert eval_cfg.num_envs == 3
 
 
-def _make_mujoco_warp_req(mjw, *, num_envs: int = 2, num_eval_envs: int = 3, obs_mode: str = "state"):
+def test_mujoco_backend_rejects_visual_observation() -> None:
+    from rl_garden.common.env_args import MujocoConfig
+    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backends.mujoco import MujocoBackend
+    from rl_garden.observations import ObservationContractError
+
+    req = EnvRequest(
+        env_id="HalfCheetah-v4",
+        num_envs=1,
+        num_eval_envs=1,
+        observation=ObservationConfig(rgb=("main",)),
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        backend_config=MujocoConfig(),
+    )
+
+    with pytest.raises(ObservationContractError):
+        MujocoBackend._make_cfg(req, is_eval=False)
+
+
+def _make_mujoco_warp_req(mjw, *, num_envs: int = 2, num_eval_envs: int = 3, observation=None):
     from rl_garden.envs.backend_registry import EnvRequest
 
     return EnvRequest(
         env_id="RlGarden-InvertedPendulum-Warp-v0",
         num_envs=num_envs,
         num_eval_envs=num_eval_envs,
-        obs_mode=obs_mode,
+        observation=observation if observation is not None else ObservationConfig(),
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=64,
-        camera_height=64,
         backend_config=mjw,
     )
 
@@ -544,13 +547,17 @@ def test_mujoco_warp_backend_make_cfg_is_eval_swaps_num_envs() -> None:
     assert eval_cfg.num_envs == 3
 
 
-def test_mujoco_warp_backend_render_flags_follow_obs_mode() -> None:
+def test_mujoco_warp_backend_render_flags_follow_observation() -> None:
     from rl_garden.common.env_args import MujocoWarpConfig
     from rl_garden.envs.backends.mujoco_warp import MujocoWarpBackend
 
-    state_req = _make_mujoco_warp_req(MujocoWarpConfig(), obs_mode="state")
-    rgb_req = _make_mujoco_warp_req(MujocoWarpConfig(), obs_mode="rgb")
-    rgbd_req = _make_mujoco_warp_req(MujocoWarpConfig(), obs_mode="rgbd")
+    state_req = _make_mujoco_warp_req(MujocoWarpConfig(), observation=ObservationConfig())
+    rgb_req = _make_mujoco_warp_req(
+        MujocoWarpConfig(), observation=ObservationConfig(rgb=("main",))
+    )
+    rgbd_req = _make_mujoco_warp_req(
+        MujocoWarpConfig(), observation=ObservationConfig(rgb=("main",), depth=("main",))
+    )
 
     state_cfg = MujocoWarpBackend._make_cfg(state_req, is_eval=False)
     rgb_cfg = MujocoWarpBackend._make_cfg(rgb_req, is_eval=False)
@@ -591,33 +598,42 @@ def test_isaaclab_backend_make_cfg_forwards_env_kwargs_json() -> None:
     assert cfg.headless is False
     assert cfg.sim_device == "cuda:1"
     assert cfg.env_kwargs == {"episode_length_s": 10.0}
-    assert cfg.obs_mode == "state"
+    assert cfg.is_visual is False
+    assert cfg.state is True
     assert cfg.frame_stack == 1
 
 
-def test_isaaclab_backend_make_cfg_forwards_obs_mode_and_frame_stack() -> None:
+def test_isaaclab_backend_make_cfg_forwards_visual_and_frame_stack() -> None:
     from rl_garden.common.env_args import IsaacLabConfig
-    from rl_garden.envs.backend_registry import EnvRequest
     from rl_garden.envs.backends.isaaclab import IsaacLabBackend
 
-    req = EnvRequest(
-        env_id="RlGarden-Cartpole-Direct-v0",
-        num_envs=4,
-        num_eval_envs=4,
-        obs_mode="rgb",
-        control_mode="",
-        render_mode="rgb_array",
-        seed=1,
-        camera_width=100,
-        camera_height=100,
-        frame_stack=3,
-        backend_config=IsaacLabConfig(),
-    )
+    req = _make_isaaclab_req(IsaacLabConfig(), is_visual=True, frame_stack=3)
 
     cfg = IsaacLabBackend._make_cfg(req, is_eval=False)
 
-    assert cfg.obs_mode == "rgb"
+    assert cfg.is_visual is True
     assert cfg.frame_stack == 3
+
+
+def test_isaaclab_backend_rejects_explicit_image_size() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+    from rl_garden.observations import ObservationContractError
+
+    req = EnvRequest(
+        env_id="Isaac-Cartpole-v0",
+        num_envs=4,
+        num_eval_envs=4,
+        observation=ObservationConfig(rgb=("camera",), image_size=(100, 100)),
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        backend_config=IsaacLabConfig(),
+    )
+
+    with pytest.raises(ObservationContractError):
+        IsaacLabBackend._make_cfg(req, is_eval=False)
 
 
 def test_isaaclab_backend_make_eval_env_not_supported_in_v1() -> None:
@@ -635,7 +651,6 @@ def test_robotwin_config_defaults() -> None:
 
     rt = RoboTwinConfig()
 
-    assert rt.include_wrist_cameras is True
     assert rt.reward_mode == "dense"
     assert rt.step_lim == 400
     assert rt.planner_backend == "mplib"
@@ -677,7 +692,6 @@ def test_robotwin_backend_make_cfg_64px() -> None:
 
     assert cfg.num_envs == 3
     assert cfg.image_size == (64, 64)
-    assert cfg.include_wrist_cameras is True
     assert cfg.render_every_control_step is False
     assert cfg.control_step_cap is None
     assert cfg.random_light is False
@@ -685,6 +699,7 @@ def test_robotwin_backend_make_cfg_64px() -> None:
     assert cfg.head_camera_type == "D435"
     assert cfg.task_config["camera"]["head_camera_type"] == "D435"
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
+    assert cfg.task_config["camera"]["collect_head_camera"] is True
     assert cfg.task_config["eval_video_log"] is True
 
 
@@ -700,7 +715,6 @@ def test_robotwin_backend_make_cfg_device() -> None:
     assert cfg.num_envs == 2
     assert cfg.device == "auto"
     assert cfg.image_size == (64, 64)
-    assert cfg.include_wrist_cameras is True
     assert cfg.render_every_control_step is False
     assert cfg.control_step_cap is None
     assert cfg.random_light is False
@@ -711,17 +725,50 @@ def test_robotwin_backend_make_cfg_device() -> None:
     assert cfg.task_config["camera"]["collect_wrist_camera"] is True
 
 
-def test_robotwin_backend_disable_wrist_cameras() -> None:
+def test_robotwin_backend_omits_wrist_cameras_when_not_requested() -> None:
     from rl_garden.common.env_args import RoboTwinConfig
     from rl_garden.envs.backends.robotwin import RoboTwinBackend
 
-    rt = RoboTwinConfig(include_wrist_cameras=False)
-    req = _make_rt_req(rt, num_envs=2)
+    rt = RoboTwinConfig()
+    req = _make_rt_req(rt, num_envs=2, rgb=("head",))
 
     cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
 
-    assert cfg.include_wrist_cameras is False
     assert cfg.task_config["camera"]["collect_wrist_camera"] is False
+    assert cfg.task_config["camera"]["collect_head_camera"] is True
+
+
+def test_robotwin_backend_rejects_unknown_camera() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+    from rl_garden.observations import ObservationContractError
+
+    rt = RoboTwinConfig()
+    req = _make_rt_req(rt, rgb=("front",))
+
+    with pytest.raises(ObservationContractError):
+        RoboTwinBackend._make_cfg(req, is_eval=False)
+
+
+def test_robotwin_backend_rejects_depth() -> None:
+    from rl_garden.common.env_args import RoboTwinConfig
+    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+    from rl_garden.observations import ObservationContractError
+
+    req = EnvRequest(
+        env_id="place_shoe",
+        num_envs=1,
+        num_eval_envs=1,
+        observation=ObservationConfig(depth=("head",)),
+        control_mode="delta_joint_pos",
+        render_mode="rgb_array",
+        seed=1,
+        backend_config=RoboTwinConfig(),
+    )
+
+    with pytest.raises(ObservationContractError):
+        RoboTwinBackend._make_cfg(req, is_eval=False)
 
 
 def test_robotwin_backend_forwards_all_options() -> None:
@@ -767,7 +814,6 @@ def test_robotwin_backend_disable_topp() -> None:
     assert cfg.task_config["need_topp"] is False
 
 
-
 def test_state_wsrl_defaults_match_existing_cli() -> None:
     args = WSRLTrainingArgs()
 
@@ -782,14 +828,12 @@ def test_state_wsrl_defaults_match_existing_cli() -> None:
     assert args.use_calql is True
 
 
-def test_rgbd_wsrl_defaults_match_existing_cli() -> None:
+def test_wsrl_off2on_args_defaults_match_existing_cli() -> None:
     from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
     args = WSRLOff2OnArgs()
 
-    assert args.obs_mode == "rgb"
-    assert args.camera_width == 128
-    assert args.camera_height == 128
+    assert args.obs == ObservationConfig()
     assert args.buffer_size == 200_000
     assert args.batch_size == 512
     assert args.utd == 0.25
@@ -832,8 +876,8 @@ def test_build_calql_forwards_stats_window_size_from_args_to_agent() -> None:
     """Regression: a CalQLOff2OnArgs field declared but not forwarded inside
     build_calql would silently no-op from the CLI -- exactly the gap that
     stats_window_size itself was previously missing at the Off2OnCalQL
-    constructor level. state obs_mode keeps this a plain-args-forwarding
-    check, not a vision-encoder construction test."""
+    constructor level. State obs (the default) keeps this a plain-args-
+    forwarding check, not a vision-encoder construction test."""
     from unittest.mock import MagicMock
 
     from gymnasium import spaces
@@ -842,12 +886,10 @@ def test_build_calql_forwards_stats_window_size_from_args_to_agent() -> None:
 
     env = MagicMock()
     env.num_envs = 2
-    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
-    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
 
-    args = CalQLOff2OnArgs(
-        obs_mode="state", buffer_device="cpu", stats_window_size=10, hidden_dim=8
-    )
+    args = CalQLOff2OnArgs(buffer_device="cpu", stats_window_size=10, hidden_dim=8)
     agent = build_calql(args, env, None, None, None)
 
     assert agent.stats_window_size == 10
@@ -863,12 +905,11 @@ def test_build_iql_forwards_actor_distribution_and_actor_lr_schedule_from_args()
     from rl_garden.training.offline.iql import IQLArgs, build_iql
 
     env_spec = OfflineEnvSpec(
-        spaces.Box(low=-1, high=1, shape=(4,), dtype=float),
-        spaces.Box(low=-1, high=1, shape=(2,), dtype=float),
+        spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32),
+        spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
         num_envs=1,
     )
     args = IQLArgs(
-        obs_mode="state",
         buffer_device="cpu",
         actor_distribution="unsquashed",
         actor_lr_schedule="warmup_cosine",
@@ -893,11 +934,10 @@ def test_build_iql_off2on_forwards_actor_distribution_and_actor_lr_schedule_from
 
     env = MagicMock()
     env.num_envs = 2
-    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
-    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
 
     args = IQLOff2OnArgs(
-        obs_mode="state",
         buffer_device="cpu",
         actor_distribution="unsquashed",
         actor_lr_schedule="warmup_cosine",
@@ -914,231 +954,61 @@ def test_build_iql_off2on_forwards_actor_distribution_and_actor_lr_schedule_from
     assert agent.num_eval_episodes == 100
 
 
-@dataclass
-class _BadPlainConvArgs:
-    encoder: str = "plain_conv"
-    encoder_features_dim: int = 256
-    pretrained_weights: str | None = "resnet10_pretrained"
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
-
-
-@dataclass
-class _VitArgs:
-    encoder: str = "vit"
-    encoder_features_dim: int = 256
-    include_state: bool = True
-    image_fusion_mode: str = "stack_channels"
-    vit_fusion_mode: str = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: str = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: str | None = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
-    plain_conv_weight_init: str = "kaiming_uniform"
-    plain_conv_last_act: bool = True
-    plain_conv_pooling: str = "flatten"
-    image_augmentation: str = "none"
-    image_random_shift_pad: int = 4
-
-
-def test_plain_conv_rejects_resnet_only_options() -> None:
+def test_encoder_config_rejects_resnet_only_options_for_plain_conv() -> None:
     with pytest.raises(ValueError, match="only supported for resnet encoders"):
-        image_encoder_factory_from_args(_BadPlainConvArgs())
+        EncoderConfig(
+            backbone="plain_conv", pretrained_weights="resnet10_pretrained"
+        ).image_encoder_factory()
 
 
-def test_vit_rejects_resnet_only_options() -> None:
-    args = _VitArgs(pretrained_weights="resnet10_pretrained")
-    with pytest.raises(ValueError, match="only supported for resnet encoders"):
-        image_encoder_factory_from_args(args)
-
-
-def test_non_plain_conv_rejects_plain_conv_only_options() -> None:
-    args = _VitArgs(plain_conv_weight_init="orthogonal")
+def test_encoder_config_rejects_plain_conv_only_options_for_other_backbones() -> None:
     with pytest.raises(ValueError, match="only supported for the plain_conv encoder"):
-        image_encoder_factory_from_args(args)
+        EncoderConfig(backbone="vit", plain_conv_weight_init="orthogonal").image_encoder_factory()
 
-    args = _VitArgs(plain_conv_last_act=False)
     with pytest.raises(ValueError, match="only supported for the plain_conv encoder"):
-        image_encoder_factory_from_args(args)
+        EncoderConfig(backbone="vit", plain_conv_last_act=False).image_encoder_factory()
 
-    args = _VitArgs(plain_conv_pooling="gap")
     with pytest.raises(ValueError, match="only supported for the plain_conv encoder"):
-        image_encoder_factory_from_args(args)
-
-def test_vit_sac_kwargs_defaults_to_per_key() -> None:
-    kwargs = vit_sac_kwargs_from_args(_VitArgs(), ("rgb_base", "rgb_wrist"))
-    extractor_kwargs = kwargs["policy_kwargs"]["features_extractor_kwargs"]
-    assert extractor_kwargs["fusion_mode"] == "per_key"
-    assert extractor_kwargs["image_keys"] == ("rgb_base", "rgb_wrist")
-    # head hyperparams live at the bundle top level, not in the extractor kwargs
-    assert kwargs["actor_feature_dim"] == 128
-    assert kwargs["critic_spatial_emb_dim"] == 1024
-    assert "actor_feature_dim" not in extractor_kwargs
-    assert "critic_spatial_emb_dim" not in extractor_kwargs
+        EncoderConfig(backbone="vit", plain_conv_pooling="gap").image_encoder_factory()
 
 
-def test_encoder_registry_matches_literal() -> None:
-    """Every VisionArgs.encoder choice must have exactly one registry entry."""
+def test_encoder_registry_matches_backbone_literal() -> None:
+    """Every EncoderConfig.backbone choice must have exactly one registry entry."""
     from typing import get_args, get_type_hints
 
-    literal_choices = set(get_args(get_type_hints(VisionArgs)["encoder"]))
+    from rl_garden.encoders.registry import ENCODER_REGISTRY
+
+    literal_choices = set(get_args(get_type_hints(EncoderConfig)["backbone"]))
     assert literal_choices == set(ENCODER_REGISTRY)
 
 
-@pytest.mark.parametrize(
-    "encoder", ["plain_conv", "resnet10", "resnet18", "drqv2_conv", "cnn3d"]
-)
-def test_vit_sac_kwargs_empty_for_non_vit(encoder: str) -> None:
-    # Regression guard: non-vit encoders must NOT inject actor_feature_dim, which
-    # crashed every non-vit RGBD run when forwarded to SACPolicy. Empty bundle ->
-    # the algorithm constructor falls back to actor_feature_dim=None.
-    kwargs = vit_sac_kwargs_from_args(VisionArgs(encoder=encoder), ("rgb",))
-    assert kwargs == {}
-    assert "actor_feature_dim" not in kwargs
+def test_encoder_config_factory_returns_callable_for_each_backbone() -> None:
+    from rl_garden.encoders.registry import ENCODER_REGISTRY
 
-
-def test_image_encoder_factory_returns_callable_for_each_encoder() -> None:
-    for encoder in ENCODER_REGISTRY:
-        factory = image_encoder_factory_from_args(VisionArgs(encoder=encoder))
+    for backbone in ENCODER_REGISTRY:
+        factory = EncoderConfig(backbone=backbone).image_encoder_factory()
         assert callable(factory)
 
 
-def test_offline_plain_conv_factory_uses_shared_defaults() -> None:
-    factory = image_encoder_factory_from_args(OfflineVisionArgs(encoder="plain_conv"))
-    assert callable(factory)
+def test_critic_encoder_inactive_without_override() -> None:
+    from rl_garden.training.online.sac import SACArgs
+
+    args = SACArgs(obs=ObservationConfig(rgb=("base_camera",)))
+    inactive = inactive_config_paths(args)
+
+    assert inactive["critic_encoder.backbone"] == "critic_encoder is not set"
 
 
-def test_image_keys_from_obs_mode() -> None:
-    assert image_keys_from_obs_mode("rgb") == ("rgb",)
-    assert image_keys_from_obs_mode("rgbd") == ("rgb", "depth")
+def test_critic_encoder_active_once_overridden() -> None:
+    from rl_garden.training.online.sac import SACArgs
 
-
-def test_critic_features_extractor_kwargs_empty_when_unset() -> None:
-    args = VisionArgs(encoder="resnet10")
-    assert critic_features_extractor_kwargs_from_args(args, ("rgb",)) == {}
-
-
-def test_critic_features_extractor_kwargs_flat_for_non_vit_critic_encoder() -> None:
-    from rl_garden.encoders import CombinedExtractor
-
-    args = VisionArgs(encoder="drqv2_conv", critic_encoder="resnet10")
-    kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
-    assert kwargs["critic_features_extractor_class"] is CombinedExtractor
-    assert kwargs["critic_features_extractor_kwargs"]["image_keys"] == ("rgb",)
-    # actor's own encoder choice (drqv2_conv) must not leak into the critic's
-    # image_encoder_factory -- only args.critic_encoder (resnet10) should.
-    assert callable(kwargs["critic_features_extractor_kwargs"]["image_encoder_factory"])
-
-
-def test_critic_features_extractor_kwargs_structured_for_vit_critic_encoder() -> None:
-    from rl_garden.encoders import ViTTokenAndPropExtractor
-
-    args = VisionArgs(encoder="resnet10", critic_encoder="vit")
-    kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
-    assert kwargs["critic_features_extractor_class"] is ViTTokenAndPropExtractor
-
-
-def test_critic_features_extractor_kwargs_respects_critic_include_state_override() -> None:
-    args = VisionArgs(encoder="resnet10", critic_encoder="resnet10", critic_include_state=False)
-    kwargs = critic_features_extractor_kwargs_from_args(args, ("rgb",))
-    assert kwargs["critic_features_extractor_kwargs"]["use_proprio"] is False
-
-
-def test_critic_image_keys_and_include_state_inactive_without_critic_encoder() -> None:
-    # Without critic_encoder, critic_features_extractor_kwargs_from_args()
-    # is never reached by any build_* call site (all gate on
-    # `if args.critic_encoder:` first), so an explicit critic_image_keys/
-    # critic_include_state would otherwise be silently ignored -- not a
-    # dimension mismatch, just a no-op. Flag it at config-resolution time
-    # instead, matching the pretrained_weights/freeze_resnet_* precedent
-    # for "field X requires field Y" just above this in the same function.
-    args = VisionArgs(
-        obs_mode="rgb", encoder="resnet10", critic_image_keys="rgb", critic_include_state=False
+    args = SACArgs(
+        obs=ObservationConfig(rgb=("base_camera",)),
+        critic_encoder=EncoderConfig(backbone="resnet10"),
     )
     inactive = inactive_config_paths(args)
-    assert inactive["critic_image_keys"] == "critic_encoder is not set"
-    assert inactive["critic_include_state"] == "critic_encoder is not set"
 
-
-def test_critic_image_keys_and_include_state_active_with_critic_encoder() -> None:
-    args = VisionArgs(
-        obs_mode="rgb",
-        encoder="resnet10",
-        critic_encoder="resnet10",
-        critic_image_keys="rgb",
-        critic_include_state=False,
-    )
-    inactive = inactive_config_paths(args)
-    assert "critic_image_keys" not in inactive
-    assert "critic_include_state" not in inactive
-
-
-def test_image_keys_from_env_can_filter_explicit_per_camera_keys() -> None:
-    from gymnasium import spaces
-
-    class _Env:
-        single_observation_space = spaces.Dict(
-            {
-                "rgb_base_camera": spaces.Box(
-                    low=0, high=255, shape=(64, 64, 3), dtype="uint8"
-                ),
-                "rgb_hand_camera": spaces.Box(
-                    low=0, high=255, shape=(64, 64, 3), dtype="uint8"
-                ),
-                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype="float32"),
-            }
-        )
-
-    args = VisionArgs(per_camera_rgbd=True, image_keys="rgb_base_camera")
-
-    assert image_keys_from_env(_Env(), args) == ("rgb_base_camera",)
-
-
-def test_image_keys_from_env_rejects_missing_explicit_key() -> None:
-    from gymnasium import spaces
-
-    class _Env:
-        single_observation_space = spaces.Dict(
-            {
-                "rgb_base_camera": spaces.Box(
-                    low=0, high=255, shape=(64, 64, 3), dtype="uint8"
-                ),
-            }
-        )
-
-    args = VisionArgs(per_camera_rgbd=True, image_keys="rgb_missing")
-
-    with pytest.raises(ValueError, match="rgb_missing"):
-        image_keys_from_env(_Env(), args)
-
-
-def test_image_keys_from_env_image_key_filter_overrides_args_image_keys() -> None:
-    from gymnasium import spaces
-
-    class _Env:
-        single_observation_space = spaces.Dict(
-            {
-                "rgb_base_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype="uint8"),
-                "rgb_hand_camera": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype="uint8"),
-                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype="float32"),
-            }
-        )
-
-    args = VisionArgs(per_camera_rgbd=True, image_keys="rgb_base_camera")
-
-    # image_key_filter (resolving args.critic_image_keys) wins over args.image_keys.
-    assert image_keys_from_env(_Env(), args, image_key_filter="rgb_hand_camera") == (
-        "rgb_hand_camera",
-    )
-    # Omitted -> falls back to args.image_keys, unchanged from before.
-    assert image_keys_from_env(_Env(), args) == ("rgb_base_camera",)
+    assert "critic_encoder.backbone" not in inactive
 
 
 def test_resolve_num_eval_steps_falls_back_to_default_when_unset() -> None:

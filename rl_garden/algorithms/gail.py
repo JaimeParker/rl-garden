@@ -21,7 +21,7 @@ is needed either. Box observations only (matches the D4RL MuJoCo locomotion
 target; Dict/image support would need a Dict-aware discriminator).
 
 Expert demonstrations are loaded once at construction time into a plain
-``TensorReplayBuffer`` via the existing
+``ReplayBuffer`` via the existing
 ``rl_garden.buffers.d4rl_legacy_dataset.load_d4rl_legacy_dataset_to_replay_buffer``
 -- no new dataset-loading code.
 """
@@ -33,10 +33,15 @@ import torch
 import torch.nn.functional as F
 
 from rl_garden.algorithms.ppo import PPO
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.envs.wrappers.gail_reward import GAILRewardWrapper
 from rl_garden.networks.discriminator import GAILDiscriminator
+from rl_garden.observations import (
+    ObservationContractError,
+    ObservationSchema,
+    normalize_observation_space,
+)
 
 
 class GAIL(PPO):
@@ -76,8 +81,21 @@ class GAIL(PPO):
 
     def _setup_model(self) -> None:
         super()._setup_model()
+        # GAILDiscriminator is a bespoke state-action MLP (Box observations
+        # only, per the module docstring) -- not schema/encoder-driven like
+        # the rest of the codebase, so it explicitly rejects image keys
+        # rather than silently ignoring them, and reads the raw "state" Box
+        # out of the (always-Dict, since the boundary normalizes) env space.
+        schema = ObservationSchema.from_space(
+            normalize_observation_space(self.env.single_observation_space)
+        )
+        if schema.keys != ("state",):
+            raise ObservationContractError(
+                "GAIL's discriminator only supports state-only observations "
+                f"(no images); got keys {schema.keys}."
+            )
         self.discriminator = GAILDiscriminator(
-            self.env.single_observation_space,
+            self.env.single_observation_space["state"],
             self.env.single_action_space,
             net_arch=self.disc_net_arch,
         ).to(self.device)
@@ -96,7 +114,7 @@ class GAIL(PPO):
         # evaluation reports ground-truth env reward.
         self.env = GAILRewardWrapper(self.env, reward_fn=self._discriminator_reward)
 
-    def _build_demo_buffer(self) -> TensorReplayBuffer:
+    def _build_demo_buffer(self) -> ReplayBuffer:
         from rl_garden.buffers.d4rl_legacy_dataset import (
             load_d4rl_legacy_dataset_to_replay_buffer,
         )
@@ -108,7 +126,7 @@ class GAIL(PPO):
                 "GAIL currently only supports demo_dataset_backend="
                 f"'d4rl_legacy', got {self.demo_dataset_backend!r}."
             )
-        buffer = TensorReplayBuffer(
+        buffer = ReplayBuffer(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=1,
@@ -128,7 +146,7 @@ class GAIL(PPO):
         # rollout_buffer.add() itself moves rewards to self.device, so
         # returning the reward on self.device (not the original obs device)
         # is fine.
-        obs = self._obs_to_policy_device(obs)
+        obs = self._obs_to_policy_device(obs)["state"]
         action = action if action.device == self.device else action.to(self.device)
         with torch.no_grad():
             logits = self.discriminator(obs, action)
@@ -143,9 +161,9 @@ class GAIL(PPO):
             gen_sample = next(self.rollout_buffer.get(self.demo_batch_size))
             expert_sample = self._demo_buffer.sample(self.demo_batch_size)
             stats = self._train_discriminator_step(
-                gen_sample.obs,
+                gen_sample.obs["state"],
                 gen_sample.actions,
-                expert_sample.obs,
+                expert_sample.obs["state"],
                 expert_sample.actions,
             )
             disc_losses.append(stats["disc_loss"])

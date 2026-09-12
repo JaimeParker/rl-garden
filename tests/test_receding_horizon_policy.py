@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
+from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.diffusion_policy import DiffusionPolicy
 from rl_garden.policies.receding_horizon import RecedingHorizonPolicy
 
@@ -89,16 +90,19 @@ def test_n_action_steps_bounds_validated():
 def test_wraps_real_diffusion_policy_end_to_end():
     torch.manual_seed(0)
     obs_dim, action_dim = 3, 2
+    state_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
+    observation_space = spaces.Dict({"state": state_space})
     policy = DiffusionPolicy(
-        observation_space=spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32),
+        observation_space=observation_space,
         action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
+        features_extractor=FlattenExtractor(observation_space=observation_space),
         horizon_steps=4,
         cond_steps=1,
         denoising_steps=5,
         mlp_dims=[16, 16, 16],
     )
     wrapper = RecedingHorizonPolicy(policy, n_action_steps=2)
-    obs = torch.randn(3, obs_dim)
+    obs = {"state": torch.randn(3, obs_dim)}
     with torch.no_grad():
         for _ in range(5):
             action = wrapper.predict(obs, deterministic=True)

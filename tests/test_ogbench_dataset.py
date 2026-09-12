@@ -8,8 +8,8 @@ import pytest
 from gymnasium import spaces
 
 from rl_garden.buffers import (
-    MCTensorReplayBuffer,
-    TensorReplayBuffer,
+    MCReplayBuffer,
+    ReplayBuffer,
     infer_specs_from_ogbench,
     load_ogbench_dataset_to_replay_buffer,
 )
@@ -76,27 +76,30 @@ def test_infer_specs_from_ogbench_canonicalizes_float_obs(monkeypatch):
 
     obs_space, action_space = infer_specs_from_ogbench("antmaze-large-navigate-singletask-v0")
 
-    assert isinstance(obs_space, spaces.Box)
-    assert obs_space.dtype == np.float32
-    assert obs_space.shape == (_OBS_DIM,)
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].dtype == np.float32
+    assert obs_space["state"].shape == (_OBS_DIM,)
     assert action_space.shape == (_ACTION_DIM,)
 
 
-def test_infer_specs_from_ogbench_passes_through_uint8_image_space(monkeypatch):
+def test_infer_specs_from_ogbench_wraps_uint8_image_space_as_rgb_key(monkeypatch):
     image_space = spaces.Box(0, 255, (4, 4, 3), dtype=np.uint8)
     _install_fake_ogbench(monkeypatch, _singletask_dataset(), obs_space=image_space)
 
     obs_space, _ = infer_specs_from_ogbench("visual-antmaze-large-navigate-singletask-v0")
 
-    assert obs_space.dtype == np.uint8
-    assert obs_space.shape == (4, 4, 3)
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"rgb_ogbench"}
+    assert obs_space["rgb_ogbench"].dtype == np.uint8
+    assert obs_space["rgb_ogbench"].shape == (4, 4, 3)
 
 
 def test_load_ogbench_dataset_maps_masks_to_dones_and_terminals_to_episode_ends(monkeypatch):
     _install_fake_ogbench(monkeypatch, _singletask_dataset())
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -115,8 +118,8 @@ def test_load_ogbench_dataset_maps_masks_to_dones_and_terminals_to_episode_ends(
 def test_load_ogbench_dataset_episode_ends_track_terminals(monkeypatch):
     _install_fake_ogbench(monkeypatch, _singletask_dataset())
 
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -135,8 +138,8 @@ def test_load_ogbench_dataset_episode_ends_track_terminals(monkeypatch):
 def test_load_ogbench_dataset_num_traj_truncates_at_trajectory_boundary(monkeypatch):
     _install_fake_ogbench(monkeypatch, _singletask_dataset())
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -154,8 +157,8 @@ def test_load_ogbench_dataset_num_traj_truncates_at_trajectory_boundary(monkeypa
 def test_load_ogbench_dataset_rejects_goal_conditioned_dataset(monkeypatch):
     _install_fake_ogbench(monkeypatch, _goal_conditioned_dataset())
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -174,8 +177,8 @@ def test_load_ogbench_dataset_clips_saturated_actions(monkeypatch):
     dataset["actions"] = saturated
     _install_fake_ogbench(monkeypatch, dataset)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -207,8 +210,8 @@ def test_load_ogbench_dataset_closes_throwaway_env(monkeypatch):
         sys.modules, "ogbench", types.SimpleNamespace(make_env_and_datasets=_make_env_and_datasets)
     )
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,

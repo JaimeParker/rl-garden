@@ -8,6 +8,7 @@ expose it, but the behavior under test lives entirely in
 """
 import re
 
+import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
@@ -21,8 +22,8 @@ class _ScriptedVecEnv:
     def __init__(self, episode_len: list[int]) -> None:
         self.episode_len = list(episode_len)
         self.num_envs = len(self.episode_len)
-        self.single_observation_space = spaces.Box(-1.0, 1.0, (4,), dtype=float)
-        self.single_action_space = spaces.Box(-1.0, 1.0, (2,), dtype=float)
+        self.single_observation_space = spaces.Box(-1.0, 1.0, (4,), dtype=np.float32)
+        self.single_action_space = spaces.Box(-1.0, 1.0, (2,), dtype=np.float32)
         self._steps_since_reset = [0] * self.num_envs
 
     def reset(self, seed=None):

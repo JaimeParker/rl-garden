@@ -78,20 +78,20 @@ python examples/train_off2on.py wsrl \
 # RGB observations with plain_conv encoder
 python examples/train_off2on.py wsrl \
     --env_id PickCube-v1 \
-    --obs_mode rgb \
-    --encoder plain_conv
+    --obs.rgb base_camera \
+    --encoder.backbone plain_conv
 
-# RGBD observations with ResNet encoder
+# RGB+depth observations with ResNet encoder
 python examples/train_off2on.py wsrl \
     --env_id PickCube-v1 \
-    --obs_mode rgbd \
-    --encoder resnet10
+    --obs.rgb base_camera --obs.depth base_camera \
+    --encoder.backbone resnet10
 
 # Use shell launcher
 python examples/train_off2on.py wsrl \
   --config configs/off2on/wsrl_rgb.yaml \
   --env_id PickCube-v1 \
-  --encoder resnet10
+  --encoder.backbone resnet10
 ```
 
 ### Offline-Only Pretraining (No Sim Env)
@@ -412,10 +412,10 @@ is not possible today.
   online switch the way CORL does.
 
 ### Vision-Specific
-- `--obs_mode rgb`: Observation mode (rgb | rgbd)
-- `--encoder plain_conv`: Image encoder (plain_conv | resnet10 | resnet18)
-- `--camera_width 128`: Camera width (default: 128)
-- `--camera_height 128`: Camera height (default: 128)
+- `--obs.rgb base_camera` / `--obs.depth base_camera`: cameras to observe
+  (`ObservationConfig`, `rl_garden/observations/config.py`)
+- `--encoder.backbone plain_conv`: Image encoder (plain_conv | resnet10 | resnet18 | vit | drqv2_conv | cnn3d)
+- `--obs.image_size 128 128`: Camera render size (`(H, W)`; backend default when unset)
 
 ### Acceleration
 
@@ -474,7 +474,7 @@ from rl_garden.buffers import load_h5_dataset_to_replay_buffer
 from rl_garden.envs import make_maniskill_env, ManiSkillEnvConfig
 
 # Create environment
-env_cfg = ManiSkillEnvConfig(env_id="PickCube-v1", num_envs=16, obs_mode="state")
+env_cfg = ManiSkillEnvConfig(env_id="PickCube-v1", num_envs=16)  # state=True is the default
 env = make_maniskill_env(env_cfg)
 
 # Create WSRL agent
@@ -548,26 +548,27 @@ agent.learn(total_timesteps=50_000)
 
 ```python
 from rl_garden.algorithms import WSRL
-from rl_garden.encoders import default_image_encoder_factory
+from rl_garden.encoders import EncoderConfig
 
-# Create environment with RGB observations
+# Create environment with RGB observations (rgb_cameras -> "rgb_base_camera" key)
 env_cfg = ManiSkillEnvConfig(
     env_id="PickCube-v1",
     num_envs=16,
-    obs_mode="rgb",
-    include_state=True,
+    rgb_cameras=("base_camera",),
+    state=True,
 )
 env = make_maniskill_env(env_cfg)
 
-# Create WSRL agent
+# Create WSRL agent -- encoder_config/obs_groups/encoder_sharing are the
+# observation-agnostic surface every algorithm accepts (ObservationEncoderMixin,
+# rl_garden/algorithms/_observation.py); the algorithm never branches on
+# Box vs Dict observation spaces.
 agent = WSRL(
     env=env,
     net_arch={"pi": [256, 256], "qf": [256, 256]},
     n_critics=10,
     use_calql=True,
-    image_keys=("rgb",),
-    state_key="state",
-    image_encoder_factory=default_image_encoder_factory(features_dim=256),
+    encoder_config=EncoderConfig(backbone="plain_conv", features_dim=256),
 )
 
 # Train
@@ -622,8 +623,7 @@ OfflineRLAlgorithm
 
 6. **WSRL Algorithm** (`rl_garden/algorithms/wsrl.py`)
    - Inherits the Cal-QL rollout shell
-   - Auto-selects `FlattenExtractor`/`MCTensorReplayBuffer` for Box observations
-   - Auto-selects `CombinedExtractor`/`MCDictReplayBuffer` for Dict observations
+   - Resolves the observation encoder via `ObservationEncoderMixin` and uses `MCReplayBuffer`
    - Offline→online mode switching
    - Empty/append/mixed replay modes
    - Offline probe and WSRL phase logging

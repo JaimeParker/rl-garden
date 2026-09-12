@@ -20,22 +20,23 @@ rl-garden, both faithful to CORL's actual numerics (not bugs):
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObservationContractError, ObsGroups
 from rl_garden.policies.awac_policy import AWACPolicy
 
 
@@ -69,6 +70,9 @@ class AWACCore:
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
     ) -> None:
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
@@ -107,6 +111,9 @@ class AWACCore:
         self.kernel_init = kernel_init
         self.backbone_type = backbone_type
         self.std_parameterization = std_parameterization
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return ("critic_optimizer", "actor_optimizer")
@@ -128,6 +135,14 @@ class AWACCore:
             "exp_adv_max": self.exp_adv_max,
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -145,26 +160,13 @@ class AWACCore:
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        raise TypeError(
-            "AWAC only supports Box observation spaces, got " + str(type(obs_space))
-        )
-
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(observation_space=self.env.single_observation_space)
+        return self.observation_encoders.actor
 
-    def _build_replay_buffer(self) -> TensorReplayBuffer:
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                "AWAC only supports Box observation spaces, got " + str(type(obs_space))
-            )
-        return TensorReplayBuffer(
-            observation_space=obs_space,
+    def _build_replay_buffer(self):
+        # obs_space is always Dict (boundary normalization is unconditional).
+        return ReplayBuffer(
+            observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
@@ -173,6 +175,15 @@ class AWACCore:
         )
 
     def _setup_model(self) -> None:
+        self._resolve_observation_encoders(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
+        if self.observation_encoders.schema.has_images:
+            raise ObservationContractError(
+                "AWAC only supports state observations (no images); got image "
+                f"keys {self.observation_encoders.schema.image_keys}."
+            )
         features_extractor = self._build_features_extractor()
         self.policy = AWACPolicy(
             observation_space=self.env.single_observation_space,
@@ -218,7 +229,9 @@ class AWACCore:
 
     def fit_obs_normalizer(self) -> None:
         buf = self.replay_buffer
-        obs = buf.obs[: buf.size].reshape(-1, buf.obs.shape[-1]).to(self.device)
+        # buf.obs is always a DictArray (boundary normalization is unconditional).
+        raw_obs = buf.obs["state"]
+        obs = raw_obs[: buf.size].reshape(-1, raw_obs.shape[-1]).to(self.device)
         self.policy.fit_obs_normalizer(obs)
 
     def _sample_train_batch(self, batch_size: int):
@@ -377,6 +390,9 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -389,12 +405,6 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
     ) -> None:
-        obs_space = env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"AWAC only supports Box observation spaces, got {type(obs_space)}"
-            )
-        self._is_dict_obs = False
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -444,6 +454,9 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
         )
         self._setup_model()
         self._init_off2on_params(offline_sampling=offline_sampling)
@@ -487,6 +500,9 @@ class AWAC(AWACCore, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -545,12 +561,8 @@ class AWAC(AWACCore, OfflineRLAlgorithm):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"AWAC supports only Box observation spaces, got {type(obs_space)}"
-            )
-
         self._setup_model()

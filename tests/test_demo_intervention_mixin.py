@@ -22,7 +22,7 @@ class _FakeAlgo(DemoInterventionMixin):
 
 
 class _Env:
-    single_observation_space = spaces.Box(-1.0, 1.0, (3,), dtype=np.float32)
+    single_observation_space = spaces.Dict({"state": spaces.Box(-1.0, 1.0, (3,), dtype=np.float32)})
     single_action_space = spaces.Box(-1.0, 1.0, (2,), dtype=np.float32)
 
 
@@ -40,7 +40,7 @@ def test_add_demo_transition_is_sampled_by_inherited_sample_train_batch():
     algo = _FakeAlgo()
     algo.init_demo_buffer(buffer_size=8, demo_data_ratio=1.0)
 
-    obs = torch.zeros(3)
+    obs = {"state": torch.zeros(3)}
     action = torch.zeros(2)
     reward = torch.tensor(1.0)
     done = torch.tensor(False)

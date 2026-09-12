@@ -8,8 +8,9 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import SAC
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
 from rl_garden.common.checkpoint import checkpoint_dict, save_checkpoint_file
 from rl_garden.common.types import NStepReplayBufferSample
 from rl_garden.common.training_phase import InitialTrainingPhase
@@ -31,7 +32,7 @@ class DummyDictVecEnv:
         self.num_envs = 2
         self.single_observation_space = spaces.Dict(
             {
-                "rgb": spaces.Box(
+                "rgb_cam": spaces.Box(
                     low=0, high=255, shape=(64, 64, 3), dtype=np.uint8
                 ),
                 "state": spaces.Box(
@@ -101,8 +102,7 @@ def _dict_agent(**kwargs) -> SAC:
         "training_freq": 1,
         "eval_freq": 0,
         "net_arch": {"pi": [16], "qf": [16]},
-        "image_keys": ("rgb",),
-        "proprio_latent_dim": 4,
+        "encoder_config": EncoderConfig(proprio_latent_dim=4),
     }
     params.update(kwargs)
     return SAC(
@@ -113,9 +113,15 @@ def _dict_agent(**kwargs) -> SAC:
 
 def _fill(agent: SAC, steps: int = 8) -> None:
     env = agent.env
+    # env.single_observation_space is a Dict({"state": Box}) -- DummyVecEnv's
+    # bare Box space is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper) before agent.env is
+    # ever set, matching the Dict obs / Dict replay buffer every algorithm
+    # actually gets now.
+    state_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
@@ -131,7 +137,7 @@ def _fill_dict(agent: SAC, steps: int = 8) -> None:
     env = agent.env
     for _ in range(steps):
         obs = {
-            "rgb": torch.randint(
+            "rgb_cam": torch.randint(
                 0,
                 256,
                 (env.num_envs, 64, 64, 3),
@@ -140,7 +146,7 @@ def _fill_dict(agent: SAC, steps: int = 8) -> None:
             "state": torch.randn(env.num_envs, 4),
         }
         next_obs = {
-            "rgb": torch.randint(
+            "rgb_cam": torch.randint(
                 0,
                 256,
                 (env.num_envs, 64, 64, 3),
@@ -243,15 +249,15 @@ def test_sac_nstep_defaults_to_existing_replay_buffer():
 
     assert agent.nstep == 1
     assert agent._extra_batch_slice_keys == ()
-    assert isinstance(agent.replay_buffer, DictReplayBuffer)
-    assert not isinstance(agent.replay_buffer, NStepDictReplayBuffer)
+    assert isinstance(agent.replay_buffer, ReplayBuffer)
+    assert not isinstance(agent.replay_buffer, NStepReplayBuffer)
 
 
 def test_sac_nstep_uses_buffer_discounts_and_supports_high_utd():
     agent = _dict_agent(nstep=3, gamma=0.8, utd=2.0, batch_size=8)
     _fill_dict(agent)
 
-    assert isinstance(agent.replay_buffer, NStepDictReplayBuffer)
+    assert isinstance(agent.replay_buffer, NStepReplayBuffer)
     assert agent._extra_batch_slice_keys == ("discounts",)
     data = agent.replay_buffer.sample(agent.batch_size)
     assert isinstance(data, NStepReplayBufferSample)

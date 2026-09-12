@@ -54,21 +54,22 @@ Formulas verified against ``BCQ.py`` directly:
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.mlp import KernelInit
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.bcq_policy import BCQPolicy
 
 _NUM_TARGET_CANDIDATES = 10
@@ -76,6 +77,10 @@ _NUM_TARGET_CANDIDATES = 10
 
 class BCQCore:
     """Shared BCQ loss/network logic. See module docstring."""
+
+    #: BCQ is state-only (no critic_features_extractor on BCQPolicy): one
+    #: encoder trained by the critic loss, actor path detached.
+    encoder_sharing = "shared_critic_grad"
 
     def _init_bcq_params(
         self,
@@ -106,6 +111,9 @@ class BCQCore:
         vae_latent_dim: Optional[int] = None,
         beta: float = 0.5,
         soft_q_lambda: float = 0.75,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
     ) -> None:
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
@@ -142,6 +150,9 @@ class BCQCore:
         self.vae_latent_dim = vae_latent_dim
         self.beta = beta
         self.soft_q_lambda = soft_q_lambda
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return ("critic_optimizer", "actor_optimizer", "vae_optimizer")
@@ -167,6 +178,14 @@ class BCQCore:
             "beta": self.beta,
             "soft_q_lambda": self.soft_q_lambda,
             "num_target_candidates": _NUM_TARGET_CANDIDATES,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -184,25 +203,12 @@ class BCQCore:
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        raise TypeError(
-            "BCQ only supports Box observation spaces, got " + str(type(obs_space))
-        )
-
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(observation_space=self.env.single_observation_space)
+        return self.observation_encoders.actor
 
-    def _build_replay_buffer(self) -> TensorReplayBuffer:
+    def _build_replay_buffer(self) -> ReplayBuffer:
         obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                "BCQ only supports Box observation spaces, got " + str(type(obs_space))
-            )
-        return TensorReplayBuffer(
+        return ReplayBuffer(
             observation_space=obs_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
@@ -212,6 +218,9 @@ class BCQCore:
         )
 
     def _setup_model(self) -> None:
+        self._resolve_observation_encoders(
+            self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
+        )
         features_extractor = self._build_features_extractor()
         self.policy = BCQPolicy(
             observation_space=self.env.single_observation_space,
@@ -260,8 +269,11 @@ class BCQCore:
         ]
 
     def fit_obs_normalizer(self) -> None:
+        # buf.obs is always a DictArray now (boundary normalization always on);
+        # same pattern as AWAC.fit_obs_normalizer.
         buf = self.replay_buffer
-        obs = buf.obs[: buf.size].reshape(-1, buf.obs.shape[-1]).to(self.device)
+        raw_obs = buf.obs["state"]
+        obs = raw_obs[: buf.size].reshape(-1, raw_obs.shape[-1]).to(self.device)
         self.policy.fit_obs_normalizer(obs)
 
     def _sample_train_batch(self, batch_size: int):
@@ -405,6 +417,9 @@ class BCQ(BCQCore, OfflineRLAlgorithm):
         vae_latent_dim: Optional[int] = None,
         beta: float = 0.5,
         soft_q_lambda: float = 0.75,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -465,12 +480,9 @@ class BCQ(BCQCore, OfflineRLAlgorithm):
             vae_latent_dim=vae_latent_dim,
             beta=beta,
             soft_q_lambda=soft_q_lambda,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"BCQ supports only Box observation spaces, got {type(obs_space)}"
-            )
 
         self._setup_model()

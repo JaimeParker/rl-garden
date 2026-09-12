@@ -155,6 +155,65 @@ def test_empty_image_keys_raises():
         ImageFrameStackWrapper(_FakeFrankaRealEnv(), frame_stack=3, image_keys=())
 
 
+class _FakeMultiCameraEnv(gym.Env):
+    """Generic-path fixture with two image keys (rgb + depth) alongside
+    state -- exercises stacking multiple heterogeneous image keys at once,
+    matching how mujoco_warp/robotwin/ogbench call the generic path with
+    more than one ``rgb_<cam>``/``depth_<cam>`` key."""
+
+    num_envs = 1
+
+    def __init__(self) -> None:
+        self.single_observation_space = spaces.Dict(
+            {
+                "state": spaces.Box(-np.inf, np.inf, (4,), np.float32),
+                "rgb_main": spaces.Box(0, 255, (2, 2, 3), np.uint8),
+                "depth_main": spaces.Box(0, np.inf, (2, 2, 1), np.float32),
+            }
+        )
+        self.single_action_space = spaces.Box(-1, 1, (2,), np.float32)
+        self.observation_space = batch_space(self.single_observation_space, 1)
+        self.action_space = batch_space(self.single_action_space, 1)
+        self._value = torch.zeros(1, dtype=torch.uint8)
+
+    def _obs(self):
+        rgb = self._value[:, None, None, None].expand(-1, 2, 2, 3).clone()
+        depth = self._value[:, None, None, None].expand(-1, 2, 2, 1).float()
+        state = self._value[:, None].float().expand(-1, 4).clone()
+        return {"rgb_main": rgb, "depth_main": depth, "state": state}
+
+    def reset(self, *, seed=None, options=None):
+        self._value.zero_()
+        return self._obs(), {}
+
+    def step(self, action):
+        del action
+        self._value += 1
+        zeros = torch.zeros(1, dtype=torch.bool)
+        return self._obs(), self._value.float(), zeros, zeros, {}
+
+
+def test_generic_image_keys_path_stacks_multiple_image_keys_together():
+    wrapped = ImageFrameStackWrapper(
+        _FakeMultiCameraEnv(), frame_stack=3, image_keys=("rgb_main", "depth_main")
+    )
+    obs, _ = wrapped.reset()
+
+    assert obs["rgb_main"].shape == (1, 3, 2, 2, 3)
+    assert obs["depth_main"].shape == (1, 3, 2, 2, 1)
+    assert obs["state"].shape == (1, 4)
+    assert torch.equal(obs["rgb_main"][:, 0], obs["rgb_main"][:, 2])
+    assert torch.equal(obs["depth_main"][:, 0], obs["depth_main"][:, 2])
+
+    current, *_ = wrapped.step(torch.zeros(1, 2))
+    assert torch.all(current["rgb_main"][:, :2] == 0)
+    assert torch.all(current["rgb_main"][:, 2] == 1)
+    assert torch.all(current["depth_main"][:, :2] == 0)
+    assert torch.all(current["depth_main"][:, 2] == 1)
+    # state is never stacked, even with multiple image keys present.
+    assert current["state"].shape == (1, 4)
+
+
 def test_image_frame_stack_partial_reset_only_replaces_selected_history():
     env = ImageFrameStackWrapper(_FakeBatchedEnv(), frame_stack=3)
     env.reset()

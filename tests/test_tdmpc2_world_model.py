@@ -9,6 +9,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.tdmpc2 import TDMPC2
 from rl_garden.algorithms.tdmpc2 import math_utils
+from rl_garden.encoders.config import EncoderConfig
 
 
 class DummyVecEnv:
@@ -45,14 +46,14 @@ class DummyDictVecEnv(DummyVecEnv):
         self.single_observation_space = spaces.Dict(
             {
                 "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
-                "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
             }
         )
 
     def _obs(self) -> dict:
         return {
             "state": torch.full((1, 4), float(self._t)),
-            "rgb": torch.zeros((1, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.zeros((1, 64, 64, 3), dtype=torch.uint8),
         }
 
     def reset(self, seed=None):
@@ -98,8 +99,7 @@ def _agent(env=None, **kwargs) -> TDMPC2:
 
 def _dict_agent(**kwargs) -> TDMPC2:
     params = dict(_TINY_KWARGS)
-    params["image_keys"] = ("rgb",)
-    params["proprio_latent_dim"] = 4
+    params["encoder_config"] = EncoderConfig(proprio_latent_dim=4)
     params.update(kwargs)
     return TDMPC2(env=DummyDictVecEnv(), episode_length=5, seed_steps=6, **params)
 

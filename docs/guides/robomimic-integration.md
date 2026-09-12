@@ -13,6 +13,14 @@ observations only, `ph`/`mh` dataset types, single-arm tasks (`lift`, `can`,
 `square`, `transport`, `tool_hang`). Image observations and the `mg`
 dataset type are out of scope for now.
 
+Producer mapping (see [Configuration System](configuration.md#h5-dataset-observation-layout)
+for the general rule): `robomimic`'s native per-field `low_dim` observation
+(a dict of separate proprioceptive fields, e.g. `robot0_eef_pos`,
+`robot0_gripper_qpos`, `object`) is flattened into rl-garden's single
+`"state"` key by `flatten_robomimic_obs`
+(`rl_garden/buffers/robomimic_dataset.py`) -- there is no `rgb_<cam>` mapping
+yet since image observations are out of scope here.
+
 ## Install
 
 ```bash
@@ -96,7 +104,6 @@ RLPD end-to-end (env backend + offline prior data from the same file):
 python examples/train_online.py rlpd \
   --env-backend robomimic --env-id Lift \
   --robomimic.dataset-path /path/to/lift/ph/low_dim_v15.hdf5 \
-  --obs-mode state \
   --dataset-backend robomimic \
   --offline-dataset /path/to/lift/ph/low_dim_v15.hdf5 \
   --num-envs 4 --num-eval-envs 2 \

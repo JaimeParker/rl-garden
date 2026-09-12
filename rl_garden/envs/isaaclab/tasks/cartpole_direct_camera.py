@@ -6,9 +6,9 @@ Verifies the image-observation path: unlike IsaacLab's own
 "better training results"), ``_get_observations()`` here returns the
 ``TiledCamera`` output untouched -- raw ``uint8`` ``[0, 255]`` -- per
 ``RLGardenDirectRLEnv``'s documented image convention. It also returns a
-``"state"`` key alongside ``"rgb"`` (the same 4-value state
-``CartpoleDirectEnv`` uses), demonstrating the state+image ``include_state``
-case for backends other than ManiSkill.
+``"state"`` key alongside ``"rgb_front"`` (the same 4-value state
+``CartpoleDirectEnv`` uses), demonstrating the state+image case for backends
+other than ManiSkill.
 """
 from __future__ import annotations
 
@@ -32,14 +32,15 @@ class CartpoleDirectCameraEnvCfg(CartpoleDirectEnvCfg):
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
         ),
         # rl-garden's default PlainConv image encoder only supports 64x64 or
-        # 128x128 inputs (hardcoded conv/pool stride schedule) -- match the
-        # CLI's --camera_width/--camera_height default of 64.
+        # 128x128 inputs (hardcoded conv/pool stride schedule); this task's
+        # resolution is fixed here (ObservationConfig.image_size can't
+        # override it -- see rl_garden.envs.isaaclab.env module docstring).
         width=64,
         height=64,
     )
-    # observation_space can't express the {"rgb": ..., "state": ...} dict
-    # shape RLGardenDirectRLEnv-scaffold tasks return -- placeholder value
-    # only, see direct_env.py's module docstring. rl-garden's own adapter
+    # observation_space can't express the {"rgb_front": ..., "state": ...}
+    # dict shape RLGardenDirectRLEnv-scaffold tasks return -- placeholder
+    # value only, see direct_env.py's module docstring. rl-garden's own adapter
     # builds its gym.spaces.Dict from the runtime obs dict instead.
     observation_space = 1
     # clone_in_fabric=True (used by the state-only base cfg) mis-sizes the
@@ -54,7 +55,7 @@ class CartpoleDirectCameraEnv(CartpoleDirectEnv):
     def _get_observations(self) -> dict:
         state = super()._get_observations()["state"]
         rgb = self.camera.data.output["rgb"]
-        return {"rgb": rgb, "state": state}
+        return {"rgb_front": rgb, "state": state}
 
 
 gym.register(

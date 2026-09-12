@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from rl_garden.training.online.ppo import (
-    _ppo_common_kwargs,
-    _ppo_env_request,
-    _ppo_image_kwargs,
-)
-
-_transformer_ppo_env_request = _ppo_env_request
+from rl_garden.training.online.ppo import _ppo_common_kwargs, _ppo_observation_kwargs
 
 
 def build_transformer_ppo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import TransformerPPO
     from rl_garden.training.inspection import construct_agent
 
-    image_kwargs = _ppo_image_kwargs(args, env)
+    image_kwargs = _ppo_observation_kwargs(args)
     agent = construct_agent(
         TransformerPPO,
         **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
@@ -34,14 +28,14 @@ def build_transformer_ppo(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_transformer_ppo(args: TransformerPPOArgs) -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_transformer_ppo_env_request,
+        make_env_request=make_env_request,
         build_agent=build_transformer_ppo,
     )
 
@@ -63,7 +57,8 @@ from rl_garden.training.online._registry import registry
 class TransformerPPOArgs(VisionTransformerPPOTrainingArgs, EnvBackendArgs):
     """TransformerPPO — GTrXL latent module between the encoder and actor/critic heads.
 
-    Combine with any encoder via ``--encoder``, e.g. ``transformer_ppo --encoder resnet10``.
+    Combine with any encoder via ``--encoder.backbone``, e.g.
+    ``transformer_ppo --obs.rgb base_camera --encoder.backbone resnet10``.
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
     """
 

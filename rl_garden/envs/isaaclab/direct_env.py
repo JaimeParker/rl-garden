@@ -21,11 +21,12 @@ subclass.
 Observation key convention: unlike IsaacLab's native tasks (which return
 ``{"policy": obs}``), ``_get_observations()`` here should return rl-garden's
 own cross-backend keys -- ``"state"`` for the flat proprioceptive tensor,
-``"rgb"``/``"depth"`` (or ``"rgb_<camera>"``/``"depth_<camera>"`` for
-multi-camera tasks) for images -- so the resulting env plugs directly into
-the same ``ImageFrameStackWrapper`` used for other backends. Image tensors
-must be **raw pixel values** (e.g. ``camera.data.output["rgb"]`` passed
-through untouched, uint8 ``[0, 255]``): do NOT apply the mean-subtraction
+``"rgb_<camera>"``/``"depth_<camera>"`` for images, always named even for a
+single camera (the observation contract has no bare rgb/depth keys) -- so
+the resulting env plugs directly into the same ``ImageFrameStackWrapper``
+used for other backends. Image tensors must be **raw pixel values** (e.g.
+IsaacLab's own ``camera.data.output`` rgb channel, passed through
+untouched, uint8 ``[0, 255]``): do NOT apply the mean-subtraction
 IsaacLab's own ``cartpole_camera_env.py`` example does for RGB. rl-garden's
 image encoders decide whether to apply ``/255`` normalization from the
 declared space's dtype/range (see

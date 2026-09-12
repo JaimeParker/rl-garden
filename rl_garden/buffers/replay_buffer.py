@@ -1,4 +1,4 @@
-"""Dict replay buffer for ``{rgb, depth, state, ...}`` observations.
+"""Replay buffer for ``{rgb, depth, state, ...}`` Dict observations.
 
 Built on a ``DictArray`` container lifted from ManiSkill's
 ``examples/baselines/sac/sac_rgbd.py``. Each observation key gets its own
@@ -154,7 +154,7 @@ class DictArray:
         return self.buffer_shape
 
 
-class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
+class ReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -169,7 +169,7 @@ class DictReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         manifest_extra: Optional[dict[str, Any]] = None,
     ) -> None:
         assert isinstance(observation_space, spaces.Dict), (
-            "DictReplayBuffer requires a Dict observation space."
+            "ReplayBuffer requires a Dict observation space."
         )
         self.num_envs = num_envs
         self.buffer_size = buffer_size

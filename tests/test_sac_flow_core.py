@@ -7,7 +7,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import SACFlow
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import FlowMatchingActor
 from rl_garden.policies.sac_flow_policy import SACFlowPolicy
 
@@ -15,8 +15,8 @@ from rl_garden.policies.sac_flow_policy import SACFlowPolicy
 # images without PlainConv's flatten-layer size mismatch. Mirrors
 # tests/test_fql_core.py's own vision-test image encoder factory.
 _TEST_IMAGE_SIZE = 16
-_test_image_encoder_factory = default_image_encoder_factory(
-    features_dim=16, plain_conv_pooling="gap"
+_test_encoder_config = EncoderConfig(
+    backbone="plain_conv", features_dim=16, plain_conv_pooling="gap"
 )
 
 
@@ -52,10 +52,10 @@ class DummyVecEnv:
         obs_space = self.single_observation_space
         if isinstance(obs_space, spaces.Dict):
             return {
-                "rgb": torch.randint(
+                "rgb_cam": torch.randint(
                     0,
                     256,
-                    (self.num_envs, *obs_space["rgb"].shape),
+                    (self.num_envs, *obs_space["rgb_cam"].shape),
                     dtype=torch.uint8,
                 ),
                 "state": torch.randn(self.num_envs, *obs_space["state"].shape),
@@ -88,7 +88,7 @@ def _action_space() -> spaces.Box:
 def _vision_space() -> spaces.Dict:
     return spaces.Dict(
         {
-            "rgb": spaces.Box(
+            "rgb_cam": spaces.Box(
                 low=0, high=255, shape=(_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
             ),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
@@ -146,7 +146,7 @@ def test_sac_flow_vision_smoke():
     shape, adapted for SACFlow's online rollout-based construction (no
     replay-buffer pre-fill needed; ``learn()`` collects real transitions)."""
     env = DummyVecEnv(_vision_space(), _action_space())
-    agent = SACFlow(env=env, image_encoder_factory=_test_image_encoder_factory, **_sac_flow_kwargs())
+    agent = SACFlow(env=env, encoder_config=_test_encoder_config, **_sac_flow_kwargs())
 
     agent.learn(total_timesteps=40)
 
@@ -169,6 +169,25 @@ def test_sac_flow_checkpoint_roundtrip(tmp_path):
     agent.save(path)
 
     loaded = SACFlow(env=DummyVecEnv(_state_space(), _action_space()), **_sac_flow_kwargs())
+    loaded.load(path)
+
+    assert loaded._global_step == agent._global_step
+    for key, value in agent.policy.state_dict().items():
+        assert torch.equal(value, loaded.policy.state_dict()[key]), key
+
+
+def test_sac_flow_dict_obs_checkpoint_roundtrip_with_encoder_config(tmp_path):
+    env = DummyVecEnv(_vision_space(), _action_space())
+    agent = SACFlow(env=env, encoder_config=_test_encoder_config, **_sac_flow_kwargs())
+    agent.learn(total_timesteps=40)
+    path = tmp_path / "sac_flow_dict.pt"
+    agent.save(path)
+
+    loaded = SACFlow(
+        env=DummyVecEnv(_vision_space(), _action_space()),
+        encoder_config=_test_encoder_config,
+        **_sac_flow_kwargs(),
+    )
     loaded.load(path)
 
     assert loaded._global_step == agent._global_step

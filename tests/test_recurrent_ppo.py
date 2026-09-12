@@ -48,7 +48,7 @@ class DummyVecEnv:
     def _obs(self):
         if isinstance(self.single_observation_space, spaces.Dict):
             return {
-                "rgb": torch.randint(
+                "rgb_cam": torch.randint(
                     0, 256, (self.num_envs, 64, 64, 3), dtype=torch.uint8
                 ),
                 "state": torch.randn(self.num_envs, 4),
@@ -63,7 +63,7 @@ def _state_space() -> spaces.Box:
 def _dict_space() -> spaces.Dict:
     return spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
         }
     )
@@ -263,7 +263,6 @@ def test_recurrent_ppo_dict_obs_smoke():
     agent = RecurrentPPO(
         env=env,
         **_ppo_kwargs(),
-        image_keys=("rgb",),
         rnn_hidden_size=8,
     )
     captured = _capture_train_losses(agent)

@@ -7,8 +7,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import (
-    MCDictReplayBuffer,
-    MCTensorReplayBuffer,
+    MCReplayBuffer,
     load_h5_dataset_to_replay_buffer,
 )
 from rl_garden.datasets import (
@@ -139,8 +138,8 @@ def test_writer_outputs_state_h5_compatible_with_wsrl_loader(tmp_path):
             success=True,
         )
 
-    buffer = MCTensorReplayBuffer(
-        spaces.Box(low=-10, high=10, shape=(2,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        spaces.Dict({"state": spaces.Box(low=-10, high=10, shape=(2,), dtype=np.float32)}),
         spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
         num_envs=1,
         buffer_size=8,
@@ -149,15 +148,15 @@ def test_writer_outputs_state_h5_compatible_with_wsrl_loader(tmp_path):
         sample_device="cpu",
     )
     assert load_h5_dataset_to_replay_buffer(buffer, path) == 2
-    assert torch.equal(buffer.obs[:2, 0], torch.tensor([[0.0, 0.0], [1.0, 1.0]]))
-    assert torch.equal(buffer.next_obs[:2, 0], torch.tensor([[1.0, 1.0], [2.0, 2.0]]))
+    assert torch.equal(buffer.obs["state"][:2, 0], torch.tensor([[0.0, 0.0], [1.0, 1.0]]))
+    assert torch.equal(buffer.next_obs["state"][:2, 0], torch.tensor([[1.0, 1.0], [2.0, 2.0]]))
 
 
 def test_writer_outputs_dict_h5_compatible_with_wsrl_loader(tmp_path):
     path = tmp_path / "rgb.h5"
     obs = [
-        {"state": torch.zeros(2), "rgb": torch.zeros(4, 4, 3, dtype=torch.uint8)},
-        {"state": torch.ones(2), "rgb": torch.ones(4, 4, 3, dtype=torch.uint8)},
+        {"state": torch.zeros(2), "rgb_cam": torch.zeros(4, 4, 3, dtype=torch.uint8)},
+        {"state": torch.ones(2), "rgb_cam": torch.ones(4, 4, 3, dtype=torch.uint8)},
     ]
     with WSRLTrajectoryWriter(path) as writer:
         writer.write_episode(
@@ -170,11 +169,11 @@ def test_writer_outputs_dict_h5_compatible_with_wsrl_loader(tmp_path):
             success=True,
         )
 
-    buffer = MCDictReplayBuffer(
+    buffer = MCReplayBuffer(
         spaces.Dict(
             {
                 "state": spaces.Box(low=-10, high=10, shape=(2,), dtype=np.float32),
-                "rgb": spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
             }
         ),
         spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
@@ -185,7 +184,7 @@ def test_writer_outputs_dict_h5_compatible_with_wsrl_loader(tmp_path):
         sample_device="cpu",
     )
     assert load_h5_dataset_to_replay_buffer(buffer, path) == 1
-    assert buffer.obs["rgb"][0, 0].dtype == torch.uint8
+    assert buffer.obs["rgb_cam"][0, 0].dtype == torch.uint8
 
 
 def test_collect_policy_dataset_writes_complete_episodes_and_final_obs(tmp_path):

@@ -1,6 +1,8 @@
 env_id: PickCube-v1
-obs_mode: rgb
-encoder: plain_conv
+obs:
+  rgb: [base_camera]
+encoder:
+  backbone: plain_conv
 num_envs: 16
 num_offline_steps: 0
 num_online_steps: 1000000

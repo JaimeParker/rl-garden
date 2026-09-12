@@ -139,18 +139,20 @@ reflect the just-written reset state, not the pre-reset one).
 ## Observation key convention
 
 Unlike native IsaacLab tasks (which return `{"policy": obs}`),
-`_get_observations()` here must return rl-garden's own cross-backend keys:
+`_get_observations()` here must return rl-garden's own strict cross-backend
+key vocabulary (`rl_garden.observations.schema.validate_observation_space`;
+no other key names are accepted anywhere in rl-garden):
 
 - `"state"` — flat proprioceptive tensor, shape `(num_envs, D)`.
-- `"rgb"` / `"depth"` — single-camera image tensors, shape `(num_envs, H, W, C)`.
-- `"rgb_<camera_name>"` / `"depth_<camera_name>"` — for tasks with more than
-  one camera (you choose the names; the adapter picks up any key starting
-  with `rgb`/`depth`).
+- `"rgb_<camera_name>"` / `"depth_<camera_name>"` — one key per camera, shape
+  `(num_envs, H, W, C)` (you choose `camera_name`; IsaacLab bakes the actual
+  camera set/resolution into the task registration rather than reading it
+  from `ObservationConfig.rgb`/`.depth`/`.image_size` at runtime, so any
+  non-empty name works). Bare `"rgb"`/`"depth"` keys are **not** valid.
 
 This is what lets the resulting env plug directly into rl-garden's existing
-`ImageFrameStackWrapper` and `image_keys_from_env` (`rl_garden/common/cli_args.py`)
-with zero extra code — no ManiSkill-specific translation layer is needed for
-IsaacLab tasks.
+`ImageFrameStackWrapper` (`rl_garden/envs/wrappers`) with zero extra code —
+no ManiSkill-specific translation layer is needed for IsaacLab tasks.
 
 **Image tensors must be raw pixel values** — e.g.
 `self.camera.data.output["rgb"]` passed through untouched, `uint8` in
@@ -201,8 +203,11 @@ image encoder (`rl_garden/encoders/plain_conv.py`) hardcodes a conv/pool
 stride schedule that only produces a valid feature map for those two sizes
 (any other resolution silently builds a mis-sized `Linear` layer and crashes
 at the first forward pass — `RuntimeError: mat1 and mat2 shapes cannot be
-multiplied`). Pass matching `--camera_width`/`--camera_height` on the training
-CLI (see below); it defaults to 64.
+multiplied`). IsaacLab bakes the camera's actual pixel resolution into
+`TiledCameraCfg.width`/`.height` above (`--obs.image_size` is not
+consulted by this backend — camera set/resolution are baked into the task
+registration, not runtime-selectable); keep it matching one of the two
+supported sizes.
 
 **Scene config for camera tasks must not set `clone_in_fabric=True`.** The
 state-only default (`InteractiveSceneCfg(..., clone_in_fabric=True)`) mis-sizes
@@ -221,16 +226,19 @@ reliable.
 
 ```bash
 python examples/train_online.py ppo --env_backend isaaclab \
-  --env_id RlGarden-MyTask-v0 --obs_mode state \
+  --env_id RlGarden-MyTask-v0 \
   --num_envs 4096 --eval_freq 0 --total_timesteps 200000
 ```
 
-For a camera task:
+For a camera task, pass any non-empty camera name to `--obs.rgb` — IsaacLab
+ignores the name itself (the real camera set/resolution is baked into the
+task registration, see "Camera resolution" above), it only distinguishes
+"some vision requested" from state-only:
 
 ```bash
 python examples/train_online.py ppo --env_backend isaaclab \
-  --env_id RlGarden-MyTask-Camera-v0 --obs_mode rgb \
-  --camera_width 64 --camera_height 64 --num_envs 32 --eval_freq 0 \
+  --env_id RlGarden-MyTask-Camera-v0 --obs.rgb camera \
+  --num_envs 32 --eval_freq 0 \
   --total_timesteps 200000 \
   --isaaclab.sim_device cuda:0
 ```
@@ -256,7 +264,7 @@ zero extra code:
 
 ```bash
 python examples/train_online.py ppo --env_backend isaaclab \
-  --env_id Isaac-Cartpole-Direct-v0 --obs_mode state \
+  --env_id Isaac-Cartpole-Direct-v0 \
   --num_envs 4096 --eval_freq 0 --total_timesteps 200000
 ```
 

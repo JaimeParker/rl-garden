@@ -5,12 +5,11 @@ features-agnostic (``forward(x, time, cond)`` reshapes ``cond["state"]``,
 which is just a dict-key label, not a raw-obs assumption), and
 ``IDQLPolicy`` already calls ``extract_features(obs)`` exactly once per obs,
 reusing that one tensor across the N-sample repeat-interleave and every
-denoising step -- so no separate design work was needed for vision, only
-the same ``spaces.Box -> FlattenExtractor`` / ``spaces.Dict ->
-CombinedExtractor`` branch ``FQL``/``IQL`` already use (mirrored here
-directly, not through ``IQLCore``'s richer ``policy_kwargs``-based
-resolution -- IDQL has no ``policy_kwargs`` mechanism of its own and this
-port doesn't add one).
+denoising step. Encoder selection is the shared observation-redesign mixin
+(``encoder_config``/``obs_groups``, ``rl_garden/algorithms/_observation.py``)
+-- one encoder shared by value/critic/actor (``encoder_sharing="shared"``,
+see the class attribute below), IDQL has no ``policy_kwargs`` mechanism of
+its own and no asymmetric-critic path (so no ``critic_encoder_config``).
 
 Standalone -- does not subclass ``IQLCore`` (`rl_garden/algorithms/iql.py`).
 ``IQLCore``'s value/critic math is literally the same math IDQL needs, but
@@ -42,24 +41,20 @@ expectile-weighted stochastic resample.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.idql_policy import IDQLPolicy
 
 ActorObjective = Literal["bc", "soft_adv", "hard_adv", "exp_adv"]
@@ -67,6 +62,12 @@ ActorObjective = Literal["bc", "soft_adv", "hard_adv", "exp_adv"]
 
 class IDQL(OfflineRLAlgorithm):
     _compatible_checkpoint_algorithms = ("IDQL",)
+    # `_compute_losses`/`diffusion_loss` both call `extract_features(...,
+    # stop_gradient=False)`, and value/critic/actor losses sum into one
+    # `.backward()` before `critic_value_optimizer.step()` (which owns
+    # `features_extractor.parameters()`) -- the encoder is trained by every
+    # loss term, matching "shared" (not the inherited "shared_critic_grad").
+    encoder_sharing: EncoderSharing = "shared"
 
     def __init__(
         self,
@@ -101,7 +102,9 @@ class IDQL(OfflineRLAlgorithm):
         buffer_device: str = "cuda",
         batch_size: int = 256,
         offline_sampling: str = "with_replace",
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -159,50 +162,22 @@ class IDQL(OfflineRLAlgorithm):
         self.lr_decay_steps = lr_decay_steps
         self.lr_min_ratio = lr_min_ratio
         self.grad_clip_norm = grad_clip_norm
-        self.image_encoder_factory = image_encoder_factory
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
 
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(
-                f"IDQL supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
         self._setup_model()
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        return CombinedExtractor
-
-    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
-        if isinstance(self.env.single_observation_space, spaces.Dict):
-            return {
-                "image_encoder_factory": (
-                    self.image_encoder_factory or default_image_encoder_factory()
-                ),
-            }
-        return {}
-
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(
-            observation_space=self.env.single_observation_space,
-            **self._default_features_extractor_kwargs(),
-        )
+        """One shared encoder for value/critic/actor -- see
+        ``encoder_sharing`` above; no ``critic_encoder_config``/asymmetric
+        critic path exists for IDQL (unlike SAC)."""
+        return self.observation_encoders.actor
 
     def _build_replay_buffer(self):
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            return DictReplayBuffer(
-                observation_space=obs_space,
-                action_space=self.env.single_action_space,
-                num_envs=self.num_envs,
-                buffer_size=self.buffer_size,
-                storage_device=self.buffer_device,
-                sample_device=self.device,
-            )
-        return TensorReplayBuffer(
-            observation_space=obs_space,
+        # obs_space is always Dict (boundary normalization is unconditional).
+        return ReplayBuffer(
+            observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
@@ -211,6 +186,10 @@ class IDQL(OfflineRLAlgorithm):
         )
 
     def _setup_model(self) -> None:
+        self._resolve_observation_encoders(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
         features_extractor = self._build_features_extractor()
         self.policy = IDQLPolicy(
             observation_space=self.env.single_observation_space,
@@ -383,4 +362,12 @@ class IDQL(OfflineRLAlgorithm):
             "denoising_steps": self.denoising_steps,
             "schedule": self.schedule,
             "n_action_samples": self.n_action_samples,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }

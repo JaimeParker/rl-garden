@@ -12,18 +12,27 @@ class RLBenchBackend(EnvBackend):
 
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
-        from rl_garden.buffers.rlbench_dataset import RLBENCH_CAMERA_NAMES
         from rl_garden.envs.rlbench.config import RLBenchEnvConfig
+        from rl_garden.observations.schema import ObservationContractError
 
         config = req.backend_config
+        obs = req.observation
+        if obs.frame_stack > 1 and not (obs.rgb or obs.depth):
+            raise ObservationContractError(
+                f"rlbench: frame_stack={obs.frame_stack} requires at least "
+                "one rgb/depth camera; a state-only observation cannot be "
+                "frame-stacked."
+            )
         return RLBenchEnvConfig(
             task_name=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
             seed=req.seed,
             device=config.device if config is not None else "cpu",
-            obs_mode=req.obs_mode,
-            cameras=tuple(config.cameras) if config is not None else RLBENCH_CAMERA_NAMES,
-            image_size=tuple(config.image_size) if config is not None else (128, 128),
+            rgb_cameras=obs.rgb,
+            depth_cameras=obs.depth,
+            state=obs.state,
+            image_size=obs.image_size if obs.image_size is not None else (128, 128),
+            frame_stack=obs.frame_stack,
             headless=config.headless if config is not None else True,
             env_kwargs=json.loads(config.env_kwargs_json) if config is not None else {},
             reward_scale=1.0 if is_eval else req.reward_scale,

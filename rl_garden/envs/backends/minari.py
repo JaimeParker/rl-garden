@@ -16,7 +16,9 @@ class MinariBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.minari.config import MinariEnvConfig
+        from rl_garden.envs.wrappers import require_state_only_observation
 
+        require_state_only_observation(req.observation, backend="minari")
         mn = req.backend_config  # MinariConfig or None
         return MinariEnvConfig(
             dataset_id=req.env_id,

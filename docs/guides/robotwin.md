@@ -100,19 +100,21 @@ RoboTwinEnvConfig(
 - `chunk_step()`
 - `close()`
 
-The observation keys are:
+The observation keys, one per camera named in `--obs.rgb` (a subset of
+`head`/`left_wrist`/`right_wrist`; RoboTwin has no depth camera output, so
+`--obs.depth` cannot be set for this backend), plus `state` when enabled:
 
 ```text
-rgb              head camera, uint8, B x H x W x 3
-state            14D qpos/proprio vector, float32
-rgb_left_wrist   optional left wrist camera, uint8, B x H x W x 3
-rgb_right_wrist  optional right wrist camera, uint8, B x H x W x 3
+rgb_head          head camera, uint8, B x H x W x 3
+state             14D qpos/proprio vector, float32
+rgb_left_wrist    left wrist camera, uint8, B x H x W x 3 (only if requested)
+rgb_right_wrist   right wrist camera, uint8, B x H x W x 3 (only if requested)
 ```
 
-When `include_wrist_cameras=True`, missing wrist images are filled with zeros so
-the observation space remains stable. When wrist cameras are disabled, those
-keys are omitted entirely, and RoboTwin is also configured not to render them.
-Task instruction text is returned in `infos`, not in the observation dict.
+Only the cameras named in `--obs.rgb` appear in the observation `Dict` at
+all -- there is no zero-filled placeholder for an unrequested camera, and
+RoboTwin is configured not to render it. Task instruction text is returned in
+`infos`, not in the observation dict.
 
 The internal execution stack is:
 
@@ -311,11 +313,10 @@ Use larger images only with a smaller buffer or explicit CPU replay:
 ```bash
 python examples/train_online.py sac \
   --env-backend robotwin \
-  --obs-mode rgb \
+  --obs.rgb head \
   --env-id place_shoe \
   --robotwin.robotwin-root /path/to/RoboTwin \
-  --camera-width 224 \
-  --camera-height 224 \
+  --obs.image-size 224 224 \
   --buffer-device cpu \
   --buffer-size 50000
 ```
@@ -361,35 +362,36 @@ Minimal PPO command:
 HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
 python examples/train_online.py ppo \
   --env-backend robotwin \
-  --obs-mode rgb \
+  --obs.rgb head \
   --env-id place_shoe \
   --robotwin.robotwin-root /path/to/RoboTwin \
   --robotwin.head-camera-type Train_D435_128x96 \
-  --camera-width 64 \
-  --camera-height 64 \
+  --obs.image-size 64 64 \
   --num-envs 4 \
   --num-eval-envs 2 \
   --total-timesteps 10000 \
   --num-steps 16 \
   --robotwin.step-lim 400 \
-  --encoder plain_conv \
-  --image-fusion-mode per_key \
+  --encoder.backbone plain_conv \
+  --encoder.image-fusion-mode per_key \
   --robotwin.reward-mode dense \
   --control-mode delta_joint_pos
 ```
 
-For `place_empty_cup`, prefer the RLinf-aligned defaults:
+For `place_empty_cup`, prefer the RLinf-aligned defaults. `--obs.rgb head`
+(naming only the head camera) is what replaces the old
+`--robotwin.no-include-wrist-cameras` flag -- wrist cameras are simply left
+out of `--obs.rgb`, not disabled by a separate switch:
 
 ```bash
 HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
 python examples/train_online.py ppo \
   --env-backend robotwin \
-  --obs-mode rgb \
+  --obs.rgb head \
   --env-id place_empty_cup \
   --robotwin.robotwin-root /path/to/RoboTwin \
   --robotwin.head-camera-type Train_D435_128x96 \
-  --camera-width 64 \
-  --camera-height 64 \
+  --obs.image-size 64 64 \
   --num-envs 4 \
   --num-eval-envs 2 \
   --total-timesteps 10000 \
@@ -397,9 +399,8 @@ python examples/train_online.py ppo \
   --robotwin.step-lim 200 \
   --robotwin.assets-path /path/to/RoboTwin \
   --robotwin.embodiment piper piper 0.6 \
-  --robotwin.no-include-wrist-cameras \
-  --encoder plain_conv \
-  --image-fusion-mode per_key \
+  --encoder.backbone plain_conv \
+  --encoder.image-fusion-mode per_key \
   --robotwin.reward-mode dense \
   --control-mode delta_joint_pos
 ```
@@ -414,7 +415,7 @@ RoboTwin renders camera frames at its own camera-config resolution before
 rl-garden resizes observations for the policy. For the 64x64 place-empty-cup
 launcher, rl-garden asks RoboTwin to use `Train_D435_128x96` and then resizes
 the resulting head-camera RGB to `64x64`. This is different from only setting
-`--camera-width 64 --camera-height 64`, which controls the policy input size.
+`--obs.image-size 64 64`, which controls the policy input size.
 
 For RL training, rl-garden defaults RoboTwin's per-substep render update off:
 `render_every_control_step=False`. RoboTwin only needs a camera frame after one
@@ -469,7 +470,7 @@ Minimal SAC command:
 HOME=/tmp XDG_CACHE_HOME=/tmp MPLCONFIGDIR=/tmp \
 python examples/train_online.py sac \
   --env-backend robotwin \
-  --obs-mode rgb \
+  --obs.rgb head \
   --env-id place_shoe \
   --robotwin.robotwin-root /path/to/RoboTwin \
   --num-envs 4 \
@@ -480,8 +481,8 @@ python examples/train_online.py sac \
   --batch-size 32 \
   --buffer-size 1024 \
   --robotwin.step-lim 400 \
-  --encoder plain_conv \
-  --image-fusion-mode per_key \
+  --encoder.backbone plain_conv \
+  --encoder.image-fusion-mode per_key \
   --robotwin.reward-mode dense \
   --control-mode delta_joint_pos \
   --buffer-device cuda
@@ -522,7 +523,7 @@ ssh <ssh-alias> "mkdir -p <remote-project-path>/logs && \
     export PYTHONPATH=<container-workspace-path>:<container-robotwin-root-path>:\\\${PYTHONPATH:-} && \
     MPLCONFIGDIR=/tmp python -u examples/train_online.py ppo \
       --env-backend robotwin \
-      --obs-mode rgb \
+      --obs.rgb head \
       --env-id place_shoe \
       --robotwin.robotwin-root <container-robotwin-root-path> \
       --num-envs 4 \
@@ -530,8 +531,8 @@ ssh <ssh-alias> "mkdir -p <remote-project-path>/logs && \
       --total-timesteps 200000 \
       --num-steps 16 \
       --robotwin.step-lim 400 \
-      --encoder plain_conv \
-      --image-fusion-mode per_key \
+      --encoder.backbone plain_conv \
+      --encoder.image-fusion-mode per_key \
       --robotwin.reward-mode dense \
   ' 2>&1 | tee <remote-project-path>/logs/rlg_robotwin_place_shoe_ppo_\$(date +%Y%m%d_%H%M%S).log\""
 ```

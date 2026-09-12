@@ -5,8 +5,8 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.common.cli_args import VisionArgs, image_encoder_factory_from_args
-from rl_garden.encoders import CNN3DEncoder, DrQv2Encoder
+from rl_garden.encoders import CNN3DEncoder, DrQv2Encoder, cnn3d_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 
 
 def test_cnn3d_encoder_forward_shape() -> None:
@@ -60,9 +60,11 @@ def test_cnn3d_encoder_reshapes_folded_channels_into_time_axis() -> None:
 
 
 def test_cnn3d_factory_from_args_builds_encoder_with_frame_stack() -> None:
-    factory = image_encoder_factory_from_args(
-        VisionArgs(encoder="cnn3d", frame_stack=3, encoder_features_dim=16)
-    )
+    # frame_stack (num_frames) is an ObservationConfig (Layer A) concern, not
+    # an EncoderConfig one -- CombinedExtractor derives it from the schema
+    # and calls cnn3d_encoder_factory(num_frames=...) directly (see
+    # rl_garden/encoders/combined.py); test that factory function here.
+    factory = cnn3d_encoder_factory(num_frames=3, features_dim=16)
     enc = factory(spaces.Box(0.0, 1.0, (9, 64, 64), dtype=np.float32))
 
     assert isinstance(enc, CNN3DEncoder)
@@ -71,18 +73,14 @@ def test_cnn3d_factory_from_args_builds_encoder_with_frame_stack() -> None:
 
 
 def test_cnn3d_factory_from_args_defers_frame_stack_validation_to_build() -> None:
-    # image_encoder_factory_from_args itself must not raise for frame_stack=1:
-    # test_image_encoder_factory_returns_callable_for_each_encoder (in
-    # test_cli_args.py) calls it with default VisionArgs() (frame_stack=1) for
-    # every registered encoder. Only constructing the encoder should raise.
-    factory = image_encoder_factory_from_args(VisionArgs(encoder="cnn3d", frame_stack=1))
+    factory = cnn3d_encoder_factory(num_frames=1)
 
     with pytest.raises(ValueError, match="frame_stack >= 2"):
         factory(spaces.Box(0.0, 1.0, (3, 64, 64), dtype=np.float32))
 
 
 def test_drqv2_conv_factory_from_args_builds_drqv2_encoder() -> None:
-    factory = image_encoder_factory_from_args(VisionArgs(encoder="drqv2_conv"))
+    factory = EncoderConfig(backbone="drqv2_conv").image_encoder_factory()
     enc = factory(spaces.Box(0, 255, (3, 84, 84), dtype=np.uint8))
 
     assert isinstance(enc, DrQv2Encoder)

@@ -55,7 +55,7 @@ class ValueFlowsPolicy(FQLPolicy):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         num_samples: int = 16,
@@ -176,7 +176,7 @@ class ValueFlowsPolicy(FQLPolicy):
         ``actor_bc_flow`` (via ``compute_flow_actions``), not
         ``actor_onestep_flow`` -- i.e. the BC-flow teacher is fed the
         one-step student's own encoder output, not
-        ``actor_bc_flow_encoder``'s. In ``"shared"`` mode this is a no-op
+        ``actor_bc_flow_encoder``'s. In ``"shared_critic_grad"`` mode this is a no-op
         (one encoder, so the tensors are identical); in ``"separate"`` mode
         it is a deliberate simplification, not reference parity --
         ``extract_actor_loss_features`` would give the BC flow its own

@@ -26,14 +26,16 @@ from rl_garden.training.inspection import (
     prepare_standalone,
     run_preflight,
 )
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.training.offline._args import HILPTrainingArgs
 from rl_garden.training.offline._registry import registry
 
 
 @dataclass
-class HILPArgs(HILPTrainingArgs):
+class HILPArgs(HILPTrainingArgs, ObservationArgs):
     """HILP pretraining. Requires ``--dataset_path`` (H5 trajectory file,
-    state-only). Produces a phi-representation + skill-value/critic/actor
+    state-only in practice -- ``infer_box_specs_from_h5`` always returns a
+    flat Box space). Produces a phi-representation + skill-value/critic/actor
     checkpoint."""
 
 
@@ -47,6 +49,7 @@ def run_hilp(args: HILPArgs) -> None:
 
 
 def _run_hilp(args: HILPArgs, cleanup: list[Callable[[], None]]) -> None:
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms import HILP, OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
     from rl_garden.training.inspection import construct_agent
@@ -62,6 +65,16 @@ def _run_hilp(args: HILPArgs, cleanup: list[Callable[[], None]]) -> None:
         raise SystemExit("--dataset_path is required for hilp.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
+    if args.obs.is_visual:
+        from rl_garden.observations import ObservationContractError
+
+        raise ObservationContractError(
+            "hilp is state-only: infer_box_specs_from_h5 always returns a "
+            "flat Box space (no camera keys), so --obs.rgb/--obs.depth "
+            f"cameras {args.obs.rgb + args.obs.depth} would be silently "
+            "ignored (HILP's own has_images guard in _setup_model can never "
+            "see them from this entrypoint)."
+        )
 
     seed_everything(args.seed)
 
@@ -102,6 +115,8 @@ def _run_hilp(args: HILPArgs, cleanup: list[Callable[[], None]]) -> None:
         HILP,
         env=env,
         dataset_path=args.dataset_path,
+        encoder_config=args.encoder if args.obs.is_visual else None,
+        obs_groups=resolve_obs_groups_config(args),
         skill_dim=args.skill_dim,
         value_hidden_dims=args.value_hidden_dims,
         actor_hidden_dims=args.actor_hidden_dims,

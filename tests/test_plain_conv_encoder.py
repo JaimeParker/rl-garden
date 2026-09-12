@@ -6,9 +6,10 @@ import torch
 import torch.nn as nn
 from gymnasium import spaces
 
-from rl_garden.common.cli_args import VisionArgs, image_encoder_factory_from_args
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders import CombinedExtractor, PlainConv, RandomShiftsAug
+from rl_garden.observations import ObservationSchema
 
 
 def _image_space(channels: int = 3) -> spaces.Box:
@@ -128,20 +129,14 @@ def test_plain_conv_gap_applies_to_each_per_key_camera() -> None:
             "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
         }
     )
-    factory = image_encoder_factory_from_args(
-        VisionArgs(
-            encoder="plain_conv",
-            encoder_features_dim=16,
-            image_fusion_mode="per_key",
-            plain_conv_pooling="gap",
-        )
+    schema = ObservationSchema.from_space(obs_space)
+    encoder_config = EncoderConfig(
+        backbone="plain_conv",
+        features_dim=16,
+        image_fusion_mode="per_key",
+        plain_conv_pooling="gap",
     )
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb_base_camera", "rgb_hand_camera"),
-        image_encoder_factory=factory,
-        fusion_mode="per_key",
-    )
+    extractor = CombinedExtractor(obs_space, schema, encoder_config)
 
     assert set(extractor.image_encoders) == {"rgb_base_camera", "rgb_hand_camera"}
     assert all(
@@ -150,30 +145,25 @@ def test_plain_conv_gap_applies_to_each_per_key_camera() -> None:
     )
 
 
-def test_combined_extractor_excludes_unrequested_image_key_but_keeps_genuine_vector_key() -> None:
+def test_combined_extractor_excludes_unrequested_image_key() -> None:
+    # An asymmetric ObsGroups actor/critic split subsets the schema but not
+    # observation_space; the dropped key (here depth_cam) must not leak into
+    # this extractor's output, whatever its shape.
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
-            "depth": spaces.Box(0.0, 1.0, (64, 64, 1), dtype=np.float32),
+            "rgb_cam": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "depth_cam": spaces.Box(0.0, 1.0, (64, 64, 1), dtype=np.float32),
             "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
-            "extra": spaces.Box(-1.0, 1.0, (3,), dtype=np.float32),
         }
     )
-    factory = image_encoder_factory_from_args(
-        VisionArgs(encoder="plain_conv", encoder_features_dim=16)
-    )
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb",),
-        image_encoder_factory=factory,
-        proprio_latent_dim=4,
-    )
+    schema = ObservationSchema.from_space(obs_space).subset(("rgb_cam", "state"))
+    encoder_config = EncoderConfig(backbone="plain_conv", features_dim=16, proprio_latent_dim=4)
+    extractor = CombinedExtractor(obs_space, schema, encoder_config)
 
-    assert "depth" not in extractor.vector_extractors
-    assert "extra" in extractor.vector_extractors
-    # 16 (image) + 4 (proprio) + 3 (extra) -- must NOT include depth's raw
+    assert extractor.image_keys == ("rgb_cam",)
+    # 16 (image) + 4 (proprio) -- must NOT include depth_cam's raw
     # 64*64*1=4096 pixels.
-    assert extractor.features_dim == 16 + 4 + 3
+    assert extractor.features_dim == 16 + 4
 
 
 def test_combined_extractor_drops_unrequested_per_camera_key() -> None:
@@ -184,47 +174,17 @@ def test_combined_extractor_drops_unrequested_per_camera_key() -> None:
             "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
         }
     )
-    factory = image_encoder_factory_from_args(
-        VisionArgs(encoder="plain_conv", encoder_features_dim=16, image_fusion_mode="per_key")
+    schema = ObservationSchema.from_space(obs_space).subset(("rgb_base_camera", "state"))
+    encoder_config = EncoderConfig(
+        backbone="plain_conv", features_dim=16, image_fusion_mode="per_key", proprio_latent_dim=4
     )
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb_base_camera",),
-        image_encoder_factory=factory,
-        fusion_mode="per_key",
-        proprio_latent_dim=4,
-    )
+    extractor = CombinedExtractor(obs_space, schema, encoder_config)
 
     assert set(extractor.image_encoders) == {"rgb_base_camera"}
-    assert "rgb_hand_camera" not in extractor.vector_extractors
+    assert extractor.image_keys == ("rgb_base_camera",)
     # 16 (image) + 4 (proprio) -- must NOT include rgb_hand_camera's raw
     # 64*64*3=12288 pixels.
     assert extractor.features_dim == 16 + 4
-
-
-def test_combined_extractor_keeps_low_dim_rgb_prefixed_key_as_vector() -> None:
-    # Locks in shape-gating (not name alone): a low-dimensional key that
-    # merely starts with "rgb" (e.g. a validity flag) must stay on the
-    # ordinary vector path, not be swept into the image-exclusion set.
-    obs_space = spaces.Dict(
-        {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
-            "rgb_valid": spaces.Box(0.0, 1.0, (1,), dtype=np.float32),
-            "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
-        }
-    )
-    factory = image_encoder_factory_from_args(
-        VisionArgs(encoder="plain_conv", encoder_features_dim=16)
-    )
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb",),
-        image_encoder_factory=factory,
-        proprio_latent_dim=4,
-    )
-
-    assert "rgb_valid" in extractor.vector_extractors
-    assert extractor.features_dim == 16 + 4 + 1
 
 
 def test_plain_conv_pool_feature_map_alias_uses_adaptive_max() -> None:
@@ -236,14 +196,12 @@ def test_plain_conv_pool_feature_map_alias_uses_adaptive_max() -> None:
 
 
 def test_plain_conv_factory_passes_cli_options() -> None:
-    factory = image_encoder_factory_from_args(
-        VisionArgs(
-            encoder="plain_conv",
-            plain_conv_weight_init="orthogonal",
-            plain_conv_last_act=False,
-            plain_conv_pooling="gap",
-        )
-    )
+    factory = EncoderConfig(
+        backbone="plain_conv",
+        plain_conv_weight_init="orthogonal",
+        plain_conv_last_act=False,
+        plain_conv_pooling="gap",
+    ).image_encoder_factory()
     enc = factory(_image_space())
 
     assert isinstance(enc, PlainConv)
@@ -280,13 +238,14 @@ def test_random_shifts_aug_with_generator_preserves_cuda_rng_state() -> None:
 def test_combined_extractor_default_prepare_batch_is_noop() -> None:
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
         }
     )
-    extractor = CombinedExtractor(obs_space, image_keys=("rgb",))
+    schema = ObservationSchema.from_space(obs_space)
+    extractor = CombinedExtractor(obs_space, schema, EncoderConfig())
     obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     keys_before = set(obs)
@@ -299,38 +258,38 @@ def test_combined_extractor_default_prepare_batch_is_noop() -> None:
 def test_combined_extractor_random_shift_stack_channels_caches_obs_and_next() -> None:
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
-            "depth": spaces.Box(0.0, 1.0, (64, 64, 1), dtype=np.float32),
+            "rgb_cam": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "depth_cam": spaces.Box(0.0, 1.0, (64, 64, 1), dtype=np.float32),
         }
     )
+    schema = ObservationSchema.from_space(obs_space)
+    encoder_config = EncoderConfig(image_fusion_mode="stack_channels", image_augmentation="random_shift")
+    extractor = CombinedExtractor(obs_space, schema, encoder_config, augmentation_seed=7)
+    # Swap in a recording encoder post-construction to inspect exactly what
+    # the image branch feeds it -- EncoderConfig no longer accepts an ad-hoc
+    # factory override, but image_encoder is a plain instance attribute.
     image_encoder = RecordingImageEncoder(
         spaces.Box(0.0, 1.0, (4, 64, 64), dtype=np.float32)
     )
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb", "depth"),
-        fusion_mode="stack_channels",
-        image_augmentation="random_shift",
-        augmentation_seed=7,
-        image_encoder_factory=lambda _space: image_encoder,
-    )
+    extractor.image_encoder = image_encoder
+
     obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
-        "depth": torch.rand(2, 64, 64, 1),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "depth_cam": torch.rand(2, 64, 64, 1),
     }
     next_obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
-        "depth": torch.rand(2, 64, 64, 1),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "depth_cam": torch.rand(2, 64, 64, 1),
     }
-    original_rgb = obs["rgb"].clone()
-    original_next_rgb = next_obs["rgb"].clone()
+    original_rgb = obs["rgb_cam"].clone()
+    original_next_rgb = next_obs["rgb_cam"].clone()
 
     extractor.prepare_batch(obs, next_obs)
     _ = extractor.extract(obs)
     _ = extractor.extract(next_obs)
 
-    assert torch.equal(obs["rgb"], original_rgb)
-    assert torch.equal(next_obs["rgb"], original_next_rgb)
+    assert torch.equal(obs["rgb_cam"], original_rgb)
+    assert torch.equal(next_obs["rgb_cam"], original_next_rgb)
     assert len(image_encoder.inputs) == 2
     assert image_encoder.inputs[0].shape == (2, 4, 64, 64)
     assert image_encoder.inputs[1].shape == (2, 4, 64, 64)
@@ -343,21 +302,17 @@ def test_combined_extractor_random_shift_per_key_caches_independent_images() -> 
             "rgb_hand": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
         }
     )
+    schema = ObservationSchema.from_space(obs_space)
+    encoder_config = EncoderConfig(image_fusion_mode="per_key", image_augmentation="random_shift")
+    extractor = CombinedExtractor(obs_space, schema, encoder_config, augmentation_seed=11)
+    # Swap in recording encoders post-construction (see stack_channels test
+    # above for why: EncoderConfig no longer accepts an ad-hoc factory).
     encoders: list[RecordingImageEncoder] = []
-
-    def _factory(space: spaces.Box) -> RecordingImageEncoder:
-        encoder = RecordingImageEncoder(space)
+    for key in extractor.image_keys:
+        encoder = RecordingImageEncoder(spaces.Box(0.0, 1.0, (3, 64, 64), dtype=np.float32))
+        extractor.image_encoders[key] = encoder
         encoders.append(encoder)
-        return encoder
 
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb_base", "rgb_hand"),
-        fusion_mode="per_key",
-        image_augmentation="random_shift",
-        augmentation_seed=11,
-        image_encoder_factory=_factory,
-    )
     base = torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8)
     hand = torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8)
     obs = {"rgb_base": base.clone(), "rgb_hand": hand.clone()}

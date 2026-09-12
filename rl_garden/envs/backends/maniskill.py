@@ -28,17 +28,13 @@ class ManiSkillBackend(EnvBackend):
             if ms is not None and ms.env_kwargs_json
             else {}
         )
-        return ManiSkillEnvConfig(
+        obs = req.observation
+        return ManiSkillEnvConfig.from_observation(
+            obs,
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
-            obs_mode=req.obs_mode,
-            include_state=req.include_state,
             control_mode=req.control_mode,
-            camera_width=req.camera_width,
-            camera_height=req.camera_height,
             render_mode=req.render_mode,
-            per_camera_rgbd=req.per_camera_rgbd,
-            frame_stack=req.frame_stack,
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
             sim_backend=sim_backend,

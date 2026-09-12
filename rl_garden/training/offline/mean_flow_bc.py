@@ -27,12 +27,7 @@ class MeanFlowBCArgs(
 def _mean_flow_bc_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    from gymnasium import spaces
-
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
-    from rl_garden.encoders import discover_image_keys
-
-    obs_space = env_spec.single_observation_space
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
@@ -69,17 +64,12 @@ def _mean_flow_bc_kwargs(
         "checkpoint_freq": 0,
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
+        # No critic here, so encoder_sharing is irrelevant (see algorithm
+        # module docstring); no critic_encoder_config either.
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "image_augmentation_seed": args.seed,
     }
-    if isinstance(obs_space, spaces.Dict):
-        image_keys = discover_image_keys(obs_space)
-        kwargs.update(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys,
-            state_key="state",
-            use_proprio=args.include_state,
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=False,
-        )
     return kwargs
 
 

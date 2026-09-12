@@ -27,7 +27,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers._checkpointed_sequence_buffer import _CheckpointedSequenceReplayBuffer
-from rl_garden.buffers.dict_buffer import _tree_to_device
+from rl_garden.buffers.replay_buffer import _tree_to_device
 from rl_garden.common.types import Obs
 
 # Local, intentionally-duplicated type alias mirroring
@@ -56,14 +56,15 @@ class RecurrentReplayBufferSample:
 
 
 class RecurrentReplayBuffer(_CheckpointedSequenceReplayBuffer):
-    """One class for both Box and Dict observations (unlike the Tensor/Dict
-    n-step buffer pair) -- the sum-tree/checkpoint/burn-in machinery here is
-    already the novel bulk of this file; duplicating it across a second class
-    would double the review surface for no behavioral benefit."""
+    """One class handling every observation schema (state-only or
+    Dict+image) -- obs is always a Dict (a bare Box env is normalized once
+    at the algorithm boundary), so there is no second observation-shape
+    variant to split out; the sum-tree/checkpoint/burn-in machinery here is
+    already the novel bulk of this file."""
 
     def __init__(
         self,
-        observation_space: spaces.Box | spaces.Dict,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         num_envs: int,
         buffer_size: int,

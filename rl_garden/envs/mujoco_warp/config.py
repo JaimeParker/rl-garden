@@ -11,10 +11,11 @@ class MujocoWarpEnvConfig:
     num_envs: int
     seed: int
     device: str = "cuda:0"
-    camera_width: Optional[int] = None
-    camera_height: Optional[int] = None
+    render_width: Optional[int] = None
+    render_height: Optional[int] = None
     render_rgb: bool = True
     render_depth: bool = False
+    frame_stack: int = 1
     # Per-task kwargs forwarded verbatim to the task class constructor.
     env_kwargs: dict[str, Any] = field(default_factory=dict)
     reward_scale: float = 1.0

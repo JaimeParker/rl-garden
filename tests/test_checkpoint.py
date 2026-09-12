@@ -7,8 +7,8 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import SAC, WSRL
-from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
-from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
+from rl_garden.buffers import ReplayBuffer
+from rl_garden.buffers.mc_buffer import MCReplayBuffer
 from rl_garden.common.training_phase import InitialTrainingPhase
 
 
@@ -55,7 +55,7 @@ def _rgbd_env() -> DummyVecEnv:
     return DummyVecEnv(
         spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
                 "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
             }
         ),
@@ -96,10 +96,14 @@ def _wsrl_kwargs() -> dict[str, object]:
 def _add_state_transitions(agent, steps: int = 4) -> None:
     # Marks the final step done=True so the run is one complete trajectory --
     # MC-buffer-backed agents (Cal-QL/WSRL) only sample complete trajectories.
+    # env.single_observation_space is Dict({"state": Box}) -- DummyVecEnv's
+    # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
     env = agent.env
+    state_shape = env.single_observation_space["state"].shape
     for i in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         action = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         reward = torch.full((env.num_envs,), float(i))
         done = torch.ones(env.num_envs) if i == steps - 1 else torch.zeros(env.num_envs)
@@ -110,11 +114,11 @@ def _add_rgbd_transitions(agent, steps: int = 4) -> None:
     env = agent.env
     for i in range(steps):
         obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
         }
         action = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
@@ -153,7 +157,7 @@ def test_sac_checkpoint_roundtrip_with_replay_buffer(tmp_path):
     assert loaded._global_step == 8
     assert loaded._global_update == agent._global_update
     assert loaded.replay_buffer.pos == agent.replay_buffer.pos
-    assert torch.equal(loaded.replay_buffer.obs, agent.replay_buffer.obs)
+    assert torch.equal(loaded.replay_buffer.obs["state"], agent.replay_buffer.obs["state"])
     assert torch.equal(loaded.replay_buffer.actions, agent.replay_buffer.actions)
 
 
@@ -201,7 +205,6 @@ def test_sac_dict_checkpoint_roundtrip(tmp_path):
     agent = SAC(
         env=_rgbd_env(),
         **_sac_kwargs(),
-        image_keys=("rgb",),
     )
     _add_rgbd_transitions(agent)
     agent._global_step = 4
@@ -209,12 +212,12 @@ def test_sac_dict_checkpoint_roundtrip(tmp_path):
     path = tmp_path / "rgbd_final.pt"
     agent.save(path, include_replay_buffer=True)
 
-    loaded = SAC(env=_rgbd_env(), **_sac_kwargs(), image_keys=("rgb",))
+    loaded = SAC(env=_rgbd_env(), **_sac_kwargs())
     loaded.load(path)
 
     _assert_state_dict_equal(agent.policy.state_dict(), loaded.policy.state_dict())
     assert loaded.replay_buffer.pos == agent.replay_buffer.pos
-    assert torch.equal(loaded.replay_buffer.obs["rgb"], agent.replay_buffer.obs["rgb"])
+    assert torch.equal(loaded.replay_buffer.obs["rgb_cam"], agent.replay_buffer.obs["rgb_cam"])
     assert torch.equal(loaded.replay_buffer.obs["state"], agent.replay_buffer.obs["state"])
 
 
@@ -271,61 +274,37 @@ def test_wsrl_checkpoint_restores_online_warmup_progress(tmp_path):
 
 
 def test_wsrl_dict_checkpoint_roundtrip(tmp_path):
-    agent = WSRL(env=_rgbd_env(), **_wsrl_kwargs(), image_keys=("rgb",))
+    agent = WSRL(env=_rgbd_env(), **_wsrl_kwargs())
     _add_rgbd_transitions(agent)
     agent._global_step = 6
 
     path = tmp_path / "wsrl_rgbd.pt"
     agent.save(path, include_replay_buffer=True)
 
-    loaded = WSRL(env=_rgbd_env(), **_wsrl_kwargs(), image_keys=("rgb",))
+    loaded = WSRL(env=_rgbd_env(), **_wsrl_kwargs())
     loaded.load(path)
 
     _assert_state_dict_equal(agent.policy.state_dict(), loaded.policy.state_dict())
     assert loaded._global_step == 6
-    assert isinstance(loaded.replay_buffer, MCDictReplayBuffer)
+    assert isinstance(loaded.replay_buffer, MCReplayBuffer)
     assert loaded.replay_buffer.pos == agent.replay_buffer.pos
-    assert torch.equal(loaded.replay_buffer.obs["rgb"], agent.replay_buffer.obs["rgb"])
+    assert torch.equal(loaded.replay_buffer.obs["rgb_cam"], agent.replay_buffer.obs["rgb_cam"])
     assert torch.equal(loaded.replay_buffer.obs["state"], agent.replay_buffer.obs["state"])
-
-
-def test_tensor_replay_buffer_file_roundtrip(tmp_path):
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
-    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
-    source = TensorReplayBuffer(obs_space, act_space, 2, 8, "cpu", "cpu")
-    target = TensorReplayBuffer(obs_space, act_space, 2, 8, "cpu", "cpu")
-    for _ in range(3):
-        source.add(
-            torch.randn(2, 3),
-            torch.randn(2, 3),
-            torch.randn(2, 2),
-            torch.randn(2),
-            torch.zeros(2),
-        )
-
-    path = tmp_path / "buffer.pt"
-    from rl_garden.common.checkpoint import load_replay_buffer_file, save_replay_buffer_file
-
-    save_replay_buffer_file(path, source)
-    load_replay_buffer_file(path, target)
-    assert target.pos == source.pos
-    assert target.full == source.full
-    assert torch.equal(target.obs, source.obs)
-    assert torch.equal(target.next_obs, source.next_obs)
 
 
 def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
         }
     )
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    dict_source = DictReplayBuffer(obs_space, act_space, 2, 8, "cpu", "cpu")
-    dict_target = DictReplayBuffer(obs_space, act_space, 2, 8, "cpu", "cpu")
-    mc_source = MCTensorReplayBuffer(
-        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+    dict_source = ReplayBuffer(obs_space, act_space, 2, 8, "cpu", "cpu")
+    dict_target = ReplayBuffer(obs_space, act_space, 2, 8, "cpu", "cpu")
+    mc_obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)})
+    mc_source = MCReplayBuffer(
+        mc_obs_space,
         act_space,
         2,
         8,
@@ -333,8 +312,8 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
         storage_device="cpu",
         sample_device="cpu",
     )
-    mc_target = MCTensorReplayBuffer(
-        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+    mc_target = MCReplayBuffer(
+        mc_obs_space,
         act_space,
         2,
         8,
@@ -347,11 +326,11 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
         is_last = step == 2
         dict_source.add(
             {
-                "rgb": torch.randint(0, 256, (2, 4, 4, 3), dtype=torch.uint8),
+                "rgb_cam": torch.randint(0, 256, (2, 4, 4, 3), dtype=torch.uint8),
                 "state": torch.randn(2, 3),
             },
             {
-                "rgb": torch.randint(0, 256, (2, 4, 4, 3), dtype=torch.uint8),
+                "rgb_cam": torch.randint(0, 256, (2, 4, 4, 3), dtype=torch.uint8),
                 "state": torch.randn(2, 3),
             },
             torch.randn(2, 1),
@@ -361,8 +340,8 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
         # Close the trajectory on the final step: the MC buffer only
         # samples/counts complete trajectories.
         mc_source.add(
-            torch.randn(2, 3),
-            torch.randn(2, 3),
+            {"state": torch.randn(2, 3)},
+            {"state": torch.randn(2, 3)},
             torch.randn(2, 1),
             torch.randn(2),
             torch.ones(2) if is_last else torch.zeros(2),
@@ -371,10 +350,10 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
 
     from rl_garden.common.checkpoint import load_replay_buffer_file, save_replay_buffer_file
 
-    dict_path = tmp_path / "dict_buffer.pt"
+    dict_path = tmp_path / "replay_buffer.pt"
     save_replay_buffer_file(dict_path, dict_source)
     load_replay_buffer_file(dict_path, dict_target)
-    assert torch.equal(dict_target.obs["rgb"], dict_source.obs["rgb"])
+    assert torch.equal(dict_target.obs["rgb_cam"], dict_source.obs["rgb_cam"])
     assert torch.equal(dict_target.obs["state"], dict_source.obs["state"])
 
     mc_path = tmp_path / "mc_buffer.pt"
@@ -399,15 +378,15 @@ def test_mc_buffer_loads_legacy_checkpoint_missing_externally_valid(tmp_path):
         replay_buffer_state_dict,
     )
 
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    source = MCTensorReplayBuffer(
+    source = MCReplayBuffer(
         obs_space, act_space, 2, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
     )
     for step in range(4):
         is_last = step == 3
         source.add(
-            torch.randn(2, 3), torch.randn(2, 3), torch.randn(2, 1),
+            {"state": torch.randn(2, 3)}, {"state": torch.randn(2, 3)}, torch.randn(2, 1),
             torch.ones(2), torch.zeros(2),  # bootstrap_at_done="always": dones stays all-zero
             episode_end=torch.full((2,), float(is_last)).bool(),
         )
@@ -422,7 +401,7 @@ def test_mc_buffer_loads_legacy_checkpoint_missing_externally_valid(tmp_path):
     del state["external_mc"]
     state["dones"] = torch.zeros(4, 2)
 
-    target = MCTensorReplayBuffer(
+    target = MCReplayBuffer(
         obs_space, act_space, 2, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
     )
     load_replay_buffer_state_dict(target, state)
@@ -445,16 +424,16 @@ def test_checkpoint_load_resets_stale_derived_sampling_caches(tmp_path):
         replay_buffer_state_dict,
     )
 
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
-    def _make_buffer_with_valid_count(n_episodes: int) -> MCTensorReplayBuffer:
-        buf = MCTensorReplayBuffer(
+    def _make_buffer_with_valid_count(n_episodes: int) -> MCReplayBuffer:
+        buf = MCReplayBuffer(
             obs_space, act_space, 1, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
         )
         for _ in range(n_episodes):
             buf.add(
-                torch.randn(1, 3), torch.randn(1, 3), torch.randn(1, 1),
+                {"state": torch.randn(1, 3)}, {"state": torch.randn(1, 3)}, torch.randn(1, 1),
                 torch.ones(1), torch.zeros(1), episode_end=torch.ones(1).bool(),
             )
         return buf
@@ -552,7 +531,7 @@ def test_observation_metadata_float64_matches_runtime_float32():
             "observation": gym_spaces.Box(
                 low=-1.0, high=1.0, shape=(3,), dtype=np.float64
             ),
-            "rgb": gym_spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
+            "rgb_cam": gym_spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
         }
     )
     runtime_obs = gym_spaces.Dict(
@@ -560,7 +539,7 @@ def test_observation_metadata_float64_matches_runtime_float32():
             "observation": gym_spaces.Box(
                 low=-1.0, high=1.0, shape=(3,), dtype=np.float32
             ),
-            "rgb": gym_spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
+            "rgb_cam": gym_spaces.Box(low=0, high=255, shape=(4, 4, 3), dtype=np.uint8),
         }
     )
     action_space = gym_spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)

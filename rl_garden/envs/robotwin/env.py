@@ -45,13 +45,11 @@ class RoboTwinEnv(gym.Env):
             dtype=np.float32,
         )
         h, w = cfg.image_size
-        obs_spaces: dict[str, spaces.Space] = {
-            "rgb": spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8),
-            "state": spaces.Box(low=-np.inf, high=np.inf, shape=(14,), dtype=np.float32),
-        }
-        if cfg.include_wrist_cameras:
-            obs_spaces["rgb_left_wrist"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
-            obs_spaces["rgb_right_wrist"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
+        obs_spaces: dict[str, spaces.Space] = {}
+        if cfg.state:
+            obs_spaces["state"] = spaces.Box(low=-np.inf, high=np.inf, shape=(14,), dtype=np.float32)
+        for camera in cfg.rgb_cameras:
+            obs_spaces[f"rgb_{camera}"] = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
         self.single_observation_space = spaces.Dict(obs_spaces)
         self.observation_space = self.single_observation_space
 
@@ -264,8 +262,17 @@ class RoboTwinEnv(gym.Env):
                 self.reset_state_ids[idx] = int(actual_seed)
 
 
-def make_robotwin_env(cfg: RoboTwinEnvConfig) -> RoboTwinEnv:
-    return RoboTwinEnv(cfg)
+def make_robotwin_env(cfg: RoboTwinEnvConfig):
+    env: gym.Env = RoboTwinEnv(cfg)
+    if cfg.frame_stack > 1:
+        from rl_garden.envs.wrappers import ImageFrameStackWrapper
+
+        env = ImageFrameStackWrapper(
+            env,
+            frame_stack=cfg.frame_stack,
+            image_keys=tuple(f"rgb_{camera}" for camera in cfg.rgb_cameras),
+        )
+    return env
 
 
 def _resize_image(image: Any, size: tuple[int, int]) -> np.ndarray:

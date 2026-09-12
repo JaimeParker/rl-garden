@@ -26,7 +26,7 @@ def _dataset_request(args: Any, *, num_traj: int | None = None) -> DatasetReques
         success_key=args.success_key,
         action_low=args.action_low,
         action_high=args.action_high,
-        obs_mode=getattr(args, "obs_mode", None),
+        observation=getattr(args, "obs", None),
         # Per-backend CLI config (e.g. RLBenchConfig), keyed directly off
         # dataset_backend -- correct even when --env_backend differs from
         # --dataset_backend, unlike args.resolve_backend_config() (which is

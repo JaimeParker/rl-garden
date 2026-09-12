@@ -4,13 +4,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
-from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, VisionArgs
+from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, ObservationArgs
 from rl_garden.common.env_args import EnvRunArgs
 from rl_garden.common.training_phase import InitialTrainingPhase
 
 
 @dataclass
 class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
+    # Opt-in heterogeneous critic MLP backbone (asymmetric/privileged critic).
+    # Only consulted by the SAC-family entrypoints that support a distinct
+    # critic encoder (sac/rlpd/rlpd_hybrid); unset keeps today's exact
+    # behavior (actor/critic share one backbone_type).
+    critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
     total_timesteps: int = 1_000_000
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
@@ -49,7 +54,7 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
-class VisionSACTrainingArgs(SACTrainingArgs, VisionArgs):
+class VisionSACTrainingArgs(SACTrainingArgs, ObservationArgs):
     buffer_size: int = 200_000
     batch_size: int = 512
     utd: float = 0.25
@@ -83,7 +88,7 @@ class RecurrentSACTrainingArgs(SACTrainingArgs):
 
 
 @dataclass
-class VisionRecurrentSACTrainingArgs(RecurrentSACTrainingArgs, VisionArgs):
+class VisionRecurrentSACTrainingArgs(RecurrentSACTrainingArgs, ObservationArgs):
     buffer_size: int = 200_000
     batch_size: int = 512
     utd: float = 0.25
@@ -107,7 +112,7 @@ class TransformerSACTrainingArgs(SACTrainingArgs):
 
 
 @dataclass
-class VisionTransformerSACTrainingArgs(TransformerSACTrainingArgs, VisionArgs):
+class VisionTransformerSACTrainingArgs(TransformerSACTrainingArgs, ObservationArgs):
     buffer_size: int = 200_000
     batch_size: int = 512
     utd: float = 0.25
@@ -126,21 +131,15 @@ class SACFlowTrainingArgs(SACTrainingArgs):
 
 
 @dataclass
-class VisionSACFlowTrainingArgs(SACFlowTrainingArgs, VisionArgs):
-    """SACFlow, state-obs by default (unlike plain ``SAC``'s visual-by-
-    default ``VisionSACTrainingArgs``) -- pass ``--obs_mode rgb`` to opt into
-    Dict/RGBD observations (CNN-based encoders only; see ``SACFlow``'s own
-    docstring for why ``--encoder vit`` and ``--critic-encoder`` are not
-    supported this round). Defaulting to state-obs, and leaving
-    ``buffer_size``/``batch_size``/``utd`` at ``SACFlowTrainingArgs``'s
-    existing (state-tuned) values rather than mirroring
-    ``VisionSACTrainingArgs``'s smaller visual-tuned defaults, preserves
-    ``sac_flow``'s existing CLI behavior byte-for-byte for every current
-    caller that doesn't pass ``--obs_mode`` -- a visual run should pass
-    ``--buffer_size``/``--batch_size``/``--utd`` explicitly if the 1M-buffer
-    state default isn't appropriate for image observations."""
-
-    obs_mode: str = "state"
+class VisionSACFlowTrainingArgs(SACFlowTrainingArgs, ObservationArgs):
+    """SACFlow, state-obs by default (``ObservationArgs.obs`` defaults to
+    state-only) -- pass ``--obs.rgb <camera>`` to opt into Dict/RGBD
+    observations (CNN-based encoders only; see ``SACFlow``'s own docstring
+    for why ``--encoder.backbone vit`` and ``--critic-encoder`` are not
+    supported this round). ``buffer_size``/``batch_size``/``utd`` stay at
+    ``SACFlowTrainingArgs``'s existing (state-tuned) values -- a visual run
+    should pass ``--buffer_size``/``--batch_size``/``--utd`` explicitly if
+    the 1M-buffer state default isn't appropriate for image observations."""
 
 
 @dataclass
@@ -200,7 +199,7 @@ class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
-class VisionTDMPC2TrainingArgs(TDMPC2TrainingArgs, VisionArgs):
+class VisionTDMPC2TrainingArgs(TDMPC2TrainingArgs, ObservationArgs):
     buffer_size: int = 200_000
 
 
@@ -234,7 +233,6 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     desired_kl: float = 0.01
     adaptive_lr_min: float = 1e-5
     adaptive_lr_max: float = 1e-2
-    normalize_obs: bool = False
     actor_use_layer_norm: bool = False
     value_use_layer_norm: bool = False
     actor_use_group_norm: bool = False
@@ -246,27 +244,23 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
         Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
     ] = None
     backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
+    # Opt-in heterogeneous critic MLP backbone (asymmetric/privileged
+    # critic); every PPO-family entrypoint reads this unconditionally
+    # (state or visual), unlike SAC-family's vision-gated equivalent.
+    critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
     log_std_init: float = -0.5
 
 
 @dataclass
-class VisionPPOTrainingArgs(PPOTrainingArgs, VisionArgs):
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
+class VisionPPOTrainingArgs(PPOTrainingArgs, ObservationArgs):
+    pass
 
 
 @dataclass
 class GAILTrainingArgs(PPOTrainingArgs):
     """GAIL adds an adversarial discriminator + expert demonstrations on top
-    of PPOTrainingArgs's own fields.
+    of PPOTrainingArgs's own fields (including ``critic_backbone_type``)."""
 
-    ``critic_backbone_type`` is normally a ``VisionArgs`` field, but
-    ``_ppo_common_kwargs`` (reused from ``training/online/ppo.py``) reads it
-    unconditionally -- GAIL is state-only (no ``VisionArgs``), so it is
-    declared directly here instead of pulling in the rest of VisionArgs.
-    """
-
-    critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
     demo_env_id: str = ""
     demo_dataset_backend: str = "d4rl_legacy"
     demo_buffer_size: int = 1_000_000
@@ -284,9 +278,8 @@ class RecurrentPPOTrainingArgs(PPOTrainingArgs):
 
 
 @dataclass
-class VisionRecurrentPPOTrainingArgs(RecurrentPPOTrainingArgs, VisionArgs):
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
+class VisionRecurrentPPOTrainingArgs(RecurrentPPOTrainingArgs, ObservationArgs):
+    pass
 
 
 @dataclass
@@ -310,7 +303,7 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     sibling-dataclass reasoning as ``RecurrentPPOTrainingArgs``/
     ``TransformerPPOTrainingArgs``, just with no shared base beyond
     ``EnvRunArgs``/``CheckpointArgs``. State-only (Box observations); no
-    ``VisionArgs``. ``bc_checkpoint`` (required) is the ``DiffusionBC``
+    ``ObservationArgs``. ``bc_checkpoint`` (required) is the ``DiffusionBC``
     checkpoint DPPO loads its ``actor``/``actor_ft`` weights from."""
 
     total_timesteps: int = 3_000_000
@@ -369,7 +362,7 @@ class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     subclass -- FlowPPO's hyperparameters (SDE schedule, flow-step count,
     a single scalar ``clip_coef``, no denoising-chain schedule) are a
     different set from both. State-only (Box observations); no
-    ``VisionArgs``. Trains ``actor``/``critic`` from scratch, no BC
+    ``ObservationArgs``. Trains ``actor``/``critic`` from scratch, no BC
     checkpoint warm-start (see ``rl_garden/algorithms/flow_ppo.py``'s module
     docstring)."""
 
@@ -430,73 +423,9 @@ class DiffusionCMDistillOnlineTrainingArgs(DPPOTrainingArgs):
 
 
 @dataclass
-class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, VisionArgs):
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
+class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, ObservationArgs):
+    pass
 
-
-@dataclass
-class DrQv2TrainingArgs:
-    env_id: str = "PickCube-v1"
-    num_envs: int = 16
-    num_eval_envs: int = 16
-    obs_mode: str = "rgbd"
-    include_state: bool = True
-    control_mode: str = "pd_ee_delta_pose"
-    camera_width: int = 128
-    camera_height: int = 128
-    render_mode: str = "rgb_array"
-    per_camera_rgbd: bool = False
-    total_timesteps: int = 1_000_000
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    mmap_dir: Optional[str] = None
-    mmap_mode: Literal["create", "open"] = "create"
-    learning_starts: int = 4_000
-    batch_size: int = 256
-    seed: int = 1
-    gamma: float = 0.99
-    tau: float = 0.01
-    training_freq: int = 32
-    utd: float = 0.5
-    policy_lr: float = 1e-4
-    q_lr: float = 1e-4
-    feature_dim: int = 50
-    hidden_dim: int = 1024
-    nstep: int = 3
-    stddev_schedule: str = "linear(1.0,0.1,500000)"
-    actor_stddev_schedule: Optional[str] = None
-    stddev_clip: float = 0.3
-    num_expl_steps: int = 2000
-    grad_clip_norm: Optional[float] = None
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    image_fusion_mode: str = "stack_channels"
-    image_augmentation: str = "random_shift"
-    image_random_shift_pad: int = 4
-    frame_stack: int = 1
-    log_type: str = "tensorboard"
-    log_dir: str = "runs"
-    exp_name: str = ""
-    wandb_project: str = "rl-garden"
-    wandb_entity: str = ""
-    log_group: str = ""
-    log_keywords: str = ""
-    std_log: bool = True
-    log_freq: int = 1_000
-    eval_freq: int = 10_000
-    num_eval_steps: int = 50
-    capture_video: bool = True
-    eval_output_dir: Optional[str] = None
-    video_fps: int = 30
-    checkpoint_dir: Optional[str] = None
-    checkpoint_freq: int = 0
-    save_replay_buffer: bool = False
-    save_final_checkpoint: bool = True
-    load_checkpoint: Optional[str] = None
-    load_replay_buffer: bool = False
-    replay_lazy_next_obs: bool = False
-    replay_pin_sampled_batch: bool = False
 
 
 @dataclass

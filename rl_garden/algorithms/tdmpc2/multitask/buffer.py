@@ -3,7 +3,7 @@ training, sized to hold an entire dataset (upstream's mt80 config allocates
 ``buffer_size=550_450_000`` transitions -- far larger than fits in RAM/VRAM as
 dense tensors, which is why upstream uses torchrl's ``LazyTensorStorage``).
 Backed by ``rl_garden.buffers.mmap_storage.MmapTensorStore`` instead (already
-an optional backend for ``NStepDictReplayBuffer`` -- reused, not new).
+an optional backend for ``NStepReplayBuffer`` -- reused, not new).
 
 Shares ``EpisodeSliceSamplingMixin`` with ``EpisodeSliceBuffer``: identical
 episode-boundary-strict windowed sampling, just over mmap-backed storage with

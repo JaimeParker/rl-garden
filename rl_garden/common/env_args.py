@@ -13,9 +13,10 @@ Inherit :class:`EnvBackendArgs` alongside any algorithm Args class to add
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from rl_garden.common.cli_args import LoggingArgs
+from rl_garden.observations import ObservationConfig
 
 
 @dataclass
@@ -51,7 +52,6 @@ class RoboTwinConfig:
     """RoboTwin-specific env settings. CLI prefix: ``--robotwin.<field>``"""
 
     # camera / rendering
-    include_wrist_cameras: bool = True
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
     head_camera_type: str = "D435"
@@ -170,18 +170,13 @@ class RLBenchConfig:
     """RLBench-specific env settings. CLI prefix: ``--rlbench.<field>``"""
 
     device: str = "cpu"
-    # Cameras enabled when obs_mode == "rgb" (rgb+depth each; never
-    # mask/point_cloud). RLBench's own default ObservationConfig enables all
-    # 5 -- trimming this is a cost knob, not a correctness one.
-    cameras: tuple[str, ...] = ("left_shoulder", "right_shoulder", "wrist", "front", "overhead")
-    image_size: tuple[int, int] = (128, 128)
     headless: bool = True
     # JSON-encoded dict forwarded verbatim to rlbench.environment.Environment
     # (e.g. robot_setup, shaped_rewards, static_positions) -- rarely needed.
     env_kwargs_json: str = "{}"
     # "sync" (single process) or "async" (one OS process per env --
-    # recommended once obs_mode == "rgb", each instance owns its own
-    # CoppeliaSim renderer/GL context).
+    # recommended once --obs.rgb/--obs.depth is set, each instance owns its
+    # own CoppeliaSim renderer/GL context).
     vectorization: str = "sync"
 
 
@@ -195,11 +190,6 @@ class MetaWorldConfig:
     # Appends a one-hot task id to the observation. Only consulted when
     # --env_id is "MT10"/"MT50".
     use_one_hot: bool = True
-    # Fixed camera used when --obs_mode rgb (single-task env_id only; every
-    # Meta-World v3 task scene defines the same 6 cameras: "corner",
-    # "corner2", "corner3", "corner4", "behindGripper", "gripperPOV").
-    camera: str = "corner2"
-    image_size: tuple[int, int] = (84, 84)
 
 
 @dataclass
@@ -228,3 +218,64 @@ class EnvBackendArgs:
         from rl_garden.envs.backend_registry import resolve_backend_config
 
         return resolve_backend_config(self.env_backend, self)
+
+
+def make_env_request(
+    args: Any,
+    run_name: Optional[str] = None,
+    *,
+    create_eval_env: Optional[bool] = None,
+) -> Any:
+    """Build one ``EnvRequest`` from any training-phase args object.
+
+    Single source of truth for the online per-algorithm
+    ``_<algo>_env_request`` copies and the offline/off2on runners' inline
+    ``EnvRequest(...)`` construction. ``observation`` comes from
+    ``args.obs`` (every algorithm mixes in ``ObservationArgs``); an args
+    object built without it (rare -- only offline evaluation-only helpers)
+    has no ``obs`` attribute and gets the default (state-only)
+    ``ObservationConfig()``.
+
+    ``num_envs`` reads ``args.num_envs`` (online/off2on) and falls back to
+    ``args.spec_num_envs`` (offline, which never runs a live training
+    rollout -- only the eval/spec env). ``run_name`` is only needed to
+    derive a video-recording directory; omit it for offline evaluation
+    (which never records video and passes no ``run_name``).
+
+    ``create_eval_env`` overrides the generic ``should_create_eval_env(args)``
+    decision for entrypoints with no eval-env code path at all (e.g.
+    DAgger, which is state-only by design but still carries
+    ``ObservationArgs`` for CLI/config uniformity), which always pass
+    ``create_eval_env=False`` explicitly.
+    """
+    from rl_garden.common.cli_args import resolve_eval_record_dir
+    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
+
+    num_envs = getattr(args, "num_envs", None)
+    if num_envs is None:
+        num_envs = args.spec_num_envs
+    observation = getattr(args, "obs", None)
+    if observation is None:
+        observation = ObservationConfig()
+    eval_record_dir = (
+        resolve_eval_record_dir(args, run_name) if run_name is not None else None
+    )
+    return EnvRequest(
+        env_id=args.env_id,
+        num_envs=num_envs,
+        observation=observation,
+        control_mode=args.control_mode,
+        render_mode=args.render_mode,
+        seed=args.seed,
+        reward_scale=getattr(args, "reward_scale", 1.0),
+        reward_bias=getattr(args, "reward_bias", 0.0),
+        num_eval_envs=args.num_eval_envs,
+        eval_record_dir=eval_record_dir,
+        capture_video=getattr(args, "capture_video", False),
+        video_fps=getattr(args, "video_fps", 30),
+        num_eval_steps=args.num_eval_steps,
+        create_eval_env=(
+            should_create_eval_env(args) if create_eval_env is None else create_eval_env
+        ),
+        backend_config=args.resolve_backend_config(),
+    )

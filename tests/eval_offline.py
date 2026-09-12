@@ -8,8 +8,8 @@ The script auto-detects the algorithm class from checkpoint metadata, builds a
 minimal offline agent, injects a real ManiSkill eval env with video recording
 (via ``RecordEpisode``), loads the checkpoint weights, and runs evaluation.
 
-Only state-based agents are supported (``obs_mode="state"``). Video output is
-written to ``<checkpoint_dir>/eval_videos/`` by default.
+Only state-based agents are supported (state-only observations). Video output
+is written to ``<checkpoint_dir>/eval_videos/`` by default.
 """
 from __future__ import annotations
 
@@ -114,7 +114,6 @@ def main() -> None:
     eval_cfg = ManiSkillEnvConfig(
         env_id=args.env_id,
         num_envs=args.num_envs,
-        obs_mode="state",
         control_mode=args.control_mode,
         sim_backend=args.sim_backend,
         render_backend=args.render_backend,

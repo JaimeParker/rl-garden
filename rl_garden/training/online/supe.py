@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from rl_garden.training.online.rlpd import _rlpd_env_request
 
 
 def build_supe(args, env, eval_env, logger, checkpoint_dir):
@@ -156,10 +155,12 @@ def run_supe(args: "SUPEArgs") -> None:
             "--load-replay-buffer is not supported with --mmap-dir; "
             "use --mmap-mode open to resume the disk-backed buffer"
         )
+    from rl_garden.common.env_args import make_env_request
+
     run_online(
         args,
         obs_tag="state",
-        make_env_request=_rlpd_env_request,
+        make_env_request=make_env_request,
         build_agent=build_supe,
         post_learn=lambda agent: getattr(agent.replay_buffer, "flush", lambda: None)(),
     )

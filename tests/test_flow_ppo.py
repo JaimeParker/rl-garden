@@ -12,7 +12,7 @@ from rl_garden.algorithms.flow_ppo import FlowPPOCore
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
-from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs.wrappers import ActionChunkWrapper
 from rl_garden.networks.actor_vector_field import ActorVectorField, flow_sde_step
 
@@ -23,9 +23,7 @@ EPISODE_LEN = 6
 # images without PlainConv's flatten-layer size mismatch. Mirrors
 # tests/test_fql_core.py's own vision-test image encoder factory.
 IMG_SIZE = 16
-_test_image_encoder_factory = default_image_encoder_factory(
-    features_dim=16, plain_conv_pooling="gap"
-)
+_test_encoder_config = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 
 class _FakeEnv(gym.Env):
@@ -79,7 +77,7 @@ class _FakeVisionEnv(gym.Env):
         self._step_count = torch.zeros(num_envs, dtype=torch.long)
         self.single_observation_space = spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
                 "state": spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
             }
         )
@@ -89,7 +87,7 @@ class _FakeVisionEnv(gym.Env):
 
     def _obs(self):
         return {
-            "rgb": torch.randint(
+            "rgb_cam": torch.randint(
                 0, 256, (self.num_envs, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8
             ),
             "state": torch.randn(self.num_envs, OBS_DIM),
@@ -281,7 +279,7 @@ def test_deterministic_eval_adds_no_flow_step_noise():
     Isolate that by reseeding before each call: same x_0 + zero step-noise
     must give bit-identical actions; stochastic sampling must not."""
     agent = _make_agent()
-    obs = torch.randn(4, OBS_DIM)
+    obs = {"state": torch.randn(4, OBS_DIM)}
     with torch.no_grad():
         torch.manual_seed(1)
         det1 = agent.policy.predict(obs, deterministic=True)
@@ -323,7 +321,7 @@ def test_vision_learn_runs_and_produces_finite_losses():
     torch.manual_seed(0)
     agent = _make_agent(
         env=_make_vision_env(num_envs=4, horizon_length=2),
-        image_encoder_factory=_test_image_encoder_factory,
+        encoder_config=_test_encoder_config,
     )
     agent.learn(total_timesteps=3 * 4 * 2)
     losses = agent.train()
@@ -339,7 +337,7 @@ def test_vision_encoder_only_in_critic_optimizer():
     critic_optimizer and nowhere in actor_optimizer."""
     agent = _make_agent(
         env=_make_vision_env(num_envs=4, horizon_length=2),
-        image_encoder_factory=_test_image_encoder_factory,
+        encoder_config=_test_encoder_config,
     )
     encoder_params = {id(p) for p in agent.policy.features_extractor.parameters()}
     actor_params = {id(p) for group in agent.actor_optimizer.param_groups for p in group["params"]}
@@ -360,7 +358,7 @@ def test_vision_encoder_not_called_once_per_flow_step():
     agent = _make_agent(
         env=_make_vision_env(num_envs=4, horizon_length=2),
         flow_steps=flow_steps,
-        image_encoder_factory=_test_image_encoder_factory,
+        encoder_config=_test_encoder_config,
     )
     call_count = 0
     original_extract = agent.policy.features_extractor.extract

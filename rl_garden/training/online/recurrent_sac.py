@@ -2,34 +2,24 @@
 
 from __future__ import annotations
 
-from rl_garden.training.online.sac import _sac_common_kwargs, _sac_env_request
-
-_recurrent_sac_env_request = _sac_env_request
+from rl_garden.training.online.sac import _sac_common_kwargs
 
 
 def build_recurrent_sac(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import RecurrentSAC
-    from rl_garden.common.cli_args import (
-        image_encoder_factory_from_args,
-        image_keys_from_env,
-    )
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = {
-            "image_keys": image_keys_from_env(env, args),
-            "image_encoder_factory": image_encoder_factory_from_args(args),
-            "image_fusion_mode": args.image_fusion_mode,
-            "enable_stacking": args.frame_stack > 1,
-            "image_augmentation": args.image_augmentation,
-            "random_shift_pad": args.image_random_shift_pad,
-            "image_augmentation_seed": args.seed + 1_000_003,
-            # Deliberately omit vit_sac_kwargs_from_args(...) here -- ViT
-            # token_and_prop layouts are unsupported (RecurrentSAC._build_policy
-            # raises NotImplementedError for structured_feature_config()).
-        }
+    # Deliberately no obs_groups/critic_encoder_config/encoder_sharing here:
+    # ViT token_and_prop layouts are unsupported (RecurrentSAC._build_policy
+    # raises NotImplementedError for structured_feature_config()), and
+    # asymmetric critic obs_groups were never wired for this entrypoint
+    # either (encoder_sharing stays the SAC default "shared_critic_grad",
+    # which SequenceSAC._build_policy's RecurrentSACPolicy requires -- it
+    # rejects a non-None critic_features_extractor).
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "image_augmentation_seed": args.seed + 1_000_003,
+    }
 
     agent = construct_agent(
         RecurrentSAC,
@@ -49,14 +39,14 @@ def build_recurrent_sac(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_recurrent_sac(args: RecurrentSACArgs) -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_recurrent_sac_env_request,
+        make_env_request=make_env_request,
         build_agent=build_recurrent_sac,
     )
 

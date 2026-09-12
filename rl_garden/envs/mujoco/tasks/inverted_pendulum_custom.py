@@ -71,11 +71,12 @@ class InvertedPendulumCameraCustomEnv(InvertedPendulumCustomEnv):
         super().__init__(
             camera_configs=[
                 {
+                    "key": "free",
                     "camera_id": -1,
                     "width": self._CAMERA_SIZE,
                     "height": self._CAMERA_SIZE,
-                    "rgb": True,
-                    "depth": True,
+                    "enable_rgb": True,
+                    "enable_depth": True,
                 }
             ],
             **kwargs,
@@ -83,16 +84,16 @@ class InvertedPendulumCameraCustomEnv(InvertedPendulumCustomEnv):
         self.observation_space = spaces.Dict(
             {
                 "state": spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float64),
-                "rgb": spaces.Box(
+                "rgb_free": spaces.Box(
                     low=0,
                     high=255,
                     shape=(self._CAMERA_SIZE, self._CAMERA_SIZE, 3),
                     dtype=np.uint8,
                 ),
-                "depth": spaces.Box(
+                "depth_free": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(self._CAMERA_SIZE, self._CAMERA_SIZE),
+                    shape=(self._CAMERA_SIZE, self._CAMERA_SIZE, 1),
                     dtype=np.float32,
                 ),
             }

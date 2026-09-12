@@ -1,5 +1,4 @@
 env_id: PickCube-v1
-obs_mode: state
 num_envs: 512
 num_steps: 50
 capture_video: true

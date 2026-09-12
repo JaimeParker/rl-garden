@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_state_sac_smoke():
     cfg = ManiSkillEnvConfig(
-        env_id="PickCube-v1", num_envs=4, obs_mode="state",
+        env_id="PickCube-v1", num_envs=4,
         partial_reset=False, ignore_terminations=True,
     )
     env = make_maniskill_env(cfg)
@@ -34,7 +34,7 @@ def test_state_sac_smoke():
 
 def test_state_env_supports_pd_ee_twist():
     cfg = ManiSkillEnvConfig(
-        env_id="PickCube-v1", num_envs=1, obs_mode="state",
+        env_id="PickCube-v1", num_envs=1,
         control_mode="pd_ee_twist",
         partial_reset=False, ignore_terminations=True,
     )
@@ -47,7 +47,8 @@ def test_state_env_supports_pd_ee_twist():
 
 def test_rgbd_sac_smoke():
     cfg = ManiSkillEnvConfig(
-        env_id="PickCube-v1", num_envs=4, obs_mode="rgb", include_state=True,
+        env_id="PickCube-v1", num_envs=4,
+        rgb_cameras=("base_camera",), state=True,
         partial_reset=False, ignore_terminations=True,
         camera_width=64, camera_height=64,
     )
@@ -58,7 +59,6 @@ def test_rgbd_sac_smoke():
             buffer_size=512, learning_starts=128, training_freq=64, utd=0.25,
             batch_size=32, eval_freq=0, log_freq=128,
             device="cuda", buffer_device="cuda", seed=0,
-            image_keys=("rgb",),
         )
         agent.learn(total_timesteps=256)
         assert agent._global_step >= 256

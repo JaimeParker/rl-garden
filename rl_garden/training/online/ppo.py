@@ -3,57 +3,34 @@
 from __future__ import annotations
 
 
-def _ppo_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
+def _ppo_observation_kwargs(args) -> dict:
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.encoders.config import EncoderConfig
 
-    is_visual = args.obs_mode != "state"
-    backend_config = args.resolve_backend_config()
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
-        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
-        frame_stack=1,
-        num_eval_envs=args.num_eval_envs,
-        create_eval_env=should_create_eval_env(args),
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=backend_config,
-    )
+    # detach_encoder_on_actor's old semantics: None/True -> the encoder is
+    # trained only by the value loss, actor path detached
+    # ("shared_critic_grad"); False -> both losses train it ("shared").
+    # args.encoder_sharing (when set) overrides this generic default, same
+    # as every other algorithm.
+    detach = args.detach_encoder_on_actor
+    encoder_sharing = "shared_critic_grad" if (detach is None or detach) else "shared"
+    if args.encoder_sharing is not None:
+        encoder_sharing = args.encoder_sharing
 
+    # --encoder.normalize-obs is the only normalize_obs knob (the old
+    # PPOTrainingArgs.normalize_obs flag was deleted); build_observation_encoder
+    # (rl_garden.encoders.factory) allows it alone on a state-only schema.
+    if args.obs.is_visual:
+        encoder_config = args.encoder
+    else:
+        encoder_config = EncoderConfig(normalize_obs=True) if args.encoder.normalize_obs else None
 
-def _ppo_image_kwargs(args, env) -> dict:
-    from rl_garden.common.cli_args import (
-        critic_features_extractor_kwargs_from_args,
-        image_encoder_factory_from_args,
-        image_keys_from_env,
-    )
-
-    if args.obs_mode == "state":
-        return {}
-    kwargs = {
-        "image_keys": image_keys_from_env(env, args),
-        "image_encoder_factory": image_encoder_factory_from_args(args),
-        "image_fusion_mode": args.image_fusion_mode,
+    return {
+        "encoder_config": encoder_config,
+        "obs_groups": resolve_obs_groups_config(args),
+        "encoder_sharing": encoder_sharing,
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
-    if args.critic_encoder:
-        critic_image_keys = image_keys_from_env(
-            env, args, image_key_filter=args.critic_image_keys
-        )
-        policy_kwargs = critic_features_extractor_kwargs_from_args(args, critic_image_keys)
-        if policy_kwargs:
-            kwargs["policy_kwargs"] = policy_kwargs
-    return kwargs
 
 
 def _ppo_common_kwargs(
@@ -79,7 +56,6 @@ def _ppo_common_kwargs(
         target_kl=args.target_kl,
         anneal_lr=args.anneal_lr,
         finite_horizon_gae=args.finite_horizon_gae,
-        detach_encoder_on_actor=args.detach_encoder_on_actor,
         weight_decay=args.weight_decay,
         use_adamw=args.use_adamw,
         lr_schedule=args.lr_schedule,
@@ -89,7 +65,6 @@ def _ppo_common_kwargs(
         desired_kl=args.desired_kl,
         adaptive_lr_min=args.adaptive_lr_min,
         adaptive_lr_max=args.adaptive_lr_max,
-        normalize_obs=args.normalize_obs,
         actor_use_layer_norm=args.actor_use_layer_norm,
         value_use_layer_norm=args.value_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,
@@ -118,7 +93,7 @@ def build_ppo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import PPO
     from rl_garden.training.inspection import construct_agent
 
-    image_kwargs = _ppo_image_kwargs(args, env)
+    image_kwargs = _ppo_observation_kwargs(args)
     agent = construct_agent(
         PPO,
         **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
@@ -129,14 +104,14 @@ def build_ppo(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_ppo(args: PPOArgs) -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_ppo_env_request,
+        make_env_request=make_env_request,
         build_agent=build_ppo,
     )
 
@@ -154,7 +129,8 @@ from rl_garden.training.online._registry import registry
 
 @dataclass
 class PPOArgs(VisionPPOTrainingArgs, EnvBackendArgs):
-    """PPO — visual defaults; pass ``--obs_mode state`` for state obs.
+    """PPO. State-only observations by default; pass ``--obs.rgb <camera>``
+    (optionally ``--obs.depth <camera>``) for Dict/RGBD observations.
 
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
     ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.

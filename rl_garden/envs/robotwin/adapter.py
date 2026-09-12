@@ -188,7 +188,7 @@ class RoboTwinTaskAdapter:
         self.last_dense_reward = 0.0
         obs = self.get_obs()
         obs["_env_seed"] = self.env_seed
-        self._start_eval_video_if_needed(obs.get("rgb"))
+        self._start_eval_video_if_needed(obs.get("rgb_head"))
         return obs
 
     def step(self, action: np.ndarray) -> StepResult:
@@ -440,7 +440,7 @@ def _extract_robotwin_obs(
             "RoboTwin observation does not contain joint_action.vector/state."
         )
     return {
-        "rgb": head.get("rgb"),
+        "rgb_head": head.get("rgb"),
         "rgb_left_wrist": left.get("rgb"),
         "rgb_right_wrist": right.get("rgb"),
         "state": np.asarray(state, dtype=np.float32),

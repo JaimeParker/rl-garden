@@ -27,18 +27,22 @@ from rl_garden.training.inspection import (
     prepare_standalone,
     run_preflight,
 )
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.training.offline._args import ConsistencyDistillBCTrainingArgs
 from rl_garden.training.offline._registry import registry
 
 
 @dataclass
-class ConsistencyDistillBCArgs(ConsistencyDistillBCTrainingArgs):
+class ConsistencyDistillBCArgs(ConsistencyDistillBCTrainingArgs, ObservationArgs):
     """Offline consistency distillation of a frozen ``DiffusionBC`` teacher.
-    Requires ``--dataset_path`` (H5 trajectory file, state-only, same
+    Requires ``--dataset_path`` (H5 trajectory file, state-only in practice --
+    ``infer_box_specs_from_h5`` always returns a flat Box space -- same
     dataset the teacher was trained on) and ``--bc_checkpoint`` (a
     ``diffusion_bc`` checkpoint -- ``horizon_steps``/``cond_steps``/
     ``net_backbone``/``unet_*`` must match what that checkpoint was trained
-    with)."""
+    with). ``--obs.rgb``/``--obs.depth`` raise ``ObservationContractError`` at
+    the top of ``run_consistency_distill_bc`` (the algorithm has no encoder
+    param to wire them to)."""
 
 
 def run_consistency_distill_bc(args: ConsistencyDistillBCArgs) -> None:
@@ -70,6 +74,16 @@ def _run_consistency_distill_bc(
         raise SystemExit("--bc_checkpoint is required for consistency_distill_bc.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
+    if args.obs.is_visual:
+        from rl_garden.observations import ObservationContractError
+
+        raise ObservationContractError(
+            "consistency_distill_bc is state-only: infer_box_specs_from_h5 "
+            "always returns a flat Box space (no camera keys) and "
+            "ConsistencyDistillBC has no encoder_config parameter, so "
+            f"--obs.rgb/--obs.depth cameras {args.obs.rgb + args.obs.depth} "
+            "would be silently ignored."
+        )
 
     seed_everything(args.seed)
 

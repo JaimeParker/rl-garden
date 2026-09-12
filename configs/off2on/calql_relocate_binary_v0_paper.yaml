@@ -2,7 +2,6 @@ env_backend: d4rl_legacy
 dataset_backend: h5
 env_id: relocate-binary-v0
 offline_dataset: null
-obs_mode: state
 num_envs: 1
 num_eval_envs: 1
 num_offline_steps: 20000

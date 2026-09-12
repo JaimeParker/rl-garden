@@ -10,14 +10,12 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import A2ABC, OfflineEnvSpec
-from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import ActionChunkDecoder, CNNSequenceEncoder
 from rl_garden.policies.a2a_policy import A2APolicy
 
 _IMAGE_SIZE = 16
-_test_image_encoder_factory = default_image_encoder_factory(
-    features_dim=16, plain_conv_pooling="gap"
-)
+_test_encoder_config = EncoderConfig(backbone="plain_conv", features_dim=16, plain_conv_pooling="gap")
 
 
 def _write_vision_h5_dataset(
@@ -29,7 +27,7 @@ def _write_vision_h5_dataset(
             g = f.create_group(f"traj_{traj_idx}")
             obs = g.create_group("obs")
             obs.create_dataset(
-                "rgb",
+                "rgb_cam",
                 data=rng.integers(
                     0, 256, (steps_per_traj + 1, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=np.uint8
                 ),
@@ -52,7 +50,7 @@ def _env_spec(state_dim: int, action_dim: int) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(_IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(_IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=np.uint8),
                 "state": spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32),
             }
         ),
@@ -74,9 +72,7 @@ def _make_agent(path, state_dim=4, action_dim=2, **kwargs) -> A2ABC:
         batch_size=16,
         actor_lr=1e-3,
         device="cpu",
-        image_encoder_factory=_test_image_encoder_factory,
-        image_keys=("rgb",),
-        state_key="state",
+        encoder_config=_test_encoder_config,
     )
     defaults.update(kwargs)
     return A2ABC(**defaults)
@@ -90,11 +86,13 @@ def test_policy_is_a2a_policy(tmp_path):
 
 
 def test_rejects_box_observation_space():
+    # A Box observation space normalizes to {"state": Box}, which has no
+    # image keys -- A2ABC requires vision conditioning.
     env = OfflineEnvSpec(
         spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
     )
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
         A2ABC(env=env, dataset_path="unused.h5", device="cpu")
 
 
@@ -123,7 +121,7 @@ def test_predict_returns_action_chunk_within_bounds(tmp_path):
 
     # Single-frame obs, broadcast to cond_steps.
     obs_single = {
-        "rgb": torch.randint(0, 256, (4, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (4, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=torch.uint8),
         "state": torch.randn(4, 3),
     }
     with torch.no_grad():
@@ -133,7 +131,7 @@ def test_predict_returns_action_chunk_within_bounds(tmp_path):
 
     # Explicit history obs.
     obs_history = {
-        "rgb": torch.randint(
+        "rgb_cam": torch.randint(
             0, 256, (4, agent.cond_steps, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=torch.uint8
         ),
         "state": torch.randn(4, agent.cond_steps, 3),

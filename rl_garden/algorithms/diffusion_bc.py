@@ -6,16 +6,22 @@ Ported from ``3rd_party/dppo/agent/pretrain/train_diffusion_agent.py`` +
 maintains an EMA copy; the EMA weights are what ``DPPO`` loads into its
 frozen ``actor``/trainable ``actor_ft`` for PPO fine-tuning.
 
-Handles both Box (state-only) and Dict (vision) observations as an
-``isinstance(obs_space, spaces.Box/Dict)`` branch, matching ``FlowBC``'s
-convention (``rl_garden/algorithms/flow_bc.py``) -- this class absorbs the
-former standalone ``VisionDiffusionBC``. The Box path is unchanged (no
-``features_extractor``, ``ema_net_state_dict`` stays byte-identical to
-before the merge, so ``DPPOPolicy.load_actor_weights`` keeps working
-unmodified); the Dict path builds a ``CombinedExtractor`` and trains it
-jointly with the diffusion net in the same ``actor_optimizer`` (both
-``DiffusionBC`` and the former ``VisionDiffusionBC`` already trained the
-whole policy, encoder included, in one optimizer).
+Handles both Box (state-only) and Dict (vision) observations through the
+schema-driven observation-encoder mixin (``rl_garden.algorithms._observation``,
+see the observation-redesign plan docs) -- this class absorbs the former
+standalone ``VisionDiffusionBC``. ``self.observation_encoders.actor`` is
+always passed to ``DiffusionPolicy`` as its ``features_extractor``: a
+``FlattenExtractor`` (no learnable parameters) for a state-only schema, a
+``CombinedExtractor`` for one with images, trained jointly with the
+diffusion net in the same ``actor_optimizer`` (both ``DiffusionBC`` and the
+former ``VisionDiffusionBC`` already trained the whole policy, encoder
+included, in one optimizer). ``ema_net_state_dict`` (``self.ema_policy.net``)
+is unaffected either way -- it never included the features extractor, only
+the denoising network, so ``DPPOPolicy.load_actor_weights`` keeps working
+unmodified. This algorithm has no critic, so ``encoder_sharing``/
+``critic_encoder_config`` are irrelevant and unused (kept at the mixin's
+default / always ``None`` for checkpoint-metadata-shape consistency with
+every other migrated algorithm).
 
 Training is step-based (random mini-batches via ``torch.randint``), not the
 reference's epoch-based ``DataLoader`` loop -- matches every other
@@ -36,23 +42,20 @@ than hardcoding a fixed step count.
 from __future__ import annotations
 
 import copy
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, DiffusionMLP, KernelInit
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.diffusion_policy import DiffusionPolicy
 
 
@@ -89,13 +92,9 @@ class DiffusionBC(OfflineRLAlgorithm):
         min_sampling_denoising_std: float = 0.1,
         net_cls: type[nn.Module] = DiffusionMLP,
         net_kwargs: Optional[dict[str, Any]] = None,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         actor_lr: float = 1e-3,
         weight_decay: float = 1e-6,
         lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
@@ -136,48 +135,9 @@ class DiffusionBC(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
-        obs_space = self.env.single_observation_space
-        image_kwargs_explicit = {
-            "image_encoder_factory": image_encoder_factory,
-            "image_keys": image_keys,
-            "state_key": state_key,
-            "use_proprio": use_proprio,
-            "proprio_latent_dim": proprio_latent_dim,
-            "image_fusion_mode": image_fusion_mode,
-            "enable_stacking": enable_stacking,
-        }
-        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
-        if isinstance(obs_space, spaces.Box):
-            if explicitly_set:
-                raise ValueError(
-                    "DiffusionBC with Box observation space does not accept "
-                    f"image-related kwargs (got {explicitly_set}). Use Dict "
-                    "observations instead."
-                )
-            self._is_dict_obs = False
-        elif isinstance(obs_space, spaces.Dict):
-            self._is_dict_obs = True
-            self._image_encoder_factory = (
-                image_encoder_factory or default_image_encoder_factory()
-            )
-            self._image_keys = (
-                image_keys if image_keys is not None else ("rgb", "depth")
-            )
-            self._state_key = state_key if state_key is not None else "state"
-            self._use_proprio = use_proprio if use_proprio is not None else True
-            self._proprio_latent_dim = (
-                proprio_latent_dim if proprio_latent_dim is not None else 64
-            )
-            self._image_fusion_mode = (
-                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-            )
-            self._enable_stacking = (
-                enable_stacking if enable_stacking is not None else False
-            )
-        else:
-            raise TypeError(
-                f"DiffusionBC supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
         if grad_clip_norm is not None and grad_clip_norm <= 0:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
@@ -240,18 +200,19 @@ class DiffusionBC(OfflineRLAlgorithm):
             "residual_style": self.residual_style,
             "net_cls": self.net_cls.__name__,
             "net_kwargs": self.net_kwargs,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            # DiffusionBC has no critic -- always None, unconditionally present
+            # per the shared observation-encoder checkpoint-metadata shape
+            # (see rl_garden/algorithms/_observation.py).
+            "critic_encoder_config": None,
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
-        if self._is_dict_obs:
-            meta.update(
-                {
-                    "image_keys": self._image_keys,
-                    "state_key": self._state_key,
-                    "use_proprio": self._use_proprio,
-                    "proprio_latent_dim": self._proprio_latent_dim,
-                    "image_fusion_mode": self._image_fusion_mode,
-                    "enable_stacking": self._enable_stacking,
-                }
-            )
         return meta
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -276,22 +237,14 @@ class DiffusionBC(OfflineRLAlgorithm):
     # --- model / data setup ---
 
     def _setup_model(self) -> None:
-        features_extractor = None
-        if self._is_dict_obs:
-            features_extractor = CombinedExtractor(
-                observation_space=self.env.single_observation_space,
-                image_keys=self._image_keys,
-                state_key=self._state_key,
-                image_encoder_factory=self._image_encoder_factory,
-                proprio_latent_dim=self._proprio_latent_dim,
-                use_proprio=self._use_proprio,
-                fusion_mode=self._image_fusion_mode,
-                enable_stacking=self._enable_stacking,
-            )
+        self._resolve_observation_encoders(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
         self.policy = DiffusionPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            features_extractor=self.observation_encoders.actor,
             horizon_steps=self.horizon_steps,
             cond_steps=self.cond_steps,
             denoising_steps=self.denoising_steps,
@@ -336,17 +289,16 @@ class DiffusionBC(OfflineRLAlgorithm):
             device=self.device,
             num_traj=self.num_traj,
         )
-        if self._is_dict_obs and not isinstance(obs_history, dict):
+        # load_h5_dataset_as_chunks always returns a Dict now (state-only =
+        # {"state": Tensor}) -- match it against the env's own observation
+        # space (always Dict; boundary normalization is unconditional).
+        expected_keys = set(self.env.single_observation_space.spaces.keys())
+        dataset_keys = set(obs_history.keys())
+        if dataset_keys != expected_keys:
             raise TypeError(
-                "DiffusionBC with Dict observation space requires a Dict-shaped "
-                "H5 dataset (nested obs/<key> groups); got a flat Box-shaped obs "
-                "array."
-            )
-        if not self._is_dict_obs and isinstance(obs_history, dict):
-            raise TypeError(
-                "DiffusionBC with Box observation space requires a flat "
-                "Box-shaped H5 dataset; got a Dict-shaped obs (nested obs/<key> "
-                "groups). Use a Dict observation_space to train on it."
+                "DiffusionBC requires a Dict-shaped H5 dataset (nested "
+                f"obs/<key> groups) matching the env's keys; got "
+                f"{sorted(dataset_keys)}, expected {sorted(expected_keys)}."
             )
         self._obs_history = obs_history
         self._action_chunks = action_chunks

@@ -66,6 +66,16 @@ def _run_tdmpc2_multitask(
         raise SystemExit("--dataset_dir is required for tdmpc2_multitask.")
     if not args.mmap_dir:
         raise SystemExit("--mmap_dir is required for tdmpc2_multitask.")
+    if args.obs.is_visual:
+        from rl_garden.observations import ObservationContractError
+
+        raise ObservationContractError(
+            "tdmpc2_multitask is state-only: TDMPC2Multitask (per-task "
+            "zero-padded Box observations, see tdmpc2/multitask/agent.py) has "
+            "no encoder_config/obs_groups parameters at all, unlike the "
+            "single-task TDMPC2 agent -- got --obs.rgb/--obs.depth cameras "
+            f"{args.obs.rgb + args.obs.depth}."
+        )
 
     seed_everything(args.seed)
 
@@ -219,15 +229,23 @@ def _run_tdmpc2_multitask(
 
 from dataclasses import dataclass
 
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.training.offline._args import TDMPC2MultitaskTrainingArgs
 from rl_garden.training.offline._registry import registry
 
 
 @dataclass
-class TDMPC2MultitaskArgs(TDMPC2MultitaskTrainingArgs):
+class TDMPC2MultitaskArgs(TDMPC2MultitaskTrainingArgs, ObservationArgs):
     """TD-MPC2 multitask offline pretraining. Requires ``--dataset_dir``
     (output of ``tools/conversion/convert_tdmpc2_multitask_dataset.py``) and
-    ``--mmap_dir`` (a fresh directory for the training-time mmap buffer)."""
+    ``--mmap_dir`` (a fresh directory for the training-time mmap buffer).
+
+    State-only: unlike the single-task ``tdmpc2`` entrypoint, the underlying
+    ``TDMPC2Multitask`` algorithm has no ``encoder_config``/``obs_groups``
+    parameters (per-task Box observations, zero-padded to a shared max dim --
+    see ``tdmpc2/multitask/agent.py``); ``--obs.rgb``/``--obs.depth`` raise
+    ``ObservationContractError`` at the top of ``run_tdmpc2_multitask``.
+    """
 
 
 registry.register(

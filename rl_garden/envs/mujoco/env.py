@@ -84,7 +84,15 @@ def _make_env_fn(env_id: str, env_kwargs: dict[str, Any]):
         # actually preserving final_info end to end.
         from gymnasium.wrappers import RecordEpisodeStatistics
 
-        return RecordEpisodeStatistics(gym.make(env_id, **env_kwargs))
+        from rl_garden.envs.wrappers import DictStateObservationWrapper
+
+        env = gym.make(env_id, **env_kwargs)
+        # Gymnasium's own benchmark tasks (HalfCheetah-v4, ...) expose a bare
+        # Box; rl-garden's own custom tasks (rl_garden.envs.mujoco.tasks)
+        # already return Dict({"state": ...}) natively.
+        if isinstance(env.observation_space, gym.spaces.Box):
+            env = DictStateObservationWrapper(env)
+        return RecordEpisodeStatistics(env)
 
     return _env_fn
 

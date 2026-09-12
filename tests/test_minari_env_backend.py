@@ -4,6 +4,7 @@ import types
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -11,6 +12,8 @@ from rl_garden.envs.backend_registry import EnvRequest
 from rl_garden.envs.backends.minari import MinariBackend
 from rl_garden.envs.minari.config import MinariEnvConfig
 from rl_garden.envs.minari.env import make_minari_env
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 class _TinyEnv(gym.Env):
@@ -57,13 +60,14 @@ def test_reset_and_step_return_torch_tensors_on_configured_device(monkeypatch):
     env = make_minari_env(cfg)
 
     obs, _ = env.reset()
-    assert isinstance(obs, torch.Tensor)
-    assert obs.shape == (3, 1)
-    assert obs.device.type == "cpu"
+    assert isinstance(obs, dict) and set(obs) == {"state"}
+    assert isinstance(obs["state"], torch.Tensor)
+    assert obs["state"].shape == (3, 1)
+    assert obs["state"].device.type == "cpu"
 
     actions = torch.zeros(3, 1)
     next_obs, rewards, terminations, truncations, infos = env.step(actions)
-    assert isinstance(next_obs, torch.Tensor) and next_obs.shape == (3, 1)
+    assert isinstance(next_obs["state"], torch.Tensor) and next_obs["state"].shape == (3, 1)
     assert isinstance(rewards, torch.Tensor) and rewards.dtype == torch.float32
     assert isinstance(terminations, torch.Tensor) and terminations.dtype == torch.bool
     assert isinstance(truncations, torch.Tensor) and truncations.dtype == torch.bool
@@ -84,11 +88,11 @@ def test_same_step_autoreset_final_observation_matches_pre_reset_obs(monkeypatch
     assert torch.equal(terminations, torch.tensor([True, True]))
     # SAME_STEP autoreset: the returned obs is already the reset (post-autoreset)
     # observation, not the true terminal one.
-    assert torch.equal(next_obs.flatten(), torch.tensor([0.0, 0.0]))
+    assert torch.equal(next_obs["state"].flatten(), torch.tensor([0.0, 0.0]))
     # The true pre-reset terminal observation (obs_start + 2 == 2.0) must be
     # recoverable from infos["final_observation"].
     assert "final_observation" in infos
-    assert torch.equal(infos["final_observation"].flatten(), torch.tensor([2.0, 2.0]))
+    assert torch.equal(infos["final_observation"]["state"].flatten(), torch.tensor([2.0, 2.0]))
     # final_info/episode stats must be present with the naming off_policy.py expects.
     assert "final_info" in infos
     assert "episode" in infos["final_info"]
@@ -111,7 +115,7 @@ def test_partial_termination_final_info_mask_is_per_env(monkeypatch):
     assert torch.equal(infos["_final_info"], torch.tensor([True, False]))
     # Only env 0's final_observation slot is meaningful; env 0 terminated at
     # local step 2 with obs_start=0 -> final obs value 2.0.
-    assert infos["final_observation"].flatten()[0].item() == 2.0
+    assert infos["final_observation"]["state"].flatten()[0].item() == 2.0
 
 
 def test_backend_make_eval_env_uses_num_eval_envs_and_eval_flag(monkeypatch):
@@ -126,12 +130,10 @@ def test_backend_make_eval_env_uses_num_eval_envs_and_eval_flag(monkeypatch):
     req = EnvRequest(
         env_id="fake/dataset-v0",
         num_envs=4,
-        obs_mode="state",
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(),
         num_eval_envs=2,
         backend_config=None,
     )
@@ -155,12 +157,10 @@ def test_backend_make_train_env_uses_num_envs_and_train_flag(monkeypatch):
     req = EnvRequest(
         env_id="fake/dataset-v0",
         num_envs=4,
-        obs_mode="state",
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(),
         num_eval_envs=2,
         backend_config=None,
     )
@@ -169,3 +169,19 @@ def test_backend_make_train_env_uses_num_envs_and_train_flag(monkeypatch):
     cfg = captured["cfg"]
     assert cfg.num_envs == 4
     assert cfg.eval_env is False
+
+
+def test_resolve_config_rejects_vision_request():
+    req = EnvRequest(
+        env_id="fake/dataset-v0",
+        num_envs=4,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=1,
+        observation=ObservationConfig(depth=("cam",)),
+        num_eval_envs=2,
+        backend_config=None,
+    )
+
+    with pytest.raises(ObservationContractError):
+        MinariBackend.resolve_config(req, is_eval=False)

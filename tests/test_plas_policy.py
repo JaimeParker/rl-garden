@@ -7,7 +7,7 @@ from gymnasium import spaces
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.plas_policy import PLASPolicy
 
-OBS_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
+OBS_SPACE = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)})
 ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
 
@@ -61,7 +61,7 @@ def test_train_eval_keeps_vae_in_eval_mode():
 
 def test_predict_in_bounds():
     policy = _make_policy()
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action = policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)
@@ -71,7 +71,7 @@ def test_predict_is_deterministic_no_sampling():
     """Unlike BCQ, PLAS's eval action is a single deterministic pass -- two
     calls with the same obs and no intervening training must match exactly."""
     policy = _make_policy()
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action_a = policy.predict(obs)
     action_b = policy.predict(obs)
     assert torch.equal(action_a, action_b)

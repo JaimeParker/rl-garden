@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import MISSING, fields
 import inspect
 from types import SimpleNamespace
 
@@ -8,9 +7,10 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.common.cli_args import vit_sac_kwargs_from_args
 from rl_garden.encoders import RandomShiftsAug, ViTTokenAndPropExtractor, ViTImageEncoder
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.base import TokenAndPropFeatureConfig
+from rl_garden.observations import ObservationSchema
 from rl_garden.policies import SACPolicy
 
 
@@ -31,9 +31,10 @@ def test_vit_token_and_prop_extractor_per_key_concats_patch_dimension():
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
+    schema = ObservationSchema.from_space(obs_space)
     extractor = ViTTokenAndPropExtractor(
         obs_space,
-        image_keys=("rgb_base", "rgb_wrist"),
+        schema,
         embed_dim=16,
         num_heads=4,
         augmentation="none",
@@ -57,13 +58,14 @@ def test_vit_token_and_prop_extractor_per_key_concats_patch_dimension():
 def test_vit_token_and_prop_extractor_stack_channels_is_explicit():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
-            "depth": spaces.Box(0.0, 1.0, (32, 32, 1), np.float32),
+            "rgb_cam": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            "depth_cam": spaces.Box(0.0, 1.0, (32, 32, 1), np.float32),
         }
     )
+    schema = ObservationSchema.from_space(obs_space)
     extractor = ViTTokenAndPropExtractor(
         obs_space,
-        image_keys=("rgb", "depth"),
+        schema,
         fusion_mode="stack_channels",
         embed_dim=16,
         num_heads=4,
@@ -73,8 +75,8 @@ def test_vit_token_and_prop_extractor_stack_channels_is_explicit():
     assert len(extractor.image_encoders) == 0
     assert extractor.num_patches == 9
     obs = {
-        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
-        "depth": torch.rand(2, 32, 32, 1),
+        "rgb_cam": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
+        "depth_cam": torch.rand(2, 32, 32, 1),
     }
     assert extractor(obs).shape == (2, 9 * 16)
 
@@ -82,13 +84,14 @@ def test_vit_token_and_prop_extractor_stack_channels_is_explicit():
 def test_vit_token_and_prop_extractor_structured_config():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
+    schema = ObservationSchema.from_space(obs_space)
     extractor = ViTTokenAndPropExtractor(
         obs_space,
-        image_keys=("rgb",),
+        schema,
         embed_dim=16,
         num_heads=4,
         augmentation="none",
@@ -105,23 +108,24 @@ def test_vit_token_and_prop_extractor_structured_config():
 def test_vit_token_and_prop_extractor_prepare_batch_caches_features():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
+    schema = ObservationSchema.from_space(obs_space)
     extractor = ViTTokenAndPropExtractor(
         obs_space,
-        image_keys=("rgb",),
+        schema,
         embed_dim=16,
         num_heads=4,
         augmentation="none",
     )
     obs = {
-        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     next_obs = {
-        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     extractor.prepare_batch(obs, next_obs)
@@ -151,14 +155,15 @@ def test_sac_policy_with_vit_builds_spatial_critic():
 
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
     action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
+    schema = ObservationSchema.from_space(obs_space)
     extractor = ViTTokenAndPropExtractor(
         obs_space,
-        image_keys=("rgb",),
+        schema,
         embed_dim=16,
         num_heads=4,
         augmentation="none",
@@ -177,7 +182,7 @@ def test_sac_policy_with_vit_builds_spatial_critic():
     assert policy._actor_adapter is not None
 
     obs = {
-        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     extractor.prepare_batch(obs)
@@ -219,25 +224,20 @@ def test_sac_policy_actor_feature_dim_without_structured_config_raises():
 
 
 def test_vit_sac_kwargs_from_args_defaults_to_per_key():
-    class Args:
-        encoder = "vit"
-        include_state = True
-        vit_fusion_mode = "per_key"
-        vit_embed_dim = 128
-        vit_depth = 1
-        vit_num_heads = 4
-        vit_embed_norm = False
-        vit_augmentation = "random_shift"
-        vit_random_shift_pad = 4
-        vit_actor_feature_dim = 128
-        vit_critic_spatial_emb_dim = 1024
-
-    kwargs = vit_sac_kwargs_from_args(Args(), ("rgb_base", "rgb_wrist"))
+    schema = ObservationSchema.from_space(
+        spaces.Dict(
+            {
+                "rgb_base": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+                "rgb_wrist": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            }
+        )
+    )
+    kwargs = EncoderConfig(backbone="vit").sac_kwargs(schema)
     policy_kwargs = kwargs["policy_kwargs"]
     assert policy_kwargs["features_extractor_class"] is ViTTokenAndPropExtractor
     ext_kwargs = policy_kwargs["features_extractor_kwargs"]
     assert ext_kwargs["fusion_mode"] == "per_key"
-    assert ext_kwargs["image_keys"] == ("rgb_base", "rgb_wrist")
+    assert ext_kwargs["schema"] is schema
     # head hyperparams live at the top level, not in the extractor kwargs
     assert kwargs["actor_feature_dim"] == 128
     assert kwargs["critic_spatial_emb_dim"] == 1024
@@ -255,14 +255,15 @@ def test_vit_token_and_prop_extractor_has_no_legacy_alias():
 def test_sac_policy_sample_actor_actions_uses_adapter():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (32, 32, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (32, 32, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
     action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
+    schema = ObservationSchema.from_space(obs_space)
     extractor = ViTTokenAndPropExtractor(
         obs_space,
-        image_keys=("rgb",),
+        schema,
         embed_dim=16,
         num_heads=4,
         augmentation="none",
@@ -277,7 +278,7 @@ def test_sac_policy_sample_actor_actions_uses_adapter():
         critic_spatial_emb_dim=32,
     )
     obs = {
-        "rgb": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 32, 32, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     features = extractor(obs)
@@ -316,9 +317,3 @@ def test_cql_and_wsrl_accept_vit_policy_head_params():
         assert "critic_spatial_emb_dim" in sig.parameters
 
 
-def test_generate_wsrl_dataset_vit_actor_feature_dim_defaults_to_none():
-    from examples.generate_wsrl_dataset import Args
-
-    field = next(f for f in fields(Args) if f.name == "vit_actor_feature_dim")
-    assert field.default is None
-    assert field.default is not MISSING

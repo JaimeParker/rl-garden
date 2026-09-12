@@ -1,9 +1,11 @@
 """Meta-World env backend — registered as ``"metaworld"``.
 
 Single-task env ids (any of ``metaworld.MT1.ENV_NAMES``, e.g. ``"reach-v3"``)
-and the ``"MT10"``/``"MT50"`` multi-task benchmarks; state observations
-only. See ``rl_garden.envs.metaworld.env`` module docstring for the
-MT1-vs-MT10/50 vectorization shape.
+support state, rgb/depth camera, and frame-stacked observations; the
+``"MT10"``/``"MT50"`` multi-task benchmarks are state observations only (no
+per-env construction hook to attach a camera renderer to). See
+``rl_garden.envs.metaworld.env`` module docstring for the MT1-vs-MT10/50
+vectorization shape.
 """
 
 from __future__ import annotations
@@ -22,8 +24,16 @@ class MetaWorldBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.metaworld.config import MetaWorldEnvConfig
+        from rl_garden.observations.schema import ObservationContractError
 
         mw = req.backend_config  # MetaWorldConfig or None
+        obs = req.observation
+        if obs.frame_stack > 1 and not (obs.rgb or obs.depth):
+            raise ObservationContractError(
+                f"metaworld: frame_stack={obs.frame_stack} requires at least "
+                "one rgb/depth camera; a state-only observation cannot be "
+                "frame-stacked."
+            )
         return MetaWorldEnvConfig(
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
@@ -33,9 +43,11 @@ class MetaWorldBackend(EnvBackend):
             reward_bias=req.reward_bias,
             vectorization=mw.vectorization if mw is not None else "sync",
             use_one_hot=mw.use_one_hot if mw is not None else True,
-            obs_mode=req.obs_mode,
-            camera=mw.camera if mw is not None else "corner2",
-            image_size=tuple(mw.image_size) if mw is not None else (84, 84),
+            rgb_cameras=obs.rgb,
+            depth_cameras=obs.depth,
+            state=obs.state,
+            image_size=obs.image_size if obs.image_size is not None else (84, 84),
+            frame_stack=obs.frame_stack,
         )
 
     @classmethod

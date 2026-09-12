@@ -36,12 +36,10 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.bc import BC
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.demo_intervention import DemoInterventionMixin
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.scripted_expert import ScriptedExpert
 
 
@@ -78,7 +76,12 @@ class DAgger(DemoInterventionMixin, BC):
         # through self.offline_replay_buffer (below) instead. Kept tiny
         # rather than exposed to the caller, same reasoning DiffusionBC uses
         # for its own unused replay_buffer (buffer_size=1 there too).
+        # ReplayBuffer (BC's buffer, always Dict now) validates
+        # per_env_buffer_size = buffer_size // num_envs >= 1 at construction,
+        # so floor buffer_size at num_envs even though this buffer is never
+        # actually added to.
         self._init_prior_data_params()
+        buffer_size = max(buffer_size, getattr(env, "num_envs", 1))
         super().__init__(env=env, eval_env=eval_env, buffer_size=buffer_size, **bc_kwargs)
 
         self.expert = expert
@@ -92,18 +95,9 @@ class DAgger(DemoInterventionMixin, BC):
     # --- growing buffer sizing (see module docstring) ---
 
     def _build_prior_data_buffer(self, buffer_size: int):
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            return DictReplayBuffer(
-                observation_space=obs_space,
-                action_space=self.env.single_action_space,
-                num_envs=self.num_envs,
-                buffer_size=buffer_size,
-                storage_device=self.buffer_device,
-                sample_device=self.device,
-            )
-        return TensorReplayBuffer(
-            observation_space=obs_space,
+        # obs_space is always Dict (boundary normalization is unconditional).
+        return ReplayBuffer(
+            observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=buffer_size,

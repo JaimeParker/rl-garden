@@ -1,4 +1,4 @@
-"""Tests for MemoryEfficientDictReplayBuffer.
+"""Tests for MemoryEfficientReplayBuffer.
 
 Uses ImageFrameStackWrapper itself (already tested, test_frame_stack_wrapper.py)
 as the ground-truth generator for stacked (obs, next_obs) pairs, so this
@@ -19,8 +19,8 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.memory_efficient_dict_buffer import MemoryEfficientDictReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
 from rl_garden.envs.wrappers.frame_stack import ImageFrameStackWrapper
 
 IMAGE_KEY = "rgb_cam"
@@ -108,11 +108,11 @@ def _act_space():
 def test_no_wraparound_matches_dict_replay_buffer_exactly():
     transitions = _drive(episode_lengths=[4, 4], num_steps=8)
 
-    dict_rb = DictReplayBuffer(
+    dict_rb = ReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         storage_device="cpu", sample_device="cpu",
     )
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -137,7 +137,7 @@ def test_edge_replication_at_episode_start_matches_wrapper():
     # Episode of length 1 -> the very first stored transition's obs must be
     # 3 copies of the same (post-reset) frame, matching ImageFrameStackWrapper.
     transitions = _drive(episode_lengths=[1, 5], num_steps=1)
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -153,7 +153,7 @@ def test_wraparound_overwrite_is_detected_invalid():
     # buffer_size=4: episode of length 6 wraps the ring buffer mid-episode,
     # overwriting positions 0-1 with the same episode's later steps 4-5.
     transitions = _drive(episode_lengths=[6], num_steps=6)
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=4,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -180,7 +180,7 @@ def test_freshly_written_positions_stay_valid_across_episode_wraparound():
     immediately-preceding writes (a monotonic ring cursor guarantees this
     for the *freshest* positions of an episode)."""
     transitions = _drive(episode_lengths=[3, 3], num_steps=6)
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=4,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -191,7 +191,7 @@ def test_freshly_written_positions_stay_valid_across_episode_wraparound():
     valid = mem_rb._valid_batch(torch.tensor([0, 1, 3]), torch.zeros(3, dtype=torch.long))
     assert bool(valid.all())
 
-    dict_rb = DictReplayBuffer(
+    dict_rb = ReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         storage_device="cpu", sample_device="cpu",
     )
@@ -212,7 +212,7 @@ def test_stale_position_orphaned_by_a_later_episodes_writes_is_rejected():
     neighbors are not guaranteed unwritten-since -- this is the real,
     reachable case _valid_batch's per-slot _ep_id check exists for."""
     transitions = _drive(episode_lengths=[3, 3], num_steps=6)
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=4,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -228,7 +228,7 @@ def test_stale_position_orphaned_by_a_later_episodes_writes_is_rejected():
 
 def test_sample_never_returns_cross_episode_window():
     transitions = _drive(episode_lengths=[3, 3, 3, 3], num_steps=40)
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=6,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -246,11 +246,11 @@ def test_image_key_tensor_uses_less_memory_than_dict_replay_buffer():
         {IMAGE_KEY: spaces.Box(0, 255, (8, 32, 32, 3), np.uint8)}
     )
     act_space = spaces.Box(-1, 1, (1,), np.float32)
-    dict_rb = DictReplayBuffer(
+    dict_rb = ReplayBuffer(
         obs_space, act_space, num_envs=1, buffer_size=1000,
         storage_device="cpu", sample_device="cpu",
     )
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         obs_space, act_space, num_envs=1, buffer_size=1000,
         image_keys=(IMAGE_KEY,), frame_stack=8,
         storage_device="cpu", sample_device="cpu",
@@ -266,7 +266,7 @@ def test_image_key_tensor_uses_less_memory_than_dict_replay_buffer():
 
 
 def test_add_raises_when_obs_not_pre_stacked():
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -277,7 +277,7 @@ def test_add_raises_when_obs_not_pre_stacked():
 
 
 def test_mmap_dir_builds_manifest(tmp_path):
-    mem_rb = MemoryEfficientDictReplayBuffer(
+    mem_rb = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu", mmap_dir=tmp_path,
@@ -292,7 +292,7 @@ def test_mmap_dir_builds_manifest(tmp_path):
 
 def test_mmap_requires_cpu_storage(tmp_path):
     with pytest.raises(ValueError, match="require CPU storage"):
-        MemoryEfficientDictReplayBuffer(
+        MemoryEfficientReplayBuffer(
             _obs_space(), _act_space(), num_envs=1, buffer_size=16,
             image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
             storage_device="cuda", sample_device="cuda", mmap_dir=tmp_path,
@@ -302,7 +302,7 @@ def test_mmap_requires_cpu_storage(tmp_path):
 def test_mmap_open_restores_temporal_tracking(tmp_path):
     transitions = _drive(episode_lengths=[4, 4], num_steps=8)
 
-    source = MemoryEfficientDictReplayBuffer(
+    source = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu", mmap_dir=tmp_path,
@@ -311,7 +311,7 @@ def test_mmap_open_restores_temporal_tracking(tmp_path):
         source.add(obs, next_obs, action, reward, done)
     source.flush()
 
-    restored = MemoryEfficientDictReplayBuffer(
+    restored = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",
@@ -330,12 +330,12 @@ def test_mmap_open_restores_temporal_tracking(tmp_path):
 def test_mmap_open_sampling_after_reopen(tmp_path):
     transitions = _drive(episode_lengths=[4, 4], num_steps=8)
 
-    source = MemoryEfficientDictReplayBuffer(
+    source = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu", mmap_dir=tmp_path,
     )
-    dict_rb = DictReplayBuffer(
+    dict_rb = ReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         storage_device="cpu", sample_device="cpu",
     )
@@ -344,7 +344,7 @@ def test_mmap_open_sampling_after_reopen(tmp_path):
         dict_rb.add(obs, next_obs, action, reward, done)
     source.flush()
 
-    restored = MemoryEfficientDictReplayBuffer(
+    restored = MemoryEfficientReplayBuffer(
         _obs_space(), _act_space(), num_envs=1, buffer_size=16,
         image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
         storage_device="cpu", sample_device="cpu",

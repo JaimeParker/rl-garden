@@ -48,7 +48,22 @@ class ImageFrameStackWrapper(gym.Wrapper):
     ) -> None:
         if frame_stack < 2:
             raise ValueError("frame_stack must be at least 2")
-        super().__init__(env)
+        # Not super().__init__(env): gym.Wrapper.__init__ asserts
+        # isinstance(env, gym.Env), which the generic (image_keys=...) path's
+        # real callers violate -- it wraps an already-vectorized, batched env
+        # post-TorchVectorEnvAdapter (a gymnasium.vector.VectorWrapper, not a
+        # gym.Env), e.g. rl_garden.envs.ogbench.env.make_ogbench_env /
+        # mujoco_warp.env.make_mujoco_warp_env. Replicates gym.Wrapper.__init__
+        # verbatim minus that assertion; every attribute it sets is either
+        # overwritten immediately below (observation_space) or accessed
+        # through the inherited property with this None fallback
+        # (action_space/metadata), so this is behavior-preserving for the
+        # ManiSkill/IsaacLab path (a true gym.Env) too.
+        self.env = env
+        self._action_space = None
+        self._observation_space = None
+        self._metadata = None
+        self._cached_spec = None
         self.frame_stack = int(frame_stack)
         self._frames: dict[str, torch.Tensor] = {}
 
@@ -61,7 +76,7 @@ class ImageFrameStackWrapper(gym.Wrapper):
             self.image_keys = tuple(
                 key
                 for key in self.base_env._init_raw_obs
-                if key.startswith(("rgb", "depth"))
+                if key.startswith(("rgb_", "depth_"))
             )
             if not self.image_keys:
                 raise ValueError("ImageFrameStackWrapper requires image observations")
@@ -85,7 +100,7 @@ class ImageFrameStackWrapper(gym.Wrapper):
         """Non-ManiSkill fallback: rewrite single_observation_space/
         observation_space directly from the space definition (no live obs
         sample, no reset() call). Load-bearing, not cosmetic -- e.g.
-        DictReplayBuffer sizes every tensor from observation_space at
+        ReplayBuffer sizes every tensor from observation_space at
         buffer-construction time, so an unstacked space here would
         shape-mismatch on the first add()."""
         base_space = self.env.single_observation_space

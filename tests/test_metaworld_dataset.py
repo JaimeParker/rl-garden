@@ -13,8 +13,8 @@ import numpy as np
 from gymnasium import spaces
 
 from rl_garden.buffers import (
-    MCTensorReplayBuffer,
-    TensorReplayBuffer,
+    MCReplayBuffer,
+    ReplayBuffer,
     infer_specs_from_metaworld,
     load_metaworld_dataset_to_replay_buffer,
 )
@@ -72,15 +72,18 @@ def test_infer_specs_from_metaworld_reads_env_spaces(monkeypatch):
 
     obs_space, action_space = infer_specs_from_metaworld("reach-v3")
 
-    assert obs_space.shape == (3,)
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].shape == (3,)
+    assert obs_space["state"].dtype == np.float32
     assert action_space.shape == (2,)
 
 
 def test_load_metaworld_dataset_retries_until_success(monkeypatch):
     _install_fake_metaworld(monkeypatch)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=20,
@@ -99,8 +102,8 @@ def test_load_metaworld_dataset_retries_until_success(monkeypatch):
 def test_load_metaworld_dataset_marks_reward_and_done_only_at_last_step(monkeypatch):
     _install_fake_metaworld(monkeypatch)
 
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=20,
@@ -119,8 +122,8 @@ def test_load_metaworld_dataset_marks_reward_and_done_only_at_last_step(monkeypa
 def test_load_metaworld_dataset_applies_reward_scale_and_bias(monkeypatch):
     _install_fake_metaworld(monkeypatch)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=20,

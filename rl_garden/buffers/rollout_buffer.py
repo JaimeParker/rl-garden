@@ -8,7 +8,7 @@ from typing import Iterator, Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.buffers.replay_buffer import DictArray
 from rl_garden.buffers.gae import compute_gae
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
@@ -229,7 +229,3 @@ class RolloutBuffer:
                 old_mean=flat_means[mb_inds] if flat_means is not None else None,
                 old_log_std=flat_log_stds[mb_inds] if flat_log_stds is not None else None,
             )
-
-
-class DictRolloutBuffer(RolloutBuffer):
-    """Alias class for SB3-style naming when observations are Dict spaces."""

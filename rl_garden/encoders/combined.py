@@ -1,11 +1,10 @@
-"""Combined extractor for Dict observations ({rgb[/depth], state, ...}).
+"""Combined extractor for Dict observations ({state, rgb_<cam>, depth_<cam>}).
 
 Design
 ------
 For each observation key we plug in one of:
   - image encoder (``PlainConv`` or a ResNet) when the key is an image,
   - proprio branch (Dense -> LayerNorm -> tanh) when the key is ``state``,
-  - plain flatten for any other vector key.
 
 By default, image keys are combined by channel-concatenation BEFORE the
 encoder (matches ``EncoderObsWrapper`` in ManiSkill's sac_rgbd.py), so a
@@ -18,15 +17,16 @@ the encoded features. The proprio branch follows hil-serl's design
 Inputs from ManiSkill's ``FlattenRGBDObservationWrapper`` are HWC uint8
 tensors for images; we permute to NCHW and normalize to [0,1] here.
 
-A key present in ``observation_space`` but not requested via ``image_keys``
-is dropped entirely (not flattened as a generic vector) when it is
-image-shaped and matches the ``rgb*``/``depth*`` naming convention
-(see ``discover_image_keys``) -- it is "spoken for" by the image branch even
-when unused, the same way ``state_key`` already is.
+Which keys get an image/proprio branch is driven entirely by ``schema``
+(an ``rl_garden.observations.ObservationSchema``): its ``image_keys`` and
+``has_state``. Any key present in ``observation_space`` that ``schema``
+does not include (e.g. dropped by an asymmetric ``ObsGroups`` actor/critic
+split) is never looked up and so never contributes to the output, whatever
+its name or shape.
 """
 from __future__ import annotations
 
-from typing import Callable, Iterable, Literal, Optional
+from typing import TYPE_CHECKING, Callable, Literal, Optional
 
 import numpy as np
 import torch
@@ -37,6 +37,10 @@ from rl_garden.common.obs_normalization import RunningObsNormalizer
 from rl_garden.encoders.base import BaseFeaturesExtractor, image_needs_normalization
 from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.encoders.plain_conv import PlainConv
+from rl_garden.observations import ObservationSchema
+
+if TYPE_CHECKING:
+    from rl_garden.encoders.config import EncoderConfig
 
 # A factory takes the stacked image ``spaces.Box`` (channels-first) and returns
 # a ``BaseFeaturesExtractor``. This lets the caller swap PlainConv for a ResNet
@@ -89,34 +93,25 @@ class ProprioEncoder(BaseFeaturesExtractor):
 
 
 class CombinedExtractor(BaseFeaturesExtractor):
+    """Dict-observation feature extractor.
+
+    ``schema`` (an ``rl_garden.observations.ObservationSchema``) says *what*
+    is observed: image keys, state presence, and per-key stacking. ``encoder_config``
+    (an ``rl_garden.encoders.EncoderConfig``) says *how* to encode it: backbone,
+    fusion mode, augmentation, proprio dim, ...
+    """
+
     def __init__(
         self,
         observation_space: spaces.Dict,
-        image_keys: Iterable[str] = ("rgb", "depth"),
-        state_key: str = "state",
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        proprio_latent_dim: int = 64,
-        use_proprio: bool = True,
-        fusion_mode: ImageFusionMode = "stack_channels",
-        enable_stacking: bool = False,
-        image_augmentation: ImageAugmentationMode = "none",
-        random_shift_pad: int = 4,
+        schema: ObservationSchema,
+        encoder_config: "EncoderConfig",
+        *,
         augmentation_seed: Optional[int] = None,
-        normalize_obs: bool = False,
     ) -> None:
-        """``image_keys`` are resolved against ``observation_space`` into
-        ``present_image_keys`` and get their own encoder(s). Any other key
-        in the space is either ``state_key`` (proprio branch) or a genuine
-        vector key (flattened as-is) -- *except* a key matching the
-        ``rgb*``/``depth*`` naming convention with an image-shaped Box
-        (``discover_image_keys`` + a 3D/4D shape check), which is dropped
-        entirely rather than flattened, even though it wasn't requested.
-        This only affects keys unrequested by name+shape; a requested image
-        key under a non-conventional name (e.g. a ``"wrist"`` camera) is
-        unaffected -- it's still built as an image encoder via
-        ``present_image_keys`` membership regardless of naming.
-        """
         assert isinstance(observation_space, spaces.Dict)
+        fusion_mode = encoder_config.image_fusion_mode
+        image_augmentation = encoder_config.image_augmentation
         if fusion_mode not in ("stack_channels", "per_key"):
             raise ValueError(
                 "fusion_mode must be either 'stack_channels' or 'per_key', "
@@ -128,12 +123,23 @@ class CombinedExtractor(BaseFeaturesExtractor):
                 f"got {image_augmentation!r}"
             )
 
-        # Determine which image keys are actually present.
-        present_image_keys = [k for k in image_keys if k in observation_space.spaces]
-        has_state = use_proprio and state_key in observation_space.spaces
+        state_key = "state"
+        image_keys = schema.image_keys
+        has_state = schema.has_state
+        enable_stacking = any(schema.entries[k].stacked for k in image_keys)
+        num_frames = 1
+        if enable_stacking:
+            frame_counts = {
+                schema.entries[k].shape[0] for k in image_keys if schema.entries[k].stacked
+            }
+            assert len(frame_counts) == 1, (
+                "all stacked image keys must share one frame count, got "
+                f"{frame_counts} across {image_keys!r}"
+            )
+            num_frames = frame_counts.pop()
 
         image_specs: dict[str, tuple[int, int, int]] = {}
-        for k in present_image_keys:
+        for k in image_keys:
             sp = observation_space.spaces[k]
             assert isinstance(sp, spaces.Box), f"image key {k!r} must be a Box"
             image_specs[k] = self._image_space_to_hwc(
@@ -142,10 +148,22 @@ class CombinedExtractor(BaseFeaturesExtractor):
 
         features_dim = 0
         self._has_images = bool(image_specs)
-        factory = image_encoder_factory or default_image_encoder_factory()
         image_encoder: Optional[BaseFeaturesExtractor] = None
         image_encoders: nn.ModuleDict = nn.ModuleDict()
         if self._has_images:
+            if encoder_config.backbone == "cnn3d":
+                # num_frames is a schema (Layer A) concern -- derived above
+                # from the schema's stacked entries, not an EncoderConfig
+                # field -- so cnn3d is built directly here instead of via
+                # encoder_config.image_encoder_factory().
+                from rl_garden.encoders.cnn3d import cnn3d_encoder_factory
+
+                factory = cnn3d_encoder_factory(
+                    num_frames=num_frames, features_dim=encoder_config.features_dim
+                )
+            else:
+                factory = encoder_config.image_encoder_factory()
+
             if fusion_mode == "stack_channels":
                 total_channels = 0
                 image_hw: Optional[tuple[int, int]] = None
@@ -179,45 +197,17 @@ class CombinedExtractor(BaseFeaturesExtractor):
         proprio: Optional[ProprioEncoder] = None
         if has_state:
             proprio = ProprioEncoder(
-                observation_space.spaces[state_key], features_dim=proprio_latent_dim
+                observation_space.spaces[state_key], features_dim=encoder_config.proprio_latent_dim
             )
             features_dim += proprio.features_dim
 
-        vector_extractors: nn.ModuleDict = nn.ModuleDict()
-        # Keys that look like images by the rgb*/depth* naming convention
-        # (discover_image_keys) AND have an image-shaped Box are excluded
-        # from the generic vector-flatten fallback below, whether or not
-        # they were requested via `image_keys` -- mirrors state_key's
-        # unconditional exclusion just below: a key "spoken for" by another
-        # branch must never fall through to nn.Flatten() merely because it
-        # wasn't requested. An unrequested image-shaped key is therefore
-        # dropped entirely: no encoder is built for it, it is not
-        # vectorized, and it does not count toward features_dim.
-        # Shape-gating (not name alone) keeps a low-dimensional rgb*/depth*-
-        # named key (e.g. a hypothetical `rgb_valid` flag) on the ordinary
-        # vector path.
-        image_key_set = set(present_image_keys) | {
-            k
-            for k in discover_image_keys(observation_space)
-            if _is_image_shaped_box(observation_space.spaces[k], enable_stacking=enable_stacking)
-        }
-        for key, subspace in observation_space.spaces.items():
-            if key in image_key_set or key == state_key:
-                continue
-            assert isinstance(subspace, spaces.Box), f"vector key {key!r} must be a Box"
-            vector_extractors[key] = nn.Flatten()
-            features_dim += int(np.prod(subspace.shape))
-
         assert features_dim > 0, (
-            "CombinedExtractor produced 0-dim output. If observation_space "
-            "contains keys, check whether they were all excluded: "
-            "unrequested rgb*/depth*-prefixed image-shaped keys are "
-            "dropped (not vectorized) per the image_keys contract "
-            "documented on __init__."
+            "CombinedExtractor produced 0-dim output: schema has no image "
+            f"keys and no state key ({schema.keys!r})."
         )
         super().__init__(observation_space, features_dim)
 
-        self.image_keys: tuple[str, ...] = tuple(present_image_keys)
+        self.image_keys: tuple[str, ...] = tuple(image_keys)
         self._needs_norm: frozenset[str] = frozenset(
             k for k in self.image_keys
             if image_needs_normalization(observation_space.spaces[k])
@@ -229,19 +219,20 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.image_encoder = image_encoder
         self.image_encoders = image_encoders
         self.proprio = proprio
-        self.vector_extractors = vector_extractors
+        # No genuine vector key can exist under the strict observation
+        # schema (state / rgb_<cam> / depth_<cam> only), so this is always
+        # empty; kept so extract()/update_normalizer() stay simple no-op
+        # loops and callers checking `key in extractor.vector_extractors`
+        # keep working.
+        self.vector_extractors: nn.ModuleDict = nn.ModuleDict()
         self._obs_normalizers: nn.ModuleDict = nn.ModuleDict()
-        if normalize_obs:
-            if has_state:
-                state_dim = int(np.prod(observation_space.spaces[state_key].shape))
-                self._obs_normalizers[state_key] = RunningObsNormalizer(state_dim)
-            for key in vector_extractors:
-                vec_dim = int(np.prod(observation_space.spaces[key].shape))
-                self._obs_normalizers[key] = RunningObsNormalizer(vec_dim)
+        if encoder_config.normalize_obs and has_state:
+            state_dim = int(np.prod(observation_space.spaces[state_key].shape))
+            self._obs_normalizers[state_key] = RunningObsNormalizer(state_dim)
         self.image_augmentation = image_augmentation
-        self.random_shift_pad = random_shift_pad
+        self.random_shift_pad = encoder_config.image_random_shift_pad
         self.random_shift = (
-            RandomShiftsAug(random_shift_pad)
+            RandomShiftsAug(self.random_shift_pad)
             if image_augmentation == "random_shift" and self._has_images
             else None
         )
@@ -406,35 +397,3 @@ class CombinedExtractor(BaseFeaturesExtractor):
         for key, extractor in self.vector_extractors.items():
             if key in self._obs_normalizers:
                 self._obs_normalizers[key].update(extractor(obs[key]))
-
-
-def _is_image_shaped_box(subspace: spaces.Space, *, enable_stacking: bool) -> bool:
-    """True if `subspace` has the shape CombinedExtractor treats as an
-    image: 3D (H, W, C), or 4D (T, H, W, C) when `enable_stacking`. Used
-    with the rgb*/depth* naming convention (discover_image_keys) to
-    identify keys "spoken for" by the image branch even when not
-    requested via `image_keys`.
-    """
-    if not isinstance(subspace, spaces.Box):
-        return False
-    ndim = len(subspace.shape)
-    return ndim == 3 or (enable_stacking and ndim == 4)
-
-
-def discover_image_keys(observation_space: spaces.Dict) -> tuple[str, ...]:
-    """Return all keys in ``observation_space`` whose names start with ``rgb``
-    or ``depth``.
-
-    RGB keys come before depth keys; within each group, keys are sorted
-    alphabetically for determinism. Used by per-camera training entrypoints
-    (e.g. peg) to discover ``rgb_<cam>`` / ``depth_<cam>`` keys produced by
-    :class:`PerCameraRGBDWrapper`.
-    """
-    if not isinstance(observation_space, spaces.Dict):
-        raise TypeError(
-            "discover_image_keys expects a Dict observation space, got "
-            f"{type(observation_space).__name__}"
-        )
-    rgb_keys = sorted(k for k in observation_space.spaces if k.startswith("rgb"))
-    depth_keys = sorted(k for k in observation_space.spaces if k.startswith("depth"))
-    return tuple(rgb_keys + depth_keys)

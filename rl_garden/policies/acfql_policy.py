@@ -21,7 +21,7 @@ neither could silently diverge -- verified against ``acfql.py``'s
 ``critic_loss`` calling the same ``self.sample_actions`` used everywhere
 else, not a training-only shortcut.
 
-``best_of_n_action`` assumes ``encoder_sharing="shared"`` (uses
+``best_of_n_action`` assumes ``encoder_sharing="shared_critic_grad"`` (uses
 ``extract_features``, the critic/shared encoder, for both the BC-flow
 sampling and the Q evaluation) -- correct for v1's Box-only, shared-encoder
 default; not exercised under ``encoder_sharing="separate"``.
@@ -60,7 +60,7 @@ class ACFQLPolicy(FQLPolicy):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         actor_type: ActorType = "distill-ddpg",

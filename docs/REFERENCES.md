@@ -104,5 +104,5 @@ The following are not separate algorithms but are cited in multiple algorithms'
 docstrings above and are rl-garden's own framework code, not ports:
 `OffPolicyAlgorithm`/`OnPolicyAlgorithm`/`OfflineRLAlgorithm` (base training
 loops), `Off2OnReplayMixin` (generic offline→online transition machinery),
-`ChunkedTensorReplayBuffer`/`_chunked_rollout.py` (generalizes [QC](https://github.com/ColinQiyangLi/qc)'s
+`ChunkedReplayBuffer`/`_chunked_rollout.py` (generalizes [QC](https://github.com/ColinQiyangLi/qc)'s
 single-env action-chunk queue to GPU-batched, per-env-staggered rollout).

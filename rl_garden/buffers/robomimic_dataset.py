@@ -25,7 +25,9 @@ from gymnasium import spaces
 from rl_garden.buffers._dataset_common import (
     _add_flat_transitions,
     _concat,
+    _finalize_dataset_obs_space,
     _load_success,
+    _match_obs_to_buffer,
     _mc_returns,
     _to_tensor,
 )
@@ -84,8 +86,11 @@ def _sorted_demo_keys(data: Any) -> list[str]:
     return sorted(demo_keys, key=lambda key: int(key.split("_")[-1]))
 
 
-def infer_specs_from_robomimic(path: str | Path) -> tuple[spaces.Box, spaces.Box]:
-    """Infer flat Box observation/action spaces from a robomimic HDF5 file."""
+def infer_specs_from_robomimic(path: str | Path) -> tuple[spaces.Dict, spaces.Box]:
+    """Infer the strict-contract Dict observation space (plus action space)
+    from a robomimic HDF5 file. Every key in ``ROBOMIMIC_LOW_DIM_OBS_KEYS`` is
+    folded into the single ``"state"`` key (see module docstring) -- this is
+    robomimic's documented producer-specific mapping onto the contract."""
     h5py = _require_h5py()
     path = Path(path)
     with h5py.File(path, "r") as f:
@@ -97,7 +102,9 @@ def infer_specs_from_robomimic(path: str | Path) -> tuple[spaces.Box, spaces.Box
         obs_dim = int(sum(demo["obs"][key].shape[-1] for key in ROBOMIMIC_LOW_DIM_OBS_KEYS))
         action_dim = int(demo["actions"].shape[-1])
 
-    obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+    obs_space = _finalize_dataset_obs_space(
+        spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+    )
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32)
     return obs_space, action_space
 
@@ -201,6 +208,7 @@ def load_robomimic_dataset_to_replay_buffer(
 
     obs_all = _concat(obs_parts)
     next_obs_all = _concat(next_obs_parts)
+    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)

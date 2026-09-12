@@ -1,40 +1,18 @@
 """ACRLPD (Q-chunking's action-chunked RLPD) run function.
 
-State observations only (no ``--obs_mode``), matching ``sac_flow.py``'s
-pattern -- ``ChunkedTensorReplayBuffer`` (``ACRLPDCore._build_replay_buffer``)
-is Box-only for v1.
+``ACRLPDCore._build_replay_buffer``/``_state_only_obs_space`` raise
+``TypeError`` if the resolved observation space carries any image key --
+ACRLPD is state-only for v1 -- so ``--obs.rgb``/``--obs.depth`` are exposed
+(for CLI/config uniformity with every other algorithm) but any non-default
+value is rejected by the algorithm itself, not silently ignored.
 """
 
 from __future__ import annotations
 
 
-def _acrlpd_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    backend_config = args.resolve_backend_config()
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=None,
-        camera_height=None,
-        num_eval_envs=args.num_eval_envs,
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        create_eval_env=should_create_eval_env(args),
-        backend_config=backend_config,
-    )
-
-
 def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import ACRLPD
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
@@ -42,6 +20,14 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
+
     agent = construct_agent(
         ACRLPD,
         env=env,
@@ -98,6 +84,7 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -128,12 +115,13 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_acrlpd(args: "ACRLPDArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
     run_online(
         args,
         obs_tag="state",
-        make_env_request=_acrlpd_env_request,
+        make_env_request=make_env_request,
         build_agent=build_acrlpd,
     )
 
@@ -145,6 +133,7 @@ def run_acrlpd(args: "ACRLPDArgs") -> None:
 from dataclasses import dataclass  # noqa: E402
 from typing import Literal, Optional  # noqa: E402
 
+from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.networks import BackboneType, KernelInit  # noqa: E402
 from rl_garden.training.online._args import SACTrainingArgs  # noqa: E402
@@ -152,10 +141,10 @@ from rl_garden.training.online._registry import registry  # noqa: E402
 
 
 @dataclass
-class ACRLPDArgs(SACTrainingArgs, EnvBackendArgs):
+class ACRLPDArgs(SACTrainingArgs, ObservationArgs, EnvBackendArgs):
     """ACRLPD -- Q-chunking's action-chunked RLPD (Li, Zhou, Levine 2025,
-    ``3rd_party/qc/agents/acrlpd.py``). State observations only (no
-    ``--obs_mode``).
+    ``3rd_party/qc/agents/acrlpd.py``). State-only in practice: the
+    algorithm itself rejects any image observation (see module docstring).
 
     Defaults matching the reference (n_critics=10, no REDQ subsampling,
     mean- not min-ensemble aggregation, no entropy backup) rather than plain

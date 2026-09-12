@@ -16,7 +16,7 @@ To add a new dataset backend::
     register_dataset_backend("my_backend", MyDatasetBackend)
 
 ``DatasetRequest`` carries every field any backend might need (mirrors
-``EnvRequest``) -- a backend that doesn't need ``obs_mode``/
+``EnvRequest``) -- a backend that doesn't need ``observation``/
 ``backend_config``/etc. just ignores them, exactly like ``EnvBackend
 .resolve_config`` ignores ``EnvRequest`` fields it doesn't need. This is a
 uniform, explicit contract on purpose (every backend implements the same
@@ -37,6 +37,9 @@ from typing import Any
 
 from gymnasium import spaces
 
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
+
 
 @dataclass
 class DatasetRequest:
@@ -49,9 +52,16 @@ class DatasetRequest:
     success_key: str | None = None
     action_low: float = -1.0
     action_high: float = 1.0
-    obs_mode: str | None = None
     # Per-backend CLI config, e.g. RLBenchConfig -- getattr(args, backend_name, None).
     backend_config: Any = None
+    # Phase-3 observation surface. When set, ``infer_dataset_specs`` asserts
+    # the loaded space's key set equals ``observation.expected_keys`` --
+    # lets an offline run assert the same observation composition an online
+    # env would produce. ``None`` means "the dataset's own keys are the
+    # truth" (no assertion). Individual backends may also consult this
+    # field directly (see e.g. ``rlbench_dataset.py``) to decide what to
+    # load, not just to validate afterwards.
+    observation: ObservationConfig | None = None
 
 
 class DatasetBackend:
@@ -92,7 +102,26 @@ def _get_backend(name: str) -> type[DatasetBackend]:
 def infer_dataset_specs(
     req: DatasetRequest, *, backend_name: str
 ) -> tuple[spaces.Space, spaces.Box]:
-    return _get_backend(backend_name).infer_specs(req)
+    obs_space, action_space = _get_backend(backend_name).infer_specs(req)
+    if req.observation is not None:
+        if not isinstance(obs_space, spaces.Dict):
+            raise ObservationContractError(
+                f"dataset backend {backend_name!r} returned a "
+                f"{type(obs_space).__name__} observation space, but "
+                "req.observation was given -- every dataset loader must "
+                "return a Dict observation space to be checked against it."
+            )
+        actual_keys = set(obs_space.spaces.keys())
+        expected_keys = set(req.observation.expected_keys)
+        if actual_keys != expected_keys:
+            missing = sorted(expected_keys - actual_keys)
+            extra = sorted(actual_keys - expected_keys)
+            raise ObservationContractError(
+                f"dataset backend {backend_name!r} produced observation keys "
+                f"{sorted(actual_keys)!r}, but req.observation expects "
+                f"{sorted(expected_keys)!r} (missing={missing!r}, extra={extra!r})"
+            )
+    return obs_space, action_space
 
 
 def load_dataset(buffer: Any, req: DatasetRequest, *, backend_name: str) -> int:

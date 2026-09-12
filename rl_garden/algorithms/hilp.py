@@ -42,21 +42,35 @@ explicit since autograd tracks by default.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Optional, Sequence
 
-import numpy as np
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.hindsight_goal_dataset import HindsightGoalDataset, HindsightGoalSample
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import EnsembleQCritic, GoalConditionedPhiValue, UnsquashedGaussianActor, ValueNetwork
+from rl_garden.observations import ObservationContractError, ObsGroups
 from rl_garden.policies.hilp_policy import HILPPolicy
 
 
 class HILP(OfflineRLAlgorithm):
+    """HILP: goal-conditioned Hilbert representation + AWR skill policy over
+    raw, flat-vector observations.
+
+    Like ``OPAL``, every network here (``phi``-value, skill value/critic/
+    actor) is built directly from a raw ``obs_dim`` -- there is no
+    ``BaseFeaturesExtractor``-based policy consuming encoder ``forward()``
+    output. Observation encoding is still resolved through the shared
+    ``ObservationEncoderMixin`` for ``obs_dim``/checkpoint-metadata
+    uniformity, but only the state-only schema is supported (matching the
+    reference's own "state-based (Box observations) only" scope -- see
+    module docstring); image observations are rejected with a clear error.
+    """
+
     _compatible_checkpoint_algorithms = ("HILP",)
 
     def __init__(
@@ -79,6 +93,8 @@ class HILP(OfflineRLAlgorithm):
         lr: float = 3e-4,
         batch_size: int = 1024,
         num_traj: Optional[int] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -107,9 +123,6 @@ class HILP(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if not isinstance(self.env.single_observation_space, spaces.Box):
-            raise TypeError("HILP supports Box observation spaces only.")
-
         self.dataset_path = dataset_path
         self.skill_dim = skill_dim
         self.value_hidden_dims = tuple(value_hidden_dims)
@@ -125,6 +138,8 @@ class HILP(OfflineRLAlgorithm):
         self.p_randomgoal = p_randomgoal
         self.lr = lr
         self.num_traj = num_traj
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
 
         self._dataset = HindsightGoalDataset(
             dataset_path,
@@ -138,7 +153,13 @@ class HILP(OfflineRLAlgorithm):
         self._setup_model()
 
     def _setup_model(self) -> None:
-        obs_dim = int(np.prod(self.env.single_observation_space.shape))
+        self._resolve_observation_encoders(self.env.single_observation_space)
+        if self.observation_encoders.schema.has_images:
+            raise ObservationContractError(
+                "HILP only supports state observations; got a schema with "
+                f"image keys {self.observation_encoders.schema.image_keys}."
+            )
+        obs_dim = self.observation_encoders.actor.features_dim
         action_space = self.env.single_action_space
 
         value = GoalConditionedPhiValue(obs_dim, self.skill_dim, self.value_hidden_dims)
@@ -346,4 +367,10 @@ class HILP(OfflineRLAlgorithm):
             "p_currgoal": self.p_currgoal,
             "p_trajgoal": self.p_trajgoal,
             "p_randomgoal": self.p_randomgoal,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
         }

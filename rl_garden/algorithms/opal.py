@@ -17,19 +17,34 @@ produced by this class.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Optional, Sequence
 
-import numpy as np
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.windowed_trajectory_dataset import WindowedTrajectoryDataset
 from rl_garden.common.logger import Logger
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.opal_vae import OPALVAE
+from rl_garden.observations import ObservationContractError, ObsGroups
 
 
 class OPAL(OfflineRLAlgorithm):
+    """OPAL: pretrains a skill-space VAE over raw, flat-vector observations.
+
+    ``OPALVAE`` (``rl_garden/networks/opal_vae.py``) is a state-only
+    reconstruction model with no ``BaseFeaturesExtractor``-based policy of
+    its own -- unlike SAC/BC, it never calls an encoder's ``forward()`` in
+    its training loop, it just needs ``obs_dim``. Observation encoding is
+    still resolved through the shared ``ObservationEncoderMixin`` (for
+    ``obs_dim`` and API/checkpoint-metadata uniformity with the rest of the
+    codebase), but only the state-only schema is actually supported --
+    image observations are rejected with a clear error rather than silently
+    fed raw into the VAE (see the reference's own "state-obs path only"
+    note in ``opal_vae.py``).
+    """
+
     _compatible_checkpoint_algorithms = ("OPAL",)
 
     def __init__(
@@ -45,6 +60,8 @@ class OPAL(OfflineRLAlgorithm):
         lr: float = 3e-4,
         batch_size: int = 256,
         num_traj: Optional[int] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -72,9 +89,6 @@ class OPAL(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if not isinstance(self.env.single_observation_space, spaces.Box):
-            raise TypeError("OPAL supports Box observation spaces only.")
-
         self.dataset_path = dataset_path
         self.skill_dim = skill_dim
         self.chunk_size = chunk_size
@@ -83,6 +97,8 @@ class OPAL(OfflineRLAlgorithm):
         self.kl_coef = kl_coef
         self.lr = lr
         self.num_traj = num_traj
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
 
         self._dataset = WindowedTrajectoryDataset(
             dataset_path, chunk_size=chunk_size, device=self.device, num_traj=num_traj,
@@ -90,7 +106,13 @@ class OPAL(OfflineRLAlgorithm):
         self._setup_model()
 
     def _setup_model(self) -> None:
-        obs_dim = int(np.prod(self.env.single_observation_space.shape))
+        self._resolve_observation_encoders(self.env.single_observation_space)
+        if self.observation_encoders.schema.has_images:
+            raise ObservationContractError(
+                "OPAL only supports state observations; got a schema with "
+                f"image keys {self.observation_encoders.schema.image_keys}."
+            )
+        obs_dim = self.observation_encoders.actor.features_dim
         action_space = self.env.single_action_space
 
         self.policy = OPALVAE(
@@ -132,4 +154,10 @@ class OPAL(OfflineRLAlgorithm):
             "hidden_size": self.hidden_size,
             "vae_hidden_dims": self.vae_hidden_dims,
             "kl_coef": self.kl_coef,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
         }

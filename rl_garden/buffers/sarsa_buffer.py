@@ -20,8 +20,8 @@ a naive shift would silently read the next episode's first action at every
 """
 from __future__ import annotations
 
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.mc_buffer import MCReplayBufferMixin
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
 from rl_garden.common.types import SarsaMCReplayBufferSample
 
 
@@ -29,7 +29,7 @@ class SarsaReferenceMixin:
     """Mixin adding ``next_actions``/``next_action_valid`` to an MC buffer.
 
     Usage:
-        class SarsaMCTensorReplayBuffer(SarsaReferenceMixin, MCReplayBufferMixin, TensorReplayBuffer):
+        class SarsaMCReplayBuffer(SarsaReferenceMixin, MCReplayBufferMixin, ReplayBuffer):
             pass
     """
 
@@ -54,8 +54,11 @@ class SarsaReferenceMixin:
         )
 
 
-class SarsaMCTensorReplayBuffer(SarsaReferenceMixin, MCReplayBufferMixin, TensorReplayBuffer):
-    """``MCTensorReplayBuffer`` plus next-action tracking for Cal-QL's SARSA
-    reference-value network. Flat (non-Dict) observations only."""
+class SarsaMCReplayBuffer(SarsaReferenceMixin, MCReplayBufferMixin, ReplayBuffer):
+    """``MCReplayBuffer`` plus next-action tracking for Cal-QL's SARSA
+    reference-value network. Always Dict now, so ``data.obs`` stays
+    consistent with what the main critic's schema-driven features extractor
+    expects; ``sarsa_q_net``/``sarsa_q_target`` (flat-tensor networks) then
+    read ``data.obs["state"]``/``data.next_obs["state"]`` themselves."""
 
     pass

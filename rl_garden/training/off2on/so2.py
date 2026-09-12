@@ -5,13 +5,14 @@ as ``wsrl``/``calql``/``iql`` -- SO2's offline gradient-step loop and online
 switch are algorithm-agnostic, so no new orchestration code is needed here.
 
 Faithful reproduction of upstream's offline-buffer FIFO churn (see
-``so2.py``'s ``_MirroringTensorReplayBuffer``) additionally requires
+``so2.py``'s ``_MirroringReplayBuffer``) additionally requires
 ``--buffer_size`` set to match the loaded dataset's transition count -- a
 usage note, not a new mechanism.
 """
 from dataclasses import dataclass
 from typing import Literal
 
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on._args import (
     SO2Off2OnTrainingArgs,
@@ -21,21 +22,15 @@ from rl_garden.training.off2on._registry import registry
 
 
 @dataclass
-class SO2Off2OnArgs(SO2Off2OnTrainingArgs, EnvBackendArgs):
+class SO2Off2OnArgs(SO2Off2OnTrainingArgs, ObservationArgs, EnvBackendArgs):
     """SO2 off2on args: no warmup, mixed replay, fixed ratio.
 
-    For state obs pass --obs_mode state. Env backend:
-    ``--env_backend d4rl_legacy`` for D4RL MuJoCo locomotion
-    (halfcheetah/hopper/walker2d) or AntMaze, matching the paper's own
-    benchmark suite -- already supported, no new backend work needed.
+    State-only observations by default; pass ``--obs.rgb <camera>`` for
+    Dict/RGBD observations. Env backend: ``--env_backend d4rl_legacy`` for
+    D4RL MuJoCo locomotion (halfcheetah/hopper/walker2d) or AntMaze,
+    matching the paper's own benchmark suite -- already supported, no new
+    backend work needed.
     """
-
-    # run_off2on's shared runner (_runner.py) reads args.obs_mode
-    # unconditionally to build the EnvRequest -- unlike run_online, it has no
-    # per-algorithm make_env_request callback to hide this behind. Fixed to
-    # "state": SO2Core is Box-only (raises TypeError on Dict obs downstream
-    # if overridden), so this isn't exposed as a real vision-capable knob.
-    obs_mode: str = "state"
 
     warmup_steps: int = 0
     online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
@@ -47,7 +42,16 @@ class SO2Off2OnArgs(SO2Off2OnTrainingArgs, EnvBackendArgs):
 
 def build_so2(args: SO2Off2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnSO2
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
+
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnSO2,
@@ -94,6 +98,7 @@ def build_so2(args: SO2Off2OnArgs, env, eval_env, logger, checkpoint_dir):
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)

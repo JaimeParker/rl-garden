@@ -17,10 +17,11 @@ Example:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,6 +31,8 @@ import tyro
 
 from rl_garden.algorithms import OfflineEnvSpec
 from rl_garden.common import seed_everything
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObservationConfig
 from rl_garden.training._dataset import infer_offline_dataset_specs
 from rl_garden.training.offline.calql import CalQLArgs, build_calql
 from rl_garden.training.offline.iql import IQLArgs, build_iql
@@ -70,31 +73,12 @@ class Args:
     critic_subsample_size: int = 2
     actor_use_layer_norm: bool = True
     critic_use_layer_norm: bool = True
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
-    include_state: bool = True
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
-    encoder_features_dim: int = 256
-    per_camera_rgbd: bool = False
-    obs_mode: str = "rgb"
-    camera_width: int | None = 64
-    camera_height: int | None = 64
-    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
-    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
-    plain_conv_last_act: bool = True
-    image_augmentation: Literal["none", "random_shift"] = "none"
-    image_random_shift_pad: int = 4
-    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: str | None = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
+    # "what is observed" / "how it is encoded". Defaults give rgb-only (no
+    # depth), state=True, 64x64, single-camera.
+    obs: ObservationConfig = field(
+        default_factory=lambda: ObservationConfig(rgb=("base_camera",), image_size=(64, 64))
+    )
+    encoder: EncoderConfig = field(default_factory=EncoderConfig)
 
     # IQL uses exp(advantage * temperature), so Q-space softmax uses 1 / temperature.
     # Cal-QL uses the loaded SAC alpha as its Q-space denominator.
@@ -504,7 +488,16 @@ def _apply_mapping_to_args(args: Any, values: Mapping[str, Any]) -> None:
             continue
         current = getattr(args, key)
         if hasattr(current, "__dataclass_fields__") and isinstance(value, Mapping):
-            _apply_mapping_to_args(current, value)
+            # ObservationConfig/ObsGroups are frozen (see the
+            # observation-redesign plan) -- mutating their fields in place
+            # would raise FrozenInstanceError, so rebuild via
+            # dataclasses.replace() and reassign onto the parent instead of
+            # recursing into a plain setattr for those. EncoderConfig is not
+            # frozen and still merges field-by-field as before.
+            if current.__dataclass_params__.frozen:
+                setattr(args, key, dataclasses.replace(current, **value))
+            else:
+                _apply_mapping_to_args(current, value)
         else:
             setattr(args, key, value)
 
@@ -537,7 +530,13 @@ def _args_for_algorithm(args: Args) -> Any:
         if hasattr(algo_args, "device"):
             algo_args.device = args.device
     else:
-        for key, value in asdict(args).items():
+        # Iterate args's own fields (not asdict(args), which recursively
+        # flattens nested dataclasses like `obs`/`encoder` into plain dicts)
+        # so ObservationConfig/EncoderConfig instances copy onto algo_args
+        # as-is, not as dicts.
+        for f in fields(args):
+            key = f.name
+            value = getattr(args, key)
             if key == "dataset_path":
                 algo_args.offline_dataset = value
             elif key in {"checkpoint_path", "output_json", "config_path"}:
@@ -557,7 +556,6 @@ def _resolved_algorithm_summary(args: Args, algo_args: Any) -> dict[str, Any]:
     keys = (
         "offline_dataset",
         "dataset_backend",
-        "obs_mode",
         "gamma",
         "n_critics",
         "critic_subsample_size",
@@ -579,6 +577,8 @@ def _resolved_algorithm_summary(args: Args, algo_args: Any) -> dict[str, Any]:
         for key in keys
         if hasattr(algo_args, key)
     }
+    if hasattr(algo_args, "obs"):
+        summary["obs"] = asdict(algo_args.obs)
     summary["config_path_used"] = str(config_path) if config_path.exists() else None
     return summary
 

@@ -43,3 +43,13 @@ python examples/pretrain_offline.py calql \
 ```
 
 Do not commit checkpoints, replay snapshots, run directories, or generated logs.
+
+## Old checkpoints are unsupported
+
+Checkpoints saved before the unified observation/encoder redesign (`obs`/
+`encoder`/`obs_groups`, `rl_garden/observations/`) cannot be loaded. There is
+no migration script and none is planned -- loaders raise on the old
+observation metadata format (`obs_mode`/`image_keys`/`state_key`/
+`use_proprio`, etc.) instead of falling back to it. Do not attempt to write a
+compatibility shim; retrain from scratch against the current `obs`/`encoder`
+surface (`docs/guides/configuration.md`).

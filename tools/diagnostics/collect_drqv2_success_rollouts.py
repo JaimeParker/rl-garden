@@ -13,8 +13,9 @@ import tyro
 
 from rl_garden.algorithms.ddpg import DDPG
 from rl_garden.common import seed_everything
-from rl_garden.encoders import discover_image_keys
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.observations import ObservationConfig
 
 
 STAGE_KEYS = ("is_cubeA_grasped", "is_cubeA_on_cubeB", "is_cubeA_static", "success")
@@ -158,7 +159,6 @@ def update_reservoir(
 
 
 def _make_agent(args: Args, env: Any) -> DDPG:
-    image_keys = discover_image_keys(env.single_observation_space)
     agent = DDPG(
         env=env,
         eval_env=None,
@@ -178,10 +178,11 @@ def _make_agent(args: Args, env: Any) -> DDPG:
         stddev_schedule="linear(1.0,0.1,500000)",
         stddev_clip=0.3,
         num_expl_steps=2_000,
-        image_keys=image_keys,
-        image_fusion_mode="per_key",
-        image_augmentation="random_shift",
-        random_shift_pad=4,
+        encoder_config=EncoderConfig(
+            image_fusion_mode="per_key",
+            image_augmentation="random_shift",
+            image_random_shift_pad=4,
+        ),
         image_augmentation_seed=args.seed + 1_000_003,
         seed=args.seed,
         device=args.device,
@@ -202,16 +203,15 @@ def main() -> None:
         raise ValueError("target_successes and max_episodes must be positive")
     seed_everything(args.seed)
     rng = np.random.default_rng(args.seed)
+    obs = ObservationConfig(
+        rgb=("base_camera",), depth=("base_camera",), image_size=(64, 64)
+    )
     env = make_maniskill_env(
-        ManiSkillEnvConfig(
+        ManiSkillEnvConfig.from_observation(
+            obs,
             env_id="StackCube-v1",
             num_envs=args.num_envs,
-            obs_mode="rgb",
-            include_state=True,
             control_mode="pd_joint_delta_pos",
-            camera_width=64,
-            camera_height=64,
-            per_camera_rgbd=True,
             sim_backend="gpu",
             render_backend="gpu",
             render_mode="rgb_array",

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import torch
+from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.types import Obs
+from rl_garden.observations.schema import validate_observation_space
 
 
 def _first_existing(data: dict[str, Any], names: tuple[str, ...]) -> Any:
@@ -142,6 +145,46 @@ def _load_success(
         return success[:length], False
 
     return (rewards >= success_threshold).float(), True
+
+
+def _finalize_dataset_obs_space(space: "spaces.Box | spaces.Dict") -> "spaces.Dict":
+    """Coerce a dataset loader's inferred observation space into the strict
+    rl-garden observation contract (``rl_garden.observations.schema``) and
+    validate it.
+
+    A bare (state-only) ``Box`` becomes ``Dict({"state": Box(float32)})`` --
+    every state-only dataset loader's own ``infer_specs_from_*`` ends with
+    this call. An already-``Dict`` space (built by a loader that maps its own
+    producer-specific field names onto ``state``/``rgb_<cam>``/``depth_<cam>``
+    itself, e.g. RLBench/robomimic) is validated as-is: this function does no
+    renaming of its own.
+    """
+    if isinstance(space, spaces.Box):
+        space = spaces.Dict(
+            {
+                "state": spaces.Box(
+                    low=np.asarray(space.low, dtype=np.float32),
+                    high=np.asarray(space.high, dtype=np.float32),
+                    shape=space.shape,
+                    dtype=np.float32,
+                )
+            }
+        )
+    validate_observation_space(space)
+    return space
+
+
+def _match_obs_to_buffer(buffer: BaseReplayBuffer, obs: Obs, next_obs: Obs) -> tuple[Obs, Obs]:
+    """Wrap flat state ``obs``/``next_obs`` tensors into ``{"state": ...}``
+    for every state-only loader's data path (which produces plain tensors
+    regardless of what ``infer_specs_from_*`` reports) -- a no-op when
+    ``obs`` is already a dict (image-bearing sources). Every replay buffer
+    is Dict-observation now (the strict rl-garden contract), so this is
+    purely about the loader's own output shape, not the buffer's.
+    """
+    if not isinstance(obs, dict):
+        return {"state": obs}, {"state": next_obs}
+    return obs, next_obs
 
 
 def _add_flat_transitions(

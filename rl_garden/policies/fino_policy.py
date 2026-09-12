@@ -43,7 +43,7 @@ class FINOPolicy(FQLPolicy):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         beta: float = 10.0,

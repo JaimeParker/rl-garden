@@ -17,6 +17,8 @@ from rl_garden.encoders import (
     SpatialLearnedEmbeddings,
     resnet_encoder_factory,
 )
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObservationSchema
 from rl_garden.policies.sac_policy import SACPolicy
 
 
@@ -66,17 +68,15 @@ def test_resnet18_forward_shape():
 def test_combined_extractor_with_resnet_factory():
     dict_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (64, 64, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (5,), np.float32),
         }
     )
-    factory = resnet_encoder_factory("resnet10", features_dim=256)
-    ce = CombinedExtractor(
-        dict_space, image_keys=("rgb",), state_key="state", image_encoder_factory=factory
-    )
+    schema = ObservationSchema.from_space(dict_space)
+    ce = CombinedExtractor(dict_space, schema, EncoderConfig(backbone="resnet10", features_dim=256))
     assert ce.features_dim == 256 + 64
     obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
         "state": torch.randn(2, 5),
     }
     out = ce(obs)
@@ -86,25 +86,29 @@ def test_combined_extractor_with_resnet_factory():
 def test_combined_extractor_per_key_fusion_shape_and_modules():
     dict_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (8, 8, 3), np.uint8),
-            "depth": spaces.Box(0.0, 1.0, (8, 8, 1), np.float32),
+            "rgb_cam": spaces.Box(0, 255, (8, 8, 3), np.uint8),
+            "depth_cam": spaces.Box(0.0, 1.0, (8, 8, 1), np.float32),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
-    ce = CombinedExtractor(
-        dict_space,
-        image_keys=("rgb", "depth"),
-        state_key="state",
-        image_encoder_factory=_mean_image_encoder_factory(features_dim=7),
-        fusion_mode="per_key",
+    schema = ObservationSchema.from_space(dict_space)
+    ce = CombinedExtractor(dict_space, schema, EncoderConfig(image_fusion_mode="per_key"))
+    # Swap in custom mean-pooling encoders post-construction to inspect exact
+    # per-key module wiring -- EncoderConfig no longer accepts an ad-hoc
+    # factory override, but image_encoders is a plain ModuleDict attribute.
+    ce.image_encoders["rgb_cam"] = _mean_image_encoder_factory(features_dim=7)(
+        spaces.Box(0.0, 1.0, (3, 8, 8), np.float32)
     )
-    assert ce.features_dim == 7 + 7 + 64
+    ce.image_encoders["depth_cam"] = _mean_image_encoder_factory(features_dim=7)(
+        spaces.Box(0.0, 1.0, (1, 8, 8), np.float32)
+    )
+
     assert ce.image_encoder is None
-    assert set(ce.image_encoders.keys()) == {"rgb", "depth"}
+    assert set(ce.image_encoders.keys()) == {"rgb_cam", "depth_cam"}
 
     obs = {
-        "rgb": torch.randint(0, 256, (2, 8, 8, 3), dtype=torch.uint8),
-        "depth": torch.rand(2, 8, 8, 1),
+        "rgb_cam": torch.randint(0, 256, (2, 8, 8, 3), dtype=torch.uint8),
+        "depth_cam": torch.rand(2, 8, 8, 1),
         "state": torch.randn(2, 4),
     }
     out = ce(obs)
@@ -114,23 +118,23 @@ def test_combined_extractor_per_key_fusion_shape_and_modules():
 def test_combined_extractor_enable_stacking():
     dict_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (2, 8, 8, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (2, 8, 8, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (2, 4), np.float32),
         }
     )
-    ce = CombinedExtractor(
-        dict_space,
-        image_keys=("rgb",),
-        state_key="state",
-        image_encoder_factory=_mean_image_encoder_factory(features_dim=6),
-        fusion_mode="per_key",
-        enable_stacking=True,
+    schema = ObservationSchema.from_space(dict_space)
+    ce = CombinedExtractor(dict_space, schema, EncoderConfig(image_fusion_mode="per_key"))
+    assert ce.enable_stacking
+    # Swap in a custom mean-pooling encoder post-construction (see
+    # test_combined_extractor_per_key_fusion_shape_and_modules above).
+    ce.image_encoders["rgb_cam"] = _mean_image_encoder_factory(features_dim=6)(
+        spaces.Box(0.0, 1.0, (6, 8, 8), np.float32)
     )
-    rgb_encoder = ce.image_encoders["rgb"]
+    rgb_encoder = ce.image_encoders["rgb_cam"]
     assert rgb_encoder._observation_space.shape == (6, 8, 8)
 
     obs = {
-        "rgb": torch.randint(0, 256, (3, 2, 8, 8, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (3, 2, 8, 8, 3), dtype=torch.uint8),
         "state": torch.randn(3, 2, 4),
     }
     out = ce(obs)
@@ -140,18 +144,19 @@ def test_combined_extractor_enable_stacking():
 def test_combined_extractor_stop_gradient_detaches_only_image_features():
     dict_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (8, 8, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (8, 8, 3), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
-    ce = CombinedExtractor(
-        dict_space,
-        image_keys=("rgb",),
-        state_key="state",
-        image_encoder_factory=_mean_image_encoder_factory(features_dim=5),
+    schema = ObservationSchema.from_space(dict_space)
+    ce = CombinedExtractor(dict_space, schema, EncoderConfig())
+    # Swap in a custom mean-pooling encoder post-construction (see
+    # test_combined_extractor_per_key_fusion_shape_and_modules above).
+    ce.image_encoder = _mean_image_encoder_factory(features_dim=5)(
+        spaces.Box(0.0, 1.0, (3, 8, 8), np.float32)
     )
     obs = {
-        "rgb": torch.randint(0, 256, (2, 8, 8, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 8, 8, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
 
@@ -273,19 +278,28 @@ def test_freeze_backbone_keeps_head_trainable_under_backward(tmp_path, monkeypat
 def test_sac_policy_critic_updates_image_encoder_but_actor_does_not():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (8, 8, 3), np.uint8),
-            "depth": spaces.Box(0.0, 1.0, (8, 8, 1), np.float32),
+            "rgb_cam": spaces.Box(0, 255, (8, 8, 3), np.uint8),
+            "depth_cam": spaces.Box(0.0, 1.0, (8, 8, 1), np.float32),
             "state": spaces.Box(-1.0, 1.0, (4,), np.float32),
         }
     )
     action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
-    extractor = CombinedExtractor(
-        obs_space,
-        image_keys=("rgb", "depth"),
-        state_key="state",
-        image_encoder_factory=_mean_image_encoder_factory(features_dim=5),
-        fusion_mode="per_key",
+    schema = ObservationSchema.from_space(obs_space)
+    extractor = CombinedExtractor(obs_space, schema, EncoderConfig(image_fusion_mode="per_key"))
+    # Swap in custom mean-pooling encoders post-construction (see
+    # test_combined_extractor_per_key_fusion_shape_and_modules above).
+    extractor.image_encoders["rgb_cam"] = _mean_image_encoder_factory(features_dim=5)(
+        spaces.Box(0.0, 1.0, (3, 8, 8), np.float32)
     )
+    extractor.image_encoders["depth_cam"] = _mean_image_encoder_factory(features_dim=5)(
+        spaces.Box(0.0, 1.0, (1, 8, 8), np.float32)
+    )
+    # The swap above changes each image branch's output width (5 instead of
+    # PlainConv's default 256), so features_dim -- cached at construction --
+    # must be recomputed for SACPolicy to size its critic correctly.
+    extractor._features_dim = sum(
+        e.features_dim for e in extractor.image_encoders.values()
+    ) + extractor.proprio.features_dim
     policy = SACPolicy(
         obs_space,
         action_space,
@@ -293,8 +307,8 @@ def test_sac_policy_critic_updates_image_encoder_but_actor_does_not():
         net_arch={"pi": [16], "qf": [16]},
     )
     obs = {
-        "rgb": torch.randint(0, 256, (4, 8, 8, 3), dtype=torch.uint8),
-        "depth": torch.rand(4, 8, 8, 1),
+        "rgb_cam": torch.randint(0, 256, (4, 8, 8, 3), dtype=torch.uint8),
+        "depth_cam": torch.rand(4, 8, 8, 1),
         "state": torch.randn(4, 4),
     }
     actions = torch.randn(4, 2).clamp(-1, 1)

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -29,13 +29,10 @@ import tyro
 from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
 from rl_garden.common.checkpoint import load_checkpoint_file
-from rl_garden.common.cli_args import (
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    vit_sac_kwargs_from_args,
-)
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.plain_conv import PlainConv
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.observations import ObservationConfig
 
 
 Scope = Literal["all", "success", "both"]
@@ -49,39 +46,23 @@ class Args:
     output_json: Optional[str] = None
 
     env_id: str = "StackCube-v1"
-    obs_mode: str = "rgb"
-    include_state: bool = True
     control_mode: str = "pd_joint_delta_pos"
     reward_mode: str = "normalized_dense"
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     render_mode: str = "rgb_array"
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
-    per_camera_rgbd: bool = True
     num_envs: int = 1
 
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
-    encoder_features_dim: int = 256
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "per_key"
-    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: Optional[str] = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
-    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
-    plain_conv_last_act: bool = True
-    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
-    image_keys: Optional[str] = None
-    image_augmentation: Literal["none", "random_shift"] = "none"
-    image_random_shift_pad: int = 4
+    # "what is observed" / "how it is encoded". Defaults give rgb+depth+state
+    # for ManiSkill's default "base_camera" sensor.
+    obs: ObservationConfig = field(
+        default_factory=lambda: ObservationConfig(
+            rgb=("base_camera",), depth=("base_camera",), image_size=(64, 64)
+        )
+    )
+    encoder: EncoderConfig = field(
+        default_factory=lambda: EncoderConfig(image_fusion_mode="per_key")
+    )
 
     seed: int = 1
     device: str = "auto"
@@ -612,26 +593,21 @@ def probe_checkpoint(
 
 
 def _make_env(args: Args):
-    cfg = ManiSkillEnvConfig(
+    cfg = ManiSkillEnvConfig.from_observation(
+        args.obs,
         env_id=args.env_id,
         num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        include_state=args.include_state,
         control_mode=args.control_mode,
         reward_mode=args.reward_mode,
         sim_backend=args.sim_backend,
         render_backend=args.render_backend,
         render_mode=args.render_mode,
         reconfiguration_freq=1,
-        camera_width=args.camera_width,
-        camera_height=args.camera_height,
-        per_camera_rgbd=args.per_camera_rgbd,
     )
     return make_maniskill_env(cfg)
 
 
 def _make_agent(args: Args, env) -> SAC:
-    image_keys = image_keys_from_env(env, args)
     hidden = [args.hidden_dim] * args.actor_hidden_layers
     critic_hidden = [args.hidden_dim] * args.critic_hidden_layers
     return SAC(
@@ -665,13 +641,8 @@ def _make_agent(args: Args, env) -> SAC:
         checkpoint_dir=None,
         checkpoint_freq=0,
         save_final_checkpoint=False,
-        image_keys=image_keys,
-        image_encoder_factory=image_encoder_factory_from_args(args),
-        image_fusion_mode=args.image_fusion_mode,
-        image_augmentation=args.image_augmentation,
-        random_shift_pad=args.image_random_shift_pad,
+        encoder_config=args.encoder,
         image_augmentation_seed=args.seed + 1_000_003,
-        **vit_sac_kwargs_from_args(args, image_keys),
     )
 
 

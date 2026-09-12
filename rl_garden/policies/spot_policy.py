@@ -22,7 +22,7 @@ class SPOTPolicy(TD3BCPolicy):
 
     def __init__(
         self,
-        observation_space: spaces.Box,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         features_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (256, 256),

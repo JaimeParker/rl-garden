@@ -1,10 +1,12 @@
 """DAgger run function.
 
-State-only CLI entrypoint (matches ``DAggerTrainingArgs``'s scope). The
 ``--expert`` flag only selects among trivial built-in mock experts -- a real
 scripted/oracle expert is task-specific and is expected to be supplied by
 constructing ``DAgger`` directly rather than through this CLI path; see
-``.agents/local/imitation-learning-expansion-dagger-notes.md``.
+``.agents/local/imitation-learning-expansion-dagger-notes.md``. ``DAgger``
+forwards its constructor kwargs to ``BC`` (see ``DAgger.__init__``'s
+``**bc_kwargs``), so it takes ``--obs.*``/``--encoder.*``/``--obs_groups.*``
+like any other algorithm.
 """
 
 from __future__ import annotations
@@ -46,32 +48,28 @@ def _mock_expert_from_args(args, action_space):
 
 
 def _dagger_env_request(args, run_name):
+    # DAgger has no eval-env code path at all (no --eval_freq-driven eval
+    # loop); force create_eval_env=False regardless of args.eval_freq,
+    # unlike every other entrypoint's should_create_eval_env(args) default.
     del run_name
-    from rl_garden.envs.backend_registry import EnvRequest
+    from dataclasses import replace
 
-    backend_config = args.resolve_backend_config()
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=None,
-        camera_height=None,
-        num_eval_envs=args.num_eval_envs,
-        eval_record_dir=None,
-        capture_video=False,
-        create_eval_env=False,
-        backend_config=backend_config,
-    )
+    from rl_garden.common.env_args import make_env_request
+
+    req = make_env_request(args, create_eval_env=False)
+    return replace(req, eval_record_dir=None, capture_video=False)
 
 
 def build_dagger(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms.dagger import DAgger
     from rl_garden.training.inspection import construct_agent
 
     expert = _mock_expert_from_args(args, env.single_action_space)
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+    }
     return construct_agent(
         DAgger,
         env=env,
@@ -95,6 +93,7 @@ def build_dagger(args, env, eval_env, logger, checkpoint_dir):
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
 
 
@@ -114,14 +113,15 @@ def run_dagger(args: "DAggerArgs") -> None:
 
 from dataclasses import dataclass
 
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online._args import DAggerTrainingArgs
 from rl_garden.training.online._registry import registry
 
 
 @dataclass
-class DAggerArgs(DAggerTrainingArgs, EnvBackendArgs):
-    """DAgger with multi-env backend support (state-only)."""
+class DAggerArgs(DAggerTrainingArgs, ObservationArgs, EnvBackendArgs):
+    """DAgger with multi-env backend support."""
 
 
 registry.register("dagger", DAggerArgs, run_dagger)

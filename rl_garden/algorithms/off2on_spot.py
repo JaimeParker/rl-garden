@@ -18,8 +18,10 @@ from rl_garden.algorithms.spot import _SPOTRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObsGroups
 
 
 class Off2OnSPOT(_SPOTRolloutTrainingShell):
@@ -76,6 +78,9 @@ class Off2OnSPOT(_SPOTRolloutTrainingShell):
         lambd_cool: bool = False,
         lambd_end: float = 0.2,
         expl_noise: float = 0.1,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         online_discount: float = 0.995,
         max_online_updates: int = 1_000_000,
         seed: int = 1,
@@ -138,6 +143,9 @@ class Off2OnSPOT(_SPOTRolloutTrainingShell):
             lambd_cool=lambd_cool,
             lambd_end=lambd_end,
             expl_noise=expl_noise,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
             online_discount=online_discount,
             max_online_updates=max_online_updates,
             seed=seed,

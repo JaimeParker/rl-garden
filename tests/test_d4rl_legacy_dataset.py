@@ -12,8 +12,8 @@ from rl_garden.buffers.d4rl_legacy_dataset import (
     infer_specs_from_d4rl_legacy,
     load_d4rl_legacy_dataset_to_replay_buffer,
 )
-from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
 
 class _FakeD4RLEnv:
@@ -77,8 +77,8 @@ def test_legacy_loader_populates_replay_mc_table(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
     )
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -113,8 +113,8 @@ def test_legacy_loader_populates_plain_replay_without_gamma_attr(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
     )
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -143,8 +143,10 @@ def test_infer_specs_canonicalizes_observations_to_float32(monkeypatch):
 
     obs_space, action_space = infer_specs_from_d4rl_legacy("antmaze-test-v2")
 
-    assert obs_space.shape == (4,)
-    assert obs_space.dtype == np.float32
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].shape == (4,)
+    assert obs_space["state"].dtype == np.float32
     assert action_space.shape == (2,)
     assert env.closed
 
@@ -199,8 +201,8 @@ def test_legacy_loader_dispatches_supported_task_families(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
     )
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -217,8 +219,8 @@ def test_legacy_loader_dispatches_locomotion_family(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
     )
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -239,8 +241,8 @@ def test_legacy_loader_rejects_unknown_family(monkeypatch):
     monkeypatch.setattr(
         "rl_garden.buffers.d4rl_legacy_dataset._make_legacy_env", lambda env_id: env
     )
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (4,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,

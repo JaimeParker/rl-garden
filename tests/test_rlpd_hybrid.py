@@ -10,6 +10,7 @@ import torch.nn as nn
 from gymnasium import spaces
 
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 
 
 class _ConstQ(nn.Module):
@@ -87,7 +88,7 @@ def test_learns_without_crashing_and_updates_discrete_critic_independently():
 
 def test_predict_returns_concatenated_continuous_and_discrete_action():
     agent = _agent()
-    action = agent.policy.predict(torch.zeros(2, 4), deterministic=True)
+    action = agent.policy.predict({"state": torch.zeros(2, 4)}, deterministic=True)
     assert action.shape == (2, 3)
 
 
@@ -95,7 +96,7 @@ def test_learns_with_demo_buffer_mixed_in():
     agent = _agent()
     agent.init_demo_buffer(buffer_size=32, demo_data_ratio=0.5)
 
-    obs = torch.zeros(4)
+    obs = {"state": torch.zeros(4)}
     action = torch.zeros(3)
     reward = torch.tensor(1.0)
     done = torch.tensor(False)
@@ -142,9 +143,18 @@ class DictDummyVecEnv:
         return None
 
 
-def test_use_grasp_penalty_requires_dict_obs_space():
-    with pytest.raises(ValueError, match="Dict observation space"):
-        _agent(use_grasp_penalty=True)  # DummyVecEnv is Box, not Dict
+def test_use_grasp_penalty_with_box_env_no_longer_raises():
+    # DummyVecEnv's bare Box observation space is boundary-normalized to
+    # Dict by BaseAlgorithm.__init__ (see rl_garden.envs.wrappers
+    # .VectorizedDictStateWrapper) before RLPDHybrid ever sees it, so
+    # use_grasp_penalty=True no longer requires an explicitly Dict env.
+    agent = _agent(use_grasp_penalty=True)
+    assert isinstance(agent.replay_buffer, ReplayBuffer)
+
+
+def test_use_grasp_penalty_with_nstep_greater_than_one_raises():
+    with pytest.raises(ValueError, match="nstep == 1"):
+        _agent(use_grasp_penalty=True, nstep=2)
 
 
 def test_use_grasp_penalty_learns_without_crashing_at_high_utd():
@@ -244,7 +254,7 @@ class ImageDummyVecEnv:
         self.single_observation_space = spaces.Dict(
             {
                 "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
-                "rgb": spaces.Box(
+                "rgb_cam": spaces.Box(
                     0, 255, (frame_stack, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
                 ),
             }
@@ -259,7 +269,7 @@ class ImageDummyVecEnv:
     def _obs(self):
         return {
             "state": torch.randn(self.num_envs, 4),
-            "rgb": torch.randint(
+            "rgb_cam": torch.randint(
                 0, 256,
                 (self.num_envs, self.frame_stack, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3),
                 dtype=torch.uint8,
@@ -281,8 +291,8 @@ class ImageDummyVecEnv:
 
 
 def test_memory_efficient_buffer_constructs_the_dedup_buffer_and_learns():
-    from rl_garden.buffers.memory_efficient_dict_buffer import MemoryEfficientDictReplayBuffer
-    from rl_garden.encoders.combined import default_image_encoder_factory
+    from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
+    from rl_garden.encoders.config import EncoderConfig
 
     agent = RLPDHybrid(
         env=ImageDummyVecEnv(frame_stack=3),
@@ -296,16 +306,11 @@ def test_memory_efficient_buffer_constructs_the_dedup_buffer_and_learns():
         log_freq=0,
         net_arch=[8],
         discrete_hidden_dim=8,
-        image_keys=("rgb",),
-        image_encoder_factory=default_image_encoder_factory(
-            features_dim=16, plain_conv_pooling="gap"
-        ),
-        enable_stacking=True,
+        encoder_config=EncoderConfig(features_dim=16, plain_conv_pooling="gap"),
         memory_efficient_buffer=True,
-        memory_efficient_image_keys=("rgb",),
         memory_efficient_frame_stack=3,
     )
-    assert isinstance(agent.replay_buffer, MemoryEfficientDictReplayBuffer)
+    assert isinstance(agent.replay_buffer, MemoryEfficientReplayBuffer)
     agent.learn(total_timesteps=8)
     assert agent._global_step == 8
 

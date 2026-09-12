@@ -4,37 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs
+from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
-
-
-@dataclass
-class OfflineVisionArgs:
-    """Vision settings inferred from an offline dataset rather than a live env."""
-
-    obs_mode: str = "rgb"
-    include_state: bool = True
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
-    encoder_features_dim: int = 256
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
-    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: Optional[str] = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
-    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
-    plain_conv_last_act: bool = True
-    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
-    per_camera_rgbd: bool = False
 
 
 @dataclass
@@ -99,7 +70,7 @@ class OfflineEvalArgs:
 class OfflineCommonArgs(
     OfflineEvalArgs,
     OfflineRuntimeArgs,
-    OfflineVisionArgs,
+    ObservationArgs,
     OfflineOptimizationArgs,
     OfflineReplayArgs,
     OfflineDatasetArgs,
@@ -158,18 +129,18 @@ class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
 
 
 @dataclass
-class DiffusionBCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
+class DiffusionBCTrainingArgs(ObservationArgs, CheckpointArgs, LoggingArgs):
     """Diffusion BC pretraining (DPPO phase 1). Deliberately does NOT inherit
     ``OfflineCommonArgs``: ``run_offline`` assumes a ``agent.replay_buffer``
     populated via ``load_offline_dataset``, but ``DiffusionBC`` loads
     ``(obs_history, action_chunk)`` windows directly in its constructor (see
     ``rl_garden.buffers.chunked_dataset``) and has no replay buffer at all --
-    same reasoning as ``TDMPC2MultitaskTrainingArgs``. Adds ``OfflineVisionArgs``
+    same reasoning as ``TDMPC2MultitaskTrainingArgs``. Adds ``ObservationArgs``
     (absorbed from the former standalone ``VisionDiffusionBCTrainingArgs``) so
     a single ``diffusion_bc`` CLI surface covers both Box and Dict (vision)
     observation spaces, matching ``DiffusionBC``'s in-class
-    ``isinstance(obs_space, spaces.Box/Dict)`` branch -- most of these fields
-    are no-ops for Box-obs datasets."""
+    ``isinstance(obs_space, spaces.Box/Dict)`` branch -- most ``encoder``/
+    ``obs_groups`` fields are no-ops for Box-obs (state-only) datasets."""
 
     dataset_path: str = ""
     num_offline_steps: int = 200_000
@@ -312,13 +283,14 @@ class OPALTrainingArgs(CheckpointArgs, LoggingArgs):
 
 
 @dataclass
-class A2ABCTrainingArgs(OfflineVisionArgs, CheckpointArgs, LoggingArgs):
+class A2ABCTrainingArgs(ObservationArgs, CheckpointArgs, LoggingArgs):
     """A2A flow-matching BC pretraining. A standalone sibling of
     ``DiffusionBCTrainingArgs`` (not built on it) -- swaps
     diffusion-specific fields (``denoising_steps``, ``ema_*``,
     ``residual_style``, ``time_dim``) for A2A's flow-in-latent-space fields.
-    ``include_state`` must stay True (enforced in the entrypoint) -- the
-    state-history window is the flow's source, not optional."""
+    ``obs.state`` must stay True (``A2ABC._setup_model`` raises ``ValueError``
+    otherwise) -- the state-history window is the flow's source, not
+    optional."""
 
     dataset_path: str = ""
     num_offline_steps: int = 200_000
@@ -638,11 +610,12 @@ class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
     # overrides OfflineDeterministicActorCriticArgs's implicit ReLU default
     # (no field there today; every other algorithm in the codebase has none).
     activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
-    # "shared": one encoder (AGENTS.md's project convention, matches SACPolicy).
-    # "separate": three independent encoder instances, matching FQL's own
-    # JAX reference. Only meaningful for Dict (vision) observation spaces --
-    # Box observations use a parameterless FlattenExtractor either way.
-    encoder_sharing: Literal["shared", "separate"] = "shared"
+    # encoder_sharing lives on ObservationArgs (OfflineCommonArgs already
+    # mixes it in): "shared_critic_grad" (default, AGENTS.md's project
+    # convention, matches SACPolicy) vs. "separate" (three independent
+    # encoder instances, matching FQL's own JAX reference). Only meaningful
+    # for Dict (vision) observation spaces -- Box observations use a
+    # parameterless FlattenExtractor either way.
 
 
 @dataclass

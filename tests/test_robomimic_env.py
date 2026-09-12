@@ -5,9 +5,13 @@ import numpy as np
 import pytest
 import torch
 
+from rl_garden.envs.backend_registry import EnvRequest
+from rl_garden.envs.backends.robomimic import RobomimicBackend
 from rl_garden.envs.robomimic.config import RobomimicEnvConfig
 from rl_garden.envs.robomimic.env import make_robomimic_env
 from rl_garden.buffers.robomimic_dataset import ROBOMIMIC_LOW_DIM_OBS_KEYS
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 _KEY_DIMS = {
     "object": 10,
@@ -89,8 +93,9 @@ def test_robomimic_env_exposes_torch_vector_contract_and_success(monkeypatch):
     env = make_robomimic_env(_cfg(terminate_on_success=True, horizon=5))
 
     obs, _ = env.reset()
-    assert obs.shape == (1, _OBS_DIM)
-    assert obs.dtype == torch.float32
+    assert isinstance(obs, dict) and set(obs) == {"state"}
+    assert obs["state"].shape == (1, _OBS_DIM)
+    assert obs["state"].dtype == torch.float32
     action = torch.zeros((1, 7))
     _, reward1, terminated1, _, _ = env.step(action)
     _, reward2, terminated2, _, info2 = env.step(action)
@@ -183,3 +188,18 @@ def test_make_robomimic_env_selects_vector_backend_by_num_envs(monkeypatch):
     env4.close()
 
     assert calls == ["sync", "async"]
+
+
+def test_resolve_config_rejects_vision_request():
+    req = EnvRequest(
+        env_id="Lift",
+        num_envs=1,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=0,
+        observation=ObservationConfig(rgb=("agentview",)),
+        backend_config=None,
+    )
+
+    with pytest.raises(ObservationContractError):
+        RobomimicBackend.resolve_config(req, is_eval=False)

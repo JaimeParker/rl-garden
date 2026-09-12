@@ -1,5 +1,5 @@
-"""Memory-efficient Dict replay buffer: stores one frame per timestep for
-designated image keys instead of ``DictReplayBuffer``'s full duplicated
+"""Memory-efficient replay buffer: stores one frame per timestep for
+designated image keys instead of ``ReplayBuffer``'s full duplicated
 ``(T, H, W, C)`` stack in both ``obs`` and ``next_obs`` (HIL-SERL's
 ``MemoryEfficientReplayBuffer``/``pack_obs_and_next_obs``,
 ``3rd_party/hil-serl/serl_launcher/serl_launcher/data/
@@ -17,7 +17,7 @@ storage if fed unstacked obs.
 Design resolution: **edge-replicate at episode boundaries, do not
 reject-sample them.** ``ImageFrameStackWrapper`` already edge-replicates on
 ``reset()`` (all ``frame_stack`` copies = the first frame), so an
-early-episode transition is fully samplable in ``DictReplayBuffer`` today --
+early-episode transition is fully samplable in ``ReplayBuffer`` today --
 matching that is this buffer's correctness bar. The gather is clamped by a
 per-position ``steps_available`` bound (how many steps have occurred since
 *this episode* started, capped at ``frame_stack - 1``) -- and because
@@ -37,7 +37,7 @@ new newest) rather than computed independently -- this mirrors
 exactly, and needs no separate reach/clamp computation.
 
 Episode-boundary bookkeeping (``_ep_id``/``_step_id``, own to this class --
-NOT the same semantics as ``NStepDictReplayBuffer``'s same-named attributes,
+NOT the same semantics as ``NStepReplayBuffer``'s same-named attributes,
 whose ``_step_id`` is a monotonic global counter rather than a
 resets-per-episode one) is derived from ``done`` alone, since that is the
 only boundary signal the real-world transition schema actually carries
@@ -53,18 +53,25 @@ from typing import Optional, Sequence
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.dict_buffer import DictReplayBuffer, _tree_to_device
+from rl_garden.buffers.replay_buffer import ReplayBuffer, _tree_to_device
 from rl_garden.buffers.mmap_storage import MmapMode
 from rl_garden.common.types import GraspPenaltyReplayBufferSample, ReplayBufferSample
 
 
-class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
+class MemoryEfficientReplayBuffer(ReplayBuffer):
     def __init__(
         self,
         observation_space: spaces.Dict,
         action_space: spaces.Box,
         num_envs: int,
         buffer_size: int,
+        # Buffer-level storage-layout parameter: which Dict keys of
+        # `observation_space` carry a stacked (leading frame_stack) image and
+        # so get this buffer's one-frame-per-timestep packing (see module
+        # docstring). Distinct from -- and unrelated to -- the per-algorithm
+        # `image_keys`/`use_proprio` kwargs the observation redesign removed
+        # from `CombinedExtractor`/algorithm constructors; this one stays,
+        # since it is about how obs are stored, not how they are encoded.
         image_keys: Sequence[str],
         frame_stack: int,
         storage_device: torch.device | str = "cuda",
@@ -75,7 +82,7 @@ class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
     ) -> None:
         self.image_keys = tuple(image_keys)
         if not self.image_keys:
-            raise ValueError("MemoryEfficientDictReplayBuffer requires image_keys.")
+            raise ValueError("MemoryEfficientReplayBuffer requires image_keys.")
         if frame_stack < 2:
             raise ValueError("frame_stack must be at least 2")
         self.frame_stack = int(frame_stack)
@@ -151,7 +158,7 @@ class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
             shape = tuple(obs[key].shape)
             if len(shape) < 2 or shape[1] != self.frame_stack:
                 raise ValueError(
-                    f"MemoryEfficientDictReplayBuffer requires obs['{key}'] to arrive "
+                    f"MemoryEfficientReplayBuffer requires obs['{key}'] to arrive "
                     f"pre-stacked with a leading (N, {self.frame_stack}, ...) shape "
                     f"from ImageFrameStackWrapper -- got shape {shape}."
                 )
@@ -171,7 +178,7 @@ class MemoryEfficientDictReplayBuffer(DictReplayBuffer):
         # mmap-backed (torch.from_numpy(memmap)) when mmap_dir is set --
         # rebinding via `self._x = self._x + ...` would silently detach the
         # attribute from the underlying memmap after the first add(), losing
-        # persistence with no error. See NStepDictReplayBuffer.add() for the
+        # persistence with no error. See NStepReplayBuffer.add() for the
         # same pattern.
         self._current_ep_id += done_bool.long()
         self._current_step_id.copy_(

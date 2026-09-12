@@ -43,7 +43,7 @@ Formulas verified against ``3rd_party/qgf/agents/qgf.py`` directly:
 - **Critic loss** (``qgf.py:83-94``): ``target_q = rewards + discount**H *
   masks * next_v`` where ``next_v = value(next_obs)`` -- a straight
   V-network bootstrap, not a Q-ensemble one. Maps directly onto
-  ``ChunkedTensorReplayBuffer``'s ``rewards``/``discounts`` fields (which
+  ``ChunkedReplayBuffer``'s ``rewards``/``discounts`` fields (which
   already fold ``discount**H * masks[...,-1]`` together for both
   ``horizon_length=1`` and ``>1``).
 - **Value loss** (``qgf.py:96-106``): expectile regression of ``V(obs)``
@@ -54,7 +54,7 @@ Formulas verified against ``3rd_party/qgf/agents/qgf.py`` directly:
   both with ``valid[...,-1]`` (whole-window discard for windows that ran
   past a terminal). This port omits it, for the same reason
   ``ACRLPDCore``/``ACFQLCore`` already omit the analogous masking on this
-  buffer: ``ChunkedTensorReplayBuffer`` stops reward/discount accumulation
+  buffer: ``ChunkedReplayBuffer`` stops reward/discount accumulation
   exactly at the first true terminal (see its module docstring), so the
   target it produces is already correct/unbiased for every sampled window --
   QC's own ``valid[...,-1]``-discard convention is redundant on top of that,
@@ -79,6 +79,7 @@ generalizing shipped, tested ``IQL`` to support features it doesn't need.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
@@ -87,20 +88,15 @@ import torch.nn.functional as F
 from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.chunked_dict_replay_buffer import ChunkedDictReplayBuffer
-from rl_garden.buffers.chunked_replay_buffer import ChunkedTensorReplayBuffer
+from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.qgf_policy import (
     DenoisedActionApprox,
     QGFPolicy,
@@ -139,7 +135,6 @@ class QGFCore:
         actor_num_samples: int = 32,
         robust_critic_lr: float = 3e-4,
         robust_critic_t_emb_size: int = 16,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
         net_arch: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -190,7 +185,6 @@ class QGFCore:
         self.actor_num_samples = actor_num_samples
         self.robust_critic_lr = robust_critic_lr
         self.robust_critic_t_emb_size = robust_critic_t_emb_size
-        self.image_encoder_factory = image_encoder_factory
         self.net_arch: list[int] = (
             list(net_arch) if net_arch is not None else [512, 512, 512, 512]
         )
@@ -237,6 +231,14 @@ class QGFCore:
             "robust_critic_t_emb_size": self.robust_critic_t_emb_size,
             "net_arch": self.net_arch,
             "activation_fn": self.activation_fn,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -255,53 +257,22 @@ class QGFCore:
                 sched.load_state_dict(sched_state)
 
     def _policy_action_space(self) -> spaces.Box:
-        raw = self.env.single_action_space
-        assert isinstance(raw, spaces.Box), "QGF requires a flat Box action space."
-        low = np.tile(np.asarray(raw.low, dtype=np.float32).reshape(-1), self.horizon_length)
-        high = np.tile(np.asarray(raw.high, dtype=np.float32).reshape(-1), self.horizon_length)
+        action_space = self.env.single_action_space
+        assert isinstance(action_space, spaces.Box), "QGF requires a flat Box action space."
+        low = np.tile(np.asarray(action_space.low, dtype=np.float32).reshape(-1), self.horizon_length)
+        high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
         return spaces.Box(low=low, high=high, dtype=np.float32)
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        return CombinedExtractor
-
-    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
-        if isinstance(self.env.single_observation_space, spaces.Dict):
-            return {
-                "image_encoder_factory": (
-                    self.image_encoder_factory or default_image_encoder_factory()
-                ),
-            }
-        return {}
-
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(
-            observation_space=self.env.single_observation_space,
-            **self._default_features_extractor_kwargs(),
-        )
+        return self._resolve_observation_encoders(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        ).actor
 
     def _build_replay_buffer(self):
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            return ChunkedDictReplayBuffer(
-                observation_space=obs_space,
-                action_space=self.env.single_action_space,
-                num_envs=self.num_envs,
-                buffer_size=self.buffer_size,
-                horizon_length=self.horizon_length,
-                gamma=self.gamma,
-                storage_device=self.buffer_device,
-                sample_device=self.device,
-            )
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"QGF supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
-        return ChunkedTensorReplayBuffer(
-            observation_space=obs_space,
+        # obs_space is always Dict (boundary normalization is unconditional).
+        return ChunkedReplayBuffer(
+            observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
@@ -313,10 +284,6 @@ class QGFCore:
 
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(
-                f"QGF supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
         features_extractor = self._build_features_extractor()
         self.policy = QGFPolicy(
             observation_space=obs_space,
@@ -524,6 +491,11 @@ class QGF(QGFCore, OfflineRLAlgorithm):
     denoising at inference. See module docstring."""
 
     _compatible_checkpoint_algorithms = ("QGF",)
+    # The single shared encoder is trained by the combined
+    # critic+value+bc-actor loss in one backward() (see _compute_losses),
+    # never stop-gradiented on the actor path -- this is the mixin's
+    # "shared" convention, not the off-policy default "shared_critic_grad".
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -559,7 +531,6 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         actor_num_samples: int = 32,
         robust_critic_lr: float = 3e-4,
         robust_critic_t_emb_size: int = 16,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
         net_arch: Optional[Sequence[int]] = None,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -567,6 +538,9 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -626,7 +600,6 @@ class QGF(QGFCore, OfflineRLAlgorithm):
             actor_num_samples=actor_num_samples,
             robust_critic_lr=robust_critic_lr,
             robust_critic_t_emb_size=robust_critic_t_emb_size,
-            image_encoder_factory=image_encoder_factory,
             net_arch=net_arch,
             actor_use_layer_norm=actor_use_layer_norm,
             critic_use_layer_norm=critic_use_layer_norm,
@@ -635,9 +608,8 @@ class QGF(QGFCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(f"QGF supports Box or Dict observation spaces, got {type(obs_space)}")
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
 
         self._setup_model()

@@ -24,7 +24,15 @@ class IsaacLabBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.isaaclab import IsaacLabEnvConfig
+        from rl_garden.observations.schema import ObservationContractError
 
+        obs = req.observation
+        if obs.image_size is not None:
+            raise ObservationContractError(
+                f"isaaclab backend cannot set image_size={obs.image_size!r}; camera "
+                "resolution is fixed by the task registration (see "
+                "RLGardenDirectRLEnv-scaffold task docstrings)"
+            )
         il = req.backend_config  # IsaacLabConfig or None
         return IsaacLabEnvConfig(
             env_id=req.env_id,
@@ -32,8 +40,9 @@ class IsaacLabBackend(EnvBackend):
             seed=req.seed,
             headless=il.headless if il is not None else True,
             sim_device=il.sim_device if il is not None else "cuda:0",
-            obs_mode=req.obs_mode,
-            frame_stack=req.frame_stack,
+            is_visual=obs.is_visual,
+            state=obs.state,
+            frame_stack=obs.frame_stack,
             env_kwargs=(
                 json.loads(il.env_kwargs_json) if il is not None and il.env_kwargs_json else {}
             ),

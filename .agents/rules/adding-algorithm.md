@@ -145,27 +145,48 @@ All network tensors and replay buffers must stay on `self.device`; CPU-backed
 env observations are moved by `_obs_to_policy_device()` before inference — no
 ad-hoc `.cuda()` calls. Avoid NumPy in rollout/replay/update hot paths.
 
-### 5. Dict-obs (vision) support
+### 5. Observation encoding (`ObservationEncoderMixin`)
 
-Two separate paths — do not mix them:
+Every algorithm is observation-type agnostic: it never branches on
+`isinstance(obs_space, spaces.Box/Dict)`. Observation space is always
+`spaces.Dict` with keys `state`/`rgb_<cam>`/`depth_<cam>`
+(`rl_garden.observations`); a state-only Box is normalized to
+`Dict({"state": Box})` before an algorithm ever sees it.
 
-- **Off-policy / off2on family**: call
-  `Off2OnReplayMixin._configure_observation_kwargs(env,
-  image_encoder_factory=..., image_keys=..., ...)` before `super().__init__()`
-  (sets `self._is_dict_obs` and image attributes read by `_setup_model()`);
-  validates Box/Dict and wires images through `CombinedExtractor`
-  (`rl_garden/encoders/combined.py`). Plain `OffPolicyAlgorithm` classes not
-  using `Off2OnReplayMixin` do the equivalent Box/Dict branch inline (see
-  `SAC`).
-- **Imitation family**: vision is just a different observation — Dict-obs
-  support is always an in-class `isinstance(obs_space, spaces.Box/Dict)`
-  branch, never a `Vision*` sibling class (see `FlowBC` and `DiffusionBC`).
+`ObservationEncoderMixin` (`rl_garden/algorithms/_observation.py`) sits on
+`BaseAlgorithm`, so every algorithm gets it for free. A concrete algorithm
+opts in by:
 
-Run-file helpers that build image kwargs from CLI args: online/off2on use
-`image_encoder_factory_from_args`, `image_keys_from_env`,
-`vit_sac_kwargs_from_args` (`rl_garden/common/cli_args.py`); the offline generic
-runner uses `discover_image_keys(obs_space)` from `rl_garden.encoders` when
-`isinstance(obs_space, spaces.Dict)`.
+1. Accepting `encoder_config: EncoderConfig | None = None`,
+   `obs_groups: ObsGroups | None = None`, and — only if it supports an
+   asymmetric/privileged critic — `critic_encoder_config: EncoderConfig |
+   None = None` as constructor kwargs, and storing them as
+   `self.encoder_config`/`self.obs_groups`/`self.critic_encoder_config`.
+2. Calling `self._resolve_observation_encoders(observation_space)` from its
+   own `_setup_model()`. This builds the actor's (and, when
+   `encoder_sharing == "separate"`, the critic's own) feature extractor via
+   the Layer B factory (`rl_garden.encoders.build_observation_encoder`) and
+   stores the result on `self.observation_encoders`.
+3. Calling `self._actor_features(obs)` / `self._critic_features(obs)` in its
+   `train()`/inference code instead of hand-rolling encoder calls.
+   `_actor_features` defaults to detaching gradients when
+   `encoder_sharing == "shared_critic_grad"`.
+4. Optionally overriding the class attribute `encoder_sharing:
+   Literal["shared_critic_grad", "shared", "separate"]` (default
+   `"shared_critic_grad"` — used by almost every algorithm, PPO included:
+   the actor path is still stop-gradiented even on-policy) — `"shared"`
+   (both actor and critic losses train the one shared encoder) is only used
+   by IDQL/QGF, which have no `encoder_sharing="shared_critic_grad"`-style
+   actor/critic split to begin with; `"separate"` is needed whenever
+   `obs_groups.actor != obs_groups.critic` or a distinct
+   `critic_encoder_config` is given.
+
+See `SAC` (`rl_garden/algorithms/sac.py`) for the reference implementation.
+There is no separate vision-specific wiring path and no `Vision*` sibling
+class — a `Dict` observation with `rgb_<cam>`/`depth_<cam>` keys is handled
+by the same code path as a state-only one, driven entirely by
+`encoder_config`/`obs_groups` and the schema derived from the observation
+space.
 
 ### 6. Export the class
 
@@ -182,34 +203,19 @@ imports plus the `Args` dataclass and `registry.register(...)` go at the
 disabled repo-wide, so no `# noqa: E402` comments are needed there.
 
 ```python
-def _my_algo_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    is_visual = args.obs_mode != "state"
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        num_eval_envs=args.num_eval_envs,
-        eval_record_dir=resolve_eval_record_dir(args, run_name),
-        num_eval_steps=args.num_eval_steps,
-        create_eval_env=should_create_eval_env(args),  # required on every online env request
-        backend_config=args.resolve_backend_config(),
-        ...
-    )
-
 # MUST go through construct_agent, not MyAlgo(...) directly -- it records the
 # constructor call for --print-config/--dry-run; materialize_config raises if
 # no build was recorded, on every run.
 def build_my_algo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms.my_algo import MyAlgo
+    from rl_garden.common.cli_args import resolve_critic_encoder_config
     from rl_garden.training.inspection import construct_agent
 
     agent = construct_agent(
         MyAlgo, env=env, eval_env=eval_env, my_lr=args.my_lr, seed=args.seed,
+        encoder_config=args.encoder if args.obs.is_visual else None,
+        obs_groups=args.obs_groups, critic_encoder_config=resolve_critic_encoder_config(args),
+        encoder_sharing=args.encoder_sharing,
         logger=logger, checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq, save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint, ...
@@ -219,9 +225,10 @@ def build_my_algo(args, env, eval_env, logger, checkpoint_dir):
     return agent
 
 def run_my_algo(args: "MyAlgoArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
-    run_online(args, obs_tag="rgbd" if args.obs_mode != "state" else "state",
-               make_env_request=_my_algo_env_request, build_agent=build_my_algo)
+    run_online(args, obs_tag="rgbd" if args.obs.is_visual else "state",
+               make_env_request=make_env_request, build_agent=build_my_algo)
                # post_learn=lambda agent: ...  # optional cleanup after learn()
 
 # ---------------------------------------------------------------------------
@@ -250,14 +257,20 @@ reusing another algorithm's `Args` dataclass fails at import time, so give
 ### `MyAlgoTrainingArgs` in `_args.py`
 
 Hyperparameters belong in `rl_garden/training/online/_args.py`, not inline in
-the run file (unless the algorithm is a one-off). Use the double-layer pattern
-when state-obs and visual-obs need different resource budgets:
-`MyAlgoTrainingArgs(EnvRunArgs, CheckpointArgs)` for state-obs defaults,
-`VisionMyAlgoTrainingArgs(MyAlgoTrainingArgs, VisionArgs)` overriding fields
-that need tighter GPU-memory budgets (e.g. smaller `buffer_size`). Final
-composition: `MyAlgoArgs(VisionMyAlgoTrainingArgs, EnvBackendArgs)` when the
-algorithm supports visual observations, else `MyAlgoArgs(MyAlgoTrainingArgs,
-EnvBackendArgs)`.
+the run file (unless the algorithm is a one-off). Any algorithm that accepts
+observations mixes in `ObservationArgs` (`rl_garden/common/cli_args.py`,
+adds `obs`/`encoder`/`obs_groups`/`critic_encoder`/`encoder_sharing`):
+`MyAlgoTrainingArgs(EnvRunArgs, CheckpointArgs)` for the algorithm's own
+hyperparameters, `VisionMyAlgoTrainingArgs(MyAlgoTrainingArgs,
+ObservationArgs)` adding the observation surface (see `VisionSACTrainingArgs`
+for the reference). `obs` defaults to state-only, so this one class now
+serves both state and visual runs -- unlike the old `VisionArgs`, mixing it
+in no longer changes the observation default. Keep the two-layer split only
+when the algorithm genuinely needs a different resource budget under either
+class regardless of obs choice (e.g. `VisionSACTrainingArgs` overriding
+`buffer_size`/`batch_size`/`utd`); otherwise mix `ObservationArgs` straight
+into the one `MyAlgoTrainingArgs`. Final composition:
+`MyAlgoArgs(VisionMyAlgoTrainingArgs, EnvBackendArgs)`.
 
 ---
 
@@ -283,23 +296,17 @@ class MyAlgoArgs(OfflineCommonArgs, MyAlgoOfflineArgs):
     """MyAlgo offline pretraining."""
 
 def build_my_algo(args, env_spec, logger, eval_env=None):
-    from gymnasium import spaces
-
     from rl_garden.algorithms import MyAlgo
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
-    from rl_garden.encoders import discover_image_keys
+    from rl_garden.common.cli_args import resolve_critic_encoder_config
     from rl_garden.training.inspection import construct_agent
 
-    kwargs = dict(env=env_spec, my_lr=args.my_lr, seed=args.seed, logger=logger,
-                  eval_env=eval_env, checkpoint_dir=None, checkpoint_freq=0, ...)
-    obs_space = env_spec.single_observation_space
-    if isinstance(obs_space, spaces.Dict):  # discover_image_keys is the offline-side counterpart
-        kwargs.update(                      # of online's image_keys_from_env
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=discover_image_keys(obs_space),
-            state_key="state",
-        )
-    return construct_agent(MyAlgo, **kwargs)
+    return construct_agent(
+        MyAlgo, env=env_spec, my_lr=args.my_lr, seed=args.seed, logger=logger,
+        eval_env=eval_env, checkpoint_dir=None, checkpoint_freq=0,
+        encoder_config=args.encoder if args.obs.is_visual else None,
+        obs_groups=args.obs_groups, critic_encoder_config=resolve_critic_encoder_config(args),
+        encoder_sharing=args.encoder_sharing, ...
+    )
 
 def run_my_algo(args: MyAlgoArgs) -> None:
     from rl_garden.training.offline._runner import run_offline

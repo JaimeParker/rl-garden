@@ -9,8 +9,8 @@ from rl_garden.buffers.transformer_replay_buffer import TransformerReplayBuffer
 from rl_garden.common.obs_utils import index_obs
 
 
-def _obs_space() -> spaces.Box:
-    return spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+def _obs_space() -> spaces.Dict:
+    return spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)})
 
 
 def _action_space() -> spaces.Box:
@@ -41,7 +41,7 @@ def _make_buffer(
 
 def _add_step(buf: TransformerReplayBuffer, t: int, *, done=None, episode_end=None, reward=None):
     num_envs = buf.num_envs
-    obs = torch.full((num_envs, 4), float(t))
+    obs = {"state": torch.full((num_envs, 4), float(t))}
     action = torch.zeros(num_envs, 2)
     reward = torch.zeros(num_envs) if reward is None else reward
     done = torch.zeros(num_envs) if done is None else done
@@ -178,12 +178,12 @@ def test_sample_raises_before_any_checkpoint_ready():
 
 def test_truncation_bootstrap_uses_patched_final_obs_not_reset_obs():
     buf = _make_buffer(num_envs=1, per_env_buffer_size=8, burn_in_len=1, learning_len=1, forward_len=1)
-    true_final_obs = torch.full((1, 4), 999.0)
+    true_final_obs = {"state": torch.full((1, 4), 999.0)}
     for t in range(8):
         if t == 1:
             action = torch.zeros(1, 2)
             reward = torch.zeros(1)
-            obs = torch.full((1, 4), float(t))
+            obs = {"state": torch.full((1, 4), float(t))}
             buf.add(
                 obs, true_final_obs, action, reward,
                 torch.zeros(1), torch.ones(1),  # done=False, episode_end=True
@@ -196,4 +196,4 @@ def test_truncation_bootstrap_uses_patched_final_obs_not_reset_obs():
     idx_grid, env_grid = buf._gather_window(t0, env)
     window_obs = index_obs(buf.obs, (idx_grid, env_grid))
     patched = buf._patch_final_obs(window_obs, idx_grid, env_grid)
-    assert torch.allclose(patched[2, 0], true_final_obs[0])
+    assert torch.allclose(patched["state"][2, 0], true_final_obs["state"][0])

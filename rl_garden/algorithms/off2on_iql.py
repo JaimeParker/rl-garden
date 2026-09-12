@@ -17,7 +17,8 @@ import torch
 from rl_garden.algorithms.iql import _IQLRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.encoders.combined import ImageEncoderFactory
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 
 
 class Off2OnIQL(_IQLRolloutTrainingShell):
@@ -65,14 +66,8 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
         value_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
-        detach_encoder_on_actor: bool = True,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -139,14 +134,8 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
             value_hidden_dims=value_hidden_dims,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
-            image_encoder_factory=image_encoder_factory,
-            image_keys=image_keys,
-            state_key=state_key,
-            use_proprio=use_proprio,
-            proprio_latent_dim=proprio_latent_dim,
-            image_fusion_mode=image_fusion_mode,
-            enable_stacking=enable_stacking,
-            detach_encoder_on_actor=detach_encoder_on_actor,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
             policy_kwargs=policy_kwargs,
             actor_use_layer_norm=actor_use_layer_norm,
             critic_use_layer_norm=critic_use_layer_norm,

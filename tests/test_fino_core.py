@@ -12,6 +12,7 @@ from rl_garden.algorithms import FINO, Off2OnFINO, OfflineEnvSpec
 from rl_garden.algorithms.fino import FINOCore
 from rl_garden.algorithms.fql import FQLCore
 from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 
 # Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
 # images without PlainConv's flatten-layer size mismatch. Mirrors
@@ -20,6 +21,7 @@ _TEST_IMAGE_SIZE = 16
 _test_image_encoder_factory = default_image_encoder_factory(
     features_dim=16, plain_conv_pooling="gap"
 )
+_test_encoder_config = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 _METRIC_KEYS = (
     "critic_loss",
@@ -42,7 +44,7 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict(
             {
-                "rgb": spaces.Box(
+                "rgb_cam": spaces.Box(
                     low=0, high=255, shape=(_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
                 ),
                 "state": spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32),
@@ -68,10 +70,14 @@ def _make_agent(**kwargs) -> FINO:
 
 
 def _fill(agent: FINO, steps: int = 64) -> None:
+    # env.single_observation_space is Dict({"state": Box}) -- OfflineEnvSpec's
+    # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
     env = agent.env
+    state_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
@@ -84,11 +90,11 @@ def _fill_vision(agent: FINO, steps: int = 64) -> None:
     img_shape = (_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3)
     for _ in range(steps):
         obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, *obs_space["state"].shape),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, *obs_space["state"].shape),
         }
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
@@ -100,7 +106,7 @@ def _fill_vision(agent: FINO, steps: int = 64) -> None:
 def _assert_predict_in_bounds(agent: FINO) -> None:
     obs_space = agent.env.single_observation_space
     obs = {
-        "rgb": torch.randint(
+        "rgb_cam": torch.randint(
             0, 256, (1, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=torch.uint8
         ),
         "state": torch.randn(1, *obs_space["state"].shape),
@@ -119,15 +125,15 @@ def test_rejects_unsupported_observation_space():
         spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
         num_envs=1,
     )
-    with pytest.raises(TypeError, match="Box or Dict"):
+    with pytest.raises(ValueError, match="Box or Dict"):
         FINO(env=unsupported, buffer_device="cpu", device="cpu")
 
 
 def test_vision_shared_encoder_smoke():
     agent = _make_agent(
         env=_vision_env(),
-        encoder_sharing="shared",
-        image_encoder_factory=_test_image_encoder_factory,
+        encoder_sharing="shared_critic_grad",
+        encoder_config=_test_encoder_config,
     )
     _fill_vision(agent)
     metrics = agent.train(1, compute_info=True)
@@ -142,7 +148,7 @@ def test_vision_separate_encoder_smoke():
     agent = _make_agent(
         env=_vision_env(),
         encoder_sharing="separate",
-        image_encoder_factory=_test_image_encoder_factory,
+        encoder_config=_test_encoder_config,
     )
     _fill_vision(agent)
     metrics = agent.train(1, compute_info=True)
@@ -240,7 +246,7 @@ def test_predict_deterministic_is_per_observation_argmax():
 
     policy._sample_candidates = fake_sample_candidates
 
-    obs = torch.randn(batch_size, *agent.env.single_observation_space.shape)
+    obs = {"state": torch.randn(batch_size, *agent.env.single_observation_space["state"].shape)}
     action = policy.sample_actions(obs, deterministic=True)
 
     expected = candidates[torch.arange(batch_size), top_idx]
@@ -257,7 +263,7 @@ def test_sample_candidates_rows_own_their_candidates():
     agent = _make_agent(num_samples=4)
     policy = agent.policy
     batch_size, num_samples, action_dim = 3, 4, 3
-    obs = torch.randn(batch_size, *agent.env.single_observation_space.shape)
+    obs = {"state": torch.randn(batch_size, *agent.env.single_observation_space["state"].shape)}
     features = policy.extract_features(obs)
 
     torch.manual_seed(0)
@@ -282,7 +288,7 @@ def test_predict_and_train_with_min_agg():
     metrics = agent.train(1, compute_info=True)
     for key in _METRIC_KEYS:
         assert np.isfinite(metrics[key]), (key, metrics[key])
-    obs = torch.randn(4, *agent.env.single_observation_space.shape)
+    obs = {"state": torch.randn(4, *agent.env.single_observation_space["state"].shape)}
     with torch.no_grad():
         action = agent.policy.predict(obs, deterministic=True)
     assert torch.all(action >= agent.policy.action_low)
@@ -291,7 +297,7 @@ def test_predict_and_train_with_min_agg():
 
 def test_predict_stochastic_shapes_and_bounds():
     agent = _make_agent(num_samples=5)
-    obs = torch.randn(4, *agent.env.single_observation_space.shape)
+    obs = {"state": torch.randn(4, *agent.env.single_observation_space["state"].shape)}
     with torch.no_grad():
         action = agent.policy.predict(obs, deterministic=False)
     assert action.shape == (4, 3)
@@ -307,7 +313,7 @@ def test_num_samples_one_degenerates_to_plain_onestep_draw():
     agent = _make_agent(num_samples=1)
     policy = agent.policy
     batch_size = 3
-    obs = torch.randn(batch_size, *agent.env.single_observation_space.shape)
+    obs = {"state": torch.randn(batch_size, *agent.env.single_observation_space["state"].shape)}
 
     for deterministic in (True, False):
         torch.manual_seed(0)

@@ -134,17 +134,18 @@ def test_pin_backend_config_device_rewrites_when_ddp_active():
 
 def _pin_backend_device_via_cli_entrypoint_worker(rank: int, world_size: int, port: int) -> None:
     """pin_backend_config_device must rewrite the *real* backend_config object
-    reached via _ppo_env_request(args, run_name) -- not just a config
+    reached via make_env_request(args, run_name) -- not just a config
     instance built directly in a test, which wouldn't catch a frozen
     dataclass or another mutability obstacle on the real call path."""
     _init_gloo(rank, world_size, port)
-    from rl_garden.training.online.ppo import PPOArgs, _ppo_env_request
+    from rl_garden.common.env_args import make_env_request
+    from rl_garden.training.online.ppo import PPOArgs
 
     args = PPOArgs(
-        env_backend="isaaclab", eval_freq=0, log_freq=0, obs_mode="state",
+        env_backend="isaaclab", eval_freq=0, log_freq=0,
         num_envs=4, num_eval_envs=4,
     )
-    req = _ppo_env_request(args, "testrun")
+    req = make_env_request(args, "testrun")
     assert req.backend_config.sim_device == "cuda:0"
 
     pin_backend_config_device(req.backend_config, rank)

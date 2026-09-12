@@ -67,7 +67,8 @@ def test_iql_antmaze_paper_preset_resolves_key_values(tmp_path):
     assert inputs["dataset_backend"] == "d4rl_legacy"
     assert inputs["env_id"] == "antmaze-medium-play-v2"
     assert inputs["offline_dataset"] == "antmaze-medium-play-v2"
-    assert inputs["obs_mode"] == "state"
+    assert inputs["obs"]["state"] is True
+    assert inputs["obs"]["rgb"] == []
     assert inputs["seed"] == 0
     assert inputs["actor_lr"] == 0.0001
     assert inputs["critic_value_lr"] == 0.0003

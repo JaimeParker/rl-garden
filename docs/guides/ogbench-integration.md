@@ -75,10 +75,16 @@ own default-task table.
 
 ## Pixel (visual-*) observations
 
-Pixel envs return a single flat `Box(0, 255, (H, W, C), uint8)` per env, not
-a per-camera Dict. rl-garden's `ImageFrameStackWrapper` only supports
-Dict-keyed `rgb`/`depth` observations, so **frame stacking is out of scope
-for this integration** — pixel observations pass through as a flat Box.
+OGBench's own API exposes no named camera for pixel envs, so this backend
+fixes the single pixel key as `rgb_ogbench` — matching the offline dataset
+loader's own fixed key so online/offline observation spaces agree. Pass
+`--obs.rgb ogbench --obs.no-state` (exactly that one camera name, no
+`--obs.depth`, state disabled) for a `visual-*` env id; the backend raises
+`ObservationContractError` if `--obs.rgb` is anything else, `--obs.depth` is
+set, `--obs.state` stays enabled, or `--obs.image_size` is set (pixel
+resolution is fixed by `env_id`, not runtime-selectable). `--obs.frame_stack`
+is supported (stacks `rgb_ogbench` into a leading time dimension via
+`ImageFrameStackWrapper`).
 Set `--ogbench.vectorization async` for `visual-*` env ids: each env
 instance owns its own MuJoCo renderer/GL context, and running each in its
 own OS process sidesteps the same context-sharing risk the `mujoco`
@@ -91,7 +97,6 @@ Manipulation task (arm manipulation, `cube-single`):
 ```bash
 python examples/train_online.py rlpd \
   --env-backend ogbench --env-id cube-single-singletask-v0 \
-  --obs-mode state \
   --dataset-backend ogbench --offline-dataset cube-single-play-singletask-v0 \
   --num-envs 4 --num-eval-envs 2 \
   --total-timesteps 100000 --learning-starts 1000 --batch-size 256
@@ -102,7 +107,6 @@ Locomotion task (`antmaze-large`):
 ```bash
 python examples/train_online.py rlpd \
   --env-backend ogbench --env-id antmaze-large-singletask-task1-v0 \
-  --obs-mode state \
   --dataset-backend ogbench --offline-dataset antmaze-large-navigate-singletask-task1-v0 \
   --num-envs 4 --num-eval-envs 2 \
   --total-timesteps 100000 --learning-starts 1000 --batch-size 256
@@ -114,7 +118,7 @@ Pixel task (`visual-antmaze-medium`), `async` vectorization:
 python examples/train_online.py rlpd \
   --env-backend ogbench --env-id visual-antmaze-medium-singletask-task1-v0 \
   --ogbench.vectorization async \
-  --obs-mode rgb \
+  --obs.rgb ogbench --obs.no-state \
   --dataset-backend ogbench --offline-dataset visual-antmaze-medium-navigate-singletask-task1-v0 \
   --num-envs 4 --num-eval-envs 2 \
   --total-timesteps 100000 --learning-starts 1000 --batch-size 256
@@ -205,8 +209,6 @@ mujoco/dm_control install required).
 
 ## Current limits
 
-- No frame stacking for `visual-*` env ids (flat-Box passthrough only —
-  see above).
 - `cube-octuple` has no standard hosted singletask dataset through
   `ogbench.download_datasets`'s normal naming (only a manually-downloaded
   100M-transition dataset); the env itself is fully supported for online

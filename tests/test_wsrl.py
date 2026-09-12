@@ -1,4 +1,5 @@
 """Unit tests for WSRL algorithm with CQL/Cal-QL support."""
+import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
@@ -35,8 +36,8 @@ def simple_env():
     """Create a simple mock environment for testing."""
     env = MagicMock()
     env.num_envs = 2
-    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
-    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
     return env
 
 
@@ -110,8 +111,8 @@ class TestWSRLCreation:
         assert wsrl_agent.policy.critic_subsample_size == 2
 
     def test_replay_buffer_is_mc_buffer(self, wsrl_agent):
-        from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
-        assert isinstance(wsrl_agent.replay_buffer, MCTensorReplayBuffer)
+        from rl_garden.buffers.mc_buffer import MCReplayBuffer
+        assert isinstance(wsrl_agent.replay_buffer, MCReplayBuffer)
         assert wsrl_agent.replay_buffer.gamma == 0.99
 
     def test_optimizers_created(self, wsrl_agent):
@@ -265,8 +266,8 @@ class TestWSRLHelperMethods:
         wsrl_agent.online_cql_alpha = 5.0
         for _ in range(5):
             wsrl_agent.replay_buffer.add(
-                torch.randn(2, 4),
-                torch.randn(2, 4),
+                {"state": torch.randn(2, 4)},
+                {"state": torch.randn(2, 4)},
                 torch.randn(2, 2),
                 torch.ones(2),
                 torch.zeros(2),
@@ -359,7 +360,7 @@ class TestCQLLossComputation:
 
     def test_sample_n_actions_with_log_probs(self, wsrl_agent):
         """Verify the vectorized n-action sampler returns actions AND log_probs."""
-        obs = torch.randn(8, 4)
+        obs = {"state": torch.randn(8, 4)}
         actions, log_probs = wsrl_agent._sample_n_actions_with_log_probs(
             obs, n=wsrl_agent.cql_n_actions
         )
@@ -388,8 +389,8 @@ class TestCQLLossComputation:
         both, the two distributions would be identical.
         """
         torch.manual_seed(0)
-        obs_a = torch.zeros(64, 4)
-        obs_b = torch.ones(64, 4) * 5.0  # very different from obs_a
+        obs_a = {"state": torch.zeros(64, 4)}
+        obs_b = {"state": torch.ones(64, 4) * 5.0}  # very different from obs_a
         a, _ = wsrl_agent._sample_n_actions_with_log_probs(obs_a, n=8)
         b, _ = wsrl_agent._sample_n_actions_with_log_probs(obs_b, n=8)
         # Distinct inputs should produce distinct mean actions in expectation.
@@ -400,8 +401,8 @@ class TestCQLLossComputation:
         from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.ones(8),
             dones=torch.zeros(8),
@@ -437,8 +438,8 @@ class TestCQLLossComputation:
             device="cpu",
         )
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.ones(8),
             dones=torch.zeros(8),
@@ -461,8 +462,8 @@ class TestCQLLossComputation:
         from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.ones(8),
             dones=torch.zeros(8),
@@ -490,8 +491,8 @@ class TestCQLLossComputation:
         from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.ones(8),
             dones=torch.zeros(8),
@@ -508,7 +509,7 @@ class TestWSRLTraining:
     """Test WSRL training methods."""
 
     def test_critic_forward(self, wsrl_agent):
-        obs = torch.randn(8, 4)
+        obs = {"state": torch.randn(8, 4)}
         actions = torch.randn(8, 2)
 
         q_values = wsrl_agent._critic_forward(obs, actions, target=False)
@@ -518,8 +519,8 @@ class TestWSRLTraining:
         from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.ones(8),
             dones=torch.zeros(8),
@@ -533,8 +534,8 @@ class TestWSRLTraining:
         from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.zeros(8),
             dones=torch.zeros(8),
@@ -562,8 +563,8 @@ class TestWSRLTraining:
         from rl_garden.buffers.mc_buffer import MCReplayBufferSample
 
         data = MCReplayBufferSample(
-            obs=torch.randn(8, 4),
-            next_obs=torch.randn(8, 4),
+            obs={"state": torch.randn(8, 4)},
+            next_obs={"state": torch.randn(8, 4)},
             actions=torch.randn(8, 2),
             rewards=torch.ones(8),
             dones=torch.zeros(8),
@@ -579,14 +580,14 @@ class TestWSRLTraining:
         assert "predicted_q" in info
 
     def test_actor_loss(self, wsrl_agent):
-        obs = torch.randn(8, 4)
+        obs = {"state": torch.randn(8, 4)}
         actor_loss, log_prob = wsrl_agent._actor_loss(obs)
 
         assert actor_loss.shape == ()
         assert log_prob.shape == (8, 1)
 
     def test_actor_loss_uses_all_critics(self, wsrl_agent, monkeypatch):
-        obs = torch.randn(8, 4)
+        obs = {"state": torch.randn(8, 4)}
         seen_subsample_sizes = []
         original_min_q_value = wsrl_agent.policy.min_q_value
 
@@ -604,8 +605,8 @@ class TestWSRLTraining:
         # Add some data to replay buffer, closing the trajectory on the last
         # step -- the MC buffer only samples complete trajectories.
         for step in range(20):
-            obs = torch.randn(2, 4)
-            next_obs = torch.randn(2, 4)
+            obs = {"state": torch.randn(2, 4)}
+            next_obs = {"state": torch.randn(2, 4)}
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
             dones = torch.ones(2) if step == 19 else torch.zeros(2)
@@ -623,8 +624,8 @@ class TestWSRLTraining:
         """Verify high-UTD path runs ``utd_ratio`` critic updates per actor update."""
         # Add data to replay buffer, closing the trajectory on the last step.
         for step in range(20):
-            obs = torch.randn(2, 4)
-            next_obs = torch.randn(2, 4)
+            obs = {"state": torch.randn(2, 4)}
+            next_obs = {"state": torch.randn(2, 4)}
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
             dones = torch.ones(2) if step == 19 else torch.zeros(2)
@@ -642,8 +643,8 @@ class TestWSRLTraining:
     def test_train_dispatches_high_utd(self, wsrl_agent):
         """Normal train() should use high-UTD grouping when utd is an integer > 1."""
         for step in range(20):
-            obs = torch.randn(2, 4)
-            next_obs = torch.randn(2, 4)
+            obs = {"state": torch.randn(2, 4)}
+            next_obs = {"state": torch.randn(2, 4)}
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
             dones = torch.ones(2) if step == 19 else torch.zeros(2)
@@ -656,8 +657,8 @@ class TestWSRLTraining:
     def test_train_high_utd_invalid_ratio(self, wsrl_agent):
         """Non-divisible utd_ratio should raise."""
         for _ in range(10):
-            obs = torch.randn(2, 4)
-            next_obs = torch.randn(2, 4)
+            obs = {"state": torch.randn(2, 4)}
+            next_obs = {"state": torch.randn(2, 4)}
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
             dones = torch.zeros(2)
@@ -709,13 +710,13 @@ class TestMixedBatchSampling:
         trajectory -- the MC buffer only samples complete trajectories.
         """
         n = buffer.num_envs
-        obs_dim = buffer.obs.shape[-1]
+        obs_dim = buffer.obs["state"].shape[-1]
         act_dim = buffer.actions.shape[-1]
         for step in range(num_steps):
             is_last = step == num_steps - 1
             buffer.add(
-                torch.full((n, obs_dim), marker),
-                torch.full((n, obs_dim), marker + 1.0),
+                {"state": torch.full((n, obs_dim), marker)},
+                {"state": torch.full((n, obs_dim), marker + 1.0)},
                 torch.zeros(n, act_dim),
                 torch.zeros(n),
                 torch.ones(n) if is_last else torch.zeros(n),
@@ -743,8 +744,8 @@ class TestMixedBatchSampling:
         self._fill_buffer(wsrl_agent.replay_buffer, 5, marker=99.0)
         sample = wsrl_agent._sample_batch(wsrl_agent.batch_size)
         # batch_size=8, ratio=0.25 → 2 from offline (marker=10), 6 from online (marker=99)
-        offline_count = (sample.obs[:, 0] == 10.0).sum().item()
-        online_count = (sample.obs[:, 0] == 99.0).sum().item()
+        offline_count = (sample.obs["state"][:, 0] == 10.0).sum().item()
+        online_count = (sample.obs["state"][:, 0] == 99.0).sum().item()
         assert offline_count + online_count == wsrl_agent.batch_size
         assert offline_count == 2
         assert online_count == 6
@@ -772,7 +773,7 @@ class TestLossHookComposition:
         # Fill buffer, closing the trajectory on the last step.
         for step in range(5):
             agent.replay_buffer.add(
-                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                {"state": torch.randn(2, 4)}, {"state": torch.randn(2, 4)}, torch.randn(2, 2),
                 torch.randn(2), torch.ones(2) if step == 4 else torch.zeros(2),
             )
         data = agent.replay_buffer.sample(8)
@@ -807,7 +808,7 @@ class TestLossHookComposition:
         )
         for step in range(5):
             agent.replay_buffer.add(
-                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                {"state": torch.randn(2, 4)}, {"state": torch.randn(2, 4)}, torch.randn(2, 2),
                 torch.randn(2), torch.ones(2) if step == 4 else torch.zeros(2),
             )
         data = agent.replay_buffer.sample(8)
@@ -820,7 +821,7 @@ class TestLossHookComposition:
         """Direct call to _cql_regularizer returns the same value as _cql_loss alias."""
         for step in range(5):
             wsrl_agent.replay_buffer.add(
-                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                {"state": torch.randn(2, 4)}, {"state": torch.randn(2, 4)}, torch.randn(2, 2),
                 torch.randn(2), torch.ones(2) if step == 4 else torch.zeros(2),
             )
         data = wsrl_agent.replay_buffer.sample(8)
@@ -864,8 +865,8 @@ class TestLossHookComposition:
 
         for step in range(5):
             agent.replay_buffer.add(
-                torch.randn(2, 4),
-                torch.randn(2, 4),
+                {"state": torch.randn(2, 4)},
+                {"state": torch.randn(2, 4)},
                 torch.randn(2, 2),
                 torch.randn(2),
                 torch.ones(2) if step == 4 else torch.zeros(2),
@@ -957,7 +958,7 @@ class TestCompilePath:
         for step in range(n_steps):
             is_last = step == n_steps - 1
             agent.replay_buffer.add(
-                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                {"state": torch.randn(2, 4)}, {"state": torch.randn(2, 4)}, torch.randn(2, 2),
                 torch.randn(2), torch.ones(2) if is_last else torch.zeros(2),
             )
 
@@ -1014,7 +1015,7 @@ class TestCompilePath:
         torch.manual_seed(123)
         for step in range(5):
             agent.replay_buffer.add(
-                torch.randn(2, 4), torch.randn(2, 4), torch.randn(2, 2),
+                {"state": torch.randn(2, 4)}, {"state": torch.randn(2, 4)}, torch.randn(2, 2),
                 torch.randn(2), torch.ones(2) if step == 4 else torch.zeros(2),
             )
         torch.manual_seed(7)

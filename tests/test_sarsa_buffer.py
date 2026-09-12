@@ -4,14 +4,20 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers import SarsaMCTensorReplayBuffer
+from rl_garden.buffers import SarsaMCReplayBuffer
 
-OBS_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+OBS_SPACE = spaces.Dict(
+    {"state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)}
+)
 ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
 
-def _make_buffer(buffer_size: int = 10, num_envs: int = 1) -> SarsaMCTensorReplayBuffer:
-    return SarsaMCTensorReplayBuffer(
+def _obs() -> dict:
+    return {"state": torch.randn(1, 4)}
+
+
+def _make_buffer(buffer_size: int = 10, num_envs: int = 1) -> SarsaMCReplayBuffer:
+    return SarsaMCReplayBuffer(
         OBS_SPACE,
         ACT_SPACE,
         num_envs=num_envs,
@@ -30,7 +36,7 @@ def test_next_actions_matches_following_transition_within_an_episode():
         stored_actions.append(a)
         # Mid-episode: done=False, episode_end=False.
         buf.add(
-            torch.randn(1, 4), torch.randn(1, 4), a, torch.randn(1),
+            _obs(), _obs(), a, torch.randn(1),
             torch.zeros(1), episode_end=torch.zeros(1),
         )
 
@@ -51,11 +57,11 @@ def test_next_action_invalid_at_timeout_truncation_unlike_rebrac():
     # Locomotion-style timeout: done=False (TD bootstraps through it), but
     # episode_end=True (MC/SARSA must stop here).
     buf.add(
-        torch.randn(1, 4), torch.randn(1, 4), a0, torch.randn(1),
+        _obs(), _obs(), a0, torch.randn(1),
         torch.zeros(1), episode_end=torch.ones(1),
     )
     buf.add(
-        torch.randn(1, 4), torch.randn(1, 4), a1, torch.randn(1),
+        _obs(), _obs(), a1, torch.randn(1),
         torch.zeros(1), episode_end=torch.zeros(1),
     )
 
@@ -71,11 +77,11 @@ def test_next_action_invalid_at_true_terminal():
     a0 = torch.full((1, 2), 0.0)
     a1 = torch.full((1, 2), 1.0)
     buf.add(
-        torch.randn(1, 4), torch.randn(1, 4), a0, torch.randn(1),
+        _obs(), _obs(), a0, torch.randn(1),
         torch.ones(1), episode_end=torch.ones(1),
     )
     buf.add(
-        torch.randn(1, 4), torch.randn(1, 4), a1, torch.randn(1),
+        _obs(), _obs(), a1, torch.randn(1),
         torch.zeros(1), episode_end=torch.zeros(1),
     )
 
@@ -88,7 +94,7 @@ def test_sample_returns_sarsa_mc_sample_with_expected_shapes():
     for i in range(8):
         done = torch.ones(1) if i == 7 else torch.zeros(1)
         buf.add(
-            torch.randn(1, 4), torch.randn(1, 4), torch.randn(1, 2), torch.randn(1),
+            _obs(), _obs(), torch.randn(1, 2), torch.randn(1),
             done, episode_end=done,
         )
     sample = buf.sample(4)

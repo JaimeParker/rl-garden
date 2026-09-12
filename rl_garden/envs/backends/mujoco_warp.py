@@ -26,6 +26,31 @@ class MujocoWarpBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.mujoco_warp.config import MujocoWarpEnvConfig
+        from rl_garden.observations.schema import ObservationContractError
+
+        # v1 supports exactly one camera (CustomMujocoWarpEnv.CAMERA_NAME =
+        # "main"); see that module's docstring.
+        obs = req.observation
+        if not obs.state:
+            raise ObservationContractError(
+                "mujoco_warp: state=False is not supported -- every "
+                "mujoco_warp task emits a state observation unconditionally "
+                "(there is no per-task hook to omit it)."
+            )
+        unknown = (set(obs.rgb) | set(obs.depth)) - {"main"}
+        if unknown:
+            raise ObservationContractError(
+                f"mujoco_warp: unknown camera(s) {sorted(unknown)!r}; available "
+                "cameras: ['main']"
+            )
+        render_rgb = "main" in obs.rgb
+        render_depth = "main" in obs.depth
+        if obs.image_size is not None:
+            render_height, render_width = obs.image_size
+        elif render_rgb or render_depth:
+            render_height = render_width = 64
+        else:
+            render_height = render_width = None
 
         mjw_cfg = req.backend_config  # MujocoWarpConfig or None
         env_kwargs = (
@@ -38,10 +63,11 @@ class MujocoWarpBackend(EnvBackend):
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
             seed=req.seed,
             device=mjw_cfg.device if mjw_cfg is not None else "cuda:0",
-            camera_width=req.camera_width,
-            camera_height=req.camera_height,
-            render_rgb=req.obs_mode != "state",
-            render_depth=req.obs_mode == "rgbd",
+            render_width=render_width,
+            render_height=render_height,
+            render_rgb=render_rgb,
+            render_depth=render_depth,
+            frame_stack=obs.frame_stack,
             env_kwargs=env_kwargs,
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,

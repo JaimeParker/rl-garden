@@ -5,54 +5,25 @@ from __future__ import annotations
 from typing import Literal
 
 
-def _rlpd_hybrid_env_request(args, run_name):
-    from rl_garden.training.online.rlpd import _rlpd_env_request
-
-    return _rlpd_env_request(args, run_name)
-
-
 def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import RLPDHybrid
-    from rl_garden.common.cli_args import (
-        critic_features_extractor_kwargs_from_args,
-        image_encoder_factory_from_args,
-        image_keys_from_env,
-        vit_sac_kwargs_from_args,
-    )
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
-    is_visual = args.obs_mode != "state"
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
-    image_kwargs: dict = {}
-    if is_visual:
-        factory = image_encoder_factory_from_args(args)
-        image_keys = image_keys_from_env(env, args)
-        sac_kwargs = vit_sac_kwargs_from_args(args, image_keys)
-        policy_kwargs = dict(sac_kwargs.pop("policy_kwargs", {}) or {})
-        if args.critic_encoder:
-            critic_image_keys = image_keys_from_env(
-                env, args, image_key_filter=args.critic_image_keys
-            )
-            policy_kwargs.update(
-                critic_features_extractor_kwargs_from_args(args, critic_image_keys)
-            )
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=args.frame_stack > 1,
-            image_augmentation=args.image_augmentation,
-            random_shift_pad=args.image_random_shift_pad,
-            image_augmentation_seed=args.seed + 1_000_003,
-            critic_backbone_type=args.critic_backbone_type,
-            **sac_kwargs,
-        )
-        if policy_kwargs:
-            image_kwargs["policy_kwargs"] = policy_kwargs
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+        "image_augmentation_seed": args.seed + 1_000_003,
+        "critic_backbone_type": args.critic_backbone_type,
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         RLPDHybrid,
@@ -66,12 +37,12 @@ def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
         # getattr so plain RLPDHybridArgs (sim training) callers are
         # unaffected without needing this field.
         use_grasp_penalty=getattr(args, "use_grasp_penalty", False),
-        # HilSerlArgs-only field (real-robot replay-buffer image dedup).
-        # image_keys reuses the same is_visual-gated computation above --
-        # empty/unused when memory_efficient_buffer is off (the default).
+        # HilSerlArgs-only field (real-robot replay-buffer image dedup). The
+        # buffer's image keys are derived by RLPDHybrid itself from
+        # self.observation_encoders.schema.image_keys -- unused when
+        # memory_efficient_buffer is off (the default).
         memory_efficient_buffer=getattr(args, "memory_efficient_buffer", False),
-        memory_efficient_image_keys=image_keys if is_visual else (),
-        memory_efficient_frame_stack=args.frame_stack,
+        memory_efficient_frame_stack=args.obs.frame_stack,
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         backup_entropy=args.backup_entropy,
@@ -148,6 +119,7 @@ def build_rlpd_hybrid(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_rlpd_hybrid(args: RLPDHybridArgs) -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
     if args.mmap_dir is not None and args.load_replay_buffer:
@@ -155,12 +127,11 @@ def run_rlpd_hybrid(args: RLPDHybridArgs) -> None:
             "--load-replay-buffer is not supported with --mmap-dir; "
             "use --mmap-mode open to resume the disk-backed buffer"
         )
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_rlpd_hybrid_env_request,
+        make_env_request=make_env_request,
         build_agent=build_rlpd_hybrid,
         post_learn=lambda agent: getattr(agent.replay_buffer, "flush", lambda: None)(),
     )

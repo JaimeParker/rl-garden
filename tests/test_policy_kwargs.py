@@ -5,10 +5,13 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import SAC, WSRL
-from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
-from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
+from rl_garden.algorithms import SAC, WSRL, OfflineEnvSpec
+from rl_garden.algorithms.bc import BC
+from rl_garden.buffers import ReplayBuffer
+from rl_garden.buffers.mc_buffer import MCReplayBuffer
 from rl_garden.encoders import BaseFeaturesExtractor, CombinedExtractor, FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObservationContractError, ObsGroups
 
 
 class DummyVecEnv:
@@ -57,8 +60,8 @@ def _state_env() -> DummyVecEnv:
 def _rgbd_env() -> DummyVecEnv:
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
-            "depth": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "depth_cam": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
         }
     )
@@ -69,7 +72,7 @@ def _rgbd_env() -> DummyVecEnv:
 def _image_only_env() -> DummyVecEnv:
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
         }
     )
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -100,7 +103,7 @@ def _agent_kwargs() -> dict[str, object]:
 def test_sac_uses_flatten_extractor_by_default():
     agent = SAC(env=_state_env(), **_agent_kwargs())
     assert isinstance(agent.policy.features_extractor, FlattenExtractor)
-    assert isinstance(agent.replay_buffer, TensorReplayBuffer)
+    assert isinstance(agent.replay_buffer, ReplayBuffer)
 
 
 def test_rollout_obs_on_policy_device_is_noop_for_tensor_obs():
@@ -115,14 +118,13 @@ def test_rollout_obs_on_policy_device_is_noop_for_dict_obs():
     agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
-        image_keys=("rgb",),
     )
     obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
         "state": torch.randn(2, 5),
     }
     moved = agent._obs_to_policy_device(obs)
-    assert moved["rgb"] is obs["rgb"]
+    assert moved["rgb_cam"] is obs["rgb_cam"]
     assert moved["state"] is obs["state"]
     assert all(v.device == agent.device for v in moved.values())
 
@@ -134,6 +136,44 @@ def test_rollout_cpu_obs_moves_to_cuda_policy_device_when_needed():
     moved = agent._obs_to_policy_device(obs)
     assert moved.device.type == "cuda"
     assert obs.device.type == "cpu"
+
+
+def test_sac_features_extractor_kwargs_without_class_raises():
+    with pytest.raises(ValueError, match="features_extractor_class"):
+        SAC(
+            env=_state_env(),
+            **_agent_kwargs(),
+            policy_kwargs={"features_extractor_kwargs": {"features_dim": 23}},
+        )
+
+
+def test_sac_critic_features_extractor_kwargs_without_class_raises():
+    with pytest.raises(ValueError, match="critic_features_extractor_class"):
+        SAC(
+            env=_rgbd_env(),
+            **_agent_kwargs(),
+            policy_kwargs={"critic_features_extractor_kwargs": {"features_dim": 23}},
+        )
+
+
+def test_bc_features_extractor_kwargs_without_class_raises():
+    """Non-SAC-family regression: the guard hoisted into
+    rl_garden.algorithms._policy_kwargs.normalize_policy_kwargs applies to
+    every algorithm that delegates to it, not just SAC."""
+    env = OfflineEnvSpec(
+        spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=1,
+    )
+    with pytest.raises(ValueError, match="features_extractor_class"):
+        BC(
+            env=env,
+            buffer_size=8,
+            buffer_device="cpu",
+            batch_size=2,
+            device="cpu",
+            policy_kwargs={"features_extractor_kwargs": {"features_dim": 23}},
+        )
 
 
 def test_sac_policy_kwargs_can_build_custom_extractor():
@@ -155,47 +195,25 @@ def test_sac_dict_obs_uses_combined_extractor_by_default():
     agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
-        image_keys=("rgb", "depth"),
     )
     assert isinstance(agent.policy.features_extractor, CombinedExtractor)
-    assert isinstance(agent.replay_buffer, DictReplayBuffer)
+    assert isinstance(agent.replay_buffer, ReplayBuffer)
 
 
 def test_sac_image_only_dict_obs_uses_combined_extractor():
     agent = SAC(
         env=_image_only_env(),
         **_agent_kwargs(),
-        image_keys=("rgb",),
     )
     extractor = agent.policy.features_extractor
     assert isinstance(extractor, CombinedExtractor)
-    assert extractor.image_keys == ("rgb",)
+    assert extractor.image_keys == ("rgb_cam",)
     assert extractor.has_state is False
 
 
-def test_sac_dict_vector_keys_are_flattened():
-    agent = SAC(env=_dict_vector_env(), **_agent_kwargs())
-    extractor = agent.policy.features_extractor
-    assert isinstance(extractor, CombinedExtractor)
-    assert "extra" in extractor.vector_extractors
-    assert extractor.features_dim == 64 + 3
-
-
-def test_sac_image_encoder_factory_still_works():
-    def factory(img_space):
-        return RecordingImageExtractor(img_space, features_dim=19, marker="legacy")
-
-    agent = SAC(
-        env=_rgbd_env(),
-        **_agent_kwargs(),
-        image_keys=("rgb",),
-        image_encoder_factory=factory,
-    )
-    extractor = agent.policy.features_extractor
-    assert isinstance(extractor, CombinedExtractor)
-    assert isinstance(extractor.image_encoder, RecordingImageExtractor)
-    assert extractor.image_encoder.marker == "legacy"
-    assert extractor.image_keys == ("rgb",)
+def test_sac_rejects_unknown_obs_key_in_obs_groups():
+    with pytest.raises(ObservationContractError):
+        SAC(env=_dict_vector_env(), **_agent_kwargs(), obs_groups=ObsGroups(actor=("extra",)))
 
 
 def test_sac_dict_policy_kwargs_can_override_with_custom_extractor():
@@ -213,30 +231,22 @@ def test_sac_dict_policy_kwargs_can_override_with_custom_extractor():
     assert extractor.marker == "rgbd-custom"
 
 
-def test_sac_dict_policy_kwargs_win_over_extractor_args():
-    def legacy_factory(img_space):
-        return RecordingImageExtractor(img_space, features_dim=19, marker="legacy")
-
-    def new_factory(img_space):
-        return RecordingImageExtractor(img_space, features_dim=31, marker="policy")
-
+def test_sac_encoder_config_controls_default_extractor():
+    # Schema-driven default: encoder_config (backbone/fusion knobs) plus the
+    # observation space (which keys exist) fully determine the extractor --
+    # no more (features_extractor_class, features_extractor_kwargs) tuple to
+    # override piecemeal without a class override (see
+    # test_sac_dict_policy_kwargs_can_override_with_custom_extractor for the
+    # full-override escape hatch, which still works unchanged).
     agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
-        image_keys=("rgb", "depth"),
-        image_encoder_factory=legacy_factory,
-        policy_kwargs={
-            "features_extractor_kwargs": {
-                "image_keys": ("rgb",),
-                "image_encoder_factory": new_factory,
-            }
-        },
+        encoder_config=EncoderConfig(image_fusion_mode="per_key"),
     )
     extractor = agent.policy.features_extractor
     assert isinstance(extractor, CombinedExtractor)
-    assert extractor.image_keys == ("rgb",)
-    assert isinstance(extractor.image_encoder, RecordingImageExtractor)
-    assert extractor.image_encoder.marker == "policy"
+    assert set(extractor.image_keys) == {"rgb_cam", "depth_cam"}
+    assert extractor.fusion_mode == "per_key"
 
 
 def test_unknown_policy_kwargs_raise_clear_error():
@@ -284,54 +294,52 @@ def test_sac_net_arch_missing_keys_raises():
         )
 
 
-def test_sac_dict_obs_rejects_actor_encoder_updates():
-    with pytest.raises(ValueError, match="trained only by critic loss"):
-        SAC(
-            env=_rgbd_env(),
-            **_agent_kwargs(),
-            detach_encoder_on_actor=False,
-        )
+def test_sac_encoder_sharing_shared_disables_actor_stop_gradient():
+    # "shared" (unlike the "shared_critic_grad" default) trains the encoder
+    # from both actor and critic losses -- replaces the old hardcoded
+    # detach_encoder_on_actor=False rejection: the redesign makes this a
+    # first-class supported encoder_sharing value, not an error.
+    agent = SAC(env=_rgbd_env(), **_agent_kwargs(), encoder_sharing="shared")
+    assert agent.policy.critic_features_extractor is agent.policy.features_extractor
+    assert agent._actor_stop_gradient() is False
 
 
-def test_sac_box_obs_rejects_image_kwargs():
-    with pytest.raises(ValueError, match="image-related kwargs"):
-        SAC(env=_state_env(), **_agent_kwargs(), image_keys=("rgb",))
-
-    with pytest.raises(ValueError, match="image-related kwargs"):
-        SAC(env=_state_env(), **_agent_kwargs(), use_proprio=False)
+def test_sac_encoder_sharing_shared_critic_grad_stop_gradients_actor():
+    agent = SAC(env=_rgbd_env(), **_agent_kwargs())  # default: shared_critic_grad
+    assert agent._actor_stop_gradient() is True
 
 
-def test_sac_box_checkpoint_metadata_omits_image_fields():
+def test_sac_box_obs_rejects_unknown_obs_group_key():
+    # A Box space normalizes to {"state": Box}; requesting "rgb_cam" in
+    # obs_groups for it is a contract violation (unknown key), replacing the
+    # old hardcoded "Box rejects image kwargs" check.
+    with pytest.raises(ObservationContractError):
+        SAC(env=_state_env(), **_agent_kwargs(), obs_groups=ObsGroups(actor=("rgb_cam",)))
+
+
+def test_sac_checkpoint_metadata_always_includes_encoder_fields():
     agent = SAC(env=_state_env(), **_agent_kwargs())
     meta = agent._checkpoint_metadata()
-    for key in (
-        "image_keys",
-        "state_key",
-        "use_proprio",
-        "proprio_latent_dim",
-        "image_fusion_mode",
-        "enable_stacking",
-        "image_augmentation",
-        "random_shift_pad",
-        "image_augmentation_seed",
-    ):
-        assert key not in meta
+    assert meta["encoder_sharing"] == "shared_critic_grad"
+    assert meta["encoder_config"] is None
+    assert meta["obs_groups"] is None
+    assert meta["critic_encoder_config"] is None
 
 
-def test_sac_dict_checkpoint_metadata_includes_image_fields():
-    agent = SAC(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+def test_sac_dict_checkpoint_metadata_serializes_encoder_config():
+    agent = SAC(
+        env=_rgbd_env(), **_agent_kwargs(), encoder_config=EncoderConfig(features_dim=17)
+    )
     meta = agent._checkpoint_metadata()
-    assert meta["image_keys"] == ("rgb",)
-    assert meta["use_proprio"] is True
+    assert meta["encoder_config"]["features_dim"] == 17
+    assert meta["encoder_config"]["backbone"] == "plain_conv"
 
 
 def test_sac_passes_image_augmentation_to_combined_extractor():
     agent = SAC(
         env=_rgbd_env(),
         **_agent_kwargs(),
-        image_keys=("rgb",),
-        image_augmentation="random_shift",
-        random_shift_pad=2,
+        encoder_config=EncoderConfig(image_augmentation="random_shift", image_random_shift_pad=2),
         image_augmentation_seed=123,
     )
     ext = agent.policy.features_extractor
@@ -345,38 +353,47 @@ def test_sac_passes_image_augmentation_to_combined_extractor():
 def test_wsrl_uses_flatten_extractor_by_default():
     agent = WSRL(env=_state_env(), **_agent_kwargs())
     assert isinstance(agent.policy.features_extractor, FlattenExtractor)
-    assert isinstance(agent.replay_buffer, MCTensorReplayBuffer)
+    assert isinstance(agent.replay_buffer, MCReplayBuffer)
 
 
 def test_wsrl_dict_obs_uses_combined_extractor_by_default():
-    agent = WSRL(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+    agent = WSRL(
+        env=_rgbd_env(),
+        **_agent_kwargs(),
+        obs_groups=ObsGroups(actor=("rgb_cam", "state"), critic=("rgb_cam", "state")),
+    )
     assert isinstance(agent.policy.features_extractor, CombinedExtractor)
-    assert isinstance(agent.replay_buffer, MCDictReplayBuffer)
+    assert isinstance(agent.replay_buffer, MCReplayBuffer)
     assert agent._actor_stop_gradient() is True
 
 
-def test_wsrl_dict_obs_rejects_actor_encoder_updates():
-    with pytest.raises(ValueError, match="trained only by critic loss"):
-        WSRL(
-            env=_rgbd_env(),
-            **_agent_kwargs(),
-            detach_encoder_on_actor=False,
-        )
+def test_wsrl_dict_obs_encoder_sharing_shared_disables_actor_stop_gradient():
+    # encoder_sharing="shared" is a first-class supported mode now (not an
+    # error), replacing the old hardcoded detach_encoder_on_actor=False
+    # rejection ("trained only by critic loss").
+    agent = WSRL(env=_rgbd_env(), **_agent_kwargs(), encoder_sharing="shared")
+    assert agent._actor_stop_gradient() is False
 
 
-def test_wsrl_box_obs_rejects_image_kwargs():
-    with pytest.raises(ValueError, match="image-related kwargs"):
-        WSRL(env=_state_env(), **_agent_kwargs(), image_keys=("rgb",))
+def test_wsrl_box_obs_rejects_unknown_obs_group_key():
+    # A Box space normalizes to {"state": Box}; requesting "rgb_cam" in
+    # obs_groups for it is a contract violation (unknown key), replacing the
+    # old hardcoded "Box rejects image kwargs" check.
+    from rl_garden.observations import ObservationContractError
 
-    with pytest.raises(ValueError, match="image-related kwargs"):
-        WSRL(env=_state_env(), **_agent_kwargs(), use_proprio=False)
+    with pytest.raises(ObservationContractError):
+        WSRL(env=_state_env(), **_agent_kwargs(), obs_groups=ObsGroups(actor=("rgb_cam",)))
 
 
-def test_wsrl_dict_checkpoint_metadata_includes_image_fields():
-    agent = WSRL(env=_rgbd_env(), **_agent_kwargs(), image_keys=("rgb",))
+def test_wsrl_dict_checkpoint_metadata_includes_encoder_fields():
+    agent = WSRL(
+        env=_rgbd_env(),
+        **_agent_kwargs(),
+        encoder_config=EncoderConfig(features_dim=17),
+    )
     meta = agent._checkpoint_metadata()
-    assert meta["image_keys"] == ("rgb",)
-    assert meta["use_proprio"] is True
+    assert meta["encoder_config"]["features_dim"] == 17
+    assert meta["encoder_sharing"] == "shared_critic_grad"
 
 
 def _multi_camera_env() -> DummyVecEnv:
@@ -395,8 +412,7 @@ def test_sac_per_camera_keys_build_separate_encoders():
     agent = SAC(
         env=_multi_camera_env(),
         **_agent_kwargs(),
-        image_keys=("rgb_base_camera", "rgb_hand_camera"),
-        image_fusion_mode="per_key",
+        encoder_config=EncoderConfig(image_fusion_mode="per_key"),
     )
     ext = agent.policy.features_extractor
     assert isinstance(ext, CombinedExtractor)
@@ -406,9 +422,12 @@ def test_sac_per_camera_keys_build_separate_encoders():
         assert enc._observation_space.shape[0] == 3
 
 
-def test_discover_image_keys_orders_rgb_before_depth():
-    from rl_garden.encoders import discover_image_keys
+def test_schema_image_keys_orders_rgb_before_depth():
+    from rl_garden.observations import ObservationSchema
 
+    # gymnasium.spaces.Dict sorts its keys alphabetically regardless of
+    # insertion order, so ObservationSchema (built by iterating
+    # space.spaces.items()) sees them alphabetically too.
     obs_space = spaces.Dict(
         {
             "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
@@ -417,5 +436,5 @@ def test_discover_image_keys_orders_rgb_before_depth():
             "depth_base_camera": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
         }
     )
-    keys = discover_image_keys(obs_space)
+    keys = ObservationSchema.from_space(obs_space).image_keys
     assert keys == ("rgb_base_camera", "rgb_hand_camera", "depth_base_camera")

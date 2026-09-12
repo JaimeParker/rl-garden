@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.mc_buffer import MCDictReplayBuffer
+from rl_garden.buffers.mc_buffer import MCReplayBuffer
 from rl_garden.buffers.minari_dataset import (
     infer_specs_from_minari,
     load_minari_dataset_to_replay_buffer,
@@ -67,7 +67,7 @@ def export_dataset(dataset_id, output):
         raise TypeError("expected a Dict observation space, got {!r}".format(observation_space))
 
     dataset = minari.load_dataset(dataset_id, download=True)
-    buffer = MCDictReplayBuffer(
+    buffer = MCReplayBuffer(
         observation_space=observation_space,
         action_space=action_space,
         num_envs=1,

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
 from rl_garden.envs.robotwin.rewards import build_task_reward, supported_reward_tasks
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 class FakeExecutor:
@@ -40,7 +43,7 @@ class FakeExecutor:
     @staticmethod
     def _obs(i, seed=None):
         return {
-            "rgb": np.full((8, 8, 3), i, dtype=np.uint8),
+            "rgb_head": np.full((8, 8, 3), i, dtype=np.uint8),
             "rgb_left_wrist": None,
             "rgb_right_wrist": None,
             "state": np.ones(14, dtype=np.float32) * i,
@@ -134,9 +137,9 @@ def test_robotwin_env_reset_step_and_auto_reset_contract():
     cfg = RoboTwinEnvConfig(num_envs=2, device="cpu", image_size=(8, 8), max_episode_steps=10)
     env = RoboTwinEnv(cfg, executor=FakeExecutor(num_envs=2))
     obs, infos = env.reset(seed=0)
-    assert set(obs) == {"rgb", "rgb_left_wrist", "rgb_right_wrist", "state"}
-    assert obs["rgb"].shape == (2, 8, 8, 3)
-    assert obs["rgb"].device.type == "cpu"
+    assert set(obs) == {"rgb_head", "rgb_left_wrist", "rgb_right_wrist", "state"}
+    assert obs["rgb_head"].shape == (2, 8, 8, 3)
+    assert obs["rgb_head"].device.type == "cpu"
     assert infos["instructions"] == ["task 0", "task 1"]
     assert infos["env_seed"].shape == (2,)
 
@@ -311,12 +314,10 @@ def test_robotwin_backend_eval_env_wires_video_dir(tmp_path):
             env_id="place_shoe",
             num_envs=1,
             num_eval_envs=1,
-            obs_mode="rgb",
+            observation=ObservationConfig(rgb=("head", "left_wrist", "right_wrist"), image_size=(64, 64)),
             control_mode="delta_joint_pos",
             render_mode="rgb_array",
             seed=1,
-            camera_width=64,
-            camera_height=64,
             capture_video=True,
             eval_record_dir=str(tmp_path),
             backend_config=rt,
@@ -363,7 +364,7 @@ def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
     adapter = RoboTwinTaskAdapter(0, cfg, cfg.task_config, env_seed=123)
     obs = adapter.reset()
 
-    assert obs["rgb"].shape == (8, 12, 3)
+    assert obs["rgb_head"].shape == (8, 12, 3)
     assert task.ffmpeg is not None
     assert popen_calls
     args, stdin = popen_calls[0]
@@ -374,3 +375,82 @@ def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
     adapter.close()
     assert task.closed_video is True
     assert task.closed_env is True
+
+
+def _base_req(**overrides):
+    from rl_garden.envs.backend_registry import EnvRequest
+
+    defaults = dict(
+        env_id="place_shoe",
+        num_envs=1,
+        num_eval_envs=1,
+        observation=ObservationConfig(),
+        control_mode="delta_joint_pos",
+        render_mode="rgb_array",
+        seed=1,
+        backend_config=None,
+    )
+    defaults.update(overrides)
+    return EnvRequest(**defaults)
+
+
+def test_resolve_config_rejects_depth():
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    req = _base_req(observation=ObservationConfig(depth=("head",)))
+    with pytest.raises(ObservationContractError, match="depth"):
+        RoboTwinBackend.resolve_config(req, is_eval=False)
+
+
+def test_resolve_config_rejects_unknown_camera():
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    req = _base_req(observation=ObservationConfig(rgb=("front",)))
+    with pytest.raises(ObservationContractError, match="unknown camera"):
+        RoboTwinBackend.resolve_config(req, is_eval=False)
+
+
+def test_resolve_config_rejects_frame_stack_without_rgb():
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    req = _base_req(observation=ObservationConfig(frame_stack=2))
+    with pytest.raises(ObservationContractError, match="frame_stack"):
+        RoboTwinBackend.resolve_config(req, is_eval=False)
+
+
+def test_resolve_config_defaults_image_size_when_unset():
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    req = _base_req(observation=ObservationConfig(rgb=("head",)))
+    cfg = RoboTwinBackend.resolve_config(req, is_eval=False)
+    assert cfg.image_size == (64, 64)
+    assert cfg.rgb_cameras == ("head",)
+    assert cfg.task_config["camera"]["collect_head_camera"] is True
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is False
+
+
+def test_resolve_config_honors_explicit_image_size():
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    req = _base_req(observation=ObservationConfig(rgb=("left_wrist",), image_size=(32, 40)))
+    cfg = RoboTwinBackend.resolve_config(req, is_eval=False)
+    assert cfg.image_size == (32, 40)
+    assert cfg.task_config["camera"]["collect_head_camera"] is False
+    assert cfg.task_config["camera"]["collect_wrist_camera"] is True
+
+
+def test_resolve_config_state_false_still_builds_config():
+    from rl_garden.envs.backends.robotwin import RoboTwinBackend
+
+    req = _base_req(observation=ObservationConfig(rgb=("head",), state=False))
+    cfg = RoboTwinBackend.resolve_config(req, is_eval=False)
+    assert cfg.state is False
+
+
+def test_state_false_drops_state_key_from_env_observation_space():
+    cfg = RoboTwinEnvConfig(num_envs=1, device="cpu", rgb_cameras=("head",), state=False)
+    env = RoboTwinEnv(cfg, executor=FakeExecutor(num_envs=1))
+    assert set(env.single_observation_space.spaces) == {"rgb_head"}
+    obs, _ = env.reset(seed=0)
+    assert set(obs) == {"rgb_head"}
+    env.close()

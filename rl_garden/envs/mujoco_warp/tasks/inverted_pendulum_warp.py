@@ -103,26 +103,27 @@ class InvertedPendulumCameraWarpEnv(InvertedPendulumWarpEnv):
     _MODEL_PATH = _CAMERA_PENDULUM_PATH
 
     def __init__(self, nworld: int, device: str, **kwargs) -> None:
-        kwargs.setdefault("camera_width", 64)
-        kwargs.setdefault("camera_height", 64)
+        kwargs.setdefault("render_width", 64)
+        kwargs.setdefault("render_height", 64)
         kwargs.setdefault("render_rgb", True)
         kwargs.setdefault("render_depth", True)
         super().__init__(nworld, device, **kwargs)
         # Must match _get_obs()'s actual keys exactly: _render_cameras() only
-        # includes "rgb"/"depth" when the corresponding render_rgb/
-        # render_depth flag is set (an unallocated buffer can't be read at
-        # all, so this isn't a placeholder-vs-real-shape nuance like on some
-        # other backends -- a declared-but-absent key here means _get_obs()
-        # would KeyError or the caller silently expects a key that never
-        # arrives).
+        # includes rgb_<camera>/depth_<camera> when the corresponding
+        # render_rgb/render_depth flag is set (an unallocated buffer can't be
+        # read at all, so this isn't a placeholder-vs-real-shape nuance like
+        # on some other backends -- a declared-but-absent key here means
+        # _get_obs() would KeyError or the caller silently expects a key that
+        # never arrives).
         obs_spaces = {"state": spaces.Box(low=-float("inf"), high=float("inf"), shape=(4,))}
+        camera = self.CAMERA_NAME
         if self._render_rgb:
-            obs_spaces["rgb"] = spaces.Box(
-                low=0, high=255, shape=(self._camera_height, self._camera_width, 3), dtype="uint8"
+            obs_spaces[f"rgb_{camera}"] = spaces.Box(
+                low=0, high=255, shape=(self._render_height, self._render_width, 3), dtype="uint8"
             )
         if self._render_depth:
-            obs_spaces["depth"] = spaces.Box(
-                low=0, high=float("inf"), shape=(self._camera_height, self._camera_width)
+            obs_spaces[f"depth_{camera}"] = spaces.Box(
+                low=0, high=float("inf"), shape=(self._render_height, self._render_width, 1)
             )
         self.single_observation_space = spaces.Dict(obs_spaces)
         self.observation_space = batch_space(self.single_observation_space, self.num_envs)

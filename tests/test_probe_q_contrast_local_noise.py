@@ -214,7 +214,7 @@ def test_args_for_algorithm_preserves_checkpoint_config(tmp_path) -> None:
     (run_dir / "config.json").write_text(
         """{
           "inputs": {
-            "obs_mode": "state",
+            "obs": {"state": true, "rgb": []},
             "gamma": 0.99,
             "n_critics": 2,
             "actor_use_layer_norm": false,
@@ -239,7 +239,8 @@ def test_args_for_algorithm_preserves_checkpoint_config(tmp_path) -> None:
 
     algo_args = probe._args_for_algorithm(args)
 
-    assert algo_args.obs_mode == "state"
+    assert algo_args.obs.state is True
+    assert algo_args.obs.rgb == ()
     assert algo_args.gamma == 0.99
     assert algo_args.n_critics == 2
     assert algo_args.actor_use_layer_norm is False
@@ -249,7 +250,8 @@ def test_args_for_algorithm_preserves_checkpoint_config(tmp_path) -> None:
 
     summary = probe._resolved_algorithm_summary(args, algo_args)
     assert summary["config_path_used"] == str(run_dir / "config.json")
-    assert summary["obs_mode"] == "state"
+    assert summary["obs"]["state"] is True
+    assert summary["obs"]["rgb"] == ()
     assert summary["gamma"] == 0.99
 
 

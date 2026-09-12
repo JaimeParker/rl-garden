@@ -1,10 +1,10 @@
-"""Action-chunked replay buffer for Box (state-only) observations.
+"""Action-chunked replay buffer for Dict observations.
 
 Built for Q-chunking (QC, ``3rd_party/qc``) -- samples an H-step ("chunk")
 window per training example: the full ``(horizon_length, action_dim)`` raw
 action window (needed for both agents' chunked critic/actor inputs), plus a
 collapsed H-step discounted return using the exact same accumulate-and-
-early-stop-at-terminal recurrence as ``NStepTensorReplayBuffer``
+early-stop-at-terminal recurrence as ``NStepReplayBuffer``
 (``nstep := horizon_length``) -- reused via ``NStepSamplingMixin`` almost
 unmodified, since QC's own reward recurrence (``rewards[i] = rewards[i-1] +
 r[i]*gamma**i``, ``3rd_party/qc/utils/datasets.py:120-129``) is identical to
@@ -18,7 +18,7 @@ data follows the terminal in the ring buffer -- the next episode's data),
 and instead discards the ENTIRE sample from the critic loss via
 ``valid[..., -1] = 0`` whenever the terminal falls strictly before the final
 window position. This buffer instead stops reward/discount accumulation
-exactly at the first true terminal (matching ``NStepTensorReplayBuffer``'s
+exactly at the first true terminal (matching ``NStepReplayBuffer``'s
 existing, already-battle-tested convention) -- mathematically identical to
 QC's target for every sample QC itself would keep (window doesn't cross a
 terminal, or terminates exactly at the last position), and additionally
@@ -27,6 +27,13 @@ have discarded outright. Strictly more sample-efficient, never less
 correct. The per-position ``valid`` mask QC needs for its actor's chunked
 BC-flow loss (a genuinely different use -- masking WITHIN a kept window, not
 discarding whole windows) is still faithfully reproduced.
+
+Same storage layout, same ``NStepSamplingMixin``-based window-validity/
+rejection-sampling logic, and same ``_accumulate_chunk`` accumulation
+recurrence as the sibling n-step buffer (``nstep_buffer.py``'s
+``NStepReplayBuffer``) -- that method never touches ``obs``/``next_obs``
+inside its loop, only ``action_chunk``/``rewards``/``discounts``/``valid``.
+Storage is a ``DictArray`` (``rl_garden.buffers.replay_buffer``) per key.
 """
 from __future__ import annotations
 
@@ -37,23 +44,24 @@ from gymnasium import spaces
 
 from rl_garden.buffers._nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.common.types import ChunkedReplayBufferSample
+from rl_garden.buffers.replay_buffer import DictArray, _tree_to_device
+from rl_garden.common.types import ChunkedReplayBufferSample, TensorDict
 
 
-class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
-    """H-step action-chunked replay buffer for flat Box observations.
+class ChunkedReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
+    """H-step action-chunked replay buffer for Dict observations.
 
-    Storage layout: ``(per_env_buffer_size, num_envs, *shape)``, identical to
-    ``NStepTensorReplayBuffer``. Internally reuses ``self.nstep`` (the field
-    name ``NStepSamplingMixin`` expects) to mean ``horizon_length`` --
+    Storage layout: ``(per_env_buffer_size, num_envs, *shape)`` per key,
+    identical to ``ReplayBuffer``. Internally reuses ``self.nstep`` (the
+    field name ``NStepSamplingMixin`` expects) to mean ``horizon_length`` --
     window-validity and rejection-sampling logic
     (``_valid_nstep_batch``/``_sample_valid_indices``) is shared verbatim
-    with the n-step buffers; only ``_accumulate_chunk``/``sample`` are new.
+    with the n-step buffers.
     """
 
     def __init__(
         self,
-        observation_space: spaces.Box,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         num_envs: int,
         buffer_size: int,
@@ -62,8 +70,8 @@ class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         storage_device: torch.device | str = "cuda",
         sample_device: torch.device | str = "cuda",
     ) -> None:
-        assert isinstance(observation_space, spaces.Box), (
-            "ChunkedTensorReplayBuffer requires a flat Box observation space."
+        assert isinstance(observation_space, spaces.Dict), (
+            "ChunkedReplayBuffer requires a Dict observation space."
         )
         if horizon_length < 1:
             raise ValueError(f"horizon_length must be >= 1, got {horizon_length}")
@@ -79,12 +87,11 @@ class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         self.pos = 0
         self.full = False
 
-        obs_shape = tuple(observation_space.shape)
         act_shape = tuple(action_space.shape)
         shape = (self.per_env_buffer_size, num_envs)
 
-        self.obs = torch.zeros(shape + obs_shape, device=self.storage_device)
-        self.next_obs = torch.zeros(shape + obs_shape, device=self.storage_device)
+        self.obs = DictArray(shape, observation_space, device=self.storage_device)
+        self.next_obs = DictArray(shape, observation_space, device=self.storage_device)
         self.actions = torch.zeros(shape + act_shape, device=self.storage_device)
         self.rewards = torch.zeros(shape, device=self.storage_device)
         self.dones = torch.zeros(shape, dtype=torch.bool, device=self.storage_device)
@@ -101,16 +108,16 @@ class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
 
     def add(
         self,
-        obs: torch.Tensor,
-        next_obs: torch.Tensor,
+        obs: TensorDict,
+        next_obs: TensorDict,
         action: torch.Tensor,
         reward: torch.Tensor,
         done: torch.Tensor,
         episode_end: Optional[torch.Tensor] = None,
     ) -> None:
         if self.storage_device.type == "cpu":
-            obs = obs.cpu()
-            next_obs = next_obs.cpu()
+            obs = _tree_to_device(obs, self.storage_device)
+            next_obs = _tree_to_device(next_obs, self.storage_device)
             action = action.cpu()
             reward = reward.cpu()
             done = done.cpu()
@@ -122,13 +129,8 @@ class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         self.actions[self.pos] = action
         self.rewards[self.pos] = reward
         done_bool = done.to(self.storage_device).bool()
-        # Offline H5 loading (``_add_flat_transitions`` in
-        # ``_dataset_common.py``) only detects episode-boundary support via
-        # an MC-buffer-specific ``hasattr(buffer, "_episode_end")`` probe
-        # (unrelated to this buffer's ``episode_ends`` field) and never
-        # passes ``episode_end`` -- fall back to ``done``, matching
-        # ``_load_traj_transitions``'s own ``episode_end = dones`` default
-        # when no explicit field exists (``h5_dataset.py``).
+        # Offline H5 loading never passes episode_end explicitly -- fall
+        # back to done, matching the n-step buffer's own default.
         episode_end_bool = (
             done_bool if episode_end is None else episode_end.to(self.storage_device).bool()
         )
@@ -149,15 +151,11 @@ class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
     def _accumulate_chunk(
         self, batch_inds: torch.Tensor, env_inds: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Extends ``NStepSamplingMixin._accumulate_nstep``'s single-window
-        accumulation loop (window length ``self.nstep == horizon_length``)
-        to also gather the raw action window and a per-position validity
-        mask. ``rewards``/``discounts``/``next_inds`` are exactly what
-        ``_accumulate_nstep`` would produce; ``action_chunk``/``valid`` are
-        new. Returns ``(rewards, discounts, next_inds, action_chunk, valid)``
-        with ``action_chunk``/``valid`` shaped ``(horizon_length, batch,
-        ...)`` (transposed to batch-first by the caller).
-        """
+        """Extends ``NStepSamplingMixin``'s single-window accumulation loop
+        (window length ``self.nstep == horizon_length``) to also gather the
+        raw action window and a per-position validity mask -- never touches
+        ``obs``/``next_obs``, only ``action_chunk``/``rewards``/``discounts``/
+        ``valid``."""
         batch = batch_inds.shape[0]
         rewards = torch.zeros(batch, device=self.storage_device)
         discounts = torch.ones(batch, device=self.storage_device)
@@ -203,9 +201,18 @@ class ChunkedTensorReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
             batch_inds, env_inds
         )
 
+        obs_sample = {
+            k: _tree_to_device(v, self.sample_device)
+            for k, v in self.obs[batch_inds, env_inds].items()
+        }
+        next_obs_sample = {
+            k: _tree_to_device(v, self.sample_device)
+            for k, v in self.next_obs[next_inds, env_inds].items()
+        }
+
         return ChunkedReplayBufferSample(
-            obs=self.obs[batch_inds, env_inds].to(self.sample_device),
-            next_obs=self.next_obs[next_inds, env_inds].to(self.sample_device),
+            obs=obs_sample,
+            next_obs=next_obs_sample,
             actions=action_chunk.transpose(0, 1).to(self.sample_device),
             rewards=rewards.to(self.sample_device),
             dones=(discounts == 0.0).to(self.sample_device),

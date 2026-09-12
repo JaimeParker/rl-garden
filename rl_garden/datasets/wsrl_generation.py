@@ -231,7 +231,11 @@ class WSRLTrajectoryWriter:
             return
         array = _to_numpy(data)
         kwargs: dict[str, Any] = {}
-        if key in {"rgb", "depth", "seg"}:
+        # rl-garden observation contract image keys are "rgb_<cam>"/
+        # "depth_<cam>" (rl_garden/observations/schema.py). "seg" isn't a
+        # contract key at all, kept for any caller still writing raw
+        # segmentation masks alongside obs.
+        if key.startswith(("rgb_", "depth_")) or key == "seg":
             kwargs.update(compression="gzip", compression_opts=5)
         group.create_dataset(key, data=array, dtype=array.dtype, **kwargs)
 

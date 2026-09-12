@@ -1,44 +1,16 @@
-"""SACFlow run function. State observations by default; pass ``--obs_mode
-rgb`` (with a Dict/RGBD-producing env backend) for CNN-based vision -- see
-``rl_garden.algorithms.sac_flow.SACFlow``'s own docstring for exactly which
-vision paths are supported (CombinedExtractor encoders; not ViT, not a
+"""SACFlow run function. State observations by default; pass ``--obs.rgb
+<camera>`` (with a Dict/RGBD-producing env backend) for CNN-based vision --
+see ``rl_garden.algorithms.sac_flow.SACFlow``'s own docstring for exactly
+which vision paths are supported (CombinedExtractor encoders; not ViT, not a
 separate critic encoder)."""
 
 from __future__ import annotations
 
 
-def _sac_flow_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    is_visual = args.obs_mode != "state"
-    backend_config = args.resolve_backend_config()
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
-        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
-        frame_stack=args.frame_stack,
-        num_eval_envs=args.num_eval_envs,
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        create_eval_env=should_create_eval_env(args),
-        backend_config=backend_config,
-    )
-
-
 def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms import SACFlow
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+    from rl_garden.encoders.config import EncoderConfig
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
@@ -47,29 +19,24 @@ def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
 
-    is_visual = args.obs_mode != "state"
     image_kwargs: dict = {}
-    if is_visual:
-        if args.encoder == "vit":
+    if args.obs.is_visual:
+        if args.encoder.backbone == "vit":
             raise SystemExit(
-                "sac_flow does not support --encoder vit: FlowMatchingActor "
-                "has not been verified against a structured (ViT token) "
-                "features extractor. Use a CNN encoder (e.g. plain_conv, "
-                "resnet10/18, drqv2_conv, cnn3d)."
+                "sac_flow does not support --encoder.backbone vit: "
+                "FlowMatchingActor has not been verified against a "
+                "structured (ViT token) features extractor. Use a CNN "
+                "encoder (e.g. plain_conv, resnet10/18, drqv2_conv, cnn3d)."
             )
-        if args.critic_encoder is not None:
+        if args.critic_encoder != EncoderConfig():
             raise SystemExit(
-                "sac_flow does not support --critic-encoder (a separate "
+                "sac_flow does not support --critic-encoder.* (a separate "
                 "critic-only image encoder): SACFlowPolicy always shares "
                 "one encoder between actor and critic, unlike SACPolicy."
             )
         image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys_from_env(env, args),
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=args.frame_stack > 1,
-            image_augmentation=args.image_augmentation,
-            random_shift_pad=args.image_random_shift_pad,
+            encoder_config=args.encoder,
+            obs_groups=resolve_obs_groups_config(args),
             image_augmentation_seed=args.seed + 1_000_003,
         )
 
@@ -132,14 +99,14 @@ def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_sac_flow(args: "SACFlowArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_sac_flow_env_request,
+        make_env_request=make_env_request,
         build_agent=build_sac_flow,
     )
 
@@ -158,9 +125,9 @@ from rl_garden.training.online._registry import registry  # noqa: E402
 @dataclass
 class SACFlowArgs(VisionSACFlowTrainingArgs, EnvBackendArgs):
     """SACFlow -- SAC with a flow-matching actor. State observations by
-    default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD observations
-    (not ``--encoder vit``, not ``--critic-encoder`` -- see ``SACFlow``'s
-    own docstring).
+    default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations
+    (not ``--encoder.backbone vit``, not ``--critic-encoder.*`` -- see
+    ``SACFlow``'s own docstring).
 
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend custom``.
     """

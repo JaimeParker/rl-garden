@@ -6,12 +6,12 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
+from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
 
 @pytest.fixture
 def obs_space():
-    return spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
+    return spaces.Dict({"state": spaces.Box(low=-1, high=1, shape=(4,), dtype=float)})
 
 
 @pytest.fixture
@@ -28,8 +28,8 @@ def action_space():
 
 
 @pytest.fixture
-def mc_tensor_buffer(obs_space, action_space):
-    return MCTensorReplayBuffer(
+def mc_state_buffer(obs_space, action_space):
+    return MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=4,
@@ -41,8 +41,8 @@ def mc_tensor_buffer(obs_space, action_space):
 
 
 @pytest.fixture
-def mc_dict_buffer(dict_obs_space, action_space):
-    return MCDictReplayBuffer(
+def mc_buffer(dict_obs_space, action_space):
+    return MCReplayBuffer(
         observation_space=dict_obs_space,
         action_space=action_space,
         num_envs=4,
@@ -53,70 +53,40 @@ def mc_dict_buffer(dict_obs_space, action_space):
     )
 
 
-class TestMCTensorReplayBuffer:
-    """Test MCTensorReplayBuffer functionality."""
+class TestMCReturnValues:
+    """MC-return-computation tests that only need a single-key Dict buffer
+    (``mc_state_buffer``/``obs_space``, ``{"state": ...}``) -- kept separate
+    from ``TestMCReplayBuffer`` below, which exercises multi-key Dict
+    storage (``state`` + ``goal``) specifically."""
 
-    def test_buffer_creation(self, mc_tensor_buffer):
-        assert mc_tensor_buffer.gamma == 0.9
-        assert mc_tensor_buffer.num_envs == 4
-        assert mc_tensor_buffer.per_env_buffer_size == 25
-
-    def test_add_transitions(self, mc_tensor_buffer):
-        obs = torch.randn(4, 4)
-        next_obs = torch.randn(4, 4)
-        actions = torch.randn(4, 2)
-        rewards = torch.ones(4)
-        dones = torch.zeros(4)
-
-        mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
-        assert mc_tensor_buffer.pos == 1
-        assert not mc_tensor_buffer.full
-
-    def test_sample_with_mc_returns(self, mc_tensor_buffer):
-        # Add some transitions, closing the trajectory on the last step so
-        # sampling has at least one complete episode to draw from.
-        for step in range(10):
-            obs = torch.randn(4, 4)
-            next_obs = torch.randn(4, 4)
-            actions = torch.randn(4, 2)
-            rewards = torch.ones(4)
-            dones = torch.ones(4) if step == 9 else torch.zeros(4)
-            mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
-
-        sample = mc_tensor_buffer.sample(8)
-        assert hasattr(sample, "mc_returns")
-        assert sample.mc_returns.shape == (8,)
-        assert sample.obs.shape == (8, 4)
-        assert sample.actions.shape == (8, 2)
-
-    def test_mc_returns_single_step_episode(self, mc_tensor_buffer):
+    def test_mc_returns_single_step_episode(self, mc_state_buffer):
         # Add single-step episode
-        obs = torch.randn(4, 4)
-        next_obs = torch.randn(4, 4)
+        obs = {"state": torch.randn(4, 4)}
+        next_obs = {"state": torch.randn(4, 4)}
         actions = torch.randn(4, 2)
         rewards = torch.tensor([1.0, 2.0, 3.0, 4.0])
         dones = torch.ones(4)  # All episodes end
 
-        mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
+        mc_state_buffer.add(obs, next_obs, actions, rewards, dones)
 
-        sample = mc_tensor_buffer.sample(4)
+        sample = mc_state_buffer.sample(4)
         # MC return should equal reward for single-step episodes
         # Since we're sampling randomly, just check that returns are in the expected range
         assert torch.all(sample.mc_returns >= 1.0)
         assert torch.all(sample.mc_returns <= 4.0)
 
-    def test_mc_returns_multi_step_episode(self, mc_tensor_buffer):
+    def test_mc_returns_multi_step_episode(self, mc_state_buffer):
         # Add 3-step episode for env 0
         for step in range(3):
-            obs = torch.randn(4, 4)
-            next_obs = torch.randn(4, 4)
+            obs = {"state": torch.randn(4, 4)}
+            next_obs = {"state": torch.randn(4, 4)}
             actions = torch.randn(4, 2)
             rewards = torch.ones(4)
             dones = torch.zeros(4)
             if step == 2:  # End episode at step 2
                 dones[0] = 1.0
 
-            mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
+            mc_state_buffer.add(obs, next_obs, actions, rewards, dones)
 
         # Manually compute expected MC return for first transition
         # G_0 = r_0 + γ*r_1 + γ²*r_2 = 1 + 0.9*1 + 0.81*1 = 2.71
@@ -124,41 +94,41 @@ class TestMCTensorReplayBuffer:
 
         # Sample and check (need to ensure we sample from env 0, step 0)
         # This is probabilistic, so we'll just check the computation logic
-        sample = mc_tensor_buffer.sample(16)
+        sample = mc_state_buffer.sample(16)
         assert sample.mc_returns.shape == (16,)
         # All returns should be positive
         assert torch.all(sample.mc_returns > 0)
 
-    def test_mc_returns_with_discount(self, mc_tensor_buffer):
+    def test_mc_returns_with_discount(self, mc_state_buffer):
         # Test that discount is applied correctly
-        gamma = mc_tensor_buffer.gamma
+        gamma = mc_state_buffer.gamma
 
         # Add 2-step episode
         for step in range(2):
-            obs = torch.randn(4, 4)
-            next_obs = torch.randn(4, 4)
+            obs = {"state": torch.randn(4, 4)}
+            next_obs = {"state": torch.randn(4, 4)}
             actions = torch.randn(4, 2)
             rewards = torch.tensor([1.0, 1.0, 1.0, 1.0])
             dones = torch.zeros(4)
             if step == 1:
                 dones[0] = 1.0
 
-            mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
+            mc_state_buffer.add(obs, next_obs, actions, rewards, dones)
 
-        sample = mc_tensor_buffer.sample(16)
+        sample = mc_state_buffer.sample(16)
         # Returns should be in range [1.0, 1.0 + gamma]
         assert torch.all(sample.mc_returns >= 1.0)
         assert torch.all(sample.mc_returns <= 1.0 + gamma + 0.1)  # Small tolerance
 
 
-class TestMCDictReplayBuffer:
-    """Test MCDictReplayBuffer functionality."""
+class TestMCReplayBuffer:
+    """Test MCReplayBuffer functionality (multi-key Dict obs)."""
 
-    def test_buffer_creation(self, mc_dict_buffer):
-        assert mc_dict_buffer.gamma == 0.9
-        assert mc_dict_buffer.num_envs == 4
+    def test_buffer_creation(self, mc_buffer):
+        assert mc_buffer.gamma == 0.9
+        assert mc_buffer.num_envs == 4
 
-    def test_add_dict_transitions(self, mc_dict_buffer):
+    def test_add_dict_transitions(self, mc_buffer):
         obs = {
             "state": torch.randn(4, 4),
             "goal": torch.randn(4, 2),
@@ -171,10 +141,10 @@ class TestMCDictReplayBuffer:
         rewards = torch.ones(4)
         dones = torch.zeros(4)
 
-        mc_dict_buffer.add(obs, next_obs, actions, rewards, dones)
-        assert mc_dict_buffer.pos == 1
+        mc_buffer.add(obs, next_obs, actions, rewards, dones)
+        assert mc_buffer.pos == 1
 
-    def test_sample_dict_with_mc_returns(self, mc_dict_buffer):
+    def test_sample_dict_with_mc_returns(self, mc_buffer):
         # Add some transitions, closing the trajectory on the last step so
         # sampling has at least one complete episode to draw from.
         for step in range(10):
@@ -189,9 +159,9 @@ class TestMCDictReplayBuffer:
             actions = torch.randn(4, 2)
             rewards = torch.ones(4)
             dones = torch.ones(4) if step == 9 else torch.zeros(4)
-            mc_dict_buffer.add(obs, next_obs, actions, rewards, dones)
+            mc_buffer.add(obs, next_obs, actions, rewards, dones)
 
-        sample = mc_dict_buffer.sample(8)
+        sample = mc_buffer.sample(8)
         assert hasattr(sample, "mc_returns")
         assert sample.mc_returns.shape == (8,)
         assert isinstance(sample.obs, dict)
@@ -202,44 +172,44 @@ class TestMCDictReplayBuffer:
 class TestMCReturnComputation:
     """Test MC return computation logic."""
 
-    def test_episode_boundary_detection(self, mc_tensor_buffer):
+    def test_episode_boundary_detection(self, mc_state_buffer):
         # Add episode with clear boundary
         for step in range(5):
-            obs = torch.randn(4, 4)
-            next_obs = torch.randn(4, 4)
+            obs = {"state": torch.randn(4, 4)}
+            next_obs = {"state": torch.randn(4, 4)}
             actions = torch.randn(4, 2)
             rewards = torch.ones(4) * (step + 1)  # Increasing rewards
             dones = torch.zeros(4)
             if step == 4:
                 dones[0] = 1.0  # End episode for env 0
 
-            mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
+            mc_state_buffer.add(obs, next_obs, actions, rewards, dones)
 
-        sample = mc_tensor_buffer.sample(16)
+        sample = mc_state_buffer.sample(16)
         # All MC returns should be positive
         assert torch.all(sample.mc_returns > 0)
 
-    def test_multiple_episodes_per_env(self, mc_tensor_buffer):
+    def test_multiple_episodes_per_env(self, mc_state_buffer):
         # Add multiple episodes for same env
         for episode in range(2):
             for step in range(3):
-                obs = torch.randn(4, 4)
-                next_obs = torch.randn(4, 4)
+                obs = {"state": torch.randn(4, 4)}
+                next_obs = {"state": torch.randn(4, 4)}
                 actions = torch.randn(4, 2)
                 rewards = torch.ones(4)
                 dones = torch.zeros(4)
                 if step == 2:  # End each episode
                     dones[:] = 1.0
 
-                mc_tensor_buffer.add(obs, next_obs, actions, rewards, dones)
+                mc_state_buffer.add(obs, next_obs, actions, rewards, dones)
 
-        sample = mc_tensor_buffer.sample(16)
+        sample = mc_state_buffer.sample(16)
         assert sample.mc_returns.shape == (16,)
 
     def test_gamma_zero(self):
         # Test with gamma=0 (no discounting)
-        buffer = MCTensorReplayBuffer(
-            observation_space=spaces.Box(low=-1, high=1, shape=(4,)),
+        buffer = MCReplayBuffer(
+            observation_space=spaces.Dict({"state": spaces.Box(low=-1, high=1, shape=(4,))}),
             action_space=spaces.Box(low=-1, high=1, shape=(2,)),
             num_envs=2,
             buffer_size=20,
@@ -250,8 +220,8 @@ class TestMCReturnComputation:
 
         # Add 2-step episode
         for step in range(2):
-            obs = torch.randn(2, 4)
-            next_obs = torch.randn(2, 4)
+            obs = {"state": torch.randn(2, 4)}
+            next_obs = {"state": torch.randn(2, 4)}
             actions = torch.randn(2, 2)
             rewards = torch.ones(2)
             dones = torch.zeros(2)
@@ -267,8 +237,8 @@ class TestMCReturnComputation:
         assert torch.all(sample.mc_returns <= 1.1)
 
     def test_full_buffer_wraparound_returns_are_chronological(self):
-        buffer = MCTensorReplayBuffer(
-            observation_space=spaces.Box(low=-1, high=1, shape=(1,)),
+        buffer = MCReplayBuffer(
+            observation_space=spaces.Dict({"state": spaces.Box(low=-1, high=1, shape=(1,))}),
             action_space=spaces.Box(low=-1, high=1, shape=(1,)),
             num_envs=1,
             buffer_size=4,
@@ -278,7 +248,7 @@ class TestMCReturnComputation:
         )
 
         for reward in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]:
-            obs = torch.zeros(1, 1)
+            obs = {"state": torch.zeros(1, 1)}
             action = torch.zeros(1, 1)
             buffer.add(obs, obs, action, torch.tensor([reward]), torch.zeros(1))
 
@@ -303,7 +273,7 @@ class TestMCReturnComputation:
 
 @pytest.fixture
 def sparse_buffer(obs_space, action_space):
-    return MCTensorReplayBuffer(
+    return MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=2,
@@ -319,8 +289,8 @@ def sparse_buffer(obs_space, action_space):
 
 def _add_step(buf, reward, done, success):
     n = buf.num_envs
-    obs = torch.zeros(n, 4)
-    next_obs = torch.zeros(n, 4)
+    obs = {"state": torch.zeros(n, 4)}
+    next_obs = {"state": torch.zeros(n, 4)}
     action = torch.zeros(n, 2)
     buf.add(
         obs,
@@ -386,7 +356,7 @@ def test_sparse_mc_two_consecutive_episodes(sparse_buffer):
 def test_sparse_mc_disabled_falls_back_to_standard(obs_space, action_space):
     # When sparse_reward_mc=False, behaviour matches the previous backward sweep
     # (no inf-horizon replacement), and add() still accepts standard signature.
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -398,8 +368,8 @@ def test_sparse_mc_disabled_falls_back_to_standard(obs_space, action_space):
     for step in range(3):
         is_last = step == 2
         buf.add(
-            torch.zeros(1, 4),
-            torch.zeros(1, 4),
+            {"state": torch.zeros(1, 4)},
+            {"state": torch.zeros(1, 4)},
             torch.zeros(1, 2),
             torch.tensor([-1.0]),
             torch.tensor([1.0 if is_last else 0.0]),
@@ -412,7 +382,7 @@ def test_sparse_mc_disabled_falls_back_to_standard(obs_space, action_space):
 
 def test_sparse_mc_infers_success_from_reward_threshold(obs_space, action_space):
     # Without explicit success= arg, threshold-based inference kicks in.
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -427,8 +397,8 @@ def test_sparse_mc_infers_success_from_reward_threshold(obs_space, action_space)
     for step, r in enumerate([-1.0, -1.0, 1.0]):
         is_last = step == 2
         buf.add(
-            torch.zeros(1, 4),
-            torch.zeros(1, 4),
+            {"state": torch.zeros(1, 4)},
+            {"state": torch.zeros(1, 4)},
             torch.zeros(1, 2),
             torch.tensor([r]),
             torch.tensor([1.0 if is_last else 0.0]),
@@ -449,7 +419,7 @@ def test_mc_recursion_stops_at_episode_end_not_dones(obs_space, action_space):
     # bootstrapping TD through a timeout), but `episode_end` marks the true
     # 2-step episode boundary. MC recursion must stop there, not run through
     # the whole buffer as one trajectory.
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -465,8 +435,8 @@ def test_mc_recursion_stops_at_episode_end_not_dones(obs_space, action_space):
     ]
     for reward, is_episode_end in steps:
         buf.add(
-            torch.zeros(1, 4),
-            torch.zeros(1, 4),
+            {"state": torch.zeros(1, 4)},
+            {"state": torch.zeros(1, 4)},
             torch.zeros(1, 2),
             torch.tensor([reward]),
             torch.tensor([0.0]),  # done: never true
@@ -498,8 +468,8 @@ def test_sparse_mc_truncated_failure_then_success_does_not_leak(sparse_buffer):
     ]
     for reward, done, episode_end, success in transitions:
         sparse_buffer.add(
-            torch.zeros(2, 4),
-            torch.zeros(2, 4),
+            {"state": torch.zeros(2, 4)},
+            {"state": torch.zeros(2, 4)},
             torch.zeros(2, 2),
             torch.tensor([reward, 0.0]),
             torch.tensor([done, 0.0]),
@@ -516,8 +486,8 @@ def test_mc_add_accepts_episode_end_without_forwarding_to_wrapped_buffer(
     obs_space, action_space
 ):
     # episode_end must be consumed by the mixin, never forwarded into
-    # TensorReplayBuffer.add()'s fixed positional signature.
-    buf = MCTensorReplayBuffer(
+    # ReplayBuffer.add()'s fixed positional signature.
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -527,8 +497,8 @@ def test_mc_add_accepts_episode_end_without_forwarding_to_wrapped_buffer(
         sample_device="cpu",
     )
     buf.add(
-        torch.zeros(1, 4),
-        torch.zeros(1, 4),
+        {"state": torch.zeros(1, 4)},
+        {"state": torch.zeros(1, 4)},
         torch.zeros(1, 2),
         torch.tensor([1.0]),
         torch.tensor([0.0]),
@@ -538,7 +508,7 @@ def test_mc_add_accepts_episode_end_without_forwarding_to_wrapped_buffer(
 
 
 def test_incomplete_trailing_trajectory_excluded_from_sampling(obs_space, action_space):
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -551,8 +521,8 @@ def test_incomplete_trailing_trajectory_excluded_from_sampling(obs_space, action
     for step in range(4):
         is_end = step == 1
         buf.add(
-            torch.zeros(1, 4),
-            torch.zeros(1, 4),
+            {"state": torch.zeros(1, 4)},
+            {"state": torch.zeros(1, 4)},
             torch.zeros(1, 2),
             torch.tensor([1.0]),
             torch.tensor([0.0]),
@@ -567,7 +537,7 @@ def test_incomplete_trailing_trajectory_excluded_from_sampling(obs_space, action
 
 
 def test_sample_raises_when_no_complete_trajectory(obs_space, action_space):
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -577,8 +547,8 @@ def test_sample_raises_when_no_complete_trajectory(obs_space, action_space):
         sample_device="cpu",
     )
     buf.add(
-        torch.zeros(1, 4),
-        torch.zeros(1, 4),
+        {"state": torch.zeros(1, 4)},
+        {"state": torch.zeros(1, 4)},
         torch.zeros(1, 2),
         torch.tensor([1.0]),
         torch.tensor([0.0]),
@@ -600,7 +570,7 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
     """
     from rl_garden.buffers._dataset_common import _add_flat_transitions
 
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=2,
@@ -612,8 +582,8 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
     # Two flat, sequential 3-step episodes (as an offline loader would
     # produce), striped across num_envs=2 columns by _add_flat_transitions.
     n = 6
-    obs = torch.zeros(n, 4)
-    next_obs = torch.zeros(n, 4)
+    obs = {"state": torch.zeros(n, 4)}
+    next_obs = {"state": torch.zeros(n, 4)}
     actions = torch.zeros(n, 2)
     rewards = torch.ones(n)
     dones = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
@@ -635,12 +605,12 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
     # An online append must not corrupt the preserved offline MC values, and
     # must not inherit "return" from the unrelated offline trajectory.
     buf.add(
-        torch.full((2, 4), 9.0), torch.full((2, 4), 9.0), torch.zeros(2, 2),
+        {"state": torch.full((2, 4), 9.0)}, {"state": torch.full((2, 4), 9.0)}, torch.zeros(2, 2),
         torch.tensor([5.0, 5.0]), torch.tensor([0.0, 0.0]),
         episode_end=torch.tensor([False, False]),
     )
     buf.add(
-        torch.full((2, 4), 9.0), torch.full((2, 4), 9.0), torch.zeros(2, 2),
+        {"state": torch.full((2, 4), 9.0)}, {"state": torch.full((2, 4), 9.0)}, torch.zeros(2, 2),
         torch.tensor([5.0, 5.0]), torch.tensor([1.0, 1.0]),
         episode_end=torch.tensor([True, True]),
     )
@@ -656,7 +626,7 @@ def test_valid_indices_and_sampleable_size_are_cached_between_adds(
     """Regression for claim #2: `.nonzero()`/`.item()` are CUDA-syncing ops
     that must not be recomputed on every call -- only when the underlying
     data actually changes (add())."""
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=2,
@@ -668,7 +638,7 @@ def test_valid_indices_and_sampleable_size_are_cached_between_adds(
     for step in range(4):
         is_end = step == 3
         buf.add(
-            torch.zeros(2, 4), torch.zeros(2, 4), torch.zeros(2, 2),
+            {"state": torch.zeros(2, 4)}, {"state": torch.zeros(2, 4)}, torch.zeros(2, 2),
             torch.ones(2), torch.full((2,), float(is_end)),
         )
 
@@ -680,7 +650,7 @@ def test_valid_indices_and_sampleable_size_are_cached_between_adds(
     assert idx_a is idx_b  # same cached tensor object, not recomputed
 
     buf.add(
-        torch.zeros(2, 4), torch.zeros(2, 4), torch.zeros(2, 2),
+        {"state": torch.zeros(2, 4)}, {"state": torch.zeros(2, 4)}, torch.zeros(2, 2),
         torch.ones(2), torch.ones(2),
     )
     idx_c = buf._valid_indices()
@@ -782,7 +752,7 @@ def test_vectorized_builders_match_loop_oracle(obs_space, action_space, cfg):
     gamma = 0.9
     neg = -5.0
 
-    buf = MCTensorReplayBuffer(
+    buf = MCReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=N,

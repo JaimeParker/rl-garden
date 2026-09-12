@@ -3,11 +3,6 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_garden.common.cli_args import (
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    vit_sac_kwargs_from_args,
-)
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on._args import (
     VisionWSRLTrainingArgs,
@@ -18,7 +13,8 @@ from rl_garden.training.off2on._registry import registry
 
 @dataclass
 class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
-    """WSRL args; visual defaults. For state obs pass --obs_mode state."""
+    """WSRL args. State-only observations by default; pass
+    ``--obs.rgb <camera>`` for Dict/RGBD observations."""
 
     # net_arch defaults to [256, 256, 256] (both actor/critic) when unset --
     # these let a config pick an asymmetric depth (e.g. WSRL's own AntMaze
@@ -44,19 +40,16 @@ class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
 
 def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import WSRL
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        factory = image_encoder_factory_from_args(args)
-        image_keys = image_keys_from_env(env, args)
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode=args.image_fusion_mode,
-            **vit_sac_kwargs_from_args(args, image_keys),
-        )
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,

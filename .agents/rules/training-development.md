@@ -15,6 +15,16 @@ algorithm registration, environment backends, or replay/device behavior.
   genuinely cross-phase CLI primitives and helpers in `rl_garden/common/cli_args.py`.
 - `EnvRunArgs` and backend configuration are cross-phase environment concerns and
   belong in `rl_garden/common/env_args.py`.
+- Observation/encoder CLI ownership is centralized: every algorithm that
+  accepts observations mixes in `ObservationArgs`
+  (`rl_garden/common/cli_args.py`, adds `obs`/`encoder`/`obs_groups`/
+  `critic_encoder`/`encoder_sharing`) rather than declaring its own vision
+  fields. Build the `EnvRequest` for a training entrypoint through the one
+  shared `make_env_request(args, run_name=None, *, create_eval_env=None)`
+  (`rl_garden/common/env_args.py`) instead of a per-algorithm
+  `_<algo>_env_request` helper; it reads `args.obs` (falling back to a
+  state-only `ObservationConfig()` when the args class has no `obs` field)
+  into `EnvRequest.observation`.
 - Keep imports lazy during registry discovery so listing algorithms and
   `--print-config` do not eagerly load optional simulator dependencies.
 
@@ -43,6 +53,11 @@ algorithm registration, environment backends, or replay/device behavior.
   `hasattr` branches.
 - Implement feature extractors under `rl_garden/encoders/` as
   `BaseFeaturesExtractor` subclasses and inject them through `policy_kwargs`.
+- Never branch on `isinstance(obs_space, spaces.Box/Dict)` in an algorithm or
+  policy. Observation space is always `spaces.Dict` (state-only normalizes to
+  `Dict({"state": Box})`); resolve encoders through `ObservationEncoderMixin`
+  (`rl_garden/algorithms/_observation.py`) — see
+  [`.agents/rules/adding-algorithm.md`](adding-algorithm.md) §5.
 - Add focused tests for construction, one update step, shapes/devices, and relevant
   edge cases. CPU tests validate compatibility behavior, not the preferred path.
 
@@ -53,8 +68,14 @@ algorithm registration, environment backends, or replay/device behavior.
 - `buffer_device` controls replay storage; samples move to the algorithm device.
 - Keep replay layout `(T, N, ...)` and dict observation keys stable unless the
   requested change explicitly modifies that contract.
-- RGBD actor and critic share an encoder. Actor updates detach encoder features;
-  critic updates train the encoder.
+- Actor/critic encoder sharing is the per-algorithm-class `encoder_sharing`
+  attribute (`"shared_critic_grad"` | `"shared"` | `"separate"`), not a fixed
+  behavior: `"shared_critic_grad"` (off-policy default, e.g. SAC/CQL/IQL) is
+  one encoder, actor updates detach encoder features, critic updates train
+  it; `"shared"` (on-policy default, e.g. PPO) is one encoder trained by both
+  losses; `"separate"` is two independent encoders, required when
+  `obs_groups.actor != obs_groups.critic` or a distinct
+  `critic_encoder_config` is given.
 
 ## Specialized Defaults
 

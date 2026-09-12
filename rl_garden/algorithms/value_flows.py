@@ -107,7 +107,6 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.fql import FQLCore
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
@@ -117,11 +116,13 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.combined import ImageEncoderFactory
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
 from rl_garden.networks.value_flow_field import integrate_returns, integrate_returns_with_jvp
+from rl_garden.observations import ObsGroups, resolve_obs_groups
 from rl_garden.policies.fql_policy import EncoderSharing
 from rl_garden.policies.value_flows_policy import ValueFlowsPolicy, aggregate
 
@@ -185,11 +186,19 @@ class ValueFlowsCore(FQLCore):
         }
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
+        observation_space = self.env.single_observation_space
+        self._resolve_observation_encoders(observation_space)
         if self.encoder_sharing == "separate":
-            actor_bc_flow_encoder = self._build_features_extractor()
-            actor_onestep_flow_encoder = self._build_features_extractor()
+            features_extractor = self.observation_encoders.critic
+            actor_onestep_flow_encoder = self.observation_encoders.actor
+            actor_keys = resolve_obs_groups(
+                self.observation_encoders.schema, self.obs_groups
+            )["actor"].keys
+            actor_bc_flow_encoder = build_observation_encoder(
+                observation_space, self.encoder_config, keys=actor_keys
+            )
         else:
+            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
             actor_onestep_flow_encoder = None
         self.policy = ValueFlowsPolicy(
@@ -484,8 +493,10 @@ class ValueFlows(ValueFlowsCore, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared",
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
         min_reward: float = -1.0,
         max_reward: float = 0.0,
         ret_agg: Literal["mean", "min"] = "mean",
@@ -555,7 +566,9 @@ class ValueFlows(ValueFlowsCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
-            image_encoder_factory=image_encoder_factory,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
         )
         self._init_value_flows_params(
             min_reward=min_reward,
@@ -568,12 +581,6 @@ class ValueFlows(ValueFlowsCore, OfflineRLAlgorithm):
             num_samples=num_samples,
             policy_extraction=policy_extraction,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(
-                f"ValueFlows supports only Box or Dict observation spaces, got {type(obs_space)}"
-            )
 
         self._setup_model()
 
@@ -628,7 +635,10 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
         min_reward: float = -1.0,
         max_reward: float = 0.0,
         ret_agg: Literal["mean", "min"] = "mean",
@@ -639,14 +649,6 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
         num_samples: int = 16,
         policy_extraction: Literal["rs", "rpg"] = "rs",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
-        # Dict observation encoding (see Off2OnReplayMixin._configure_observation_kwargs)
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -660,16 +662,6 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
-        self._configure_observation_kwargs(
-            env,
-            image_encoder_factory=image_encoder_factory,
-            image_keys=image_keys,
-            state_key=state_key,
-            use_proprio=use_proprio,
-            proprio_latent_dim=proprio_latent_dim,
-            image_fusion_mode=image_fusion_mode,
-            enable_stacking=enable_stacking,
-        )
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -724,7 +716,9 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
-            image_encoder_factory=image_encoder_factory,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
         )
         self._init_value_flows_params(
             min_reward=min_reward,

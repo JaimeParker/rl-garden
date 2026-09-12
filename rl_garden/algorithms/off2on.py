@@ -25,9 +25,6 @@ from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
-from gymnasium import spaces
-
-from rl_garden.encoders.combined import ImageEncoderFactory, default_image_encoder_factory
 
 
 class Off2OnReplayMixin:
@@ -44,90 +41,11 @@ class Off2OnReplayMixin:
         self.offline_replay_buffer: Optional[Any] = None
         self.offline_data_ratio: float | Literal["auto"] = 0.0
 
-    def _configure_observation_kwargs(
-        self,
-        env: Any,
-        *,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
-        detach_encoder_on_actor: bool = True,
-    ) -> None:
-        """Validate Box/Dict obs kwargs and set ``self._is_dict_obs``/image attrs.
-
-        Must be called before ``super().__init__()``: the off-policy rollout
-        shell's own ``__init__`` calls ``_setup_model()`` internally, which
-        reads these attributes, so the concrete subclass has no later point
-        to set them.
-        """
-        obs_space = env.single_observation_space
-        image_kwargs_explicit = {
-            "image_encoder_factory": image_encoder_factory,
-            "image_keys": image_keys,
-            "state_key": state_key,
-            "use_proprio": use_proprio,
-            "proprio_latent_dim": proprio_latent_dim,
-            "image_fusion_mode": image_fusion_mode,
-            "enable_stacking": enable_stacking,
-        }
-        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
-        class_name = type(self).__name__
-
-        if isinstance(obs_space, spaces.Box):
-            if explicitly_set:
-                raise ValueError(
-                    f"{class_name} with Box observation space does not accept "
-                    f"image-related kwargs (got {explicitly_set}). Use a Dict "
-                    f"observation space, or remove these kwargs."
-                )
-            self._is_dict_obs = False
-        elif isinstance(obs_space, spaces.Dict):
-            if not detach_encoder_on_actor:
-                raise ValueError(
-                    f"{class_name} always uses stop_gradient=True on the actor "
-                    "image path for Dict observations so image encoders are "
-                    "trained only by critic loss."
-                )
-            self._is_dict_obs = True
-            self._image_encoder_factory = (
-                image_encoder_factory or default_image_encoder_factory()
-            )
-            self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
-            self._state_key = state_key if state_key is not None else "state"
-            self._use_proprio = use_proprio if use_proprio is not None else True
-            self._proprio_latent_dim = (
-                proprio_latent_dim if proprio_latent_dim is not None else 64
-            )
-            self._image_fusion_mode = (
-                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-            )
-            self._enable_stacking = enable_stacking if enable_stacking is not None else False
-        else:
-            raise TypeError(
-                f"{class_name} supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
-
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        meta = {
+        return {
             **super()._checkpoint_metadata(),
             "offline_sampling": self.offline_sampling,
         }
-        if self._is_dict_obs:
-            meta.update(
-                {
-                    "image_keys": self._image_keys,
-                    "state_key": self._state_key,
-                    "use_proprio": self._use_proprio,
-                    "proprio_latent_dim": self._proprio_latent_dim,
-                    "image_fusion_mode": self._image_fusion_mode,
-                    "enable_stacking": self._enable_stacking,
-                }
-            )
-        return meta
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
         state = super()._extra_checkpoint_state()
@@ -145,8 +63,9 @@ class Off2OnReplayMixin:
         # no-op for subclasses that never configure ``initial_training_phase``.
         return False
 
-    def _actor_stop_gradient(self) -> bool:
-        return self._is_dict_obs
+    # No _actor_stop_gradient override here: MRO falls through to
+    # CQLCore._actor_stop_gradient (or SAC's equivalent) for callers that
+    # define it; IQL/AWAC never call `self._actor_stop_gradient()`.
 
     def _clear_replay_buffer(self) -> int:
         previous_len = len(self.replay_buffer)

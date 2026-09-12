@@ -52,7 +52,10 @@ class _ConstantExpert:
 
     def __call__(self, obs) -> torch.Tensor:
         self.call_count += 1
-        batch = obs.shape[0]
+        # obs is Dict({"state": Box}) -- _FakeEnv's bare Box observation
+        # space is boundary-normalized by BaseAlgorithm.__init__ (see
+        # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+        batch = obs["state"].shape[0]
         return torch.full((batch, self.action_dim), self.value)
 
 

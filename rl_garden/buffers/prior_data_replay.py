@@ -16,13 +16,42 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
-from gymnasium import spaces
 
 from rl_garden.buffers.dataset_backend_registry import DatasetRequest, load_dataset
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
-from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
+from rl_garden.observations import ObservationConfig, ObservationSchema
+
+
+def _observation_config_from_space(obs_space) -> ObservationConfig:
+    """Reconstructs the ``ObservationConfig`` a resolved observation space
+    (``self.env.single_observation_space``, always Dict) would have come
+    from -- so dataset backends that cross-check ``observation`` against the
+    live env (e.g. rlbench) see the same cameras/image_size/state the env
+    was actually built with."""
+    schema = ObservationSchema.from_space(obs_space)
+    rgb: list[str] = []
+    depth: list[str] = []
+    image_size = None
+    frame_stack = 1
+    for key, entry in schema.entries.items():
+        if key.startswith("rgb_"):
+            rgb.append(key[len("rgb_") :])
+        elif key.startswith("depth_"):
+            depth.append(key[len("depth_") :])
+        else:
+            continue
+        if image_size is None:
+            image_size = (entry.shape[-3], entry.shape[-2])
+        if entry.stacked:
+            frame_stack = entry.shape[0]
+    return ObservationConfig(
+        state="state" in schema.entries,
+        rgb=tuple(rgb),
+        depth=tuple(depth),
+        image_size=image_size,
+        frame_stack=frame_stack,
+    )
 
 
 class PriorDataReplayMixin:
@@ -33,35 +62,16 @@ class PriorDataReplayMixin:
         self.offline_data_ratio: float = 0.0
 
     def _build_prior_data_buffer(self, buffer_size: int):
-        """Same buffer type as ``self.replay_buffer`` (Tensor/Dict, N-step or
-        not -- mirrors ``SAC._build_replay_buffer``'s branching exactly so
+        """Same buffer type as ``self.replay_buffer`` (N-step or not --
+        mirrors ``SAC._build_replay_buffer``'s branching exactly so
         ``.sample()`` returns the same dataclass shape on both buffers;
         ``_concat_replay_samples`` requires matching fields, e.g. ``nstep>1``
         adds a ``discounts`` field), sized independently for a static,
-        single-environment offline dataset."""
+        single-environment offline dataset. Observations are always Dict
+        (the strict rl-garden contract)."""
         obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            if self.nstep > 1:
-                return NStepDictReplayBuffer(
-                    observation_space=obs_space,
-                    action_space=self.env.single_action_space,
-                    num_envs=1,
-                    buffer_size=buffer_size,
-                    nstep=self.nstep,
-                    gamma=self.gamma,
-                    storage_device=self.buffer_device,
-                    sample_device=self.device,
-                )
-            return DictReplayBuffer(
-                observation_space=obs_space,
-                action_space=self.env.single_action_space,
-                num_envs=1,
-                buffer_size=buffer_size,
-                storage_device=self.buffer_device,
-                sample_device=self.device,
-            )
         if self.nstep > 1:
-            return NStepTensorReplayBuffer(
+            return NStepReplayBuffer(
                 observation_space=obs_space,
                 action_space=self.env.single_action_space,
                 num_envs=1,
@@ -71,7 +81,7 @@ class PriorDataReplayMixin:
                 storage_device=self.buffer_device,
                 sample_device=self.device,
             )
-        return TensorReplayBuffer(
+        return ReplayBuffer(
             observation_space=obs_space,
             action_space=self.env.single_action_space,
             num_envs=1,
@@ -105,6 +115,9 @@ class PriorDataReplayMixin:
                 reward_scale=reward_scale,
                 reward_bias=reward_bias,
                 success_key=success_key,
+                observation=_observation_config_from_space(
+                    self.env.single_observation_space
+                ),
             ),
             backend_name=backend,
         )

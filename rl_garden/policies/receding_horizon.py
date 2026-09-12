@@ -1,6 +1,6 @@
 """Receding-horizon rollout wrapper for chunked (diffusion/flow) policies.
 
-``DiffusionPolicy``.predict() (Box or Dict obs) returns a full
+``DiffusionPolicy``.predict() (Dict obs) returns a full
 ``(B, horizon_steps, action_dim)`` chunk and leaves execution/slicing to the
 caller (see those classes' own docstrings). This wraps one such policy to
 expose the plain single-action ``BasePolicy.predict()`` contract instead:

@@ -129,7 +129,7 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
     # Build a tiny H5 with one trajectory and verify the loaded buffer reflects
     # the scaled rewards.
     h5py = pytest.importorskip("h5py")
-    from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+    from rl_garden.buffers.mc_buffer import MCReplayBuffer
     from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 
     path = tmp_path / "tiny.h5"
@@ -146,8 +146,8 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
         traj.create_dataset("terminated", data=terminated)
         traj.create_dataset("truncated", data=truncated)
 
-    buf = MCTensorReplayBuffer(
-        observation_space=spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32),
+    buf = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)}),
         action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -165,7 +165,7 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
 
 def test_h5_loader_sparse_mc_uses_success_key_not_standard_table(tmp_path: Path):
     h5py = pytest.importorskip("h5py")
-    from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+    from rl_garden.buffers.mc_buffer import MCReplayBuffer
     from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 
     path = tmp_path / "sparse.h5"
@@ -182,8 +182,8 @@ def test_h5_loader_sparse_mc_uses_success_key_not_standard_table(tmp_path: Path)
         traj.create_dataset("terminated", data=terminated)
         traj.create_dataset("success", data=success)
 
-    buf = MCTensorReplayBuffer(
-        observation_space=spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32),
+    buf = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)}),
         action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,

@@ -360,18 +360,18 @@ def test_set_offline_probe_uses_sampleable_size_not_len():
     sampleable_size == 0 even if len() > 0 (an all-open-trajectory buffer).
     Build a buffer where sampleable_size < len() (one trailing incomplete
     episode) and confirm probe_size respects sampleable_size, not len()."""
-    from rl_garden.buffers.mc_buffer import MCTensorReplayBuffer
+    from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    buffer = MCTensorReplayBuffer(
+    buffer = MCReplayBuffer(
         obs_space, act_space, 1, 8, gamma=0.9, storage_device="cpu", sample_device="cpu"
     )
     # Two complete episodes, then one still-open trailing step.
     for is_last in (True, True, False):
         buffer.add(
-            torch.zeros(1, 3),
-            torch.zeros(1, 3),
+            {"state": torch.zeros(1, 3)},
+            {"state": torch.zeros(1, 3)},
             torch.zeros(1, 1),
             torch.ones(1),
             torch.zeros(1),
@@ -389,4 +389,4 @@ def test_set_offline_probe_uses_sampleable_size_not_len():
 
     agent.set_offline_probe_batch.assert_called_once()
     probed = agent.set_offline_probe_batch.call_args[0][0]
-    assert probed.obs.shape[0] == buffer.sampleable_size
+    assert probed.obs["state"].shape[0] == buffer.sampleable_size

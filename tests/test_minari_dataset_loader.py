@@ -8,8 +8,8 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import (
-    MCTensorReplayBuffer,
-    TensorReplayBuffer,
+    MCReplayBuffer,
+    ReplayBuffer,
     infer_specs_from_minari,
     load_minari_dataset_to_replay_buffer,
 )
@@ -74,7 +74,7 @@ def _make_sparse_success_episode(
 def _make_box_dataset(episodes) -> _FakeMinariDataset:
     return _FakeMinariDataset(
         episodes,
-        observation_space=spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),
+        observation_space=spaces.Dict({"state": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)}),
         action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
     )
 
@@ -84,10 +84,10 @@ def test_infer_specs_canonicalizes_floating_observation_spaces(monkeypatch):
         [],
         observation_space=spaces.Dict(
             {
-                "observation": spaces.Box(
+                "state": spaces.Box(
                     low=-np.inf, high=np.inf, shape=(27,), dtype=np.float64
                 ),
-                "rgb": spaces.Box(low=0, high=255, shape=(8, 8, 3), dtype=np.uint8),
+                "rgb_front": spaces.Box(low=0, high=255, shape=(8, 8, 3), dtype=np.uint8),
             }
         ),
         action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float64),
@@ -96,9 +96,40 @@ def test_infer_specs_canonicalizes_floating_observation_spaces(monkeypatch):
 
     obs_space, action_space = infer_specs_from_minari("fake/dataset-v0")
 
-    assert obs_space["observation"].dtype == np.float32
-    assert obs_space["rgb"].dtype == np.uint8
+    assert obs_space["state"].dtype == np.float32
+    assert obs_space["rgb_front"].dtype == np.uint8
     assert action_space.dtype == np.float64
+
+
+def test_infer_specs_wraps_flat_box_observation_as_state_key(monkeypatch):
+    dataset = _make_box_dataset([])
+    _install_fake_minari(monkeypatch, dataset)
+
+    obs_space, _ = infer_specs_from_minari("fake/dataset-v0")
+
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].dtype == np.float32
+
+
+def test_infer_specs_rejects_non_contract_dict_keys(monkeypatch):
+    dataset = _FakeMinariDataset(
+        [],
+        observation_space=spaces.Dict(
+            {
+                "observation": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(27,), dtype=np.float64
+                ),
+            }
+        ),
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float64),
+    )
+    _install_fake_minari(monkeypatch, dataset)
+
+    from rl_garden.observations.schema import ObservationContractError
+
+    with pytest.raises(ObservationContractError, match="observation"):
+        infer_specs_from_minari("fake/dataset-v0")
 
 
 def test_done_is_terminations_only_not_truncations(monkeypatch):
@@ -109,7 +140,7 @@ def test_done_is_terminations_only_not_truncations(monkeypatch):
 
     # num_envs=1 keeps buffer storage order == concatenation (insertion) order,
     # so positions can be read back deterministically.
-    buffer = TensorReplayBuffer(
+    buffer = ReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,
@@ -132,7 +163,7 @@ def test_obs_next_obs_shift_by_one(monkeypatch):
     dataset = _make_box_dataset([episode])
     _install_fake_minari(monkeypatch, dataset)
 
-    buffer = TensorReplayBuffer(
+    buffer = ReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,
@@ -143,8 +174,8 @@ def test_obs_next_obs_shift_by_one(monkeypatch):
 
     loaded = load_minari_dataset_to_replay_buffer(buffer, "fake/dataset-v0")
     assert loaded == 3
-    assert torch.equal(buffer.obs[:3, 0].flatten(), torch.tensor([0.0, 1.0, 2.0]))
-    assert torch.equal(buffer.next_obs[:3, 0].flatten(), torch.tensor([1.0, 2.0, 3.0]))
+    assert torch.equal(buffer.obs["state"][:3, 0].flatten(), torch.tensor([0.0, 1.0, 2.0]))
+    assert torch.equal(buffer.next_obs["state"][:3, 0].flatten(), torch.tensor([1.0, 2.0, 3.0]))
 
 
 def test_reward_scale_and_bias_applied(monkeypatch):
@@ -152,7 +183,7 @@ def test_reward_scale_and_bias_applied(monkeypatch):
     dataset = _make_box_dataset([episode])
     _install_fake_minari(monkeypatch, dataset)
 
-    buffer = TensorReplayBuffer(
+    buffer = ReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,
@@ -172,7 +203,7 @@ def test_mc_table_populated_for_mc_buffer(monkeypatch):
     dataset = _make_box_dataset([episode])
     _install_fake_minari(monkeypatch, dataset)
 
-    buffer = MCTensorReplayBuffer(
+    buffer = MCReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,
@@ -194,7 +225,7 @@ def test_sparse_mc_uses_observation_aligned_minari_success(monkeypatch):
     dataset = _make_box_dataset([episode])
     _install_fake_minari(monkeypatch, dataset)
 
-    buffer = MCTensorReplayBuffer(
+    buffer = MCReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,
@@ -228,7 +259,7 @@ def test_final_step_truncation_vs_termination_does_not_change_mc_returns(monkeyp
         dataset = _make_box_dataset([episode])
         _install_fake_minari(monkeypatch, dataset)
 
-        buffer = MCTensorReplayBuffer(
+        buffer = MCReplayBuffer(
             observation_space=dataset.observation_space,
             action_space=dataset.action_space,
             num_envs=1,
@@ -253,7 +284,7 @@ def test_sparse_mc_failed_episode_uses_infinite_horizon_floor(monkeypatch):
     dataset = _make_box_dataset([episode])
     _install_fake_minari(monkeypatch, dataset)
 
-    buffer = MCTensorReplayBuffer(
+    buffer = MCReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,
@@ -280,7 +311,7 @@ def test_num_episodes_caps_loaded_episodes(monkeypatch):
     dataset = _make_box_dataset(episodes)
     _install_fake_minari(monkeypatch, dataset)
 
-    buffer = TensorReplayBuffer(
+    buffer = ReplayBuffer(
         observation_space=dataset.observation_space,
         action_space=dataset.action_space,
         num_envs=1,

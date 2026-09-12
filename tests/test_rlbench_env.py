@@ -15,7 +15,9 @@ from gymnasium import spaces
 from rl_garden.envs.backend_registry import EnvRequest
 from rl_garden.envs.backends.rlbench import RLBenchBackend
 from rl_garden.envs.rlbench.config import RLBenchEnvConfig
-from rl_garden.envs.rlbench.env import make_rlbench_env
+from rl_garden.envs.rlbench.env import _validate_cameras, make_rlbench_env
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 class _FakeObservation:
@@ -168,20 +170,22 @@ def _install_fake_rlbench(monkeypatch, *, task_class):
     monkeypatch.setitem(sys.modules, "rlbench.action_modes.gripper_action_modes", fake_gripper_action_modes)
 
 
-def test_state_mode_returns_flat_box_torch_observation(monkeypatch):
+def test_state_mode_returns_dict_with_state_key(monkeypatch):
     _install_fake_rlbench(monkeypatch, task_class=_state_only_task_class())
 
-    cfg = RLBenchEnvConfig(task_name="reach_target", num_envs=2, seed=0, obs_mode="state", device="cpu")
+    cfg = RLBenchEnvConfig(task_name="reach_target", num_envs=2, seed=0, device="cpu")
     env = make_rlbench_env(cfg)
 
     obs, _ = env.reset()
-    assert isinstance(obs, torch.Tensor)
-    assert obs.shape == (2, 1)
-    assert obs.dtype == torch.float32
+    assert isinstance(obs, dict)
+    assert set(obs) == {"state"}
+    assert isinstance(obs["state"], torch.Tensor)
+    assert obs["state"].shape == (2, 1)
+    assert obs["state"].dtype == torch.float32
 
     actions = torch.zeros(2, 8)
     next_obs, rewards, terminations, _truncations, _infos = env.step(actions)
-    assert isinstance(next_obs, torch.Tensor)
+    assert isinstance(next_obs["state"], torch.Tensor)
     assert isinstance(rewards, torch.Tensor) and rewards.dtype == torch.float32
     assert isinstance(terminations, torch.Tensor) and terminations.dtype == torch.bool
     env.close()
@@ -191,7 +195,12 @@ def test_rgb_mode_returns_dict_with_renamed_image_keys(monkeypatch):
     _install_fake_rlbench(monkeypatch, task_class=_with_images_task_class())
 
     cfg = RLBenchEnvConfig(
-        task_name="reach_target", num_envs=1, seed=0, obs_mode="rgb", cameras=("front",), device="cpu"
+        task_name="reach_target",
+        num_envs=1,
+        seed=0,
+        rgb_cameras=("front",),
+        depth_cameras=("front",),
+        device="cpu",
     )
     env = make_rlbench_env(cfg)
 
@@ -202,6 +211,49 @@ def test_rgb_mode_returns_dict_with_renamed_image_keys(monkeypatch):
     assert obs["rgb_front"].shape == (1, 4, 4, 3)
     assert obs["depth_front"].shape == (1, 4, 4, 1)
     env.close()
+
+
+def test_rgb_mode_drops_state_key_when_state_false(monkeypatch):
+    _install_fake_rlbench(monkeypatch, task_class=_with_images_task_class())
+
+    cfg = RLBenchEnvConfig(
+        task_name="reach_target",
+        num_envs=1,
+        seed=0,
+        rgb_cameras=("front",),
+        state=False,
+        device="cpu",
+    )
+    env = make_rlbench_env(cfg)
+
+    obs, _ = env.reset()
+    assert set(obs) == {"rgb_front"}
+    env.close()
+
+
+def test_unknown_camera_raises_and_lists_available(monkeypatch):
+    import pytest
+
+    with pytest.raises(ObservationContractError) as excinfo:
+        _validate_cameras({"not_a_real_camera"})
+    for camera in ("left_shoulder", "right_shoulder", "overhead", "wrist", "front"):
+        assert camera in str(excinfo.value)
+
+
+def test_make_rlbench_env_rejects_unknown_camera(monkeypatch):
+    _install_fake_rlbench(monkeypatch, task_class=_with_images_task_class())
+
+    import pytest
+
+    cfg = RLBenchEnvConfig(
+        task_name="reach_target",
+        num_envs=1,
+        seed=0,
+        rgb_cameras=("not_a_real_camera",),
+        device="cpu",
+    )
+    with pytest.raises(ObservationContractError, match="unknown camera"):
+        make_rlbench_env(cfg)
 
 
 def test_env_fn_forwards_env_kwargs(monkeypatch):
@@ -282,12 +334,10 @@ def test_backend_make_train_env_uses_num_envs_and_train_config(monkeypatch):
     req = EnvRequest(
         env_id="reach_target",
         num_envs=4,
-        obs_mode="state",
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(),
         num_eval_envs=2,
         backend_config=None,
     )
@@ -312,12 +362,10 @@ def test_backend_make_eval_env_uses_num_eval_envs(monkeypatch):
     req = EnvRequest(
         env_id="reach_target",
         num_envs=4,
-        obs_mode="rgb",
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(rgb=("front",)),
         num_eval_envs=2,
         backend_config=None,
     )
@@ -332,12 +380,10 @@ def test_backend_resolve_config_parses_env_kwargs_json_and_vectorization():
     req = EnvRequest(
         env_id="reach_target",
         num_envs=4,
-        obs_mode="rgb",
         control_mode="",
         render_mode="rgb_array",
         seed=3,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(rgb=("front",), depth=("front",), image_size=(64, 64)),
         num_eval_envs=2,
         reward_scale=2.0,
         reward_bias=0.5,
@@ -351,3 +397,43 @@ def test_backend_resolve_config_parses_env_kwargs_json_and_vectorization():
     assert cfg.vectorization == "async"
     assert cfg.reward_scale == 2.0
     assert cfg.reward_bias == 0.5
+    assert cfg.rgb_cameras == ("front",)
+    assert cfg.depth_cameras == ("front",)
+    assert cfg.state is True
+    assert cfg.image_size == (64, 64)
+
+
+def test_backend_resolve_config_rejects_frame_stack_without_camera():
+    import pytest
+
+    req = EnvRequest(
+        env_id="reach_target",
+        num_envs=4,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=3,
+        observation=ObservationConfig(frame_stack=3),
+        num_eval_envs=2,
+        backend_config=None,
+    )
+    with pytest.raises(ObservationContractError, match="frame_stack"):
+        RLBenchBackend.resolve_config(req, is_eval=False)
+
+
+def test_frame_stack_applies_image_frame_stack_wrapper(monkeypatch):
+    _install_fake_rlbench(monkeypatch, task_class=_with_images_task_class())
+
+    cfg = RLBenchEnvConfig(
+        task_name="reach_target",
+        num_envs=1,
+        seed=0,
+        rgb_cameras=("front",),
+        depth_cameras=("front",),
+        frame_stack=3,
+        device="cpu",
+    )
+    env = make_rlbench_env(cfg)
+    obs, _ = env.reset()
+    assert obs["rgb_front"].shape == (1, 3, 4, 4, 3)
+    assert obs["depth_front"].shape == (1, 3, 4, 4, 1)
+    env.close()

@@ -92,7 +92,7 @@ def test_sample_train_batch_falls_back_to_offline_when_online_buffer_empty():
     agent.offline_replay_buffer = agent._build_prior_data_buffer(16)
     agent.offline_data_ratio = 1.0
     agent.offline_replay_buffer.add(
-        torch.zeros(1, 4), torch.ones(1, 4), torch.zeros(1, 2), torch.zeros(1), torch.zeros(1)
+        {"state": torch.zeros(1, 4)}, {"state": torch.ones(1, 4)}, torch.zeros(1, 2), torch.zeros(1), torch.zeros(1)
     )
     agent.offline_replay_buffer.sample = _tagged_sampler(2.0)
     # agent.replay_buffer has never had anything added -> len() == 0.
@@ -105,14 +105,14 @@ def test_sample_train_batch_mixes_ratio_and_shuffles():
     agent.offline_replay_buffer = agent._build_prior_data_buffer(16)
     agent.offline_data_ratio = 0.5
     agent.replay_buffer.add(
-        torch.zeros(agent.env.num_envs, 4),
-        torch.ones(agent.env.num_envs, 4),
+        {"state": torch.zeros(agent.env.num_envs, 4)},
+        {"state": torch.ones(agent.env.num_envs, 4)},
         torch.zeros(agent.env.num_envs, 2),
         torch.zeros(agent.env.num_envs),
         torch.zeros(agent.env.num_envs),
     )
     agent.offline_replay_buffer.add(
-        torch.zeros(1, 4), torch.ones(1, 4), torch.zeros(1, 2), torch.zeros(1), torch.zeros(1)
+        {"state": torch.zeros(1, 4)}, {"state": torch.ones(1, 4)}, torch.zeros(1, 2), torch.zeros(1), torch.zeros(1)
     )
     agent.replay_buffer.sample = _tagged_sampler(1.0)
     agent.offline_replay_buffer.sample = _tagged_sampler(2.0)
@@ -143,16 +143,16 @@ def test_sample_train_batch_matches_nstep_buffer_shape():
     agent.offline_data_ratio = 0.5
     for _ in range(5):
         agent.replay_buffer.add(
-            torch.zeros(agent.env.num_envs, 4),
-            torch.ones(agent.env.num_envs, 4),
+            {"state": torch.zeros(agent.env.num_envs, 4)},
+            {"state": torch.ones(agent.env.num_envs, 4)},
             torch.zeros(agent.env.num_envs, 2),
             torch.zeros(agent.env.num_envs),
             torch.zeros(agent.env.num_envs),
             episode_end=torch.zeros(agent.env.num_envs),
         )
         agent.offline_replay_buffer.add(
-            torch.zeros(1, 4),
-            torch.ones(1, 4),
+            {"state": torch.zeros(1, 4)},
+            {"state": torch.ones(1, 4)},
             torch.zeros(1, 2),
             torch.zeros(1),
             torch.zeros(1),
@@ -160,7 +160,7 @@ def test_sample_train_batch_matches_nstep_buffer_shape():
         )
 
     batch = agent._sample_train_batch(8)
-    assert batch.obs.shape == (8, 4)
+    assert batch.obs["state"].shape == (8, 4)
     assert batch.discounts.shape == (8,)
 
 
@@ -248,8 +248,8 @@ def test_load_offline_replay_buffer_d4rl_legacy(monkeypatch):
         calls["success_key"] = success_key
         for _ in range(3):
             buffer.add(
-                obs=torch.zeros(1, 4),
-                next_obs=torch.zeros(1, 4),
+                obs={"state": torch.zeros(1, 4)},
+                next_obs={"state": torch.zeros(1, 4)},
                 action=torch.zeros(1, 2),
                 reward=torch.ones(1),
                 done=torch.zeros(1, dtype=torch.bool),
@@ -286,8 +286,8 @@ def test_load_offline_replay_buffer_robomimic(monkeypatch):
         calls["success_key"] = success_key
         for _ in range(3):
             buffer.add(
-                obs=torch.zeros(1, 4),
-                next_obs=torch.zeros(1, 4),
+                obs={"state": torch.zeros(1, 4)},
+                next_obs={"state": torch.zeros(1, 4)},
                 action=torch.zeros(1, 2),
                 reward=torch.ones(1),
                 done=torch.zeros(1, dtype=torch.bool),
@@ -324,8 +324,8 @@ def test_load_offline_replay_buffer_ogbench(monkeypatch):
         calls["success_key"] = success_key
         for _ in range(3):
             buffer.add(
-                obs=torch.zeros(1, 4),
-                next_obs=torch.zeros(1, 4),
+                obs={"state": torch.zeros(1, 4)},
+                next_obs={"state": torch.zeros(1, 4)},
                 action=torch.zeros(1, 2),
                 reward=torch.ones(1),
                 done=torch.zeros(1, dtype=torch.bool),
@@ -355,18 +355,17 @@ def test_load_offline_replay_buffer_rlbench(monkeypatch):
     calls = {}
 
     def fake_loader(
-        buffer, path, *, num_traj, obs_mode, cameras, image_size, reward_scale, reward_bias, success_key
+        buffer, path, *, num_traj, cameras, image_size, reward_scale, reward_bias, success_key
     ):
         calls["path"] = path
         calls["num_traj"] = num_traj
-        calls["obs_mode"] = obs_mode
         calls["reward_scale"] = reward_scale
         calls["reward_bias"] = reward_bias
         calls["success_key"] = success_key
         for _ in range(3):
             buffer.add(
-                obs=torch.zeros(1, 4),
-                next_obs=torch.zeros(1, 4),
+                obs={"state": torch.zeros(1, 4)},
+                next_obs={"state": torch.zeros(1, 4)},
                 action=torch.zeros(1, 2),
                 reward=torch.ones(1),
                 done=torch.zeros(1, dtype=torch.bool),

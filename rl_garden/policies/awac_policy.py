@@ -41,9 +41,6 @@ class AWACPolicy(ObsNormalizingMixin, BasePolicy):
         std_parameterization: Literal["exp", "uniform"] = "exp",
     ) -> None:
         super().__init__()
-        assert isinstance(observation_space, spaces.Box), (
-            "AWACPolicy requires a Box observation space."
-        )
         assert isinstance(action_space, spaces.Box), "AWAC requires a Box action space."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
@@ -51,7 +48,7 @@ class AWACPolicy(ObsNormalizingMixin, BasePolicy):
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_extractor = features_extractor
-        self._register_obs_normalizer(int(observation_space.shape[0]))
+        self._register_obs_normalizer(int(features_extractor.features_dim))
 
         fd = features_extractor.features_dim
         net_arch = list(net_arch)
@@ -98,8 +95,8 @@ class AWACPolicy(ObsNormalizingMixin, BasePolicy):
             p.requires_grad_(False)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        obs = self._normalize_obs(obs)
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        features = self._extract_features(obs, stop_gradient=stop_gradient)
+        return self._normalize_obs(features)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         features = self.extract_features(obs)

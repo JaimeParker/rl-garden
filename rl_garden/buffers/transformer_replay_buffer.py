@@ -28,7 +28,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers._checkpointed_sequence_buffer import _CheckpointedSequenceReplayBuffer
-from rl_garden.buffers.dict_buffer import _tree_to_device
+from rl_garden.buffers.replay_buffer import _tree_to_device
 from rl_garden.common.types import Obs
 
 
@@ -48,7 +48,7 @@ class TransformerReplayBufferSample:
 class TransformerReplayBuffer(_CheckpointedSequenceReplayBuffer):
     def __init__(
         self,
-        observation_space: spaces.Box | spaces.Dict,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         num_envs: int,
         buffer_size: int,

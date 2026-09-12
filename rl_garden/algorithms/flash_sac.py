@@ -16,17 +16,23 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
+import dataclasses
+
 import numpy as np
 import torch
 import torch.nn as nn
-from gymnasium import spaces
 
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
-from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
+from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.reward_normalizer import RewardNormalizer
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.observations import (
+    ObservationContractError,
+    ObservationSchema,
+    normalize_observation_space,
+)
 from rl_garden.policies.flash_sac_policy import FlashSACPolicy, FlashSACTemperature
 
 
@@ -124,6 +130,18 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
 
     _compatible_checkpoint_algorithms = ("FlashSAC",)
 
+    def _obs_to_policy_device(self, obs):
+        # FlashSACPolicy has no encoder mixin / Dict handling -- it indexes
+        # observation_space.shape[0] directly and every method
+        # (predict/extract_features/actor_obs) expects a raw flat tensor.
+        # Every caller of this method (_eval_action, _policy_action, and
+        # this class's own _rollout_action) immediately feeds the result
+        # into the policy, so unwrapping "state" here (the env boundary
+        # always normalizes to Dict({"state": Box}) now) is the single
+        # choke point that keeps the rest of this class's raw-tensor
+        # architecture unchanged.
+        return super()._obs_to_policy_device(obs)["state"]
+
     def __init__(
         self,
         env: Any,
@@ -209,10 +227,20 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
             initial_training_phase=initial_training_phase,
         )
 
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"FlashSAC requires a flat Box observation space, got {type(obs_space)}"
+        # FlashSAC has no encoder mixin / CombinedExtractor path -- FlashSACPolicy
+        # indexes observation_space.shape[0] directly and the rollout/train loop
+        # feeds it raw flat tensors, so this is a precondition assertion (no
+        # Dict-obs branch exists to migrate), not observation-type encoder
+        # selection. The env boundary always normalizes to Dict now, so this
+        # checks the schema's key set (state-only, no images) instead of
+        # branching on Box vs Dict directly.
+        schema = ObservationSchema.from_space(
+            normalize_observation_space(self.env.single_observation_space)
+        )
+        if schema.keys != ("state",):
+            raise ObservationContractError(
+                "FlashSAC requires a flat state-only observation space, got "
+                f"keys {schema.keys}"
             )
 
         self.n_step = n_step
@@ -247,7 +275,11 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
     # ------------------------------------------------------------------
 
     def _setup_model(self) -> None:
-        obs_space = self.env.single_observation_space
+        dict_obs_space = self.env.single_observation_space
+        # FlashSACPolicy indexes observation_space.shape[0] directly (no
+        # Dict/encoder handling) -- unwrap to the raw Box entry; the replay
+        # buffer below keeps the full Dict space.
+        obs_space = dict_obs_space["state"]
         act_space = self.env.single_action_space
 
         self.policy = FlashSACPolicy(
@@ -287,8 +319,8 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
             self.target_entropy = float(self.target_entropy_arg)
 
         # Replay buffer
-        self.replay_buffer = NStepTensorReplayBuffer(
-            observation_space=obs_space,
+        self.replay_buffer = NStepReplayBuffer(
+            observation_space=dict_obs_space,
             action_space=act_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
@@ -424,6 +456,10 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self.replay_buffer.sample(self.batch_size)
+            # FlashSACPolicy/critic take raw flat tensors (see the
+            # state-only precondition in __init__); unwrap the Dict sample
+            # once here rather than at every raw-tensor use site below.
+            data = dataclasses.replace(data, obs=data.obs["state"], next_obs=data.next_obs["state"])
 
             rewards = data.rewards
             if self.reward_normalizer is not None:

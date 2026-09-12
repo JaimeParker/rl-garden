@@ -46,13 +46,15 @@ def _make_off2on(simple_env, **kwargs) -> Off2OnSPOT:
 
 def _fill_buffer(buffer, num_steps: int) -> None:
     n = buffer.num_envs
-    obs_dim = buffer.obs.shape[-1]
+    # buffer.obs.shape is the container-level (buffer_size, num_envs) shape,
+    # not the per-key feature dim -- read the "state" key's own tensor shape.
+    obs_dim = buffer.obs.data["state"].shape[-1]
     act_dim = buffer.actions.shape[-1]
     for step in range(num_steps):
         is_last = step == num_steps - 1
         buffer.add(
-            torch.randn(n, obs_dim),
-            torch.randn(n, obs_dim),
+            {"state": torch.randn(n, obs_dim)},
+            {"state": torch.randn(n, obs_dim)},
             torch.rand(n, act_dim) * 2 - 1,
             torch.randn(n),
             torch.ones(n) if is_last else torch.zeros(n),
@@ -118,7 +120,7 @@ def test_current_lambd_cools_only_after_online_switch(simple_env):
 
 def test_rollout_action_adds_exploration_noise_after_learning_starts(simple_env):
     agent = _make_off2on(simple_env, expl_noise=0.5, noise_clip=1.0)
-    obs = torch.zeros(agent.num_envs, 4)
+    obs = {"state": torch.zeros(agent.num_envs, 4)}
     torch.manual_seed(0)
     action, _, _ = agent._rollout_action(obs, learning_has_started=True)
 
@@ -164,8 +166,8 @@ def test_offline_spot_checkpoint_loads_into_off2on_spot(simple_env, tmp_path):
     obs = torch.randn(1, *offline_env.single_observation_space.shape)
     for _ in range(20):
         offline_agent.replay_buffer.add(
-            obs,
-            torch.randn_like(obs),
+            {"state": obs},
+            {"state": torch.randn_like(obs)},
             torch.rand(1, *offline_env.single_action_space.shape) * 2 - 1,
             torch.randn(1),
             torch.zeros(1),

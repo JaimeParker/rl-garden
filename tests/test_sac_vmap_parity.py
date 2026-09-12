@@ -22,12 +22,18 @@ class DummyVecEnv:
 
 
 class TrainableBoxExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Box, features_dim: int = 7) -> None:
-        super().__init__(observation_space, features_dim)
-        self.proj = torch.nn.Linear(int(np.prod(observation_space.shape)), features_dim)
+    """A custom features_extractor_class for a state-only env. Despite the
+    name, ``observation_space`` here is Dict({"state": Box}) -- _box_env's
+    bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    rl_garden.envs.wrappers.VectorizedDictStateWrapper) before SAC's
+    policy_kwargs escape hatch ever sees it."""
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(self.proj(obs.float().flatten(start_dim=1)))
+    def __init__(self, observation_space: spaces.Dict, features_dim: int = 7) -> None:
+        super().__init__(observation_space, features_dim)
+        self.proj = torch.nn.Linear(int(np.prod(observation_space["state"].shape)), features_dim)
+
+    def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        return torch.tanh(self.proj(obs["state"].float().flatten(start_dim=1)))
 
 
 class TrainableDictExtractor(BaseFeaturesExtractor):
@@ -38,7 +44,7 @@ class TrainableDictExtractor(BaseFeaturesExtractor):
 
     def forward(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         state = obs["state"].float()
-        rgb = obs["rgb"].float().mean(dim=(1, 2)) / 255.0
+        rgb = obs["rgb_cam"].float().mean(dim=(1, 2)) / 255.0
         return torch.tanh(self.state_proj(state) + self.rgb_proj(rgb))
 
 
@@ -54,7 +60,7 @@ def _dict_env() -> DummyVecEnv:
         spaces.Dict(
             {
                 "state": spaces.Box(low=-10.0, high=10.0, shape=(5,), dtype=np.float32),
-                "rgb": spaces.Box(low=0, high=255, shape=(8, 8, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(8, 8, 3), dtype=np.uint8),
             }
         ),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
@@ -138,8 +144,8 @@ def _assert_agents_close(vmap: SAC, legacy: SAC, *, atol: float = 1e-6, rtol: fl
 def _box_batch(device: str) -> ReplayBufferSample:
     gen = torch.Generator(device=device)
     gen.manual_seed(456)
-    obs = torch.randn(8, 5, generator=gen, device=device)
-    next_obs = torch.randn(8, 5, generator=gen, device=device)
+    obs = {"state": torch.randn(8, 5, generator=gen, device=device)}
+    next_obs = {"state": torch.randn(8, 5, generator=gen, device=device)}
     actions = torch.randn(8, 2, generator=gen, device=device).clamp(-0.9, 0.9)
     rewards = torch.randn(8, generator=gen, device=device)
     dones = torch.randint(0, 2, (8,), generator=gen, device=device).float()
@@ -151,11 +157,11 @@ def _dict_batch(device: str) -> ReplayBufferSample:
     gen.manual_seed(789)
     obs = {
         "state": torch.randn(8, 5, generator=gen, device=device),
-        "rgb": torch.randint(0, 256, (8, 8, 8, 3), generator=gen, device=device, dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (8, 8, 8, 3), generator=gen, device=device, dtype=torch.uint8),
     }
     next_obs = {
         "state": torch.randn(8, 5, generator=gen, device=device),
-        "rgb": torch.randint(0, 256, (8, 8, 8, 3), generator=gen, device=device, dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (8, 8, 8, 3), generator=gen, device=device, dtype=torch.uint8),
     }
     actions = torch.randn(8, 2, generator=gen, device=device).clamp(-0.9, 0.9)
     rewards = torch.randn(8, generator=gen, device=device)

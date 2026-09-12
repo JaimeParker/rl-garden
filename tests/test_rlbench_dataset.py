@@ -15,8 +15,8 @@ import pytest
 from gymnasium import spaces
 
 from rl_garden.buffers import (
-    MCTensorReplayBuffer,
-    TensorReplayBuffer,
+    MCReplayBuffer,
+    ReplayBuffer,
     infer_specs_from_rlbench,
     load_rlbench_dataset_to_replay_buffer,
 )
@@ -201,9 +201,10 @@ def test_infer_specs_from_rlbench_state_only(monkeypatch):
 
     obs_space, action_space = infer_specs_from_rlbench("/data/rlbench_demos/reach_target")
 
-    assert isinstance(obs_space, spaces.Box)
-    assert obs_space.dtype == np.float32
-    assert obs_space.shape == (3,)
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].dtype == np.float32
+    assert obs_space["state"].shape == (3,)
     assert action_space.shape == (8,)  # 7 joint velocities + 1 discretized gripper
 
 
@@ -222,7 +223,7 @@ def test_infer_specs_from_rlbench_rgb_mode_renames_image_keys(monkeypatch):
     _install_fake_rlbench(monkeypatch, demos)
 
     obs_space, _ = infer_specs_from_rlbench(
-        "/data/rlbench_demos/reach_target", obs_mode="rgb", cameras=("front",)
+        "/data/rlbench_demos/reach_target", cameras=("front",)
     )
 
     assert set(obs_space.spaces) == {"state", "rgb_front", "depth_front"}
@@ -236,8 +237,8 @@ def test_load_rlbench_dataset_uses_single_observation_action_derivation(monkeypa
     demos = _two_demos()
     _install_fake_rlbench(monkeypatch, demos)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (8,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -259,8 +260,8 @@ def test_load_rlbench_dataset_marks_reward_and_done_only_at_last_step(monkeypatc
     demos = _two_demos()
     _install_fake_rlbench(monkeypatch, demos)
 
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (8,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -282,8 +283,8 @@ def test_load_rlbench_dataset_num_traj_truncates_by_demo_count(monkeypatch):
     demos = _two_demos()
     _install_fake_rlbench(monkeypatch, demos)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (8,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -302,8 +303,8 @@ def test_load_rlbench_dataset_live_demos_routes_to_get_demos_live(monkeypatch):
     demos = _two_demos()
     captured = _install_fake_rlbench(monkeypatch, demos)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (8,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -324,8 +325,8 @@ def test_load_rlbench_dataset_live_demos_routes_to_get_demos_live(monkeypatch):
 def test_load_rlbench_dataset_raises_when_no_demos_found(monkeypatch):
     _install_fake_rlbench(monkeypatch, [])
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (3,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (8,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,

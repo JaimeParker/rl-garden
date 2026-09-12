@@ -18,7 +18,7 @@ TD3BC's two-term actor loss already does.
 
 ``encoder_sharing`` controls how the vision encoder is owned:
 
-- ``"shared"`` (default) -- one ``features_extractor``, matching AGENTS.md's
+- ``"shared_critic_grad"`` (default) -- one ``features_extractor``, matching AGENTS.md's
   project convention ("RGBD actor and critic share the encoder; actor
   updates detach encoder features", also SACPolicy's own convention). The
   critic trains it via ``critic_loss``; the actor path gets detached
@@ -56,7 +56,16 @@ from rl_garden.networks import (
 )
 from rl_garden.policies.base import BasePolicy
 
-EncoderSharing = Literal["shared", "separate"]
+# This family only implements two of the mixin's three values (see
+# rl_garden.algorithms._observation.EncoderSharing) -- "shared" (both losses
+# train one encoder, no detach) has no implementation here; see __init__'s
+# validation below. Kept as a local Literal, not imported from
+# rl_garden.algorithms._observation: rl_garden/policies/*.py must not import
+# from rl_garden.algorithms.* at module scope (importing any submodule of
+# rl_garden.algorithms runs algorithms/__init__.py, which eagerly imports
+# fql.py -> this module, i.e. import rl_garden.algorithms._observation from
+# here IS a circular import, confirmed empirically -- not just theoretical).
+EncoderSharing = Literal["shared_critic_grad", "separate"]
 
 
 class FQLPolicy(BasePolicy):
@@ -77,7 +86,7 @@ class FQLPolicy(BasePolicy):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
     ) -> None:
@@ -85,9 +94,10 @@ class FQLPolicy(BasePolicy):
         assert isinstance(action_space, spaces.Box), "FQL requires a Box action space."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
-        if encoder_sharing not in ("shared", "separate"):
+        if encoder_sharing not in ("shared_critic_grad", "separate"):
             raise ValueError(
-                f"encoder_sharing must be 'shared' or 'separate', got {encoder_sharing!r}."
+                "encoder_sharing must be 'shared_critic_grad' or 'separate', got "
+                f"{encoder_sharing!r}."
             )
         if encoder_sharing == "separate":
             if actor_bc_flow_encoder is None or actor_onestep_flow_encoder is None:
@@ -97,15 +107,16 @@ class FQLPolicy(BasePolicy):
                 )
         elif actor_bc_flow_encoder is not None or actor_onestep_flow_encoder is not None:
             raise ValueError(
-                "encoder_sharing='shared' does not accept actor_bc_flow_encoder/"
-                "actor_onestep_flow_encoder -- pass encoder_sharing='separate'."
+                "encoder_sharing='shared_critic_grad' does not accept "
+                "actor_bc_flow_encoder/actor_onestep_flow_encoder -- pass "
+                "encoder_sharing='separate'."
             )
 
         self.observation_space = observation_space
         self.action_space = action_space
         self.encoder_sharing = encoder_sharing
         # features_extractor is always the critic's own encoder -- in
-        # "shared" mode it is also the actor's encoder (with detach).
+        # "shared_critic_grad" mode it is also the actor's encoder (with detach).
         self.features_extractor = features_extractor
         if encoder_sharing == "separate":
             self.actor_bc_flow_encoder = actor_bc_flow_encoder

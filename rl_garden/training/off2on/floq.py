@@ -4,12 +4,13 @@ Reuses the shared ``run_off2on`` runner (``rl_garden/training/off2on/_runner.py`
 unmodified, matching ``acfql.py``'s shape: only a ``build_floq`` callback is
 needed here.
 
-Box observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-observations. Mirrors ``ACFQLArgs``: fields inlined against
-``Off2OnCommonArgs``, ``VisionArgs``, ``EnvBackendArgs`` rather than adding a
-new class to ``off2on/_args.py`` -- ``Off2OnFloQ`` has no action chunking, so
-the chunking-only fields on ``ACFQLArgs`` (``horizon_length``, ``actor_type``,
-``actor_num_samples``) are dropped and the 13 floq fields are added instead.
+State-only observations by default; pass ``--obs.rgb <camera>`` for
+CNN-based Dict/RGBD observations. Mirrors ``ACFQLArgs``: fields inlined
+against ``Off2OnCommonArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
+than adding a new class to ``off2on/_args.py`` -- ``Off2OnFloQ`` has no
+action chunking, so the chunking-only fields on ``ACFQLArgs``
+(``horizon_length``, ``actor_type``, ``actor_num_samples``) are dropped and
+the 13 floq fields are added instead.
 
 As with ``ACFQLArgs``, a few inherited ``Off2OnCommonArgs`` fields have no
 effect on FloQ and are not read by ``build_floq``: ``critic_subsample_size``,
@@ -24,17 +25,17 @@ from __future__ import annotations
 
 def build_floq(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFloQ
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys_from_env(env, args),
-            image_fusion_mode=args.image_fusion_mode,
-        )
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnFloQ,
@@ -70,7 +71,6 @@ def build_floq(args, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         activation_fn=args.activation_fn,
-        encoder_sharing=args.encoder_sharing,
         r_min=args.r_min,
         r_max=args.r_max,
         flow_num_ensembles=args.flow_num_ensembles,
@@ -115,24 +115,19 @@ def run_floq(args: "FloQOff2OnArgs") -> None:
 from dataclasses import dataclass  # noqa: E402
 from typing import Literal, Optional  # noqa: E402
 
-from rl_garden.common.cli_args import VisionArgs  # noqa: E402
+from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.policies.floq_policy import EncoderSharing  # noqa: E402
 from rl_garden.training.off2on._args import Off2OnCommonArgs  # noqa: E402
 from rl_garden.training.off2on._registry import registry  # noqa: E402
 
 
 @dataclass
-class FloQOff2OnArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
+class FloQOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     """FloQ -- offline-to-online flow-matching-critic FQL (Farebrother et
-    al. 2025, ``3rd_party/floq/agents/floq.py``). Box observations by
-    default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD observations.
+    al. 2025, ``3rd_party/floq/agents/floq.py``). State-only observations by
+    default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations.
     """
-
-    # See ACFQLArgs' own precedent: defaults to "state" (not VisionArgs' own
-    # "rgb" default) so callers that don't pass --obs_mode get state obs.
-    obs_mode: str = "state"
 
     # 10.0, not ACFQL's 100.0: floq's own reference config
     # (3rd_party/floq/agents/floq.py get_config, alpha=10.0) inherits FQL's
@@ -145,7 +140,6 @@ class FloQOff2OnArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
     hidden_dim: int = 512
     hidden_layers: int = 4
     activation_fn: Optional[Activation] = "gelu"
-    encoder_sharing: EncoderSharing = "shared"
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
 

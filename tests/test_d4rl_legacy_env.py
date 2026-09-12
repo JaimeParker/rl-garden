@@ -3,11 +3,16 @@ from typing import ClassVar
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
+from rl_garden.envs.backend_registry import EnvRequest
+from rl_garden.envs.backends.d4rl_legacy import D4RLLegacyBackend
 from rl_garden.envs.d4rl_legacy.config import D4RLLegacyEnvConfig
 from rl_garden.envs.d4rl_legacy.env import make_d4rl_legacy_env
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 class _FakeLegacyEnv:
@@ -93,7 +98,8 @@ def test_legacy_env_exposes_torch_vector_contract_and_success(monkeypatch):
     )
 
     obs, _ = env.reset()
-    assert obs.dtype == torch.float32
+    assert isinstance(obs, dict) and set(obs) == {"state"}
+    assert obs["state"].dtype == torch.float32
     action = torch.zeros((1, 1))
     _, reward1, terminated1, _, _ = env.step(action)
     _, reward2, terminated2, _, info2 = env.step(action)
@@ -298,6 +304,21 @@ def test_standard_adroit_reports_d4rl_normalized_score(monkeypatch):
 
     assert info["final_info"]["episode"]["normalized_score"].tolist() == [10.0]
     env.close()
+
+
+def test_resolve_config_rejects_vision_request():
+    req = EnvRequest(
+        env_id="halfcheetah-medium-v2",
+        num_envs=1,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=0,
+        observation=ObservationConfig(rgb=("cam",)),
+        backend_config=None,
+    )
+
+    with pytest.raises(ObservationContractError):
+        D4RLLegacyBackend.resolve_config(req, is_eval=False)
 
 
 def test_locomotion_reports_d4rl_normalized_score(monkeypatch):

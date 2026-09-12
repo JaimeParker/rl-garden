@@ -15,50 +15,19 @@ from __future__ import annotations
 from typing import Any
 
 
-def _policy_distillation_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    backend_config = args.resolve_backend_config()
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode="state",
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=None,
-        camera_height=None,
-        include_state=True,
-        per_camera_rgbd=False,
-        frame_stack=1,
-        num_eval_envs=args.num_eval_envs,
-        create_eval_env=should_create_eval_env(args),
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=backend_config,
-    )
-
-
 def _build_teacher_policy(args, env: Any):
-    from gymnasium import spaces
-
+    from rl_garden.algorithms.policy_distillation import role_observation_space
     from rl_garden.common.checkpoint import load_checkpoint_file, load_filtered_state_dict
-    from rl_garden.encoders.combined import CombinedExtractor
+    from rl_garden.encoders.factory import build_observation_encoder
     from rl_garden.policies.ppo_policy import PPOPolicy
 
     obs_space = env.single_observation_space
-    teacher_obs_space = spaces.Dict(
-        {key: obs_space[key] for key in args.teacher_obs_keys}
-    )
-    features_extractor = CombinedExtractor(
-        observation_space=teacher_obs_space,
-        image_keys=(),
-        use_proprio=False,
-    )
+    teacher_obs_space = role_observation_space(obs_space, args.teacher_obs_keys)
+    # No encoder_config knob is exposed for the teacher: v1's env request is
+    # state-only (see _policy_distillation_env_request) and the teacher is
+    # always rebuilt from teacher_obs_keys/teacher_net_arch, never from a
+    # caller-supplied encoder configuration.
+    features_extractor = build_observation_encoder(teacher_obs_space)
     teacher_policy = PPOPolicy(
         observation_space=teacher_obs_space,
         action_space=env.single_action_space,
@@ -91,6 +60,16 @@ def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
             "--student_obs_keys (Dict obs keys naming the privileged and "
             "realistic observation groups)."
         )
+    from rl_garden.common.cli_args import resolve_obs_groups_config
+
+    if resolve_obs_groups_config(args) is not None:
+        # PolicyDistillation has no critic (see module docstring) and its
+        # __init__ takes only encoder_config -- there is no obs_groups
+        # parameter to forward an actor/critic split to.
+        raise ValueError(
+            "policy_distillation has no critic, so --obs_groups only makes "
+            f"sense left unset; got an explicit ObsGroups: {args.obs_groups}."
+        )
 
     teacher_policy = _build_teacher_policy(args, env)
     agent = construct_agent(
@@ -100,6 +79,7 @@ def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
         teacher_policy=teacher_policy,
         teacher_obs_keys=args.teacher_obs_keys,
         student_obs_keys=args.student_obs_keys,
+        encoder_config=args.encoder if args.obs.is_visual else None,
         num_steps=args.num_steps,
         num_learning_epochs=args.num_learning_epochs,
         num_minibatches=args.num_minibatches,
@@ -126,12 +106,14 @@ def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_policy_distillation(args: "PolicyDistillationArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
-        obs_tag="state",
-        make_env_request=_policy_distillation_env_request,
+        obs_tag=obs_tag,
+        make_env_request=make_env_request,
         build_agent=build_policy_distillation,
     )
 
@@ -142,14 +124,21 @@ def run_policy_distillation(args: "PolicyDistillationArgs") -> None:
 
 from dataclasses import dataclass
 
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online._args import PolicyDistillationTrainingArgs
 from rl_garden.training.online._registry import registry
 
 
 @dataclass
-class PolicyDistillationArgs(PolicyDistillationTrainingArgs, EnvBackendArgs):
-    """Teacher-student on-policy distillation -- state-only.
+class PolicyDistillationArgs(PolicyDistillationTrainingArgs, ObservationArgs, EnvBackendArgs):
+    """Teacher-student on-policy distillation.
+
+    ``--obs.rgb``/``--obs.depth`` select the student's (and env's) cameras;
+    ``--encoder.*`` configures the student's encoder only -- PolicyDistillation
+    has no critic, so ``--obs_groups.*`` must stay symmetric (its default;
+    a non-default value is rejected in the builder, see ``build_policy_
+    distillation``).
 
     Env backend: ``--env_backend isaaclab`` is the motivating one (see
     ``rl_garden/envs/isaaclab/env.py``'s TODO for exposing a privileged obs

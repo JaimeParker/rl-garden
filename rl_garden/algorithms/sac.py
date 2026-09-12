@@ -8,6 +8,7 @@ extractor: Box observations use ``FlattenExtractor`` and Dict observations use
 """
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
@@ -17,24 +18,19 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.sac_core import SACCore
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.nstep_buffer import NStepDictReplayBuffer
-from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
 from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
 from rl_garden.common.checkpoint import load_checkpoint_file, validate_checkpoint_metadata
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.sac_policy import SACPolicy
 
 
@@ -96,17 +92,11 @@ class SAC(SACCore, OffPolicyAlgorithm):
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
-        image_augmentation: Optional[str] = None,
-        random_shift_pad: Optional[int] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
-        detach_encoder_on_actor: bool = True,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -210,58 +200,16 @@ class SAC(SACCore, OffPolicyAlgorithm):
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
         self.critic_backbone_type = critic_backbone_type
 
-        obs_space = self.env.single_observation_space
-        image_kwargs_explicit = {
-            "image_encoder_factory": image_encoder_factory,
-            "image_keys": image_keys,
-            "state_key": state_key,
-            "use_proprio": use_proprio,
-            "proprio_latent_dim": proprio_latent_dim,
-            "image_fusion_mode": image_fusion_mode,
-            "enable_stacking": enable_stacking,
-            "image_augmentation": image_augmentation,
-            "random_shift_pad": random_shift_pad,
-            "image_augmentation_seed": image_augmentation_seed,
-        }
-        explicitly_set = [k for k, v in image_kwargs_explicit.items() if v is not None]
-
-        if isinstance(obs_space, spaces.Box):
-            if explicitly_set:
-                raise ValueError(
-                    f"SAC with Box observation space does not accept image-related "
-                    f"kwargs (got {explicitly_set}). Use a Dict observation space, "
-                    f"or remove these kwargs."
-                )
-            self._is_dict_obs = False
-        elif isinstance(obs_space, spaces.Dict):
-            if not detach_encoder_on_actor:
-                raise ValueError(
-                    "SAC always uses stop_gradient=True on the actor image path for "
-                    "Dict observations so image encoders are trained only by critic loss."
-                )
-            self._is_dict_obs = True
-            self._image_encoder_factory = (
-                image_encoder_factory or default_image_encoder_factory()
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
             )
-            self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
-            self._state_key = state_key if state_key is not None else "state"
-            self._use_proprio = use_proprio if use_proprio is not None else True
-            self._proprio_latent_dim = (
-                proprio_latent_dim if proprio_latent_dim is not None else 64
-            )
-            self._image_fusion_mode = (
-                image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-            )
-            self._enable_stacking = enable_stacking if enable_stacking is not None else False
-            self._image_augmentation = (
-                image_augmentation if image_augmentation is not None else "none"
-            )
-            self._random_shift_pad = random_shift_pad if random_shift_pad is not None else 4
-            self._image_augmentation_seed = image_augmentation_seed
-        else:
-            raise TypeError(
-                f"SAC supports Box or Dict observation spaces, got {type(obs_space)}"
-            )
+        self.encoder_sharing = encoder_sharing
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        self._image_augmentation_seed = image_augmentation_seed
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
@@ -299,21 +247,20 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "critic_use_layer_norm": self.critic_use_layer_norm,
             "actor_log_std_min": self.actor_log_std_min,
             "actor_log_std_mode": self.actor_log_std_mode,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
-        if self._is_dict_obs:
-            meta.update(
-                {
-                    "image_keys": self._image_keys,
-                    "state_key": self._state_key,
-                    "use_proprio": self._use_proprio,
-                    "proprio_latent_dim": self._proprio_latent_dim,
-                    "image_fusion_mode": self._image_fusion_mode,
-                    "enable_stacking": self._enable_stacking,
-                    "image_augmentation": self._image_augmentation,
-                    "random_shift_pad": self._random_shift_pad,
-                    "image_augmentation_seed": self._image_augmentation_seed,
-                }
-            )
         return meta
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -451,84 +398,43 @@ class SAC(SACCore, OffPolicyAlgorithm):
 
     # --- construction hooks ---
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        if isinstance(obs_space, spaces.Dict):
-            return CombinedExtractor
-        raise TypeError(
-            "SAC supports Box or Dict observation spaces, got "
-            + str(type(obs_space))
-        )
-
-    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
-        if self._is_dict_obs:
-            return {
-                "image_keys": self._image_keys,
-                "state_key": self._state_key,
-                "image_encoder_factory": self._image_encoder_factory,
-                "proprio_latent_dim": self._proprio_latent_dim,
-                "use_proprio": self._use_proprio,
-                "fusion_mode": self._image_fusion_mode,
-                "enable_stacking": self._enable_stacking,
-                "image_augmentation": self._image_augmentation,
-                "random_shift_pad": self._random_shift_pad,
-                "augmentation_seed": self._image_augmentation_seed,
-            }
-        return {}
-
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        normalized = dict(policy_kwargs or {})
-        unknown_keys = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
-        if unknown_keys:
-            raise ValueError(
-                "Unsupported policy_kwargs keys: "
-                + ", ".join(unknown_keys)
-                + ". Supported keys are: features_extractor_class, "
-                + "features_extractor_kwargs, critic_features_extractor_class, "
-                + "critic_features_extractor_kwargs."
+        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
+
+        return normalize_policy_kwargs(
+            policy_kwargs,
+            supported_keys=self._SUPPORTED_POLICY_KWARGS,
+            pairs=(
+                ("features_extractor_kwargs", "features_extractor_class"),
+                ("critic_features_extractor_kwargs", "critic_features_extractor_class"),
+            ),
+        )
+
+    def _ensure_observation_encoders(self):
+        """Resolve ``self.observation_encoders`` lazily, on first actual
+        need. Not called at all when ``policy_kwargs`` fully overrides both
+        the actor and critic extractors -- building the schema-driven
+        encoder(s) only to immediately discard them would waste real
+        compute and (since it initializes real nn.Module weights) shift RNG
+        consumption for every caller, override or not.
+        """
+        if not hasattr(self, "observation_encoders"):
+            self._resolve_observation_encoders(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
             )
-
-        for key in ("features_extractor_kwargs", "critic_features_extractor_kwargs"):
-            kwargs = normalized.get(key)
-            if kwargs is None:
-                continue
-            if not isinstance(kwargs, dict):
-                raise TypeError(f"policy_kwargs[{key!r}] must be a dict.")
-            normalized[key] = dict(kwargs)
-        normalized.setdefault("features_extractor_kwargs", {})
-        return normalized
-
-    def _resolve_policy_kwargs(self) -> dict[str, Any]:
-        default_features_extractor_class = self._default_features_extractor_class()
-        default_features_extractor_kwargs = dict(self._default_features_extractor_kwargs())
-        resolved = {
-            "features_extractor_class": default_features_extractor_class,
-            "features_extractor_kwargs": default_features_extractor_kwargs,
-        }
-
-        if "features_extractor_class" in self.policy_kwargs:
-            resolved["features_extractor_class"] = self.policy_kwargs["features_extractor_class"]
-            if resolved["features_extractor_class"] is not default_features_extractor_class:
-                resolved["features_extractor_kwargs"] = {}
-        if "features_extractor_kwargs" in self.policy_kwargs:
-            if resolved["features_extractor_class"] is default_features_extractor_class:
-                resolved["features_extractor_kwargs"] = {
-                    **resolved["features_extractor_kwargs"],
-                    **self.policy_kwargs["features_extractor_kwargs"],
-                }
-            else:
-                resolved["features_extractor_kwargs"] = dict(
-                    self.policy_kwargs["features_extractor_kwargs"]
-                )
-        return resolved
+        return self.observation_encoders
 
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        resolved = self._resolve_policy_kwargs()
-        features_extractor_class = resolved["features_extractor_class"]
+        """The actor's features extractor: ``policy_kwargs`` explicit
+        override (raw escape hatch, unchanged), else the schema-driven
+        extractor resolved onto ``self.observation_encoders`` by
+        ``_resolve_observation_encoders`` (see ``_ensure_observation_encoders``)."""
+        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
+        if features_extractor_class is None:
+            return self._ensure_observation_encoders().actor
         if not isinstance(features_extractor_class, type) or not issubclass(
             features_extractor_class, BaseFeaturesExtractor
         ):
@@ -536,18 +442,32 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 "policy_kwargs['features_extractor_class'] must be a "
                 "BaseFeaturesExtractor subclass."
             )
+        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
         return features_extractor_class(
             observation_space=self.env.single_observation_space,
-            **resolved["features_extractor_kwargs"],
+            **features_extractor_kwargs,
         )
 
     def _build_critic_features_extractor(self) -> Optional[BaseFeaturesExtractor]:
-        """A second extractor for the critic, only when policy_kwargs
-        explicitly asked for one -- otherwise ``None`` so SACPolicy falls
-        back to sharing ``features_extractor`` (today's exact behavior)."""
+        """A second extractor for the critic: ``policy_kwargs`` explicit
+        override (raw escape hatch, unchanged) takes priority; otherwise
+        ``self.observation_encoders.critic`` -- ``None`` in shared modes
+        (SACPolicy then shares ``features_extractor``, today's exact
+        default behavior), or a real independent extractor when
+        ``encoder_sharing="separate"`` (the schema-driven replacement for
+        the old ``critic_features_extractor_class`` heterogeneous-encoder
+        path)."""
         critic_class = self.policy_kwargs.get("critic_features_extractor_class")
         if critic_class is None:
-            return None
+            # observation_encoders.critic is unconditionally None outside
+            # encoder_sharing="separate" (see resolve_observation_encoders);
+            # skip resolving it at all in that (common) case rather than
+            # building a real actor-role encoder here just to read `.critic`
+            # off the same result -- only relevant when _build_features_
+            # extractor's own override made that build otherwise unnecessary.
+            if self.encoder_sharing != "separate":
+                return None
+            return self._ensure_observation_encoders().critic
         if not isinstance(critic_class, type) or not issubclass(
             critic_class, BaseFeaturesExtractor
         ):
@@ -562,38 +482,11 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
 
     def _build_replay_buffer(self):
+        # obs_space is always Dict (boundary normalization is unconditional;
+        # see BaseAlgorithm.__init__/VectorizedDictStateWrapper).
         obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            if self.nstep > 1:
-                return NStepDictReplayBuffer(
-                    observation_space=obs_space,
-                    action_space=self.env.single_action_space,
-                    num_envs=self.num_envs,
-                    buffer_size=self.buffer_size,
-                    nstep=self.nstep,
-                    gamma=self.gamma,
-                    storage_device=self.buffer_device,
-                    sample_device=self.device,
-                    mmap_dir=self.mmap_dir,
-                    mmap_mode=self.mmap_mode,
-                )
-            return DictReplayBuffer(
-                observation_space=obs_space,
-                action_space=self.env.single_action_space,
-                num_envs=self.num_envs,
-                buffer_size=self.buffer_size,
-                storage_device=self.buffer_device,
-                sample_device=self.device,
-                mmap_dir=self.mmap_dir,
-                mmap_mode=self.mmap_mode,
-            )
-        if self.mmap_dir is not None:
-            raise ValueError(
-                "mmap_dir is only supported for Dict observation spaces "
-                "(image buffers); got a Box observation space."
-            )
         if self.nstep > 1:
-            return NStepTensorReplayBuffer(
+            return NStepReplayBuffer(
                 observation_space=obs_space,
                 action_space=self.env.single_action_space,
                 num_envs=self.num_envs,
@@ -602,14 +495,18 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 gamma=self.gamma,
                 storage_device=self.buffer_device,
                 sample_device=self.device,
+                mmap_dir=self.mmap_dir,
+                mmap_mode=self.mmap_mode,
             )
-        return TensorReplayBuffer(
+        return ReplayBuffer(
             observation_space=obs_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
             storage_device=self.buffer_device,
             sample_device=self.device,
+            mmap_dir=self.mmap_dir,
+            mmap_mode=self.mmap_mode,
         )
 
     def _replay_buffer_step_kwargs(
@@ -649,12 +546,15 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
 
     def _actor_stop_gradient(self) -> bool:
-        # Only stop-gradient when the encoder is shared with the critic
-        # (its established Q-loss-only training convention). With a
-        # separate critic_features_extractor, features_extractor is
-        # actor-exclusive and needs the actor loss's gradient -- nothing
-        # else would ever train it. See SACPolicy.actor_parameters().
-        return self._is_dict_obs and self.policy.critic_features_extractor is self.policy.features_extractor
+        # Two distinct extractors (via a policy_kwargs override or
+        # encoder_sharing="separate"): features_extractor is actor-exclusive
+        # and needs the actor loss's gradient -- nothing else would ever
+        # train it. See SACPolicy.actor_parameters(). Otherwise, stop-gradient
+        # only under "shared_critic_grad" (its established Q-loss-only
+        # training convention); "shared" trains the encoder from both losses.
+        if self.policy.critic_features_extractor is not self.policy.features_extractor:
+            return False
+        return self.encoder_sharing == "shared_critic_grad"
 
     @staticmethod
     def _resolve_net_arch(

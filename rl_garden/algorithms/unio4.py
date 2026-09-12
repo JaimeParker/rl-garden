@@ -53,7 +53,6 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
-from gymnasium import spaces
 
 from rl_garden.algorithms.bppo import BPPOCriticMixin
 from rl_garden.algorithms.offline import (
@@ -62,12 +61,13 @@ from rl_garden.algorithms.offline import (
     run_exact_episode_eval,
 )
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
-from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
+from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.bc_policy import BCPolicy
 from rl_garden.policies.unio4_mixture_policy import UniO4MixturePolicy
 
@@ -115,6 +115,9 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -149,11 +152,9 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"UniO4 supports only Box observation spaces, got {type(obs_space)}"
-            )
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
         if critic_warmup_steps < 0:
             raise ValueError(
                 f"critic_warmup_steps must be non-negative, got {critic_warmup_steps}."
@@ -215,13 +216,10 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
     # --- model setup ---
 
     def _build_actor_policy(self) -> BCPolicy:
-        features_extractor = FlattenExtractor(
-            observation_space=self.env.single_observation_space
-        )
         return BCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            features_extractor=self.observation_encoders.actor,
             net_arch=list(self.actor_hidden_dims),
             use_layer_norm=self.use_layer_norm,
             use_group_norm=self.use_group_norm,
@@ -233,8 +231,8 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
             tanh_squash=False,
         ).to(self.device)
 
-    def _build_replay_buffer(self) -> SarsaMCTensorReplayBuffer:
-        return SarsaMCTensorReplayBuffer(
+    def _build_replay_buffer(self) -> SarsaMCReplayBuffer:
+        return SarsaMCReplayBuffer(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
@@ -245,6 +243,7 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         )
 
     def _setup_model(self) -> None:
+        self._setup_observation_encoders()
         actors = [self._build_actor_policy() for _ in range(self.num_policies)]
         old_actors = [self._build_actor_policy() for _ in range(self.num_policies)]
         for actor, old_actor in zip(actors, old_actors):
@@ -341,7 +340,11 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
                 action, old_log_prob = self.old_actors[i].actor.action_log_prob(
                     old_features
                 )
-                advantage = (self.q_net(obs, action) - self.value_net(obs)).squeeze(-1)
+                # value_net/q_net are raw flat-tensor MLPs (BPPOCriticMixin
+                # is state-only by construction -- has_images guard).
+                advantage = (
+                    self.q_net(obs["state"], action) - self.value_net(obs["state"])
+                ).squeeze(-1)
                 advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
                 advantage = self._weighted_advantage(advantage)
 
@@ -501,6 +504,7 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         return {
             **super()._checkpoint_metadata(),
             **self._critic_checkpoint_metadata(),
+            **self._observation_checkpoint_metadata(),
             "num_policies": self.num_policies,
             "bc_ensemble_steps": self.bc_ensemble_steps,
             "alpha_bc": self.alpha_bc,

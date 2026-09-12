@@ -285,7 +285,7 @@ def _build_sac_worker(rank: int, world_size: int, port: int, tmp_dir: str) -> No
 
     mmap_dir = os.path.join(tmp_dir, "buf")
     args = SACArgs(
-        obs_mode="state", mmap_dir=mmap_dir, mmap_mode="create",
+        mmap_dir=mmap_dir, mmap_mode="create",
         eval_freq=0, log_freq=0, buffer_device="cpu", buffer_size=32,
         batch_size=8, learning_starts=1,
     )
@@ -295,7 +295,7 @@ def _build_sac_worker(rank: int, world_size: int, port: int, tmp_dir: str) -> No
     assert captured["kwargs"]["mmap_dir"] == os.path.join(mmap_dir, f"rank{rank}")
 
     open_args = SACArgs(
-        obs_mode="state", mmap_dir=mmap_dir, mmap_mode="open",
+        mmap_dir=mmap_dir, mmap_mode="open",
         eval_freq=0, log_freq=0, buffer_device="cpu", buffer_size=32,
         batch_size=8, learning_starts=1,
     )
@@ -317,7 +317,7 @@ def test_build_sac_selects_plain_sac_outside_ddp():
     from rl_garden.training.online.sac import SACArgs, build_sac
 
     args = SACArgs(
-        obs_mode="state", eval_freq=0, log_freq=0, buffer_device="cpu",
+        eval_freq=0, log_freq=0, buffer_device="cpu",
         buffer_size=32, batch_size=8, learning_starts=1,
     )
     agent = build_sac(args, _DummyVecEnv(), None, None, None)

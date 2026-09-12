@@ -7,8 +7,8 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import (
-    MCTensorReplayBuffer,
-    TensorReplayBuffer,
+    MCReplayBuffer,
+    ReplayBuffer,
     infer_specs_from_robomimic,
     load_robomimic_dataset_to_replay_buffer,
 )
@@ -72,8 +72,9 @@ def test_infer_specs_from_robomimic(tmp_path):
 
     obs_space, action_space = infer_specs_from_robomimic(path)
 
-    assert isinstance(obs_space, spaces.Box)
-    assert obs_space.shape == (_OBS_DIM,)
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].shape == (_OBS_DIM,)
     assert action_space.shape == (7,)
     assert np.all(action_space.low == -1.0)
     assert np.all(action_space.high == 1.0)
@@ -83,8 +84,8 @@ def test_load_robomimic_dataset_to_replay_buffer(tmp_path):
     path = tmp_path / "robomimic.hdf5"
     _write_dataset(path, num_demos=2, length=5, action_dim=7)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
         num_envs=2,
         buffer_size=10,
@@ -97,8 +98,8 @@ def test_load_robomimic_dataset_to_replay_buffer(tmp_path):
     assert loaded == 10
     assert len(buffer) == 10
     sample = buffer.sample(4)
-    assert sample.obs.shape == (4, _OBS_DIM)
-    assert sample.next_obs.shape == (4, _OBS_DIM)
+    assert sample.obs["state"].shape == (4, _OBS_DIM)
+    assert sample.next_obs["state"].shape == (4, _OBS_DIM)
     assert sample.actions.shape == (4, 7)
     # Design decision: dones passed to the buffer are always zero -- the
     # online env never sets terminated=True, so the offline half of a mixed
@@ -110,8 +111,8 @@ def test_load_robomimic_dataset_episode_ends_track_raw_dones(tmp_path):
     path = tmp_path / "robomimic.hdf5"
     _write_dataset(path, num_demos=2, length=5, action_dim=7)
 
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
         num_envs=2,
         buffer_size=10,
@@ -139,8 +140,8 @@ def test_load_robomimic_dataset_num_traj_limits_demos(tmp_path):
     path = tmp_path / "robomimic.hdf5"
     _write_dataset(path, num_demos=3, length=4, action_dim=7)
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
         num_envs=1,
         buffer_size=20,
@@ -171,8 +172,8 @@ def test_load_robomimic_dataset_missing_obs_key_raises(tmp_path):
             obs.create_dataset(key, data=np.zeros((3, dim), dtype=np.float64))
             next_obs.create_dataset(key, data=np.zeros((3, dim), dtype=np.float64))
 
-    buffer = TensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = ReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,
@@ -201,8 +202,8 @@ def test_load_robomimic_dataset_infers_success_when_sparse_reward_mc_enabled(tmp
         del demo["rewards"]
         demo.create_dataset("rewards", data=np.array([0.0, 0.0, 1.0], dtype=np.float64))
 
-    buffer = MCTensorReplayBuffer(
-        observation_space=spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32),
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
         action_space=spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
         num_envs=1,
         buffer_size=10,

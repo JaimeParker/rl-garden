@@ -16,7 +16,7 @@ Example:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -25,12 +25,9 @@ import tyro
 
 from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
-from rl_garden.common.cli_args import (
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    vit_sac_kwargs_from_args,
-)
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.observations import ObservationConfig
 
 
 @dataclass
@@ -43,29 +40,21 @@ class Args:
     num_eval_steps: int = 50
     device: str = "auto"
 
-    obs_mode: str = "rgb"
-    include_state: bool = True
     control_mode: str = "pd_joint_delta_pos"
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
     render_mode: str = "rgb_array"
-    per_camera_rgbd: bool = True
 
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "resnet10"
-    encoder_features_dim: int = 256
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "per_key"
-    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: Literal["none", "random_shift"] = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: int = 128
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: Optional[str] = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
+    # "what is observed" / "how it is encoded". Defaults give rgb+depth on
+    # "base_camera" at 64x64, resnet10-encoded. Pass e.g. --obs.rgb base_camera hand_camera
+    # --obs.depth base_camera hand_camera to ablate a genuinely
+    # multi-camera checkpoint.
+    obs: ObservationConfig = field(
+        default_factory=lambda: ObservationConfig(
+            rgb=("base_camera",), depth=("base_camera",), image_size=(64, 64)
+        )
+    )
+    encoder: EncoderConfig = field(
+        default_factory=lambda: EncoderConfig(backbone="resnet10", image_fusion_mode="per_key")
+    )
 
     buffer_size: int = 200_000
     buffer_device: str = "cuda"
@@ -116,20 +105,16 @@ def _mean_abs_delta(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _build_agent(args: Args) -> tuple[SAC, tuple[str, ...]]:
-    env_cfg = ManiSkillEnvConfig(
+    env_cfg = ManiSkillEnvConfig.from_observation(
+        args.obs,
         env_id=args.env_id,
         num_envs=args.num_eval_envs,
-        obs_mode=args.obs_mode,
-        include_state=args.include_state,
         control_mode=args.control_mode,
-        camera_width=args.camera_width,
-        camera_height=args.camera_height,
         render_mode=args.render_mode,
-        per_camera_rgbd=args.per_camera_rgbd,
         reconfiguration_freq=1,
     )
     env = make_maniskill_env(env_cfg)
-    image_keys = image_keys_from_env(env, args)
+    image_keys = args.obs.image_keys
     agent = SAC(
         env=env,
         eval_env=None,
@@ -157,10 +142,7 @@ def _build_agent(args: Args) -> tuple[SAC, tuple[str, ...]]:
         checkpoint_dir=None,
         checkpoint_freq=0,
         save_final_checkpoint=False,
-        image_keys=image_keys,
-        image_encoder_factory=image_encoder_factory_from_args(args),
-        image_fusion_mode=args.image_fusion_mode,
-        **vit_sac_kwargs_from_args(args, image_keys),
+        encoder_config=args.encoder,
     )
     agent.load(args.checkpoint_path, load_replay_buffer=False, load_optimizers=False)
     agent.policy.eval()

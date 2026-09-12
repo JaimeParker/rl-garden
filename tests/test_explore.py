@@ -143,18 +143,18 @@ def test_sample_train_batch_shapes(tmp_path):
     agent = _agent(offline_relabel_type="pred", use_rnd_online=True, use_rnd_offline=True)
     agent.load_offline_replay_buffer(path, backend="h5", buffer_size=16, offline_data_ratio=0.5)
     agent.replay_buffer.add(
-        torch.zeros(2, 4), torch.ones(2, 4), torch.zeros(2, 2), torch.zeros(2), torch.zeros(2)
+        {"state": torch.zeros(2, 4)}, {"state": torch.ones(2, 4)}, torch.zeros(2, 2), torch.zeros(2), torch.zeros(2)
     )
 
     batch = agent._sample_train_batch(8)
-    assert batch.obs.shape == (8, 4)
+    assert batch.obs["state"].shape == (8, 4)
     assert batch.actions.shape == (8, 2)
     assert batch.rewards.shape == (8,)
 
     # offline_data_ratio == 0 falls back to a pure online sample.
     agent.offline_data_ratio = 0.0
     batch = agent._sample_train_batch(4)
-    assert batch.obs.shape == (4, 4)
+    assert batch.obs["state"].shape == (4, 4)
 
 
 def test_checkpoint_roundtrip(tmp_path):

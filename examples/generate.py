@@ -1,12 +1,12 @@
 """Data generation utilities.
 
 Usage:
-    # Generate WSRL-compatible H5 dataset from SAC checkpoints
+    # Generate WSRL-compatible H5 dataset from SAC checkpoints (state obs,
+    # the default)
     python examples/generate.py wsrl_dataset \\
         --checkpoint_dir runs/PickCube-v1__sac_state__1/checkpoints \\
         --output_path demos/pickcube_wsrl_state.h5 \\
-        --total_transitions 200000 \\
-        --obs_mode state
+        --total_transitions 200000
 
     # Generate RGB demo H5 by rolling out a privileged state-SAC oracle
     python examples/generate.py rgb_demos \\
@@ -18,9 +18,9 @@ Usage:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Optional, Union
 
 import numpy as np
 import torch
@@ -39,12 +39,9 @@ from gymnasium import spaces
 from rl_garden.algorithms import SAC
 from rl_garden.algorithms.offline import OfflineEnvSpec
 from rl_garden.common import seed_everything
-from rl_garden.common.cli_args import (
-    image_encoder_factory_from_args,
-    image_keys_from_obs_mode,
-    vit_sac_kwargs_from_args,
-)
 from rl_garden.common.types import Obs
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObservationConfig
 from rl_garden.datasets import (
     CheckpointScore,
     CollectionStats,
@@ -73,8 +70,8 @@ class WsrlDatasetArgs:
     total_transitions: int
 
     env_id: str = "PickCube-v1"
-    obs_mode: Literal["state", "rgb", "rgbd"] = "state"
-    include_state: bool = True
+    obs: ObservationConfig = field(default_factory=ObservationConfig)
+    encoder: EncoderConfig = field(default_factory=EncoderConfig)
     control_mode: str = "pd_joint_delta_pos"
     reward_mode: Optional[str] = None
     num_envs: int = 16
@@ -83,24 +80,6 @@ class WsrlDatasetArgs:
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
     render_mode: str = "rgb_array"
-
-    camera_width: Optional[int] = 64
-    camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
-    encoder_features_dim: int = 256
-    image_fusion_mode: Literal["stack_channels", "per_key"] = "stack_channels"
-    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
-    vit_embed_dim: int = 128
-    vit_depth: int = 1
-    vit_num_heads: int = 4
-    vit_embed_norm: bool = False
-    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
-    vit_random_shift_pad: int = 4
-    vit_actor_feature_dim: Optional[int] = None
-    vit_critic_spatial_emb_dim: int = 1024
-    pretrained_weights: Optional[str] = None
-    freeze_resnet_encoder: bool = False
-    freeze_resnet_backbone: bool = False
 
     policy_mix: tuple[float, float, float, float] = (0.3, 0.3, 0.3, 0.1)
     tier_thresholds: tuple[float, float, float] = (0.2, 0.6, 0.8)
@@ -115,18 +94,15 @@ class WsrlDatasetArgs:
 
 def _wsrl_make_env(args: WsrlDatasetArgs):
     return make_maniskill_env(
-        ManiSkillEnvConfig(
+        ManiSkillEnvConfig.from_observation(
+            args.obs,
             env_id=args.env_id,
             num_envs=args.num_envs,
-            obs_mode=args.obs_mode,
-            include_state=args.include_state,
             control_mode=args.control_mode,
             render_mode=args.render_mode,
             sim_backend=args.sim_backend,
             render_backend=args.render_backend,
             reward_mode=args.reward_mode,
-            camera_width=args.camera_width if args.obs_mode != "state" else None,
-            camera_height=args.camera_height if args.obs_mode != "state" else None,
             ignore_terminations=False,
             record_metrics=True,
         )
@@ -146,18 +122,10 @@ def _wsrl_make_agent(args: WsrlDatasetArgs, env):
         device=args.device,
         std_log=False,
     )
-    if args.obs_mode == "state":
+    if not args.obs.is_visual:
         return SAC(**common_kwargs)
 
-    factory = image_encoder_factory_from_args(args)
-    image_keys = image_keys_from_obs_mode(args.obs_mode)
-    return SAC(
-        **common_kwargs,
-        image_keys=image_keys,
-        image_encoder_factory=factory,
-        image_fusion_mode=args.image_fusion_mode,
-        **vit_sac_kwargs_from_args(args, image_keys),
-    )
+    return SAC(**common_kwargs, encoder_config=args.encoder)
 
 
 def _jsonable(obj):
@@ -286,7 +254,7 @@ def _generate_wsrl_dataset(args: WsrlDatasetArgs) -> None:
 
     metadata = {
         "env_id": args.env_id,
-        "obs_mode": args.obs_mode,
+        "observation": repr(args.obs),
         "control_mode": args.control_mode,
         "reward_mode": "" if args.reward_mode is None else args.reward_mode,
         "policy_mix": normalize_mix(args.policy_mix),
@@ -351,13 +319,18 @@ def _generate_wsrl_dataset(args: WsrlDatasetArgs) -> None:
 # rgb_demos subcommand
 # ---------------------------------------------------------------------------
 
+def _rgb_demos_default_obs() -> ObservationConfig:
+    return ObservationConfig(state=True, rgb=("base_camera",), image_size=(64, 64))
+
+
 @dataclass
 class RgbDemosArgs:
     """Generate RGB demo H5 by rolling out a privileged state-SAC oracle.
 
-    The oracle policy (a Box(state_dim,) checkpoint, e.g. trained with
-    obs_mode="state") drives rollouts in a obs_mode="rgb+state" env. The
-    resulting H5 can be consumed via train_off2on.py wsrl --offline_dataset.
+    The oracle policy (a Box(state_dim,) checkpoint, e.g. trained on state
+    observations) drives rollouts in an rgb+state env (one camera, named by
+    ``obs.rgb``). The resulting H5 can be consumed via
+    train_off2on.py wsrl --offline_dataset.
     """
 
     checkpoint_path: str
@@ -365,13 +338,12 @@ class RgbDemosArgs:
     total_transitions: int
 
     env_id: str = "StackCube-v1"
+    obs: ObservationConfig = field(default_factory=_rgb_demos_default_obs)
     control_mode: str = "pd_joint_delta_pos"
     state_dim: int = 48
     record_state_dim: int = 25
     action_dim: int = 8
     num_envs: int = 16
-    camera_width: int = 64
-    camera_height: int = 64
     seed: int = 1
     device: str = "auto"
     sim_backend: str = "gpu"
@@ -384,17 +356,13 @@ class RgbDemosArgs:
 
 def _rgb_make_env(args: RgbDemosArgs):
     return make_maniskill_env(
-        ManiSkillEnvConfig(
+        ManiSkillEnvConfig.from_observation(
+            args.obs,
             env_id=args.env_id,
             num_envs=args.num_envs,
-            obs_mode="rgb+state",
-            include_state=True,
             control_mode=args.control_mode,
             sim_backend=args.sim_backend,
             render_backend=args.render_backend,
-            camera_width=args.camera_width,
-            camera_height=args.camera_height,
-            per_camera_rgbd=True,
             ignore_terminations=False,
             record_metrics=True,
         )
@@ -594,7 +562,7 @@ def _generate_rgb_demos(args: RgbDemosArgs) -> None:
         )
         metadata = {
             "env_id": args.env_id,
-            "obs_mode": "rgb",
+            "observation": f"rgb_{args.obs.rgb[0]}+state" if args.obs.rgb else "state",
             "control_mode": args.control_mode,
             "source_checkpoint": str(args.checkpoint_path),
             "stochastic_collect": args.stochastic_collect,

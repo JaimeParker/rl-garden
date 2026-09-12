@@ -13,8 +13,8 @@ def _write_pkl(path: str, entries: list[dict]) -> None:
 
 
 def test_train_main_runs_and_saves_a_checkpoint(tmp_path, monkeypatch):
-    success = [{"obs": {"wrist": torch.randint(0, 255, (3, 32, 32), dtype=torch.uint8)}} for _ in range(4)]
-    failure = [{"obs": {"wrist": torch.randint(0, 255, (3, 32, 32), dtype=torch.uint8)}} for _ in range(4)]
+    success = [{"obs": {"rgb_wrist": torch.randint(0, 255, (3, 32, 32), dtype=torch.uint8)}} for _ in range(4)]
+    failure = [{"obs": {"rgb_wrist": torch.randint(0, 255, (3, 32, 32), dtype=torch.uint8)}} for _ in range(4)]
     _write_pkl(os.path.join(tmp_path, "exp_success_1.pkl"), success)
     _write_pkl(os.path.join(tmp_path, "exp_failure_1.pkl"), failure)
 

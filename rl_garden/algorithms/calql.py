@@ -13,15 +13,16 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.cql import CQL, _CQLRolloutTrainingShell
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
-from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
-from rl_garden.buffers.mc_buffer import MCDictReplayBuffer, MCTensorReplayBuffer
-from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
+from rl_garden.buffers import ReplayBuffer
+from rl_garden.buffers.mc_buffer import MCReplayBuffer
+from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.networks.value import ScalarQNetwork
+from rl_garden.observations import ObservationSchema, normalize_observation_space
+from rl_garden.observations.schema import ObservationContractError
 
 
 class CalQLCore:
@@ -62,13 +63,13 @@ class CalQLCore:
         }
 
     def _setup_model(self) -> None:
-        if self.use_sarsa_reference and isinstance(
-            self.env.single_observation_space, spaces.Dict
-        ):
-            raise ValueError(
-                "use_sarsa_reference=True does not support Dict observation "
-                "spaces -- it is scoped to flat-Box locomotion tasks. Use "
-                "the default MC-return reference value for image/dict-obs "
+        if self.use_sarsa_reference and ObservationSchema.from_space(
+            normalize_observation_space(self.env.single_observation_space)
+        ).has_images:
+            raise ObservationContractError(
+                "use_sarsa_reference=True does not support image observations "
+                "-- it is scoped to flat-Box locomotion tasks. Use the "
+                "default MC-return reference value for image/dict-obs "
                 "environments."
             )
         super()._setup_model()
@@ -77,8 +78,8 @@ class CalQLCore:
             self.sarsa_q_target = None
             self.sarsa_q_optimizer = None
             return
-        obs_space = self.env.single_observation_space
-        obs_dim = obs_space.shape[0]
+        # obs_space is always Dict (boundary normalization is unconditional).
+        obs_dim = self.env.single_observation_space["state"].shape[0]
         action_dim = self.env.single_action_space.shape[0]
         self.sarsa_q_net = ScalarQNetwork(
             obs_dim, action_dim, self.sarsa_hidden_dims
@@ -106,10 +107,13 @@ class CalQLCore:
             "success_threshold": self.success_threshold,
         }
         if self.use_sarsa_reference:
-            return SarsaMCTensorReplayBuffer(**kwargs)
-        if isinstance(obs_space, spaces.Dict):
-            return MCDictReplayBuffer(**kwargs)
-        return MCTensorReplayBuffer(**kwargs)
+            # State-only by construction (_setup_model rejects images above),
+            # but kept Dict (not unwrapped to a bare Box) so data.obs stays
+            # consistent with what the main critic's schema-driven features
+            # extractor expects; sarsa_q_net/sarsa_q_target read
+            # data.obs["state"]/data.next_obs["state"] themselves.
+            return SarsaMCReplayBuffer(**kwargs)
+        return MCReplayBuffer(**kwargs)
 
     def _build_plain_replay_buffer(self):
         obs_space = self.env.single_observation_space
@@ -121,9 +125,7 @@ class CalQLCore:
             "storage_device": self.buffer_device,
             "sample_device": self.device,
         }
-        if isinstance(obs_space, spaces.Dict):
-            return DictReplayBuffer(**kwargs)
-        return TensorReplayBuffer(**kwargs)
+        return ReplayBuffer(**kwargs)
 
     def _calql_lower_bound(
         self,
@@ -172,7 +174,7 @@ class CalQLCore:
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         if self.use_sarsa_reference:
             with torch.no_grad():
-                reference = self.sarsa_q_net(data.obs, data.actions).squeeze(-1)
+                reference = self.sarsa_q_net(data.obs["state"], data.actions).squeeze(-1)
             data = dataclasses.replace(data, mc_returns=reference)
         return super()._cql_regularizer(data, q_pred)
 
@@ -186,9 +188,9 @@ class CalQLCore:
         if valid.sum() == 0:
             return
         with torch.no_grad():
-            target_q = self.sarsa_q_target(data.next_obs, data.next_actions)
+            target_q = self.sarsa_q_target(data.next_obs["state"], data.next_actions)
             y = data.rewards.reshape(-1, 1) + self.gamma * target_q
-        q_pred = self.sarsa_q_net(data.obs, data.actions)
+        q_pred = self.sarsa_q_net(data.obs["state"], data.actions)
         sarsa_loss = F.mse_loss(q_pred[valid], y[valid])
         self.sarsa_q_optimizer.zero_grad()
         sarsa_loss.backward()
@@ -282,7 +284,7 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
             return
         if isinstance(
             self.replay_buffer,
-            (MCDictReplayBuffer, MCTensorReplayBuffer, SarsaMCTensorReplayBuffer),
+            (MCReplayBuffer, SarsaMCReplayBuffer),
         ):
             self.replay_buffer = self._build_plain_replay_buffer()
 
@@ -300,7 +302,7 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
     ) -> dict[str, Any]:
         if not isinstance(
             self.replay_buffer,
-            (MCDictReplayBuffer, MCTensorReplayBuffer, SarsaMCTensorReplayBuffer),
+            (MCReplayBuffer, SarsaMCReplayBuffer),
         ):
             return super()._replay_buffer_step_kwargs(terminations, truncations)
         # The MC buffer needs the true episode boundary (termination |

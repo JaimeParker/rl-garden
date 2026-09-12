@@ -257,12 +257,22 @@ def _coerce_preset_value(value: Any, expected: Any, path: str) -> Any:
 
 def apply_strict_mapping(
     instance: Any, values: Mapping[str, Any], prefix: str = ""
-) -> None:
-    """Apply a YAML mapping recursively, rejecting unknown or ill-typed fields."""
+) -> Any:
+    """Apply a YAML mapping recursively, rejecting unknown or ill-typed fields.
+
+    Mutates and returns ``instance`` when it is a regular (mutable)
+    dataclass. Frozen dataclasses (e.g. ``ObservationConfig``/``ObsGroups``)
+    cannot be mutated in place, so their leaf overrides are collected and
+    applied via ``dataclasses.replace``, returning a *new* instance -- the
+    caller is responsible for writing that new instance back onto its own
+    (mutable) parent field, which every recursive call below does.
+    """
     if not is_dataclass(instance) or isinstance(instance, type):
         raise TypeError("apply_strict_mapping() requires a dataclass instance")
     known = {field.name: field for field in fields(instance)}
     hints = get_type_hints(type(instance))
+    frozen = instance.__dataclass_params__.frozen
+    updates: dict[str, Any] = {}
     for key, value in values.items():
         path = f"{prefix}.{key}" if prefix else str(key)
         if key not in known:
@@ -273,10 +283,19 @@ def apply_strict_mapping(
         if is_dataclass(current) and not isinstance(current, type):
             if not isinstance(value, Mapping):
                 raise ConfigError(f"Preset field {path!r} must be a mapping.")
-            apply_strict_mapping(current, value, path)
+            new_nested = apply_strict_mapping(current, value, path)
+            if frozen:
+                updates[key] = new_nested
+            else:
+                setattr(instance, key, new_nested)
             continue
         expected = hints.get(key, known[key].type)
-        setattr(instance, key, _coerce_preset_value(value, expected, path))
+        coerced = _coerce_preset_value(value, expected, path)
+        if frozen:
+            updates[key] = coerced
+        else:
+            setattr(instance, key, coerced)
+    return replace(instance, **updates) if frozen else instance
 
 
 def load_preset(path: str | Path) -> PresetResult:
@@ -334,9 +353,29 @@ def _dataclass_leaf_paths(value: Any, prefix: str) -> set[str]:
     return result
 
 
+def _encoder_config_inactive_subpaths(encoder: Any, prefix: str) -> dict[str, str]:
+    """Sub-fields of one ``EncoderConfig`` instance that are no-ops for its
+    own ``backbone`` choice (resnet-only / plain_conv-only / vit-only
+    knobs)."""
+    inactive: dict[str, str] = {}
+    backbone = getattr(encoder, "backbone", None)
+    if backbone is None:
+        return inactive
+    if not str(backbone).startswith("resnet"):
+        for name in ("pretrained_weights", "freeze_resnet_encoder", "freeze_resnet_backbone"):
+            inactive[f"{prefix}.{name}"] = f"{prefix}.backbone is {backbone!r}"
+    if backbone != "plain_conv":
+        for name in ("plain_conv_weight_init", "plain_conv_last_act", "plain_conv_pooling"):
+            inactive[f"{prefix}.{name}"] = f"{prefix}.backbone is {backbone!r}"
+    if backbone != "vit":
+        for field_ in fields(encoder):
+            if field_.name.startswith("vit_"):
+                inactive[f"{prefix}.{field_.name}"] = f"{prefix}.backbone is {backbone!r}"
+    return inactive
+
+
 def inactive_config_paths(args: Any) -> dict[str, str]:
     """Return inactive Args leaf paths and concise reasons."""
-    from rl_garden.common.cli_args import VisionArgs
     from rl_garden.common.env_args import EnvBackendArgs
 
     inactive: dict[str, str] = {}
@@ -350,35 +389,35 @@ def inactive_config_paths(args: Any) -> dict[str, str]:
             for path in _dataclass_leaf_paths(backend, backend_name):
                 inactive[path] = f"environment backend is {selected_backend!r}"
 
-    visual_names = {field.name for field in fields(VisionArgs)} - {"obs_mode"}
-    obs_mode = getattr(args, "obs_mode", None)
-    encoder = getattr(args, "encoder", None)
-    if obs_mode == "state":
-        for name in visual_names:
-            inactive[name] = "obs_mode is 'state'"
+    obs = getattr(args, "obs", None)
+    if obs is None:
         return inactive
 
-    if encoder is not None and not str(encoder).startswith("resnet"):
-        for name in (
-            "pretrained_weights",
-            "freeze_resnet_encoder",
-            "freeze_resnet_backbone",
-        ):
-            inactive[name] = f"encoder is {encoder!r}"
-    if encoder is not None and encoder != "plain_conv":
-        for name in (
-            "plain_conv_weight_init",
-            "plain_conv_last_act",
-            "plain_conv_pooling",
-        ):
-            inactive[name] = f"encoder is {encoder!r}"
-    if encoder is not None and encoder != "vit":
-        for name in visual_names:
-            if name.startswith("vit_"):
-                inactive[name] = f"encoder is {encoder!r}"
-    if getattr(args, "critic_encoder", None) is None:
-        for name in ("critic_image_keys", "critic_include_state"):
-            inactive[name] = "critic_encoder is not set"
+    encoder = getattr(args, "encoder", None)
+    obs_groups = getattr(args, "obs_groups", None)
+    critic_encoder = getattr(args, "critic_encoder", None)
+    if not obs.is_visual:
+        if is_dataclass(encoder):
+            for path in _dataclass_leaf_paths(encoder, "encoder"):
+                inactive[path] = "obs.is_visual is False"
+        if is_dataclass(obs_groups):
+            for path in _dataclass_leaf_paths(obs_groups, "obs_groups"):
+                inactive[path] = "obs.is_visual is False"
+        if is_dataclass(critic_encoder):
+            for path in _dataclass_leaf_paths(critic_encoder, "critic_encoder"):
+                inactive[path] = "obs.is_visual is False"
+        if getattr(args, "encoder_sharing", None) is not None:
+            inactive["encoder_sharing"] = "obs.is_visual is False"
+        return inactive
+
+    if is_dataclass(encoder):
+        inactive.update(_encoder_config_inactive_subpaths(encoder, "encoder"))
+    if critic_encoder is not None and critic_encoder == type(critic_encoder)():
+        if is_dataclass(critic_encoder):
+            for path in _dataclass_leaf_paths(critic_encoder, "critic_encoder"):
+                inactive[path] = "critic_encoder is not set"
+    elif is_dataclass(critic_encoder):
+        inactive.update(_encoder_config_inactive_subpaths(critic_encoder, "critic_encoder"))
     return inactive
 
 

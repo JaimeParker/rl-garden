@@ -94,7 +94,3 @@ class RecurrentRolloutBuffer(RolloutBuffer):
                 old_mean=self.means[:, idx] if self.store_dist_params else None,
                 old_log_std=self.log_stds[:, idx] if self.store_dist_params else None,
             )
-
-
-class RecurrentDictRolloutBuffer(RecurrentRolloutBuffer):
-    """Alias class for SB3-style naming when observations are Dict spaces."""

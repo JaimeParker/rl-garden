@@ -8,6 +8,8 @@ from rl_garden.envs.backend_registry import (
     register_env_backend,
 )
 
+_ROBOTWIN_CAMERAS = ("head", "left_wrist", "right_wrist")
+
 
 class RoboTwinBackend(EnvBackend):
     api_version = 2
@@ -16,9 +18,27 @@ class RoboTwinBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
+        from rl_garden.observations.schema import ObservationContractError
+
+        obs = req.observation
+        if obs.depth:
+            raise ObservationContractError(
+                f"robotwin backend has no depth camera output; requested "
+                f"depth={obs.depth!r}"
+            )
+        unknown = set(obs.rgb) - set(_ROBOTWIN_CAMERAS)
+        if unknown:
+            raise ObservationContractError(
+                f"robotwin: unknown camera(s) {sorted(unknown)!r}; available "
+                f"cameras: {list(_ROBOTWIN_CAMERAS)}"
+            )
+        if obs.frame_stack > 1 and not obs.rgb:
+            raise ObservationContractError(
+                "robotwin: frame_stack > 1 requires at least one rgb camera"
+            )
+        collect_wrist = bool({"left_wrist", "right_wrist"} & set(obs.rgb))
 
         rt = req.backend_config  # RoboTwinConfig or None
-        iw = rt.include_wrist_cameras if rt is not None else True
         head_cam = rt.head_camera_type if rt is not None else "D435"
         wrist_cam = rt.wrist_camera_type if rt is not None else "D435"
         random_light = rt.random_light if rt is not None else False
@@ -30,8 +50,8 @@ class RoboTwinBackend(EnvBackend):
         embodiment = rt.embodiment if rt is not None else ["aloha-agilex"]
         disable_topp = rt.disable_topp if rt is not None else False
 
-        # height first — matches (camera_height, camera_width) convention in both scripts
-        image_size = (req.camera_height or 64, req.camera_width or 64)
+        # (H, W) order -- matches ObservationConfig.image_size's own convention.
+        image_size = obs.image_size if obs.image_size is not None else (64, 64)
 
         task_cfg: dict = {
             "task_name": req.env_id,
@@ -47,8 +67,8 @@ class RoboTwinBackend(EnvBackend):
             "camera": {
                 "head_camera_type": head_cam,
                 "wrist_camera_type": wrist_cam,
-                "collect_head_camera": True,
-                "collect_wrist_camera": iw,
+                "collect_head_camera": "head" in obs.rgb,
+                "collect_wrist_camera": collect_wrist,
             },
             "domain_randomization": {
                 "random_background": True,
@@ -98,7 +118,9 @@ class RoboTwinBackend(EnvBackend):
             head_camera_type=head_cam,
             wrist_camera_type=wrist_cam,
             image_size=image_size,
-            include_wrist_cameras=iw,
+            rgb_cameras=obs.rgb,
+            state=obs.state,
+            frame_stack=obs.frame_stack,
             auto_reset=True,
             ignore_terminations=False,
             device=rt.device if rt is not None else "auto",

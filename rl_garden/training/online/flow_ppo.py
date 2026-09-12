@@ -1,45 +1,18 @@
 """FlowPPO run function: online PPO fine-tuning for flow-matching policies.
 
-Box observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-observations. Action chunking (``horizon_length``) is applied here, at env
-construction time, via ``ActionChunkWrapper`` -- same convention as
-``rl_garden/training/online/dppo.py``, see that module's docstring.
+State-only observations by default; pass ``--obs.rgb <camera>`` for
+CNN-based Dict/RGBD observations. Action chunking (``horizon_length``) is
+applied here, at env construction time, via ``ActionChunkWrapper`` -- same
+convention as ``rl_garden/training/online/dppo.py``, see that module's
+docstring.
 """
 
 from __future__ import annotations
 
 
-def _flow_ppo_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
-
-    is_visual = args.obs_mode != "state"
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
-        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
-        frame_stack=args.frame_stack,
-        num_eval_envs=args.num_eval_envs,
-        create_eval_env=should_create_eval_env(args),
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=args.resolve_backend_config(),
-    )
-
-
 def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms import FlowPPO
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
     from rl_garden.envs.wrappers import ActionChunkWrapper
     from rl_garden.training.inspection import construct_agent
 
@@ -47,12 +20,12 @@ def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
     if eval_env is not None:
         eval_env = ActionChunkWrapper(eval_env, act_steps=args.horizon_length)
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-        )
+    # FlowPPO only accepts encoder_config/obs_groups (no distinct critic
+    # encoder or encoder_sharing override yet).
+    image_kwargs = dict(
+        encoder_config=args.encoder if args.obs.is_visual else None,
+        obs_groups=resolve_obs_groups_config(args),
+    )
 
     agent = construct_agent(
         FlowPPO,
@@ -107,14 +80,14 @@ def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_flow_ppo(args: "FlowPPOArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_flow_ppo_env_request,
+        make_env_request=make_env_request,
         build_agent=build_flow_ppo,
     )
 
@@ -125,22 +98,18 @@ def run_flow_ppo(args: "FlowPPOArgs") -> None:
 
 from dataclasses import dataclass
 
-from rl_garden.common.cli_args import VisionArgs
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online._args import FlowPPOTrainingArgs
 from rl_garden.training.online._registry import registry
 
 
 @dataclass
-class FlowPPOArgs(FlowPPOTrainingArgs, VisionArgs, EnvBackendArgs):
+class FlowPPOArgs(FlowPPOTrainingArgs, ObservationArgs, EnvBackendArgs):
     """FlowPPO: online PPO fine-tuning for flow-matching policies. Trains
-    ``actor``/``critic`` from scratch (no BC-checkpoint warm-start). Box
-    observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-    observations (defaults to "state", not VisionArgs' own "rgb" default, to
-    preserve flow_ppo's existing CLI behavior for every caller that doesn't
-    pass --obs_mode)."""
-
-    obs_mode: str = "state"
+    ``actor``/``critic`` from scratch (no BC-checkpoint warm-start).
+    State-only observations by default; pass ``--obs.rgb <camera>`` for
+    CNN-based Dict/RGBD observations."""
 
 
 registry.register("flow_ppo", FlowPPOArgs, run_flow_ppo)

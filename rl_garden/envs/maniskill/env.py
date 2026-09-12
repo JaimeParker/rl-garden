@@ -2,11 +2,15 @@
 
 Wraps a ManiSkill env with the same stack ManiSkill baselines use:
 
-    gym.make -> [FlattenRGBDObservationWrapper] -> [FlattenActionSpaceWrapper]
+    gym.make -> [PerCameraRGBDWrapper] -> [FlattenActionSpaceWrapper]
               -> [RecordEpisode] -> ManiSkillVectorEnv
 
 The resulting env exposes GPU torch tensors from ``reset`` / ``step`` and is
-the only env shape the rest of ``rl_garden`` targets.
+the only env shape the rest of ``rl_garden`` targets. Vision always comes out
+as per-camera ``rgb_<cam>``/``depth_<cam>`` keys (``PerCameraRGBDWrapper``) --
+``FlattenRGBDObservationWrapper``'s channel-stacked bare ``rgb``/``depth`` is
+not used; fusing multiple cameras is the encoder's job (see
+``CombinedExtractor``'s ``fusion_mode``), not the env's.
 """
 from __future__ import annotations
 
@@ -15,10 +19,7 @@ from typing import Any
 import gymnasium as gym
 
 from rl_garden.envs.maniskill.config import ManiSkillEnvConfig
-
-
-def _is_visual_obs_mode(mode: str) -> bool:
-    return any(part in ("rgb", "rgbd", "depth") for part in mode.split("+"))
+from rl_garden.observations.schema import ObservationContractError
 
 
 def make_maniskill_env(cfg: ManiSkillEnvConfig):
@@ -27,19 +28,29 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
     Returns the wrapped ``ManiSkillVectorEnv`` instance.
     """
     if cfg.frame_stack < 1:
-        raise ValueError("frame_stack must be at least 1")
+        raise ObservationContractError("frame_stack must be at least 1")
+    is_visual = bool(cfg.rgb_cameras or cfg.depth_cameras)
 
     # Lazy imports so the package doesn't hard-depend on mani_skill being installed.
     import mani_skill.envs  # noqa: F401  (registers envs)
-    from mani_skill.utils.wrappers.flatten import (
-        FlattenActionSpaceWrapper,
-        FlattenRGBDObservationWrapper,
-    )
+    from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
     from mani_skill.utils.wrappers.record import RecordEpisode
     from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
+    # ManiSkill's own obs_mode selects which raw sensor buffers the sim
+    # renders at all; PerCameraRGBDWrapper below then filters that down to
+    # exactly the cameras/keys ObservationConfig asked for.
+    if cfg.rgb_cameras and cfg.depth_cameras:
+        ms_obs_mode = "rgbd"
+    elif cfg.rgb_cameras:
+        ms_obs_mode = "rgb"
+    elif cfg.depth_cameras:
+        ms_obs_mode = "depth"
+    else:
+        ms_obs_mode = "state"
+
     env_kwargs: dict[str, Any] = dict(
-        obs_mode=cfg.obs_mode,
+        obs_mode=ms_obs_mode,
         render_mode=cfg.render_mode,
         sim_backend=cfg.sim_backend,
         render_backend=cfg.render_backend,
@@ -74,37 +85,26 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
         **env_kwargs,
     )
 
-    # RGBD dict -> flat {rgb(/depth), state} dict
-    # FIXME(depth-obs-mode): `"depth" in cfg.obs_mode` is a substring test, so
-    # obs_mode="rgbd" yields False ("depth" is not a substring of "rgbd") and
-    # depth is silently dropped -- yet image_keys_from_obs_mode("rgbd") returns
-    # ("rgb", "depth"). The two disagree on what "rgbd" means. Decide the rgbd
-    # contract and make env factory + image_keys helper consistent. (Pre-existing;
-    # out of scope for the encoder-registry change.)
-    if _is_visual_obs_mode(cfg.obs_mode):
-        if cfg.per_camera_rgbd:
-            from rl_garden.envs.wrappers import PerCameraRGBDWrapper
+    if is_visual:
+        from rl_garden.envs.wrappers import PerCameraRGBDWrapper
 
-            env = PerCameraRGBDWrapper(
-                env,
-                rgb=("rgb" in cfg.obs_mode),
-                depth=("depth" in cfg.obs_mode),
-                state=cfg.include_state,
-            )
-        else:
-            env = FlattenRGBDObservationWrapper(
-                env,
-                rgb=("rgb" in cfg.obs_mode),
-                depth=("depth" in cfg.obs_mode),
-                state=cfg.include_state,
-            )
+        env = PerCameraRGBDWrapper(
+            env,
+            rgb_cameras=cfg.rgb_cameras,
+            depth_cameras=cfg.depth_cameras,
+            state=cfg.state,
+        )
 
         if cfg.frame_stack > 1:
             from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
             env = ImageFrameStackWrapper(env, frame_stack=cfg.frame_stack)
-    elif cfg.frame_stack > 1:
-        raise ValueError("frame_stack > 1 requires a visual observation mode")
+    else:
+        if cfg.frame_stack > 1:
+            raise ObservationContractError("frame_stack > 1 requires a visual observation mode")
+        from rl_garden.envs.wrappers import DictStateObservationWrapper
+
+        env = DictStateObservationWrapper(env)
 
     if isinstance(env.action_space, gym.spaces.Dict):
         env = FlattenActionSpaceWrapper(env)

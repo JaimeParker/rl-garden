@@ -4,9 +4,25 @@ Top-level layout of `rl-garden`. Read `AGENTS.md` first for the project-level
 agent rules; this file is a plain orientation reference, not a rules doc.
 
 - `rl_garden/algorithms/` — online, offline, and off-to-online algorithms.
+  `_observation.py` holds `ObservationEncoderMixin`/`resolve_observation_encoders`
+  (Layer C: turns an algorithm's `encoder_config`/`obs_groups`/
+  `critic_encoder_config`/`encoder_sharing` into built feature extractors).
+- `rl_garden/observations/` — the observation composition contract (Layer A):
+  `ObservationConfig` ("what is observed" — state/rgb/depth cameras, image
+  size, frame stacking), `ObservationSchema`/`Modality`/`ObsEntry` (derived
+  from an observation space), `ObsGroups`/`resolve_obs_groups` (asymmetric
+  actor/critic observation keys), and the strict `state`/`rgb_<cam>`/
+  `depth_<cam>` key-vocabulary validation every backend/dataset loader must
+  satisfy.
 - `rl_garden/policies/` — policy composition and actor/critic modules.
 - `rl_garden/buffers/` — tensor, dict, Monte-Carlo, and rollout buffers.
-- `rl_garden/encoders/` — state, CNN, RGBD/proprio, pooling, FiLM, and ResNet encoders.
+- `rl_garden/encoders/` — state, CNN, RGBD/proprio, pooling, FiLM, and ResNet
+  encoders (Layer B — "how observations are encoded"). `config.py` holds
+  `EncoderConfig` (the `--encoder.*` CLI surface); `registry.py` holds
+  `ENCODER_REGISTRY`/`EncoderSpec` (backbone name -> factory); `factory.py`
+  holds `build_observation_encoder(observation_space, encoder_config, ...)`,
+  the one entry point that builds a `FlattenExtractor` (state-only) or
+  `CombinedExtractor` (Dict with images) feature extractor.
 - `rl_garden/networks/` — actor, critic, value, and MLP backbone builders.
 - `rl_garden/common/` — logging, shared CLI arguments, environment arguments,
   checkpoint I/O, optimization, types, and utilities.

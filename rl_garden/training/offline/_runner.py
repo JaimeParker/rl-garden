@@ -13,7 +13,6 @@ from rl_garden.algorithms import OfflineEnvSpec, run_offline_pretraining
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.cli_args import (
     resolve_checkpoint_dir,
-    resolve_num_eval_steps,
     warn_if_eval_budget_undersized,
 )
 from rl_garden.common.effective_config import json_value, persist_effective_config
@@ -44,29 +43,25 @@ def _save_filename(args: Any, algorithm: str) -> str:
 
 
 def _eval_env_request(args: Any) -> EnvRequest:
-    backend_config = args.resolve_backend_config()
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.spec_num_envs,
-        obs_mode=args.obs_mode,
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=args.camera_width,
-        camera_height=args.camera_height,
-        include_state=args.include_state,
-        per_camera_rgbd=args.per_camera_rgbd,
-        reward_scale=args.reward_scale,
-        reward_bias=args.reward_bias,
-        num_eval_envs=args.num_eval_envs,
-        capture_video=False,
+    """The offline eval/spec env request -- one shared builder (not per
+    algorithm) via ``make_env_request``. Resolves ``num_eval_steps`` itself
+    (rather than relying on ``BaseAlgorithmRegistry._normalize_runtime``'s
+    equivalent derivation) so this stays correct when called directly, not
+    just via the full CLI pipeline."""
+    from dataclasses import replace
+
+    from rl_garden.common.cli_args import resolve_num_eval_steps
+    from rl_garden.common.env_args import make_env_request
+
+    req = make_env_request(args)
+    return replace(
+        req,
         num_eval_steps=resolve_num_eval_steps(
             num_eval_steps=args.num_eval_steps,
             num_eval_episodes=args.num_eval_episodes,
             eval_episode_horizon=args.eval_episode_horizon,
             default=50,
         ),
-        backend_config=backend_config,
     )
 
 

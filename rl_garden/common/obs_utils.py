@@ -8,10 +8,10 @@ from rl_garden.common.types import Obs
 
 def flatten_leading_dims(obs: Obs) -> Obs:
     """Collapse the leading ``(T, N, ...)`` axes of ``obs`` into a single batch axis."""
-    # Deferred import: rl_garden.buffers.dict_buffer's package (rl_garden.buffers)
+    # Deferred import: rl_garden.buffers.replay_buffer's package (rl_garden.buffers)
     # imports rollout_buffer, which imports this module -- importing DictArray at
     # module level here would be circular.
-    from rl_garden.buffers.dict_buffer import DictArray
+    from rl_garden.buffers.replay_buffer import DictArray
 
     if isinstance(obs, DictArray):
         return {key: flatten_leading_dims(value) for key, value in obs.data.items()}

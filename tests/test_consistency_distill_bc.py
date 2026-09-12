@@ -8,6 +8,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import ConsistencyDistillBC, DiffusionBC, OfflineEnvSpec
 from rl_garden.networks import DiffusionUNet1D
+from rl_garden.observations import ObservationContractError
 
 
 def _write_h5_dataset(path, *, num_traj: int, steps_per_traj: int, obs_dim: int, action_dim: int) -> None:
@@ -53,6 +54,28 @@ def _train_teacher_and_save(tmp_path, *, obs_dim, action_dim, horizon_steps=2, c
     teacher.train(10)
     ckpt_path = teacher.save(tmp_path / "teacher.pt")
     return str(path), str(ckpt_path)
+
+
+def test_rejects_dict_observation_space_with_images(tmp_path):
+    # The has_images check runs before bc_checkpoint is ever loaded (see
+    # ConsistencyDistillBC.__init__), so dataset_path/bc_checkpoint never
+    # need to point at real files for this to raise.
+    env = OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-np.inf, np.inf, shape=(4,), dtype=np.float32),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+    )
+    with pytest.raises(ObservationContractError):
+        ConsistencyDistillBC(
+            env=env,
+            dataset_path=str(tmp_path / "unused.h5"),
+            bc_checkpoint=str(tmp_path / "unused.pt"),
+            device="cpu",
+        )
 
 
 def test_teacher_frozen_student_trains_target_ema_moves(tmp_path):

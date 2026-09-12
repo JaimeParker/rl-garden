@@ -5,10 +5,10 @@ Reuses the shared ``run_off2on`` runner (``rl_garden/training/off2on/_runner.py`
 unmodified, matching ``floq.py``'s shape: only a ``build_fino`` callback is
 needed here.
 
-Box observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-observations. Mirrors ``FloQOff2OnArgs``: fields inlined against
-``Off2OnCommonArgs``, ``VisionArgs``, ``EnvBackendArgs`` rather than adding a
-new class to ``off2on/_args.py`` -- ``Off2OnFINO`` has no critic-flow
+State-only observations by default; pass ``--obs.rgb <camera>`` for
+CNN-based Dict/RGBD observations. Mirrors ``FloQOff2OnArgs``: fields inlined
+against ``Off2OnCommonArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
+than adding a new class to ``off2on/_args.py`` -- ``Off2OnFINO`` has no critic-flow
 machinery, so FloQ's flow-critic fields (``r_min``, ``r_max``,
 ``flow_num_ensembles``, etc.) are dropped and FINO's three new fields
 (``noise_scale``, ``beta``, ``num_samples``) are added instead.
@@ -26,17 +26,16 @@ from __future__ import annotations
 
 def build_fino(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFINO
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys_from_env(env, args),
-            image_fusion_mode=args.image_fusion_mode,
-        )
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnFINO,
@@ -72,7 +71,6 @@ def build_fino(args, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         activation_fn=args.activation_fn,
-        encoder_sharing=args.encoder_sharing,
         noise_scale=args.noise_scale,
         beta=args.beta,
         num_samples=args.num_samples,
@@ -106,25 +104,20 @@ def run_fino(args: "FINOOff2OnArgs") -> None:
 from dataclasses import dataclass  # noqa: E402
 from typing import Literal, Optional  # noqa: E402
 
-from rl_garden.common.cli_args import VisionArgs  # noqa: E402
+from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.policies.fino_policy import EncoderSharing  # noqa: E402
 from rl_garden.training.off2on._args import Off2OnCommonArgs  # noqa: E402
 from rl_garden.training.off2on._registry import registry  # noqa: E402
 
 
 @dataclass
-class FINOOff2OnArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
+class FINOOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     """FINO -- offline-to-online flow-matching actor with noise-injected
     BC-flow training and rejection-sampled inference (Shin et al., ICLR
-    2026, ``3rd_party/FINO/agents/fino.py``). Box observations by default;
-    pass ``--obs_mode rgb`` for CNN-based Dict/RGBD observations.
+    2026, ``3rd_party/FINO/agents/fino.py``). State-only observations by
+    default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations.
     """
-
-    # See FloQOff2OnArgs' own precedent: defaults to "state" (not VisionArgs'
-    # own "rgb" default) so callers that don't pass --obs_mode get state obs.
-    obs_mode: str = "state"
 
     alpha: float = 10.0
     flow_steps: int = 10
@@ -133,7 +126,6 @@ class FINOOff2OnArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
     hidden_dim: int = 512
     hidden_layers: int = 4
     activation_fn: Optional[Activation] = "gelu"
-    encoder_sharing: EncoderSharing = "shared"
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
 

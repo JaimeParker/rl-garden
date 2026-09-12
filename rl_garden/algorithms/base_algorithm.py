@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
+from gymnasium import spaces
 
+from rl_garden.algorithms._observation import ObservationEncoderMixin
 from rl_garden.common.checkpoint import (
     checkpoint_dict,
     load_checkpoint_file,
@@ -25,10 +27,29 @@ from rl_garden.common.eval_metrics import append_masked_episode_metrics
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import STANDARD_UPDATE_MASK, TrainingUpdateMask
 from rl_garden.common.utils import get_device, seed_everything
+from rl_garden.envs.wrappers.dict_state import VectorizedDictStateWrapper
 from rl_garden.policies.base import BasePolicy
 
 
-class BaseAlgorithm(ABC):
+def _normalize_env_observation_space(env: Any) -> Any:
+    """Boundary normalization (see ``.agents``/observation-redesign plan,
+    Layer C): every algorithm sees a Dict observation space and Dict obs
+    from here on, never branching on Box vs Dict itself. A bare ``Box``
+    ``single_observation_space`` -- a plain gymnasium env or a test double
+    that hasn't gone through a backend's own env-construction wrapping --
+    gets wrapped here, once. Real backends already emit Dict (each backend
+    applies ``DictStateObservationWrapper`` pre-vectorization, or is
+    natively Dict), so this is a no-op for them.
+    """
+    if env is None:
+        return env
+    space = getattr(env, "single_observation_space", None)
+    if not isinstance(space, spaces.Box):
+        return env
+    return VectorizedDictStateWrapper(env)
+
+
+class BaseAlgorithm(ObservationEncoderMixin, ABC):
     policy: BasePolicy
 
     # Subclasses may list parent algorithm class names whose checkpoints are
@@ -44,6 +65,8 @@ class BaseAlgorithm(ABC):
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
     ) -> None:
+        env = _normalize_env_observation_space(env)
+        eval_env = _normalize_env_observation_space(eval_env)
         self.env = env
         self.eval_env = eval_env
         self.seed = seed

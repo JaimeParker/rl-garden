@@ -5,9 +5,10 @@ a construction-time preset: offline data retained and mixed throughout
 online fine-tuning by default (matching upstream's ``concat_online_ratio``
 mixed-batch scheme -- see ``training/off2on/so2.py`` for the CLI preset).
 
-Only Box-observation, non-nstep SAC kwargs are exposed here (no
-image/vision/mmap kwargs) -- matches this port's Box-only scope (see
-``so2.py``'s module docstring).
+Only non-nstep, non-mmap SAC kwargs are exposed here; ``encoder_config``/
+``obs_groups``/``critic_encoder_config`` are forwarded through to the
+underlying ``SAC``-based shell so Dict (vision) observations work exactly
+like they do for plain ``SAC`` (see ``so2.py``'s module docstring).
 """
 from __future__ import annotations
 
@@ -15,11 +16,14 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.so2 import _SO2RolloutTrainingShell
 from rl_garden.common.alpha_tuning import AlphaTuning
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 
 
 class Off2OnSO2(_SO2RolloutTrainingShell):
@@ -69,6 +73,11 @@ class Off2OnSO2(_SO2RolloutTrainingShell):
         actor_log_std_min: float = -5.0,
         actor_log_std_mode: Literal["clamp", "tanh"] = "clamp",
         critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        image_augmentation_seed: Optional[int] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         target_smoothing_noise_std: float = 0.3,
         target_smoothing_noise_clip_min: float = -0.6,
@@ -127,6 +136,11 @@ class Off2OnSO2(_SO2RolloutTrainingShell):
             actor_log_std_min=actor_log_std_min,
             actor_log_std_mode=actor_log_std_mode,
             critic_backbone_type=critic_backbone_type,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
+            image_augmentation_seed=image_augmentation_seed,
             policy_kwargs=policy_kwargs,
             target_smoothing_noise_std=target_smoothing_noise_std,
             target_smoothing_noise_clip_min=target_smoothing_noise_clip_min,

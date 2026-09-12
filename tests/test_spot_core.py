@@ -33,13 +33,19 @@ def _make_agent(**kwargs) -> SPOT:
 
 def _fill(agent: SPOT, steps: int = 64) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- a bare Box env
+    # (as _state_env() constructs) is boundary-normalized by
+    # BaseAlgorithm.__init__ (rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    obs_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        state = torch.randn(env.num_envs, *obs_shape)
+        next_state = torch.randn_like(state)
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
-        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+        agent.replay_buffer.add(
+            {"state": state}, {"state": next_state}, actions, rewards, dones
+        )
 
 
 def test_rejects_unsupported_observation_space():
@@ -48,8 +54,43 @@ def test_rejects_unsupported_observation_space():
         spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
         num_envs=1,
     )
-    with pytest.raises(TypeError, match="Box"):
+    with pytest.raises(ValueError, match="Box"):
         SPOT(env=unsupported, buffer_device="cpu", device="cpu")
+
+
+def test_accepts_state_only_dict_observation_space():
+    # SPOT's replay buffer (inherited from TD3BCCore) is Dict-based now -- a
+    # pure-state Dict env (no images) is exactly what a bare Box env
+    # normalizes to at the boundary.
+    dict_env = OfflineEnvSpec(
+        spaces.Dict({"state": spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)}),
+        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+        num_envs=1,
+    )
+    agent = SPOT(
+        env=dict_env, buffer_device="cpu", device="cpu", net_arch=[16, 16], vae_hidden_dim=16
+    )
+    assert agent.observation_encoders.schema.keys == ("state",)
+
+
+def test_accepts_dict_observation_space_with_images():
+    # SPOT accepts encoder_config/obs_groups like the rest of the codebase
+    # (schema-driven encoder resolution) -- a Dict env with an image key
+    # must construct without error.
+    image_env = OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32),
+                "rgb_cam": spaces.Box(0, 255, shape=(8, 8, 3), dtype=np.uint8),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+        num_envs=1,
+    )
+    agent = SPOT(
+        env=image_env, buffer_device="cpu", device="cpu", net_arch=[16, 16], vae_hidden_dim=16
+    )
+    assert agent.observation_encoders.schema.has_images
 
 
 def _pretrained_agent(**kwargs) -> SPOT:
@@ -69,7 +110,7 @@ def test_gradient_step_produces_finite_losses():
 
 def test_predict_in_bounds():
     agent = _make_agent()
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action = agent.policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)
@@ -202,7 +243,7 @@ def test_cuda_smoke():
     assert all(np.isfinite(v) for v in metrics.values()), metrics
 
     agent.policy.zero_grad(set_to_none=True)
-    obs = torch.randn(4, 6, device="cuda")
+    obs = {"state": torch.randn(4, 6, device="cuda")}
     action = agent.policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)

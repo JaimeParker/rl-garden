@@ -1,11 +1,13 @@
 """Monte Carlo return computation for replay buffers.
 
-Extends existing replay buffers (TensorReplayBuffer, DictReplayBuffer) with
-on-the-fly MC return computation for Cal-QL. Tracks episode boundaries and
-computes discounted returns when sampling batches.
+Extends ``ReplayBuffer`` with on-the-fly MC return computation for
+Cal-QL. Tracks episode boundaries and computes discounted returns when
+sampling batches.
 
 Key features:
-- Mixin pattern: works with both Tensor and Dict buffers
+- Mixin pattern: works with any host replay buffer sharing ``BaseReplayBuffer``'s
+  ``add``/``_index_batch`` shape (currently only ``ReplayBuffer``, the
+  strict Dict-observation contract)
 - Episode boundary tracking via done flags
 - Vectorized GPU-native MC return table (built lazily, invalidated on add())
 - ~100× faster than per-sample loop on large buffers
@@ -20,8 +22,7 @@ from typing import Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.types import MCReplayBufferSample, Obs, TensorDict
 
 
@@ -35,7 +36,7 @@ class MCReplayBufferMixin:
     - Optional sparse-reward MC handling
 
     Usage:
-        class MCTensorReplayBuffer(MCReplayBufferMixin, TensorReplayBuffer):
+        class MCReplayBuffer(MCReplayBufferMixin, ReplayBuffer):
             pass
     """
 
@@ -434,29 +435,11 @@ class MCReplayBufferMixin:
         self._perm_full_at_build = self.full
 
 
-class MCTensorReplayBuffer(MCReplayBufferMixin, TensorReplayBuffer):
-    """TensorReplayBuffer with Monte Carlo return computation.
+class MCReplayBuffer(MCReplayBufferMixin, ReplayBuffer):
+    """ReplayBuffer with Monte Carlo return computation.
 
     Usage:
-        buffer = MCTensorReplayBuffer(
-            observation_space=env.observation_space,
-            action_space=env.action_space,
-            num_envs=16,
-            buffer_size=1_000_000,
-            gamma=0.99,
-        )
-        sample = buffer.sample(256)
-        # sample.mc_returns contains MC returns for Cal-QL
-    """
-
-    pass
-
-
-class MCDictReplayBuffer(MCReplayBufferMixin, DictReplayBuffer):
-    """DictReplayBuffer with Monte Carlo return computation.
-
-    Usage:
-        buffer = MCDictReplayBuffer(
+        buffer = MCReplayBuffer(
             observation_space=env.observation_space,
             action_space=env.action_space,
             num_envs=16,

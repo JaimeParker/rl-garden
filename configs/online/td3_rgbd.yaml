@@ -1,0 +1,15 @@
+env_id: PickCube-v1
+obs:
+  rgb: [base_camera]
+  depth: [base_camera]
+  image_size: [128, 128]
+encoder:
+  backbone: drqv2_conv
+  image_fusion_mode: stack_channels
+  image_augmentation: random_shift
+  image_random_shift_pad: 4
+capture_video: true
+video_fps: 30
+render_mode: rgb_array
+eval_freq: 10000
+total_timesteps: 1000000

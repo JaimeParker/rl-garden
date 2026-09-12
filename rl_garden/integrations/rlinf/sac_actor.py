@@ -141,8 +141,11 @@ def trajectory_batch_to_sample(
     if dones.dim() == 2:
         dones = dones.squeeze(1)
     return ReplayBufferSample(
-        obs=obs.to(device),
-        next_obs=next_obs.to(device),
+        # build_env_spec's bare Box observation_space is boundary-normalized
+        # to Dict({"state": Box}) by BaseAlgorithm.__init__ (always on), so
+        # obs/next_obs must match that contract here too.
+        obs={"state": obs.to(device)},
+        next_obs={"state": next_obs.to(device)},
         actions=actions.to(device),
         rewards=rewards.to(device).float(),
         dones=dones.to(device).float(),

@@ -35,9 +35,10 @@ from rl_garden.training.offline._registry import registry
 class A2ABCArgs(A2ABCTrainingArgs):
     """A2A flow-matching BC pretraining. Requires ``--dataset_path`` (H5
     trajectory file with nested ``obs/<key>`` groups, e.g. ``obs/rgb``/
-    ``obs/state``). Vision conditioning is mandatory -- unlike
-    ``diffusion_bc``'s Dict-obs path, ``--include_state=False`` is rejected: the
-    state-history window is the flow's source, not optional."""
+    ``obs/state``). Vision conditioning is mandatory and a ``"state"`` key is
+    required in the dataset -- ``A2ABC._setup_model`` raises ``ValueError``
+    when either is missing: the state-history window is the flow's source,
+    not optional."""
 
 
 def run_a2a_bc(args: A2ABCArgs) -> None:
@@ -50,10 +51,10 @@ def run_a2a_bc(args: A2ABCArgs) -> None:
 
 
 def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms import A2ABC, OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
-    from rl_garden.encoders import discover_image_keys
+    from rl_garden.observations import ObservationSchema, normalize_observation_space
     from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
@@ -67,11 +68,6 @@ def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
         raise SystemExit("--dataset_path is required for a2a_bc.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
-    if args.include_state is False:
-        raise SystemExit(
-            "a2a_bc requires include_state=True -- the state-history window "
-            "is the flow's source, not optional."
-        )
 
     seed_everything(args.seed)
 
@@ -113,7 +109,7 @@ def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
     cleanup.append(logger.close)
 
     env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
-    image_keys = discover_image_keys(obs_space)
+    image_keys = ObservationSchema.from_space(normalize_observation_space(obs_space)).image_keys
     agent = construct_agent(
         A2ABC,
         env=env,
@@ -134,11 +130,9 @@ def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
         enc_contrastive_weight=args.enc_contrastive_weight,
         flow_contrastive_weight=args.flow_contrastive_weight,
         contrastive_temperature=args.contrastive_temperature,
-        image_encoder_factory=image_encoder_factory_from_args(args),
-        image_keys=image_keys,
-        state_key="state",
-        image_fusion_mode=args.image_fusion_mode,
-        enable_stacking=False,
+        encoder_config=args.encoder,
+        obs_groups=resolve_obs_groups_config(args),
+        image_augmentation_seed=args.seed + 1_000_003,
         actor_lr=args.actor_lr,
         weight_decay=args.weight_decay,
         lr_schedule=args.lr_schedule,
@@ -185,7 +179,7 @@ def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
     if args.std_log:
         print(
             f"[a2a_bc] dataset_size={agent._dataset_size} "
-            f"image_keys={image_keys} action={action_space.shape}",
+            f"image_keys: {image_keys!r} action={action_space.shape}",
             flush=True,
         )
 

@@ -11,7 +11,7 @@ from rl_garden.policies.base import BasePolicy
 class _DummyPolicy(BasePolicy):
     def predict(self, obs, deterministic: bool = False) -> torch.Tensor:
         del deterministic
-        return torch.zeros(obs.shape[0], 1)
+        return torch.zeros(obs["state"].shape[0], 1)
 
 
 class _DummyEnv:

@@ -92,10 +92,10 @@ class CNN3DEncoder(BaseFeaturesExtractor):
 def cnn3d_encoder_factory(num_frames: int, features_dim: int = 256):
     """Return a factory that creates ``CNN3DEncoder`` instances.
 
-    Usable as ``image_encoder_factory`` in ``CombinedExtractor`` so the
-    entire image pathway uses spatiotemporal 3D convolution:
-
-        CombinedExtractor(..., image_encoder_factory=cnn3d_encoder_factory(num_frames=3), ...)
+    ``CombinedExtractor`` calls this directly (not through the encoder
+    registry) when ``encoder_config.backbone == "cnn3d"``, deriving
+    ``num_frames`` from the schema's stacked image entries so the entire
+    image pathway uses spatiotemporal 3D convolution.
     """
 
     def _factory(img_space: spaces.Box) -> CNN3DEncoder:

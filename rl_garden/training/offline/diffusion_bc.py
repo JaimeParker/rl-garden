@@ -12,9 +12,12 @@ there is no separate dataset-loading step to run after agent construction.
 Handles both Box and Dict (vision) H5 datasets -- ``DiffusionBC`` itself
 absorbed the former standalone ``VisionDiffusionBC``, and this entrypoint
 follows suit: ``infer_specs_from_h5`` (not the Box-only
-``infer_box_specs_from_h5``) infers the observation space from the dataset,
-and the Dict-only kwargs (image encoder, fusion mode, ...) are built the
-same way ``flow_bc.py``'s ``_flow_bc_kwargs`` does.
+``infer_box_specs_from_h5``) infers the observation space from the dataset
+(not gated by ``--obs``, which only governs live-env backends -- the H5's
+own stored keys decide what's Dict-shaped here), and the Dict-only
+``encoder_config``/``obs_groups`` kwargs are built by ``_diffusion_bc_kwargs``
+below, forwarding ``args.encoder`` to the schema-driven observation-encoder
+mixin (see ``rl_garden.algorithms._observation``).
 """
 
 from __future__ import annotations
@@ -25,8 +28,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-from gymnasium import spaces
 
 from rl_garden.buffers.h5_dataset import infer_specs_from_h5
 from rl_garden.common import Logger, seed_everything
@@ -58,24 +59,37 @@ class DiffusionBCArgs(DiffusionBCTrainingArgs):
     A Dict (vision) obs run is likewise never a valid ``dppo``/
     ``consistency_distill_bc`` ``--bc_checkpoint`` teacher (both require a
     Box-trained checkpoint; see the guards in ``DPPO.__init__``/
-    ``ConsistencyDistillBC._setup_model``). Most ``OfflineVisionArgs`` fields
-    are no-ops for a Box-shaped dataset."""
+    ``ConsistencyDistillBC._setup_model``). Most ``--encoder``/``--obs-groups``
+    fields are no-ops for a Box-shaped dataset."""
 
 
 def _diffusion_bc_kwargs(args: DiffusionBCArgs, obs_space: Any) -> dict:
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
-    from rl_garden.encoders import discover_image_keys
+    """``encoder_config``/``obs_groups`` for a Dict (vision) obs space; a
+    no-op for a Box (state-only) obs space (both stay unset, resolved by the
+    schema-driven mixin to a plain ``FlattenExtractor``).
 
-    kwargs: dict = {}
-    if isinstance(obs_space, spaces.Dict):
-        kwargs.update(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=discover_image_keys(obs_space),
-            state_key="state",
-            use_proprio=args.include_state,
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=False,
-        )
+    ``args.obs`` does not gate this dataset's shape (the H5 file's own
+    stored keys decide it, via ``infer_specs_from_h5`` above -- unlike a
+    live env backend, there is no ``ObservationConfig`` contract to honor
+    here); ``args.obs.state`` is instead read as "exclude the state key from
+    ``obs_groups`` even when the dataset has one".
+    """
+    if not hasattr(obs_space, "spaces"):
+        return {}
+
+    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.observations import ObsGroups, ObservationSchema
+
+    kwargs: dict = {"encoder_config": args.encoder}
+    if not args.obs.state:
+        # Exclude "state" even when present in the dataset's obs space: an
+        # obs_groups actor/critic subset that omits it.
+        image_keys = ObservationSchema.from_space(obs_space).image_keys
+        kwargs["obs_groups"] = ObsGroups(actor=image_keys, critic=image_keys)
+    else:
+        obs_groups = resolve_obs_groups_config(args)
+        if obs_groups is not None:
+            kwargs["obs_groups"] = obs_groups
     return kwargs
 
 
@@ -227,12 +241,13 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     persist_effective_config(materialized, config_path)
     logger.update_config(json_value(materialized))
     if args.std_log:
-        if isinstance(obs_space, spaces.Dict):
-            from rl_garden.encoders import discover_image_keys
+        if hasattr(obs_space, "spaces"):
+            from rl_garden.observations import ObservationSchema
 
+            schema_image_keys = ObservationSchema.from_space(obs_space).image_keys
             print(
                 f"[diffusion_bc] dataset_size={agent._dataset_size} "
-                f"image_keys={discover_image_keys(obs_space)} action={action_space.shape}",
+                f"images={schema_image_keys} action={action_space.shape}",
                 flush=True,
             )
         else:

@@ -34,7 +34,7 @@ def test_windows_never_cross_trajectory_boundary_and_pad_history_by_repeat(tmp_p
     )
 
     assert action_chunks.shape == (4, 2, 1)
-    assert obs_history.shape == (4, 3, 1)
+    assert obs_history["state"].shape == (4, 3, 1)
 
     expected_action_chunks = torch.tensor(
         [[[0.0], [10.0]], [[10.0], [20.0]], [[20.0], [30.0]], [[30.0], [40.0]]]
@@ -49,7 +49,7 @@ def test_windows_never_cross_trajectory_boundary_and_pad_history_by_repeat(tmp_p
             [[1.0], [2.0], [3.0]],
         ]
     )
-    assert torch.equal(obs_history, expected_obs_history)
+    assert torch.equal(obs_history["state"], expected_obs_history)
 
 
 def test_dict_observations_supported(tmp_path):

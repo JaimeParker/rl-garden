@@ -10,15 +10,17 @@ constructs its agent class from ``args`` (mirroring the
 including any ``--load_checkpoint`` handling.
 
 Usage:
-    # State observations (override visual defaults)
-    python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode state \\
+    # State observations (the default)
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
         --buffer_size 1000000 --batch_size 256 --utd 4.0
 
     # RGB observations with plain_conv encoder
-    python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode rgb --encoder plain_conv
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --obs.rgb base_camera --encoder.backbone plain_conv
 
     # RGBD observations with ResNet encoder
-    python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode rgbd --encoder resnet10
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --obs.rgb base_camera --obs.depth base_camera --encoder.backbone resnet10
 
     # Online-only (no offline pre-training)
     python examples/train_off2on.py wsrl --env_id PickCube-v1 --num_offline_steps 0
@@ -45,17 +47,10 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.offline import _log_eval_stdout, run_offline_pretraining
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.cli_args import (
-    resolve_checkpoint_dir,
-    resolve_eval_record_dir,
-    warn_if_eval_budget_undersized,
-)
+from rl_garden.common.cli_args import resolve_checkpoint_dir, warn_if_eval_budget_undersized
 from rl_garden.common.effective_config import json_value, persist_effective_config
-from rl_garden.envs.backend_registry import (
-    EnvRequest,
-    make_training_envs,
-    should_create_eval_env,
-)
+from rl_garden.common.env_args import make_env_request
+from rl_garden.envs.backend_registry import make_training_envs, should_create_eval_env
 from rl_garden.training._dataset import load_offline_dataset
 from rl_garden.training.inspection import (
     config_session,
@@ -245,8 +240,11 @@ def _run_off2on(
         eval_episode_horizon=args.eval_episode_horizon,
     )
 
-    is_visual = args.obs_mode != "state"
-    obs_label = f"rgbd_{args.encoder}" if is_visual else "state"
+    # getattr: a handful of off2on algorithms (AWAC, SPOT, SO2) are Box-only
+    # and never mix in ObservationArgs at all, so args has no .obs/.encoder.
+    obs = getattr(args, "obs", None)
+    is_visual = obs.is_visual if obs is not None else False
+    obs_label = f"rgbd_{args.encoder.backbone}" if is_visual else "state"
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = (
         args.exp_name
@@ -287,29 +285,7 @@ def _run_off2on(
             "--num_eval_envs > 0 to provide an eval environment."
         )
 
-    backend_config = args.resolve_backend_config()
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    req = EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
-        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
-        reward_scale=args.reward_scale,
-        reward_bias=args.reward_bias,
-        num_eval_envs=args.num_eval_envs,
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=backend_config,
-        create_eval_env=should_create_eval_env(args),
-    )
+    req = make_env_request(args, run_name)
     if dry_run:
         req = replace(req, capture_video=False, eval_record_dir=None)
     env, eval_env = make_training_envs(args.env_backend, req)

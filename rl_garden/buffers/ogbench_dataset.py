@@ -29,7 +29,13 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import _add_flat_transitions, _mc_returns, _to_tensor
+from rl_garden.buffers._dataset_common import (
+    _add_flat_transitions,
+    _finalize_dataset_obs_space,
+    _match_obs_to_buffer,
+    _mc_returns,
+    _to_tensor,
+)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
@@ -37,8 +43,16 @@ from rl_garden.buffers.dataset_backend_registry import (
     register_dataset_backend,
 )
 from rl_garden.common.spaces import canonicalize_floating_observation_space
+from rl_garden.observations.schema import validate_observation_space
 
 DEFAULT_DATASET_DIR = "~/.ogbench/data"
+
+# OGBench's own API exposes exactly one image per ``visual-*`` env id, with
+# no camera name of its own -- this is the single canonical key name used
+# until the ``ogbench`` env backend (rl_garden/envs/ogbench) settles on its
+# own single-camera naming for the *online* env, at which point the two must
+# be reconciled (see this worker's report).
+_OGBENCH_VISUAL_KEY = "rgb_ogbench"
 
 
 def _require_ogbench():
@@ -54,15 +68,22 @@ def _require_ogbench():
 
 def infer_specs_from_ogbench(
     dataset_name: str, *, dataset_dir: str = DEFAULT_DATASET_DIR
-) -> tuple[spaces.Box, spaces.Box]:
-    """Return the observation/action spaces for an OGBench dataset's env."""
+) -> tuple[spaces.Dict, spaces.Box]:
+    """Return the strict-contract Dict observation space (plus action space)
+    for an OGBench dataset's env. State datasets become
+    ``Dict({"state": Box(float32)})``; ``visual-*`` (uint8 image) datasets
+    become ``Dict({"rgb_ogbench": Box(uint8)})`` -- see ``_OGBENCH_VISUAL_KEY``.
+    """
     ogbench = _require_ogbench()
     env = ogbench.make_env_and_datasets(dataset_name, dataset_dir=dataset_dir, env_only=True)
     try:
-        return (
-            canonicalize_floating_observation_space(env.observation_space),
-            env.action_space,
-        )
+        space = canonicalize_floating_observation_space(env.observation_space)
+        if isinstance(space, spaces.Box) and space.dtype == np.uint8:
+            obs_space = spaces.Dict({_OGBENCH_VISUAL_KEY: space})
+            validate_observation_space(obs_space)
+        else:
+            obs_space = _finalize_dataset_obs_space(space)
+        return obs_space, env.action_space
     finally:
         env.close()
 
@@ -120,6 +141,7 @@ def load_ogbench_dataset_to_replay_buffer(
         low = torch.as_tensor(env.action_space.low, dtype=actions.dtype, device=actions.device)
         high = torch.as_tensor(env.action_space.high, dtype=actions.dtype, device=actions.device)
         actions = actions.clamp(low + 1e-5, high - 1e-5)
+        obs, next_obs = _match_obs_to_buffer(buffer, obs, next_obs)
 
         successes = dones if hasattr(buffer, "_step_success") else None
         mc_returns = (

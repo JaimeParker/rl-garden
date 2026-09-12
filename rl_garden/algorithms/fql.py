@@ -40,12 +40,12 @@ rl-garden algorithm's ``None`` -> ReLU): the reference's MLP hardcodes
 ``nn.gelu`` unconditionally (``3rd_party/fql/utils/networks.py``).
 
 ``encoder_sharing`` (vision/Dict obs only -- Box obs uses a parameterless
-``FlattenExtractor`` either way): ``"shared"`` (default) follows AGENTS.md's
-project convention and every other vision-capable algorithm (``SACPolicy``),
-one encoder trained by critic loss, actor path detached. ``"separate"``
-matches FQL's own JAX reference exactly (three independent encoder
-instances). See ``FQLPolicy``'s docstring for the full gradient-isolation
-argument per mode.
+``FlattenExtractor`` either way): ``"shared_critic_grad"`` (default) follows
+AGENTS.md's project convention and every other vision-capable algorithm
+(``SACPolicy``), one encoder trained by critic loss, actor path detached.
+``"separate"`` matches FQL's own JAX reference exactly (three independent
+encoder instances). See ``FQLPolicy``'s docstring for the full
+gradient-isolation argument per mode.
 
 ``_critic_loss`` averages (not sums) the per-critic MSE across the ensemble,
 matching the reference's ``mean((q - target_q)**2)`` over the full
@@ -54,28 +54,23 @@ matching the reference's ``mean((q - target_q)**2)`` over the full
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.dict_buffer import DictReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
+from rl_garden.observations import ObsGroups, resolve_obs_groups
 from rl_garden.policies.fql_policy import EncoderSharing, FQLPolicy
 
 
@@ -114,8 +109,10 @@ class FQLCore:
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared",
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
     ) -> None:
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
@@ -127,9 +124,10 @@ class FQLCore:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
             )
-        if encoder_sharing not in ("shared", "separate"):
+        if encoder_sharing not in ("shared_critic_grad", "separate"):
             raise ValueError(
-                f"encoder_sharing must be 'shared' or 'separate', got {encoder_sharing!r}."
+                "encoder_sharing must be 'shared_critic_grad' or 'separate' for "
+                f"the FQL family, got {encoder_sharing!r}."
             )
 
         self.tau = tau
@@ -160,7 +158,9 @@ class FQLCore:
         self.backbone_type = backbone_type
         self.activation_fn = activation_fn
         self.encoder_sharing = encoder_sharing
-        self.image_encoder_factory = image_encoder_factory
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return ("critic_optimizer", "actor_optimizer")
@@ -186,6 +186,17 @@ class FQLCore:
             "n_critics": self.n_critics,
             "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -203,50 +214,10 @@ class FQLCore:
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        if isinstance(obs_space, spaces.Dict):
-            return CombinedExtractor
-        raise TypeError(
-            "FQL only supports Box or Dict observation spaces, got " + str(type(obs_space))
-        )
-
-    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            return {
-                "image_encoder_factory": (
-                    self.image_encoder_factory or default_image_encoder_factory()
-                ),
-            }
-        return {}
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(
-            observation_space=self.env.single_observation_space,
-            **self._default_features_extractor_kwargs(),
-        )
-
     def _build_replay_buffer(self):
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Dict):
-            return DictReplayBuffer(
-                observation_space=obs_space,
-                action_space=self.env.single_action_space,
-                num_envs=self.num_envs,
-                buffer_size=self.buffer_size,
-                storage_device=self.buffer_device,
-                sample_device=self.device,
-            )
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                "FQL only supports Box or Dict observation spaces, got " + str(type(obs_space))
-            )
-        return TensorReplayBuffer(
-            observation_space=obs_space,
+        # obs_space is always Dict (boundary normalization is unconditional).
+        return ReplayBuffer(
+            observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
             buffer_size=self.buffer_size,
@@ -255,11 +226,29 @@ class FQLCore:
         )
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
+        observation_space = self.env.single_observation_space
+        self._resolve_observation_encoders(observation_space)
         if self.encoder_sharing == "separate":
-            actor_bc_flow_encoder = self._build_features_extractor()
-            actor_onestep_flow_encoder = self._build_features_extractor()
+            # Mixin resolves the actor/critic pair; FQL needs a third encoder
+            # (two actor networks + the critic's own) -- see the recipe's
+            # "FQL family encoder_sharing value mapping" section. The mixin's
+            # "actor" role backs actor_onestep_flow, "critic" role backs
+            # FQLPolicy's features_extractor (the critic's own encoder), and
+            # the extra actor_bc_flow encoder is built directly, over the
+            # same key subset as the "actor" role.
+            features_extractor = self.observation_encoders.critic
+            actor_onestep_flow_encoder = self.observation_encoders.actor
+            actor_keys = resolve_obs_groups(
+                self.observation_encoders.schema, self.obs_groups
+            )["actor"].keys
+            actor_bc_flow_encoder = build_observation_encoder(
+                observation_space, self.encoder_config, keys=actor_keys
+            )
         else:
+            # Single encoder instance, doing double duty as both the
+            # critic's own encoder and the actor's (detached) encoder --
+            # exactly what FQLPolicy's "shared_critic_grad" branch assumes.
+            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
             actor_onestep_flow_encoder = None
         self.policy = FQLPolicy(
@@ -378,7 +367,7 @@ class FQLCore:
         return {"critic_loss": float(critic_loss.detach().item())}
 
     def _actor_update(self, data, obs_features: torch.Tensor) -> dict[str, float]:
-        # In "shared" mode bc/onestep/q features all alias one detached
+        # In "shared_critic_grad" mode bc/onestep/q features all alias one detached
         # forward through the shared encoder (today's behavior). In
         # "separate" mode each is a fresh, grad-enabled forward through
         # that network's own encoder -- q_features in particular cannot
@@ -520,8 +509,10 @@ class FQL(FQLCore, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared",
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -582,13 +573,9 @@ class FQL(FQLCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
-            image_encoder_factory=image_encoder_factory,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(
-                f"FQL supports only Box or Dict observation spaces, got {type(obs_space)}"
-            )
 
         self._setup_model()

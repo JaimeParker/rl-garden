@@ -26,8 +26,9 @@ import tyro
 from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
 from rl_garden.common.utils import get_device
-from rl_garden.encoders.combined import default_image_encoder_factory, discover_image_keys
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.observations import ObservationConfig
 
 
 @dataclass
@@ -46,26 +47,23 @@ class ProbeArgs:
 
 
 def _make_env(args: ProbeArgs):
-    cfg = ManiSkillEnvConfig(
+    obs = ObservationConfig(
+        rgb=("base_camera",), depth=("base_camera",), image_size=(64, 64)
+    )
+    cfg = ManiSkillEnvConfig.from_observation(
+        obs,
         env_id=args.env_id,
         num_envs=args.num_envs,
-        obs_mode="rgb",
-        include_state=True,
         control_mode=args.control_mode,
         reward_mode="normalized_dense",
         sim_backend="gpu",
         render_backend="gpu",
         reconfiguration_freq=1,
-        camera_width=64,
-        camera_height=64,
-        per_camera_rgbd=True,
     )
     return make_maniskill_env(cfg)
 
 
 def _make_agent(args: ProbeArgs, env, device: torch.device) -> SAC:
-    image_keys = discover_image_keys(env.single_observation_space)
-    factory = default_image_encoder_factory(features_dim=args.encoder_features_dim)
     return SAC(
         env=env,
         eval_env=env,
@@ -82,9 +80,9 @@ def _make_agent(args: ProbeArgs, env, device: torch.device) -> SAC:
         checkpoint_dir=None,
         checkpoint_freq=0,
         save_final_checkpoint=False,
-        image_keys=image_keys,
-        image_encoder_factory=factory,
-        image_fusion_mode="per_key",
+        encoder_config=EncoderConfig(
+            features_dim=args.encoder_features_dim, image_fusion_mode="per_key"
+        ),
     )
 
 

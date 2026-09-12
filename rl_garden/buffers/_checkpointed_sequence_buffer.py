@@ -21,7 +21,7 @@ from gymnasium import spaces
 from rl_garden.buffers._final_obs_table import FinalObsTableMixin
 from rl_garden.buffers._recurrent_sampling import RecurrentSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.buffers.replay_buffer import DictArray
 from rl_garden.buffers.sum_tree import SumTree
 from rl_garden.common.obs_utils import index_obs
 
@@ -31,7 +31,7 @@ class _CheckpointedSequenceReplayBuffer(
 ):
     def __init__(
         self,
-        observation_space: spaces.Box | spaces.Dict,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         num_envs: int,
         buffer_size: int,
@@ -77,19 +77,13 @@ class _CheckpointedSequenceReplayBuffer(
         self.full = False
 
         shape = (self.per_env_buffer_size, num_envs)
-        self._is_dict_obs = isinstance(observation_space, spaces.Dict)
         class_name = type(self).__name__
-        if self._is_dict_obs:
-            self.obs = DictArray(shape, observation_space, device=self.storage_device)
-        elif isinstance(observation_space, spaces.Box):
-            self.obs = torch.zeros(
-                shape + tuple(observation_space.shape), device=self.storage_device
-            )
-        else:
+        if not isinstance(observation_space, spaces.Dict):
             raise TypeError(
-                f"{class_name} supports Box or Dict observations, got "
-                f"{type(observation_space)}."
+                f"{class_name} requires a Dict observation space (the "
+                f"rl-garden observation contract), got {type(observation_space)}."
             )
+        self.obs = DictArray(shape, observation_space, device=self.storage_device)
         self.actions = torch.zeros(
             shape + tuple(action_space.shape), device=self.storage_device
         )
@@ -98,7 +92,7 @@ class _CheckpointedSequenceReplayBuffer(
         self.episode_ends = torch.zeros(shape, dtype=torch.bool, device=self.storage_device)
 
         # Episode-contiguity bookkeeping -- same fields/semantics as
-        # NStepDictReplayBuffer (nstep_buffer.py), reused not reinvented.
+        # NStepReplayBuffer (nstep_buffer.py), reused not reinvented.
         self._ep_id = torch.full(shape, -1, dtype=torch.long, device=self.storage_device)
         self._current_ep_id = torch.zeros(
             num_envs, dtype=torch.long, device=self.storage_device
@@ -184,12 +178,8 @@ class _CheckpointedSequenceReplayBuffer(
         done_bool = done.to(self.storage_device).bool()
         episode_end_bool = episode_end.to(self.storage_device).bool().reshape(self.num_envs)
 
-        if self._is_dict_obs:
-            assert isinstance(obs, dict)
-            self.obs[self.pos] = {k: v.to(self.storage_device) for k, v in obs.items()}
-        else:
-            assert isinstance(obs, torch.Tensor)
-            self.obs[self.pos] = obs.to(self.storage_device)
+        assert isinstance(obs, dict)
+        self.obs[self.pos] = {k: v.to(self.storage_device) for k, v in obs.items()}
         self.actions[self.pos] = action.to(self.storage_device)
         self.rewards[self.pos] = reward.reshape(self.num_envs).to(self.storage_device)
         self.dones[self.pos] = done_bool.reshape(self.num_envs)

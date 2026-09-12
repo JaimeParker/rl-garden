@@ -16,7 +16,9 @@ class D4RLLegacyBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.d4rl_legacy.config import D4RLLegacyEnvConfig
+        from rl_garden.envs.wrappers import require_state_only_observation
 
+        require_state_only_observation(req.observation, backend="d4rl_legacy")
         config = req.backend_config
         return D4RLLegacyEnvConfig(
             env_id=req.env_id,

@@ -1,4 +1,4 @@
-"""N-step Dict replay buffer for DrQ-v2 / DDPG.
+"""N-step replay buffer for DrQ-v2 / DDPG.
 
 Reuses ``DictArray`` for GPU-native storage and adds episode-boundary tracking
 so n-step returns can be computed correctly at sample time without leaking
@@ -15,7 +15,7 @@ from gymnasium import spaces
 from rl_garden.buffers._final_obs_table import FinalObsTableMixin
 from rl_garden.buffers._nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.buffers.dict_buffer import (
+from rl_garden.buffers.replay_buffer import (
     DictArray,
     _resolve_dtype,
     _tensor_to_device,
@@ -29,10 +29,10 @@ from rl_garden.buffers.mmap_storage import (
 from rl_garden.common.types import NStepReplayBufferSample
 
 
-class NStepDictReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
+class NStepReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
     """Dict replay buffer with n-step return support.
 
-    Storage layout is identical to ``DictReplayBuffer``:
+    Storage layout is identical to ``ReplayBuffer``:
     ``(per_env_buffer_size, num_envs, *shape)`` ring buffer.
 
     Episode boundaries are tracked via a per-transition episode-id tensor so
@@ -60,7 +60,7 @@ class NStepDictReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         mmap_mode: MmapMode = "create",
     ) -> None:
         assert isinstance(observation_space, spaces.Dict), (
-            "NStepDictReplayBuffer requires a Dict observation space."
+            "NStepReplayBuffer requires a Dict observation space."
         )
         if nstep < 1:
             raise ValueError(f"nstep must be >= 1, got {nstep}")
@@ -330,7 +330,7 @@ class NStepDictReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         )
 
 
-class LazyNextNStepDictReplayBuffer(FinalObsTableMixin, NStepDictReplayBuffer):
+class LazyNextNStepReplayBuffer(FinalObsTableMixin, NStepReplayBuffer):
     """N-step dict replay that stores only sparse episode-end next observations.
 
     Normal bootstrap observations are reconstructed from later ``obs`` slots in
@@ -360,7 +360,6 @@ class LazyNextNStepDictReplayBuffer(FinalObsTableMixin, NStepDictReplayBuffer):
             mmap_dir=mmap_dir,
             **kwargs,
         )
-        self._is_dict_obs = True
         self._init_final_obs_table(
             (self.per_env_buffer_size, self.num_envs),
             capacity=final_obs_capacity,

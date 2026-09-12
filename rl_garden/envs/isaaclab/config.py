@@ -10,6 +10,11 @@ class IsaacLabEnvConfig:
     seed: int
     headless: bool = True
     sim_device: str = "cuda:0"
-    obs_mode: str = "state"
+    # From EnvRequest.observation. IsaacLab tasks bake their own camera
+    # set/resolution into the task registration (not runtime-selectable), so
+    # this backend only distinguishes "some vision requested" from
+    # state-only, plus whether to keep the "state" key when vision is on.
+    is_visual: bool = False
+    state: bool = True
     frame_stack: int = 1
     env_kwargs: dict = field(default_factory=dict)

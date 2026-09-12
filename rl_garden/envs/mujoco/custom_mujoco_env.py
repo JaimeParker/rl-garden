@@ -15,9 +15,10 @@ this class.
 
 Observation key convention: ``_get_obs()`` should return rl-garden's own
 cross-backend keys -- ``"state"`` for the flat proprioceptive tensor,
-``"rgb"``/``"depth"`` (or ``"rgb_<camera>"``/``"depth_<camera>"`` for
-multiple cameras) for images, matching the convention already used for the
-IsaacLab custom-task scaffold. Since ``_get_obs()`` always returns a dict,
+``"rgb_<camera>"``/``"depth_<camera>"`` for images, always named even for a
+single camera (the observation contract has no bare rgb/depth keys),
+matching the convention already used for the IsaacLab custom-task
+scaffold. Since ``_get_obs()`` always returns a dict,
 the ``observation_space`` passed to ``__init__`` must be a matching
 ``gym.spaces.Dict`` -- not a bare ``Box`` -- even for a single ``"state"``
 key. Unlike some other rl-garden backends where the declared space is only a
@@ -93,9 +94,15 @@ class CustomMujocoEnv(MujocoEnv):
 
     @staticmethod
     def _camera_key(cfg: dict[str, Any]) -> str:
-        key = cfg.get("camera_name", cfg.get("camera_id"))
+        """Observation-key name for this camera. ``"key"`` overrides when the
+        camera has no MuJoCo ``camera_name`` (e.g. a free/unnamed camera
+        selected by ``camera_id``) but still needs a stable, descriptive
+        observation key."""
+        key = cfg.get("key", cfg.get("camera_name", cfg.get("camera_id")))
         if key is None:
-            raise ValueError("camera_configs entries need 'camera_name' or 'camera_id'")
+            raise ValueError(
+                "camera_configs entries need 'key', 'camera_name', or 'camera_id'"
+            )
         return str(key)
 
     def step(self, action):
@@ -116,17 +123,22 @@ class CustomMujocoEnv(MujocoEnv):
 
     def _render_cameras(self) -> dict[str, np.ndarray]:
         """Renders every configured camera into rl-garden's
-        ``rgb[_<cam>]``/``depth[_<cam>]`` key convention. Call this from your
-        own ``_get_obs()``; it is not invoked automatically."""
-        single = len(self._camera_configs) == 1
+        ``rgb_<cam>``/``depth_<cam>`` key convention (always named, even for a
+        single camera -- the observation contract has no bare ``rgb``/
+        ``depth`` keys). Call this from your own ``_get_obs()``; it is not
+        invoked automatically."""
         out: dict[str, np.ndarray] = {}
         for cfg in self._camera_configs:
-            renderer = self._camera_renderers[self._camera_key(cfg)]
-            suffix = "" if single else f"_{self._camera_key(cfg)}"
-            if cfg.get("rgb", True):
-                out[f"rgb{suffix}"] = renderer.render("rgb_array")
-            if cfg.get("depth", False):
-                out[f"depth{suffix}"] = renderer.render("depth_array")
+            key = self._camera_key(cfg)
+            renderer = self._camera_renderers[key]
+            if cfg.get("enable_rgb", True):
+                out[f"rgb_{key}"] = renderer.render("rgb_array")
+            if cfg.get("enable_depth", False):
+                # Contract requires depth as (H, W, 1); MujocoRenderer returns
+                # a bare (H, W) buffer.
+                out[f"depth_{key}"] = renderer.render("depth_array")[..., None].astype(
+                    np.float32
+                )
         return out
 
     def close(self) -> None:

@@ -1,0 +1,9 @@
+env_id: PickCube-v1
+obs:
+  rgb: [base_camera]
+  image_size: [64, 64]
+capture_video: true
+video_fps: 30
+render_mode: rgb_array
+eval_freq: 10000
+total_timesteps: 10000000

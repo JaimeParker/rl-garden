@@ -46,7 +46,7 @@ class _FakeBoxEnv:
 def _ppo_kwargs(**overrides) -> dict:
     kwargs = dict(
         num_steps=8, num_minibatches=2, update_epochs=2, device="cpu",
-        lr_schedule="adaptive_kl", normalize_obs=False, eval_freq=0, log_freq=0,
+        lr_schedule="adaptive_kl", eval_freq=0, log_freq=0,
         net_arch=[16], target_kl=None,
     )
     kwargs.update(overrides)
@@ -76,14 +76,14 @@ def test_ppo_adaptive_kl_rollout_mean_matches_stored_buffer_provenance():
     agent = PPO(env, **_ppo_kwargs(num_steps=6))
     agent.policy.eval()  # frozen policy: deterministic mean per obs
 
-    obs, _ = env.reset(seed=agent.seed)
+    obs, _ = agent.env.reset(seed=agent.seed)
     hidden = agent._initial_hidden_state(agent.num_envs)
     next_done = torch.zeros(agent.num_envs, device=agent.device)
     agent.rollout_buffer.reset()
     stored_obs = []
     for _ in range(6):
         actions, values, log_probs, _, hidden = agent._rollout_step(obs, hidden, next_done)
-        next_obs, rewards, terminations, truncations, infos = env.step(actions)
+        next_obs, rewards, terminations, truncations, infos = agent.env.step(actions)
         next_done = torch.logical_or(terminations, truncations).float()
         final_values = agent._compute_final_values(infos, next_done.bool(), hidden)
         agent.rollout_buffer.add(
@@ -121,12 +121,12 @@ def test_ppo_adaptive_kl_lr_shrinks_for_large_kl():
     # from old_mean to deterministically force the shrink branch regardless
     # of how close the freshly-initialized policy's own KL happens to be.
     agent.rollout_buffer.reset()
-    obs, _ = env.reset(seed=agent.seed)
+    obs, _ = agent.env.reset(seed=agent.seed)
     hidden = agent._initial_hidden_state(agent.num_envs)
     next_done = torch.zeros(agent.num_envs, device=agent.device)
     for _ in range(agent.num_steps):
         actions, values, log_probs, _, hidden = agent._rollout_step(obs, hidden, next_done)
-        next_obs, rewards, terminations, truncations, infos = env.step(actions)
+        next_obs, rewards, terminations, truncations, infos = agent.env.step(actions)
         next_done = torch.logical_or(terminations, truncations).float()
         final_values = agent._compute_final_values(infos, next_done.bool(), hidden)
         agent.rollout_buffer.add(
@@ -187,7 +187,7 @@ def test_recurrent_ppo_adaptive_kl_rollout_mean_matches_stored_buffer_provenance
     agent = RecurrentPPO(env, **_ppo_kwargs(num_steps=6))
     agent.policy.eval()
 
-    obs, _ = env.reset(seed=agent.seed)
+    obs, _ = agent.env.reset(seed=agent.seed)
     hidden = agent._initial_hidden_state(agent.num_envs)
     next_done = torch.zeros(agent.num_envs, device=agent.device)
     agent.rollout_buffer.reset()
@@ -196,7 +196,7 @@ def test_recurrent_ppo_adaptive_kl_rollout_mean_matches_stored_buffer_provenance
     for _ in range(6):
         stored_hidden.append(hidden)
         actions, values, log_probs, _, hidden = agent._rollout_step(obs, hidden, next_done)
-        next_obs, rewards, terminations, truncations, infos = env.step(actions)
+        next_obs, rewards, terminations, truncations, infos = agent.env.step(actions)
         next_done = torch.logical_or(terminations, truncations).float()
         final_values = agent._compute_final_values(infos, next_done.bool(), hidden)
         agent.rollout_buffer.add(
@@ -226,7 +226,7 @@ def test_adaptive_kl_reaches_buffer_through_cli_args_entrypoint():
     env = _FakeBoxEnv()
     args = PPOArgs(
         lr_schedule="adaptive_kl", desired_kl=0.02, num_steps=8, num_minibatches=2,
-        update_epochs=1, eval_freq=0, log_freq=0, obs_mode="state",
+        update_epochs=1, eval_freq=0, log_freq=0,
     )
     agent = build_ppo(args, env, None, None, None)
     assert agent.lr_schedule == "adaptive_kl"
@@ -235,7 +235,7 @@ def test_adaptive_kl_reaches_buffer_through_cli_args_entrypoint():
 
     r_args = RecurrentPPOArgs(
         lr_schedule="adaptive_kl", desired_kl=0.02, num_steps=8, num_minibatches=2,
-        update_epochs=1, eval_freq=0, log_freq=0, obs_mode="state",
+        update_epochs=1, eval_freq=0, log_freq=0,
     )
     r_agent = build_recurrent_ppo(r_args, env, None, None, None)
     assert r_agent.lr_schedule == "adaptive_kl"

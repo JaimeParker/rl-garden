@@ -7,7 +7,7 @@ from gymnasium import spaces
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.spot_policy import SPOTPolicy
 
-OBS_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
+OBS_SPACE = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)})
 ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
 
@@ -52,7 +52,7 @@ def test_train_eval_keeps_vae_in_eval_mode():
 
 def test_reuses_td3bc_actor_critic_predict():
     policy = _make_policy()
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action = policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)

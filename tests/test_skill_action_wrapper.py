@@ -23,12 +23,14 @@ class _FakeStaggeredEnv(gym.Env):
         self._value = torch.zeros(self.num_envs, 1)
         self.single_action_space = spaces.Box(-1, 1, (1,), np.float32)
         self.action_space = batch_space(self.single_action_space, self.num_envs)
-        self.single_observation_space = spaces.Box(-np.inf, np.inf, (1,), np.float32)
+        self.single_observation_space = spaces.Dict(
+            {"state": spaces.Box(-np.inf, np.inf, (1,), np.float32)}
+        )
         self.observation_space = batch_space(self.single_observation_space, self.num_envs)
 
     def reset(self, *, seed=None, options=None):
         self._value.zero_()
-        return self._value.clone(), {}
+        return {"state": self._value.clone()}, {}
 
     def step(self, action):
         del action
@@ -46,10 +48,10 @@ class _FakeStaggeredEnv(gym.Env):
         if done.any():
             self._value[done] = 0.0
             info = {
-                "final_observation": final_value.clone(),
+                "final_observation": {"state": final_value.clone()},
                 "_final_observation": done.clone(),
             }
-        return self._value.clone(), reward, terminated, truncated, info
+        return {"state": self._value.clone()}, reward, terminated, truncated, info
 
 
 class _RecordingDecoder:
@@ -113,7 +115,7 @@ def test_staggered_termination_freezes_final_obs_and_masks_reward():
 
     done_mask = infos["_final_observation"]
     assert torch.equal(done_mask, torch.tensor([True, True, False]))
-    final_obs = infos["final_observation"][done_mask, 0]
+    final_obs = infos["final_observation"]["state"][done_mask, 0]
     assert torch.allclose(final_obs, torch.tensor([1.0, 3.0]))
 
 

@@ -34,7 +34,9 @@ def load_h5_dataset_as_chunks(
     num_traj: int | None = None,
 ) -> tuple[Obs, torch.Tensor]:
     """Returns ``(obs_history, action_chunks)``:
-    ``obs_history`` has shape ``(N, cond_steps, *obs_shape)`` (Box or Dict),
+    ``obs_history`` is always a Dict (``{"state": Tensor}`` for state-only
+    sources, plus any ``rgb_<cam>``/``depth_<cam>`` keys the H5 file carries),
+    each leaf shaped ``(N, cond_steps, *entry_shape)``;
     ``action_chunks`` has shape ``(N, horizon_steps, action_dim)``.
     """
     if horizon_steps < 1:
@@ -78,4 +80,11 @@ def load_h5_dataset_as_chunks(
         raise ValueError(
             f"No trajectory in {path} is long enough for horizon_steps={horizon_steps}."
         )
-    return _concat(obs_hist_parts), torch.cat(action_chunk_parts, dim=0)
+    obs_history = _concat(obs_hist_parts)
+    if not isinstance(obs_history, dict):
+        # Strict observation contract: state-only H5 files store ``obs`` as a
+        # flat Dataset (not a Group), so ``_load_traj_transitions`` returns a
+        # bare tensor here -- wrap it to match ``infer_specs_from_h5``'s
+        # always-Dict space (``{"state": Box}`` for state-only).
+        obs_history = {"state": obs_history}
+    return obs_history, torch.cat(action_chunk_parts, dim=0)

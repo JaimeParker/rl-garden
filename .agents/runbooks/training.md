@@ -11,14 +11,14 @@ The first positional argument selects the registered algorithm:
 ```bash
 # Online: sac, ppo, recurrent/transformer variants, drqv2, flash_sac,
 # td3, rlpd, rlpd_hybrid, tdmpc2
-python examples/train_online.py sac --env_id PickCube-v1 --obs_mode state
+python examples/train_online.py sac --env_id PickCube-v1
 
 # Offline: bc, iql, cql, calql, wsrl, awac, td3_bc, tdmpc2_multitask
 python examples/pretrain_offline.py calql \
   --offline_dataset demos/pickcube.h5 --num_offline_steps 700000
 
 # Offline-to-online: wsrl, calql, iql, awac
-python examples/train_off2on.py wsrl --env_id PickCube-v1 --obs_mode state
+python examples/train_off2on.py wsrl --env_id PickCube-v1
 ```
 
 Use checked-in presets for repeatable experiment defaults:
@@ -28,7 +28,7 @@ python examples/train_online.py sac --config configs/online/sac_state.yaml
 python examples/train_online.py sac --config configs/online/sac_rgb_resnet.yaml
 python examples/train_online.py ppo --config configs/online/ppo_state.yaml
 python examples/train_online.py ppo --config configs/online/ppo_rgb.yaml
-python examples/train_online.py drqv2 --config configs/online/drqv2_rgb.yaml
+python examples/train_online.py drqv2 --config configs/online/drqv2_rgbd.yaml
 python examples/train_off2on.py wsrl --config configs/off2on/wsrl.yaml
 python examples/train_off2on.py wsrl --config configs/off2on/wsrl_rgb.yaml
 python examples/pretrain_offline.py calql --offline_dataset demos/pickcube.h5
@@ -48,10 +48,10 @@ Use `--print-config` for pure parsing and static validation. It exits before
 loading a simulator or creating environments, loggers, agents, and run directories:
 
 ```bash
-python examples/train_online.py sac --obs_mode state --print-config
+python examples/train_online.py sac --print-config
 python examples/pretrain_offline.py calql \
   --offline_dataset demos/pickcube.h5 --print-config
-python examples/train_off2on.py wsrl --obs_mode rgb --print-config
+python examples/train_off2on.py wsrl --obs.rgb base_camera --print-config
 ```
 
 Use `--dry-run` when the selected backend is available. It materializes the

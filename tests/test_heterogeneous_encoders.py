@@ -11,7 +11,9 @@ from gymnasium import spaces
 from rl_garden.algorithms import SAC
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders import BaseFeaturesExtractor, CombinedExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.recurrent import RecurrentLatentEncoder
+from rl_garden.observations import ObservationSchema
 from rl_garden.policies.ppo_policy import PPOPolicy
 from rl_garden.policies.recurrent_ppo_policy import RecurrentPPOPolicy
 from rl_garden.policies.recurrent_sac_policy import RecurrentSACPolicy
@@ -53,7 +55,7 @@ class _TrainableDictExtractor(BaseFeaturesExtractor):
 
     def forward(self, obs):
         state = obs["state"].float()
-        rgb = obs["rgb"].float().mean(dim=(1, 2)) / 255.0
+        rgb = obs["rgb_cam"].float().mean(dim=(1, 2)) / 255.0
         return torch.tanh(self.state_proj(state) + self.rgb_proj(rgb))
 
 
@@ -69,7 +71,7 @@ class _TrainableBoxExtractor(BaseFeaturesExtractor):
 def _dict_env() -> DummyVecEnv:
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
         }
     )
@@ -81,11 +83,11 @@ def _fill_dict(agent, steps: int = 8) -> None:
     env = agent.env
     for _ in range(steps):
         obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
         }
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
@@ -113,8 +115,7 @@ def _dict_agent(**kwargs) -> SAC:
         "training_freq": 1,
         "eval_freq": 0,
         "net_arch": {"pi": [16], "qf": [16]},
-        "image_keys": ("rgb",),
-        "proprio_latent_dim": 4,
+        "encoder_config": EncoderConfig(proprio_latent_dim=4),
     }
     params.update(kwargs)
     return SAC(env=_dict_env(), **params)
@@ -331,20 +332,18 @@ def test_prepare_batch_all_calls_both_when_separate():
 def test_combined_extractor_augmentation_cache_keys_are_instance_scoped():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
         }
     )
-    actor_extractor = CombinedExtractor(
-        obs_space, image_keys=("rgb",), image_augmentation="random_shift", augmentation_seed=1
-    )
-    critic_extractor = CombinedExtractor(
-        obs_space, image_keys=("rgb",), image_augmentation="random_shift", augmentation_seed=2
-    )
+    schema = ObservationSchema.from_space(obs_space)
+    encoder_config = EncoderConfig(image_augmentation="random_shift")
+    actor_extractor = CombinedExtractor(obs_space, schema, encoder_config, augmentation_seed=1)
+    critic_extractor = CombinedExtractor(obs_space, schema, encoder_config, augmentation_seed=2)
     assert actor_extractor._aug_stack_key != critic_extractor._aug_stack_key
 
     obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     actor_extractor.prepare_batch(obs)
@@ -379,12 +378,13 @@ def test_rlpd_hybrid_discrete_critic_sized_from_critic_extractor():
 def test_separate_critic_extractor_drops_unrequested_image_key():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
-            "depth": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "depth_cam": spaces.Box(low=0.0, high=1.0, shape=(64, 64, 1), dtype=np.float32),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
         }
     )
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    critic_schema = ObservationSchema.from_space(obs_space).subset(("rgb_cam", "state"))
     agent = SAC(
         env=DummyVecEnv(obs_space, act_space),
         device="cpu",
@@ -395,31 +395,29 @@ def test_separate_critic_extractor_drops_unrequested_image_key():
         training_freq=1,
         eval_freq=0,
         net_arch={"pi": [16], "qf": [16]},
-        image_keys=("rgb", "depth"),
-        proprio_latent_dim=4,
+        encoder_config=EncoderConfig(proprio_latent_dim=4),
         policy_kwargs={
             "critic_features_extractor_class": CombinedExtractor,
             "critic_features_extractor_kwargs": {
-                "image_keys": ("rgb",),
-                "proprio_latent_dim": 4,
+                "schema": critic_schema,
+                "encoder_config": EncoderConfig(proprio_latent_dim=4),
             },
         },
     )
 
     critic_extractor = agent.policy.critic_features_extractor
     assert isinstance(critic_extractor, CombinedExtractor)
-    assert critic_extractor.image_keys == ("rgb",)
-    assert "depth" not in critic_extractor.vector_extractors
+    assert critic_extractor.image_keys == ("rgb_cam",)
 
     for _ in range(8):
         obs = {
-            "rgb": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
-            "depth": torch.rand(1, 64, 64, 1),
+            "rgb_cam": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
+            "depth_cam": torch.rand(1, 64, 64, 1),
             "state": torch.randn(1, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
-            "depth": torch.rand(1, 64, 64, 1),
+            "rgb_cam": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
+            "depth_cam": torch.rand(1, 64, 64, 1),
             "state": torch.randn(1, 4),
         }
         actions = torch.randn(1, *act_space.shape).clamp(-1, 1)

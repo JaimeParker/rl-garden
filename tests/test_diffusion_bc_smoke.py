@@ -7,13 +7,13 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import DiffusionBC, OfflineEnvSpec
-from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import DiffusionUNet1D
 
 _IMAGE_SIZE = 16
-_test_image_encoder_factory = default_image_encoder_factory(
-    features_dim=16, plain_conv_pooling="gap"
-)
+# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
+# images without PlainConv's flatten-layer size mismatch.
+_TEST_ENCODER_CONFIG = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 
 def _write_h5_dataset(path, *, num_traj: int, steps_per_traj: int, obs_dim: int, action_dim: int) -> None:
@@ -43,7 +43,7 @@ def _write_vision_h5_dataset(
             g = f.create_group(f"traj_{traj_idx}")
             obs = g.create_group("obs")
             obs.create_dataset(
-                "rgb",
+                "rgb_cam",
                 data=rng.integers(
                     0, 256, (steps_per_traj + 1, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=np.uint8
                 ),
@@ -73,7 +73,7 @@ def _dict_env_spec(state_dim: int, action_dim: int) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(_IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(_IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=np.uint8),
                 "state": spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32),
             }
         ),
@@ -92,9 +92,7 @@ def _make_dict_agent(path, state_dim=4, action_dim=2, **kwargs) -> DiffusionBC:
         batch_size=16,
         actor_lr=1e-3,
         device="cpu",
-        image_encoder_factory=_test_image_encoder_factory,
-        image_keys=("rgb",),
-        state_key="state",
+        encoder_config=_TEST_ENCODER_CONFIG,
     )
     defaults.update(kwargs)
     return DiffusionBC(**defaults)
@@ -121,10 +119,11 @@ def test_diffusion_bc_loss_decreases_and_checkpoint_roundtrips(tmp_path):
     late = agent.train(80)["loss"]
     assert late < early
 
-    # Box-purity pin: the Box path must never build/store a features_extractor,
-    # so a Box-trained checkpoint's state_dict stays byte-identical to before
-    # the Dict-obs merge (required for DPPOPolicy.load_actor_weights).
-    assert not hasattr(agent.policy, "features_extractor")
+    # State-only purity pin: the Box path's features_extractor is a
+    # parameterless FlattenExtractor, so a Box-trained checkpoint's
+    # state_dict stays byte-identical to before the observation redesign
+    # (required for DPPOPolicy.load_actor_weights, which only loads
+    # ``net.*`` keys).
     assert not any("features_extractor" in k for k in agent.policy.state_dict())
 
     ckpt_path = agent.save(tmp_path / "diffusion_bc.pt")
@@ -187,17 +186,21 @@ def test_ema_start_step_defaults_to_dataset_scaled_warmup():
 def test_predict_returns_action_chunk_within_bounds():
     obs_dim, action_dim = 3, 2
     torch.manual_seed(0)
+    from rl_garden.encoders.flatten import FlattenExtractor
     from rl_garden.policies.diffusion_policy import DiffusionPolicy
 
+    state_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
+    obs_space = spaces.Dict({"state": state_space})
     policy = DiffusionPolicy(
-        observation_space=spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32),
+        observation_space=obs_space,
         action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
+        features_extractor=FlattenExtractor(obs_space),
         horizon_steps=3,
         cond_steps=2,
         denoising_steps=5,
         mlp_dims=[16, 16, 16],
     )
-    obs = torch.randn(4, obs_dim)
+    obs = {"state": torch.randn(4, obs_dim)}
     with torch.no_grad():
         action_chunk = policy.predict(obs, deterministic=True)
     assert action_chunk.shape == (4, 3, action_dim)
@@ -257,16 +260,19 @@ def test_kernel_init_is_forwarded_to_non_default_backbone():
     """Regression test: DiffusionPolicy's net_cls dispatch (`build_diffusion_net`)
     must forward kernel_init to non-DiffusionMLP backbones too, not only the
     default DiffusionMLP path."""
+    from rl_garden.encoders.flatten import FlattenExtractor
     from rl_garden.policies.diffusion_policy import DiffusionPolicy
 
     obs_dim, action_dim = 4, 2
+    obs_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
     net_kwargs = dict(down_dims=(8, 16), kernel_size=3, n_groups=4)
 
     def build(kernel_init):
         torch.manual_seed(0)
         return DiffusionPolicy(
-            observation_space=spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32),
+            observation_space=obs_space,
             action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
+            features_extractor=FlattenExtractor(obs_space),
             horizon_steps=2,
             cond_steps=1,
             denoising_steps=10,
@@ -283,19 +289,6 @@ def test_kernel_init_is_forwarded_to_non_default_backbone():
         for k, v in default_init.net.state_dict().items()
     )
     assert differs, "kernel_init should change DiffusionUNet1D's initial parameters"
-
-
-def test_box_obs_rejects_explicit_vision_kwarg():
-    """Box observation space + any explicitly-set vision kwarg must raise
-    ValueError (mirrors FlowBC's explicitly_set guard); Box no longer has a
-    TypeError-on-Dict-vs-Box-rejection shape to test since Dict is now
-    accepted -- this replaces the old VisionDiffusionBC
-    test_rejects_box_observation_space, inverted."""
-    env = _env_spec(4, 2)
-    with pytest.raises(ValueError):
-        DiffusionBC(
-            env=env, dataset_path="unused.h5", device="cpu", image_keys=("rgb",)
-        )
 
 
 def test_dict_obs_features_extractor_attribute_present(tmp_path):
@@ -331,7 +324,7 @@ def test_dict_obs_predict_returns_action_chunk_within_bounds(tmp_path):
     agent = _make_dict_agent(path, state_dim=3, action_dim=2)
 
     obs = {
-        "rgb": torch.randint(0, 256, (4, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (4, _IMAGE_SIZE, _IMAGE_SIZE, 3), dtype=torch.uint8),
         "state": torch.randn(4, 3),
     }
     with torch.no_grad():

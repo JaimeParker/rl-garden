@@ -13,26 +13,31 @@ Dict); A2A only ever uses the Dict path (vision conditioning is mandatory).
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
-from gymnasium import spaces
 
+from rl_garden.algorithms._observation import ObservationEncoderMixin
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
+from rl_garden.observations import ObsGroups, ObservationSchema, normalize_observation_space
 from rl_garden.policies.a2a_policy import A2APolicy
 
 
 class A2ABC(OfflineRLAlgorithm):
+    """A2A flow-matching BC.
+
+    ``_resolve_observation_encoders`` and the other observation-encoder
+    helpers come from ``ObservationEncoderMixin`` via ``BaseAlgorithm``
+    (see ``rl_garden/algorithms/_observation.py``); no direct inheritance
+    needed here."""
+
     _compatible_checkpoint_algorithms = ("A2ABC",)
 
     def __init__(
@@ -61,11 +66,9 @@ class A2ABC(OfflineRLAlgorithm):
         enc_contrastive_weight: float = 0.0,
         flow_contrastive_weight: float = 0.0,
         contrastive_temperature: float = 0.1,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         actor_lr: float = 1e-3,
         weight_decay: float = 1e-6,
         lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
@@ -103,28 +106,14 @@ class A2ABC(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if not isinstance(self.env.single_observation_space, spaces.Dict):
-            raise TypeError("A2ABC requires a Dict observation space.")
         if grad_clip_norm is not None and grad_clip_norm <= 0:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
             )
 
-        self._state_key = state_key if state_key is not None else "state"
-        if self._state_key not in self.env.single_observation_space.spaces:
-            raise ValueError(
-                f"A2ABC requires state_key={self._state_key!r} in the observation "
-                "space -- the state-history window is the flow's source (x_0), "
-                "not optional."
-            )
-        self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
-        if not any(
-            k in self.env.single_observation_space.spaces for k in self._image_keys
-        ):
-            raise ValueError(
-                "A2ABC requires at least one resolved image key for vision "
-                f"conditioning (got image_keys={self._image_keys!r})."
-            )
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
 
         self.dataset_path = dataset_path
         self.horizon_steps = horizon_steps
@@ -152,11 +141,6 @@ class A2ABC(OfflineRLAlgorithm):
         self.enc_contrastive_weight = enc_contrastive_weight
         self.flow_contrastive_weight = flow_contrastive_weight
         self.contrastive_temperature = contrastive_temperature
-        self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
-        self._image_fusion_mode = (
-            image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-        )
-        self._enable_stacking = enable_stacking if enable_stacking is not None else False
         self.actor_lr = actor_lr
         self.weight_decay = weight_decay
         self.lr_schedule: ScheduleType = lr_schedule
@@ -192,10 +176,13 @@ class A2ABC(OfflineRLAlgorithm):
             "flow_recon_weight": self.flow_recon_weight,
             "enc_contrastive_weight": self.enc_contrastive_weight,
             "flow_contrastive_weight": self.flow_contrastive_weight,
-            "image_keys": self._image_keys,
-            "state_key": self._state_key,
-            "image_fusion_mode": self._image_fusion_mode,
-            "enable_stacking": self._enable_stacking,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -216,22 +203,37 @@ class A2ABC(OfflineRLAlgorithm):
     # --- model / data setup ---
 
     def _setup_model(self) -> None:
-        features_extractor = CombinedExtractor(
-            observation_space=self.env.single_observation_space,
-            image_keys=self._image_keys,
-            state_key=self._state_key,
-            image_encoder_factory=self._image_encoder_factory,
-            use_proprio=False,
-            fusion_mode=self._image_fusion_mode,
-            enable_stacking=self._enable_stacking,
+        observation_space = self.env.single_observation_space
+        schema = ObservationSchema.from_space(normalize_observation_space(observation_space))
+        if not schema.has_state:
+            raise ValueError(
+                "A2ABC requires a 'state' key in the observation space -- the "
+                "state-history window is the flow's source (x_0), not optional."
+            )
+        if not schema.has_images:
+            raise ValueError(
+                "A2ABC requires at least one image key (rgb_<cam>/depth_<cam>) "
+                "for vision conditioning."
+            )
+        if self.obs_groups is None:
+            # The features extractor is vision-only by design (state history
+            # is encoded separately by A2APolicy's history_encoder) -- default
+            # both actor/critic groups to the image keys so the symmetric
+            # check in resolve_observation_encoders doesn't force
+            # encoder_sharing="separate" (A2ABC has no critic to build one
+            # for).
+            self.obs_groups = ObsGroups(actor=schema.image_keys, critic=schema.image_keys)
+        self._resolve_observation_encoders(
+            observation_space, augmentation_seed=self._image_augmentation_seed
         )
+        features_extractor = self.observation_encoders.actor
+
         self.policy = A2APolicy(
-            observation_space=self.env.single_observation_space,
+            observation_space=observation_space,
             action_space=self.env.single_action_space,
             features_extractor=features_extractor,
             horizon_steps=self.horizon_steps,
             cond_steps=self.cond_steps,
-            state_key=self._state_key,
             latent_dim=self.latent_dim,
             cnn_num_layers=self.cnn_num_layers,
             cnn_hidden_channels=self.cnn_hidden_channels,
@@ -277,10 +279,15 @@ class A2ABC(OfflineRLAlgorithm):
             device=self.device,
             num_traj=self.num_traj,
         )
-        if not isinstance(obs_history, dict):
-            raise TypeError(
-                "A2ABC requires a Dict-shaped H5 dataset (nested obs/<key> "
-                "groups); got a flat Box-shaped obs array."
+        expected_keys = set(
+            normalize_observation_space(self.env.single_observation_space).spaces.keys()
+        )
+        dataset_keys = set(obs_history.keys())
+        if dataset_keys != expected_keys:
+            raise ValueError(
+                f"H5 dataset observation keys {sorted(dataset_keys)} do not "
+                f"match the env's observation space keys {sorted(expected_keys)} "
+                "(A2ABC requires vision conditioning -- see _setup_model)."
             )
         self._obs_history = obs_history
         self._action_chunks = action_chunks

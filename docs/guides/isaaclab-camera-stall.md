@@ -11,8 +11,8 @@ so the diagnostic ground already covered doesn't need to be re-derived.
 
 ## Symptom
 
-A PPO training run using the IsaacLab backend with `--obs_mode rgb` (or
-`rgbd`) hangs indefinitely, typically within the first 1-2 rollout+update
+A PPO training run using the IsaacLab backend with `--obs.rgb <camera>`
+hangs indefinitely, typically within the first 1-2 rollout+update
 cycles, sometimes later. The process:
 
 - Stops producing any new stdout output (running with `python -u`,
@@ -66,7 +66,7 @@ docker exec -d liuzhaohong_maniskill_isaaclab bash -lc '
   cd /workspace/Projects/rl-garden
   python -u examples/train_online.py ppo --env_backend isaaclab \
     --env_id RlGarden-Cartpole-Direct-Camera-Plain-v0 \
-    --obs_mode rgb --camera_width 64 --camera_height 64 --num_envs 2 \
+    --obs.rgb camera --num_envs 2 \
     --eval_freq 0 --total_timesteps 192 --num_steps 16 \
     --isaaclab.sim_device cuda:2 \
     --log-type none > /tmp/run.log 2>&1
@@ -143,9 +143,10 @@ kept here so they aren't retried blindly.
    from IsaacLab's own official camera example), but rl-garden's default
    `PlainConv` image encoder only supports 64×64 or 128×128 (hardcoded
    conv/pool stride schedule, see `rl_garden/encoders/plain_conv.py`'s
-   docstring). Fixed by using 64×64 and passing matching `--camera_width 64
-   --camera_height 64` on the CLI. Real, permanent fix; not the stall's
-   cause (same stall reproduces with correct resolution too).
+   docstring). Fixed by setting `TiledCameraCfg.width`/`.height` to 64×64
+   (IsaacLab bakes camera resolution into the task registration, not
+   runtime-selectable through `--obs.image_size`). Real, permanent fix; not
+   the stall's cause (same stall reproduces with correct resolution too).
 
 6. **Ruled out: `clone_in_fabric=True` (real bug, separate from the
    stall).** The state-only base task's `scene` cfg sets
@@ -273,7 +274,8 @@ call follows heavy compute.
 ## Current mitigation and its limits
 
 `_IsaacLabVecEnvAdapter.post_update_sync()` (`rl_garden/envs/isaaclab/env.py`)
-calls `torch.cuda.synchronize()` when `obs_mode != "state"`. It is invoked
+calls `torch.cuda.synchronize()` when `self.is_visual` (i.e. `--obs.rgb`/
+`--obs.depth` was set). It is invoked
 once per rollout+update cycle from `OnPolicyAlgorithm.learn()`
 (`rl_garden/algorithms/on_policy.py`), via a duck-typed hook lookup
 (`getattr(self.env, "post_update_sync", None)`) — **zero cost/behavior

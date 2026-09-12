@@ -14,7 +14,7 @@ Example:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import torch
 import tyro
@@ -22,15 +22,20 @@ import tyro
 from rl_garden.algorithms import SAC
 from rl_garden.common import seed_everything
 from rl_garden.common.utils import get_device
-from rl_garden.encoders.combined import default_image_encoder_factory, discover_image_keys
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
+from rl_garden.observations import ObservationConfig
 
 
 @dataclass
 class ProbeArgs:
     checkpoint_path: str
     env_id: str = "StackCube-v1"
-    obs_mode: str = "rgb"
+    # Defaults to rgb+depth+state on ManiSkill's "base_camera"; pass
+    # --obs.rgb --obs.depth (empty) for state-only.
+    obs: ObservationConfig = field(
+        default_factory=lambda: ObservationConfig(rgb=("base_camera",), depth=("base_camera",))
+    )
     control_mode: str = "pd_joint_delta_pos"
     num_envs: int = 16
     num_steps: int = 1000
@@ -41,31 +46,17 @@ class ProbeArgs:
 
 
 def _make_env(args: ProbeArgs):
-    if args.obs_mode == "state":
-        cfg = ManiSkillEnvConfig(
-            env_id=args.env_id,
-            num_envs=args.num_envs,
-            obs_mode="state",
-            control_mode=args.control_mode,
-            sim_backend="gpu",
-            render_backend="gpu",
-            reconfiguration_freq=1,
-        )
-    else:
-        cfg = ManiSkillEnvConfig(
-            env_id=args.env_id,
-            num_envs=args.num_envs,
-            obs_mode=args.obs_mode,
-            include_state=True,
-            control_mode=args.control_mode,
-            reward_mode="normalized_dense",
-            sim_backend="gpu",
-            render_backend="gpu",
-            reconfiguration_freq=1,
-            camera_width=64,
-            camera_height=64,
-            per_camera_rgbd=True,
-        )
+    obs = replace(args.obs, image_size=(64, 64)) if args.obs.is_visual else args.obs
+    cfg = ManiSkillEnvConfig.from_observation(
+        obs,
+        env_id=args.env_id,
+        num_envs=args.num_envs,
+        control_mode=args.control_mode,
+        reward_mode="normalized_dense" if args.obs.is_visual else None,
+        sim_backend="gpu",
+        render_backend="gpu",
+        reconfiguration_freq=1,
+    )
     return make_maniskill_env(cfg)
 
 
@@ -87,13 +78,11 @@ def _make_agent(args: ProbeArgs, env, device: torch.device) -> SAC:
         checkpoint_freq=0,
         save_final_checkpoint=False,
     )
-    if args.obs_mode != "state":
-        image_keys = discover_image_keys(env.single_observation_space)
-        factory = default_image_encoder_factory(features_dim=args.encoder_features_dim)
+    if args.obs.is_visual:
         kwargs.update(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode="per_key",
+            encoder_config=EncoderConfig(
+                features_dim=args.encoder_features_dim, image_fusion_mode="per_key"
+            )
         )
     return SAC(**kwargs)
 

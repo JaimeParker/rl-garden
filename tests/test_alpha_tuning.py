@@ -37,10 +37,14 @@ def _agent(**kwargs) -> SAC:
 
 
 def _fill(agent: SAC, steps: int = 8) -> None:
+    # env.single_observation_space is Dict({"state": Box}) -- DummyVecEnv's
+    # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
     env = agent.env
+    state_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)

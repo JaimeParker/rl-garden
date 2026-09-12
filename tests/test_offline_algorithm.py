@@ -26,7 +26,7 @@ class DummyPolicy(BasePolicy):
 
     def predict(self, obs, deterministic: bool = False) -> torch.Tensor:
         del deterministic
-        return self.net(obs)
+        return self.net(obs["state"])
 
 
 class DummyOfflineAlgorithm(OfflineRLAlgorithm):
@@ -111,11 +111,30 @@ def test_infer_box_specs_from_h5(tmp_path):
     assert np.all(action_space.high == 0.5)
 
 
-def test_infer_box_specs_rejects_dict_obs(tmp_path):
+def test_infer_box_specs_from_h5_unwraps_state_only_dict(tmp_path):
+    """A state-only Dict obs group (obs/state, no image keys) is a valid
+    flat-Box source: infer_box_specs_from_h5 unwraps it rather than
+    rejecting it."""
     path = tmp_path / "demo_dict.h5"
     with h5py.File(path, "w") as f:
         group = f.create_group("traj_0")
         obs = group.create_group("obs")
+        obs.create_dataset("state", data=np.zeros((4, 7), dtype=np.float32))
+        group.create_dataset("actions", data=np.zeros((3, 2), dtype=np.float32))
+
+    obs_space, action_space = infer_box_specs_from_h5(path)
+
+    assert isinstance(obs_space, spaces.Box)
+    assert obs_space.shape == (7,)
+    assert action_space.shape == (2,)
+
+
+def test_infer_box_specs_rejects_dict_obs_with_image_keys(tmp_path):
+    path = tmp_path / "demo_dict.h5"
+    with h5py.File(path, "w") as f:
+        group = f.create_group("traj_0")
+        obs = group.create_group("obs")
+        obs.create_dataset("rgb_front", data=np.zeros((4, 64, 64, 3), dtype=np.uint8))
         obs.create_dataset("state", data=np.zeros((4, 7), dtype=np.float32))
         group.create_dataset("actions", data=np.zeros((3, 2), dtype=np.float32))
 
@@ -132,7 +151,7 @@ def test_infer_specs_from_h5_supports_dict_obs(tmp_path):
     with h5py.File(path, "w") as f:
         group = f.create_group("traj_0")
         obs = group.create_group("obs")
-        obs.create_dataset("rgb", data=np.zeros((4, 64, 64, 3), dtype=np.uint8))
+        obs.create_dataset("rgb_front", data=np.zeros((4, 64, 64, 3), dtype=np.uint8))
         obs.create_dataset("state", data=np.zeros((4, 7), dtype=np.float32))
         group.create_dataset("actions", data=np.zeros((3, 2), dtype=np.float32))
 
@@ -141,11 +160,26 @@ def test_infer_specs_from_h5_supports_dict_obs(tmp_path):
     )
 
     assert isinstance(obs_space, spaces.Dict)
-    assert obs_space["rgb"].shape == (64, 64, 3)
-    assert obs_space["rgb"].dtype == np.uint8
+    assert obs_space["rgb_front"].shape == (64, 64, 3)
+    assert obs_space["rgb_front"].dtype == np.uint8
     assert obs_space["state"].shape == (7,)
     assert action_space.shape == (2,)
     assert np.all(action_space.low == -0.25)
+
+
+def test_infer_specs_from_h5_rejects_non_contract_keys(tmp_path):
+    path = tmp_path / "demo_bad_keys.h5"
+    with h5py.File(path, "w") as f:
+        group = f.create_group("traj_0")
+        obs = group.create_group("obs")
+        obs.create_dataset("proprio", data=np.zeros((4, 7), dtype=np.float32))
+        obs.create_dataset("rgb_cam", data=np.zeros((4, 64, 64, 3), dtype=np.uint8))
+        group.create_dataset("actions", data=np.zeros((3, 2), dtype=np.float32))
+
+    from rl_garden.observations.schema import ObservationContractError
+
+    with pytest.raises(ObservationContractError, match="proprio"):
+        infer_specs_from_h5(path)
 
 
 def test_run_offline_pretraining_tracks_steps_and_saves(tmp_path):
@@ -267,8 +301,8 @@ def test_offline_registry_builders_create_wsrl_and_iql():
     from rl_garden.training.offline.iql import IQLArgs, build_iql
     from rl_garden.training.offline.wsrl import WSRLOfflineArgs, build_wsrl
 
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=float)
-    action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=float)
+    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+    action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=1)
 
     base_kwargs = dict(
@@ -315,9 +349,10 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
     """The optional --env_id eval env must mirror dict-obs/vision CLI args.
 
     Without this, pretrain_offline.py's periodic zero-shot eval env defaults
-    to a flat ``obs_mode="state"`` ManiSkill env, which crashes BC/IQL
-    policies built for per-camera RGB+state Dict observation spaces.
+    to a state-only ManiSkill env, which crashes BC/IQL policies built for
+    per-camera RGB+state Dict observation spaces.
     """
+    from rl_garden.observations import ObservationConfig
     from rl_garden.training.offline._runner import _eval_env_request
     from rl_garden.training.offline.bc import BCArgs
 
@@ -325,11 +360,7 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
         offline_dataset="/tmp/unused.h5",
         env_id="StackCube-v1",
         num_eval_envs=16,
-        obs_mode="rgb",
-        include_state=True,
-        per_camera_rgbd=True,
-        camera_width=64,
-        camera_height=64,
+        obs=ObservationConfig(rgb=("base_camera",), state=True, image_size=(64, 64)),
         reward_scale=2.0,
         reward_bias=-1.0,
     )
@@ -338,11 +369,9 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
 
     assert req.env_id == "StackCube-v1"
     assert req.num_eval_envs == 16
-    assert req.obs_mode == "rgb"
-    assert req.include_state is True
-    assert req.per_camera_rgbd is True
-    assert req.camera_width == 64
-    assert req.camera_height == 64
+    assert req.observation == ObservationConfig(
+        rgb=("base_camera",), state=True, image_size=(64, 64)
+    )
     assert req.reward_scale == 2.0
     assert req.reward_bias == -1.0
 

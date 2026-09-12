@@ -9,7 +9,7 @@ longer imports at all. A few tests still exercise a *real* registered
 backend (``minari``/``d4rl_legacy``/``rlbench``) with just its underlying
 per-format function monkeypatched away, to keep regression coverage for
 each backend's own adapter behavior (Box-space rejection, ``num_traj`` ->
-``num_episodes`` renaming, and the ``obs_mode``/``backend_config``
+``num_episodes`` renaming, and the ``observation``/``backend_config``
 passthrough bugfix).
 """
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from gymnasium import spaces
 
 from rl_garden.buffers import dataset_backend_registry
 from rl_garden.buffers.dataset_backend_registry import DatasetBackend, DatasetRequest
+from rl_garden.observations import ObservationConfig
 from rl_garden.training._dataset import infer_offline_dataset_specs, load_offline_dataset
 
 
@@ -231,15 +232,20 @@ def test_load_offline_dataset_routes_to_d4rl_legacy_with_num_episodes(monkeypatc
     assert called["num_episodes"] == 12
 
 
-def test_infer_specs_routes_to_rlbench_with_obs_mode_and_cameras(monkeypatch):
-    """Regression test for the found bug: --obs_mode/--rlbench.cameras
+def test_infer_specs_routes_to_rlbench_with_cameras(monkeypatch):
+    """Regression test for the found bug: --obs/--rlbench.cameras
     weren't reaching rlbench's dataset spec inference/loading at all."""
-    obs_space, action_space = _box_spaces()
+    _, action_space = _box_spaces()
+    obs_space = spaces.Dict(
+        {
+            "state": spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32),
+            "rgb_front": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+        }
+    )
     called = {}
 
-    def _fake_infer_specs_from_rlbench(path, *, obs_mode, cameras, image_size):
+    def _fake_infer_specs_from_rlbench(path, *, cameras, image_size):
         called["path"] = path
-        called["obs_mode"] = obs_mode
         called["cameras"] = cameras
         called["image_size"] = image_size
         return obs_space, action_space
@@ -249,13 +255,14 @@ def test_infer_specs_routes_to_rlbench_with_obs_mode_and_cameras(monkeypatch):
         _fake_infer_specs_from_rlbench,
     )
 
-    args = _args(dataset_backend="rlbench", offline_dataset="/data/reach_target")
-    args.obs_mode = "rgb"
-    args.rlbench = SimpleNamespace(cameras=("front",), image_size=(64, 64))
+    args = _args(
+        dataset_backend="rlbench",
+        offline_dataset="/data/reach_target",
+        obs=ObservationConfig(rgb=("front",), image_size=(64, 64)),
+    )
 
     result = infer_offline_dataset_specs(args)
     assert result == (obs_space, action_space)
-    assert called["obs_mode"] == "rgb"
     assert called["cameras"] == ("front",)
     assert called["image_size"] == (64, 64)
 

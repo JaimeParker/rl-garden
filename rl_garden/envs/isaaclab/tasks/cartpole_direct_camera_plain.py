@@ -53,7 +53,7 @@ class CartpoleDirectCameraPlainEnv(CartpoleDirectEnv):
     def _get_observations(self) -> dict:
         state = super()._get_observations()["state"]
         rgb = self.camera.data.output["rgb"]
-        return {"rgb": rgb, "state": state}
+        return {"rgb_front": rgb, "state": state}
 
 
 gym.register(

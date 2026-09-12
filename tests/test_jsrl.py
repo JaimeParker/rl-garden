@@ -129,7 +129,7 @@ def test_load_guide_policy_iql_matches_source_policy(tmp_path):
         ckpt, "iql", agent.env.single_observation_space, agent.env.single_action_space,
         device=torch.device("cpu"), std_parameterization="uniform",
     )
-    obs = torch.randn(4, _OBS_DIM)
+    obs = {"state": torch.randn(4, _OBS_DIM)}
     assert torch.allclose(
         guide.predict(obs, deterministic=True), agent.policy.predict(obs, deterministic=True)
     )
@@ -153,7 +153,7 @@ def test_load_guide_policy_awac_preserves_obs_normalizer(tmp_path):
         device=torch.device("cpu"),
     )
     assert not torch.allclose(guide.obs_mean, torch.zeros(_OBS_DIM))
-    obs = torch.randn(4, _OBS_DIM)
+    obs = {"state": torch.randn(4, _OBS_DIM)}
     assert torch.allclose(
         guide.predict(obs, deterministic=True), agent.policy.predict(obs, deterministic=True)
     )
@@ -165,7 +165,7 @@ def test_load_guide_policy_calql_matches_source_policy(tmp_path):
         ckpt, "calql", agent.env.single_observation_space, agent.env.single_action_space,
         device=torch.device("cpu"),
     )
-    obs = torch.randn(4, _OBS_DIM)
+    obs = {"state": torch.randn(4, _OBS_DIM)}
     assert torch.allclose(
         guide.predict(obs, deterministic=True), agent.policy.predict(obs, deterministic=True)
     )

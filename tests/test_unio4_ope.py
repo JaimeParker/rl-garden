@@ -49,9 +49,15 @@ def _make_agent(**kwargs) -> UniO4OPE:
 
 def _fill(agent, steps: int = 60, episode_len: int = 20) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- a bare Box env
+    # (as _state_env() constructs) is boundary-normalized by
+    # BaseAlgorithm.__init__ (rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    obs_shape = env.single_observation_space["state"].shape
     for t in range(steps):
-        obs = torch.rand(env.num_envs, *env.single_observation_space.shape) * 2 - 1
-        next_obs = torch.rand_like(obs) * 2 - 1
+        state = torch.rand(env.num_envs, *obs_shape) * 2 - 1
+        next_state = torch.rand_like(state) * 2 - 1
+        obs = {"state": state}
+        next_obs = {"state": next_state}
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.rand(env.num_envs)
         dones = torch.zeros(env.num_envs, dtype=torch.bool)

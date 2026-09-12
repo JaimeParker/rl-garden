@@ -285,6 +285,47 @@ class BaseAlgorithmRegistry:
 
     def _validate_config(self, command: ParsedCommand) -> None:
         args = command.args
+        obs = getattr(args, "obs", None)
+        obs_groups = getattr(args, "obs_groups", None)
+        if obs is not None and obs_groups is not None:
+            expected_keys = set(obs.expected_keys)
+            for group_name in ("actor", "critic"):
+                group_keys = getattr(obs_groups, group_name, None)
+                if group_keys is None:
+                    continue
+                unknown = sorted(set(group_keys) - expected_keys)
+                if unknown:
+                    raise ConfigError(
+                        f"--obs-groups.{group_name} has key(s) {unknown} not in "
+                        f"--obs's expected keys {sorted(expected_keys)}."
+                    )
+            # Resolved (not just syntactic) actor/critic key-set mismatch
+            # requires two independent encoders (encoder_sharing="separate").
+            # Only checked against an *explicit* --encoder-sharing override:
+            # the algorithm's own class-default encoder_sharing isn't
+            # statically known here without importing/instantiating the
+            # algorithm, so a mismatch left at the default is instead caught
+            # at agent-construction time by
+            # ``resolve_observation_encoders`` (rl_garden/algorithms/
+            # _observation.py), just not this early.
+            actor_keys = (
+                set(obs_groups.actor) if obs_groups.actor is not None else expected_keys
+            )
+            critic_keys = (
+                set(obs_groups.critic) if obs_groups.critic is not None else expected_keys
+            )
+            encoder_sharing = getattr(args, "encoder_sharing", None)
+            if (
+                actor_keys != critic_keys
+                and encoder_sharing is not None
+                and encoder_sharing != "separate"
+            ):
+                raise ConfigError(
+                    "--obs-groups resolves to different actor "
+                    f"({sorted(actor_keys)}) and critic ({sorted(critic_keys)}) "
+                    "observation keys, which requires two independent encoders; "
+                    f"pass --encoder-sharing separate (got {encoder_sharing!r})."
+                )
         if self.phase_name == "offline":
             if command.algorithm == "tdmpc2_multitask":
                 if not getattr(args, "dataset_dir", None):

@@ -27,12 +27,7 @@ class FlowBCArgs(
 def _flow_bc_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    from gymnasium import spaces
-
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
-    from rl_garden.encoders import discover_image_keys
-
-    obs_space = env_spec.single_observation_space
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
@@ -64,17 +59,15 @@ def _flow_bc_kwargs(
         "checkpoint_freq": 0,
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
+        # Passed unconditionally rather than gated on --obs.is_visual: the
+        # dataset's own stored keys decide state-vs-Dict shape, not --obs
+        # (see infer_specs_from_h5), so --obs.is_visual can't be trusted
+        # here. A state-only dataset combined with a non-default
+        # image-related --encoder.* field now raises ObservationContractError
+        # (build_observation_encoder) instead of silently ignoring it.
+        "encoder_config": args.encoder,
+        "obs_groups": resolve_obs_groups_config(args),
     }
-    if isinstance(obs_space, spaces.Dict):
-        image_keys = discover_image_keys(obs_space)
-        kwargs.update(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys,
-            state_key="state",
-            use_proprio=args.include_state,
-            image_fusion_mode=args.image_fusion_mode,
-            enable_stacking=False,
-        )
     return kwargs
 
 

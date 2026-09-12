@@ -41,6 +41,22 @@ from rl_garden.common.optim import make_optimizer
 from rl_garden.models.dynamics import EnsembleDynamicsModel, get_termination_fn, rollout_q_mean, train_ensemble
 
 
+class _RawStatePolicyAdapter:
+    """Adapts a Dict-obs actor (``UniO4``'s ``BCPolicy`` members, always
+    Dict now that the env boundary normalizes unconditionally) to
+    ``rollout_q_mean``'s raw-tensor contract: the dynamics-model rollout
+    (this module) is pure flat-tensor state-space arithmetic (``obs +
+    delta_obs``, ``torch.cat([obs, action])``) with no Dict/image handling
+    anywhere, and stays that way -- only the actor call needs the "state"
+    key restored."""
+
+    def __init__(self, policy) -> None:
+        self._policy = policy
+
+    def predict(self, obs: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
+        return self._policy.predict({"state": obs}, deterministic=deterministic)
+
+
 class UniO4OPE(UniO4):
     _compatible_checkpoint_algorithms = ("UniO4OPE",)
 
@@ -91,7 +107,9 @@ class UniO4OPE(UniO4):
 
     def _setup_model(self) -> None:
         super()._setup_model()
-        obs_dim = int(np.prod(self.env.single_observation_space.shape))
+        # State-only by construction (BPPOCriticMixin's has_images guard,
+        # inherited via UniO4) -- obs_space is always Dict now.
+        obs_dim = int(np.prod(self.env.single_observation_space["state"].shape))
         action_dim = int(np.prod(self.env.single_action_space.shape))
         self.dynamics_model = EnsembleDynamicsModel(
             obs_dim,
@@ -121,8 +139,11 @@ class UniO4OPE(UniO4):
     def _train_dynamics_model(self) -> None:
         buf = self.replay_buffer
         valid = self._valid_buffer_rows()
-        obs = buf.obs[:valid].reshape(-1, buf.obs.shape[-1]).to(self.device)
-        next_obs = buf.next_obs[:valid].reshape(-1, buf.next_obs.shape[-1]).to(self.device)
+        # buf.obs/next_obs are DictArrays ({"state": Box}) now.
+        obs = buf.obs["state"][:valid].reshape(-1, buf.obs["state"].shape[-1]).to(self.device)
+        next_obs = buf.next_obs["state"][:valid].reshape(
+            -1, buf.next_obs["state"].shape[-1]
+        ).to(self.device)
         actions = buf.actions[:valid].reshape(-1, buf.actions.shape[-1]).to(self.device)
         rewards = buf.rewards[:valid].reshape(-1).to(self.device)
 
@@ -148,7 +169,7 @@ class UniO4OPE(UniO4):
     def _ope_gating_check(self) -> dict[str, float]:
         buf = self.replay_buffer
         valid = self._valid_buffer_rows()
-        obs_flat = buf.obs[:valid].reshape(-1, buf.obs.shape[-1])
+        obs_flat = buf.obs["state"][:valid].reshape(-1, buf.obs["state"].shape[-1])
         idx = torch.randint(
             0, obs_flat.shape[0], (self.ope_rollout_batch_size,), device=obs_flat.device
         )
@@ -157,7 +178,7 @@ class UniO4OPE(UniO4):
         metrics: dict[str, float] = {}
         for i in range(self.num_policies):
             score = rollout_q_mean(
-                self.actors[i],
+                _RawStatePolicyAdapter(self.actors[i]),
                 self.q_net,
                 self.dynamics_model,
                 self._termination_fn,

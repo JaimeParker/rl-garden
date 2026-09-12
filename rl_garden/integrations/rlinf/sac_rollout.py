@@ -65,7 +65,11 @@ class RLGardenSACRollout(AsyncMultiStepRolloutWorker):
         states = env_obs["states"].to(self.device)
         deterministic = mode == "eval"
         with torch.no_grad():
-            actions = self.hf_model.predict(states, deterministic=deterministic)
+            # build_env_spec's bare Box observation_space is boundary-
+            # normalized to Dict({"state": Box}) by BaseAlgorithm.__init__
+            # (always on), so the policy's schema-driven features extractor
+            # expects Dict obs.
+            actions = self.hf_model.predict({"state": states}, deterministic=deterministic)
         num_action_chunks = int(self.model_cfg.num_action_chunks)
         if num_action_chunks != 1:
             raise NotImplementedError(

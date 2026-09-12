@@ -4,6 +4,7 @@ Mirrors the fixture style of test_off2on_calql.py, but targets Off2OnIQL and
 focuses on what's specific to it: no online-regularizer-override concept at
 all (unlike Cal-QL), no warmup by default, mixed replay with adaptive ratio.
 """
+import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
@@ -16,8 +17,8 @@ from rl_garden.algorithms.off2on_iql import Off2OnIQL
 def simple_env():
     env = MagicMock()
     env.num_envs = 2
-    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=float)
-    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+    env.single_observation_space = spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
     return env
 
 
@@ -43,12 +44,12 @@ def off2on_iql_agent(simple_env):
 
 def _fill_buffer(buffer, num_steps: int, marker: float = 0.0) -> None:
     n = buffer.num_envs
-    obs_dim = buffer.obs.shape[-1]
+    obs_dim = buffer.obs["state"].shape[-1]
     act_dim = buffer.actions.shape[-1]
     for _ in range(num_steps):
         buffer.add(
-            torch.full((n, obs_dim), marker),
-            torch.full((n, obs_dim), marker + 1.0),
+            {"state": torch.full((n, obs_dim), marker)},
+            {"state": torch.full((n, obs_dim), marker + 1.0)},
             torch.zeros(n, act_dim),
             torch.zeros(n),
             torch.zeros(n),
@@ -59,9 +60,9 @@ class _ScriptedEvalVecEnv:
     def __init__(self, episode_len: int, num_envs: int = 1):
         self.num_envs = num_envs
         self.single_observation_space = spaces.Box(
-            low=-1, high=1, shape=(4,), dtype=float
+            low=-1, high=1, shape=(4,), dtype=np.float32
         )
-        self.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+        self.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         self.episode_len = episode_len
         self.steps = 0
 
@@ -162,8 +163,8 @@ class TestOff2OnIQLMixedBatchSampling:
         )
         _fill_buffer(off2on_iql_agent.replay_buffer, 5, marker=99.0)
         sample = off2on_iql_agent._sample_batch(off2on_iql_agent.batch_size)
-        offline_count = (sample.obs[:, 0] == 10.0).sum().item()
-        online_count = (sample.obs[:, 0] == 99.0).sum().item()
+        offline_count = (sample.obs["state"][:, 0] == 10.0).sum().item()
+        online_count = (sample.obs["state"][:, 0] == 99.0).sum().item()
         assert offline_count + online_count == off2on_iql_agent.batch_size
         assert offline_count == 2
         assert online_count == 6
@@ -177,8 +178,8 @@ class TestOff2OnIQLMixedBatchSampling:
 
         assert off2on_iql_agent._resolve_offline_data_ratio() == pytest.approx(0.25)
         sample = off2on_iql_agent._sample_batch(off2on_iql_agent.batch_size)
-        offline_count = (sample.obs[:, 0] == 10.0).sum().item()
-        online_count = (sample.obs[:, 0] == 99.0).sum().item()
+        offline_count = (sample.obs["state"][:, 0] == 10.0).sum().item()
+        online_count = (sample.obs["state"][:, 0] == 99.0).sum().item()
         assert offline_count == 2
         assert online_count == 6
 
@@ -190,7 +191,7 @@ class TestOff2OnIQLMixedBatchSampling:
 
         assert off2on_iql_agent._resolve_offline_data_ratio() == 1.0
         sample = off2on_iql_agent._sample_batch(off2on_iql_agent.batch_size)
-        assert torch.all(sample.obs[:, 0] == 42.0)
+        assert torch.all(sample.obs["state"][:, 0] == 42.0)
 
     def test_mixed_batch_invalid_ratio_raises(self, off2on_iql_agent):
         with pytest.raises(ValueError, match="offline_data_ratio"):
@@ -211,8 +212,8 @@ def test_off2on_iql_checkpoint_roundtrip_restores_weights(tmp_path):
         kwargs = dict(
             env=MagicMock(
                 num_envs=2,
-                single_observation_space=spaces.Box(-1, 1, shape=(4,), dtype=float),
-                single_action_space=spaces.Box(-1, 1, shape=(2,), dtype=float),
+                single_observation_space=spaces.Box(-1, 1, shape=(4,), dtype=np.float32),
+                single_action_space=spaces.Box(-1, 1, shape=(2,), dtype=np.float32),
             ),
             buffer_size=64,
             buffer_device="cpu",

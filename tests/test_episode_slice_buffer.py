@@ -8,15 +8,15 @@ from gymnasium import spaces
 from rl_garden.buffers.episode_slice_buffer import EpisodeSliceBuffer
 
 
-def _obs_space() -> spaces.Box:
-    return spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+def _obs_space() -> spaces.Dict:
+    return spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)})
 
 
 def _dict_obs_space() -> spaces.Dict:
     return spaces.Dict(
         {
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
-            "rgb": spaces.Box(low=0, high=255, shape=(3, 8, 8), dtype=np.uint8),
+            "rgb_front": spaces.Box(low=0, high=255, shape=(3, 8, 8), dtype=np.uint8),
         }
     )
 
@@ -44,13 +44,9 @@ def _make_buffer(
 
 def _add_step(buf: EpisodeSliceBuffer, t: int, *, done=None, episode_end=None, reward=None):
     num_envs = buf.num_envs
-    if buf._is_dict_obs:
-        obs = {
-            "state": torch.full((num_envs, 4), float(t)),
-            "rgb": torch.zeros((num_envs, 3, 8, 8), dtype=torch.uint8),
-        }
-    else:
-        obs = torch.full((num_envs, 4), float(t))
+    obs = {"state": torch.full((num_envs, 4), float(t))}
+    if "rgb_front" in buf.observation_space.spaces:
+        obs["rgb_front"] = torch.zeros((num_envs, 3, 8, 8), dtype=torch.uint8)
     action = torch.zeros(num_envs, 2)
     reward = torch.zeros(num_envs) if reward is None else reward
     done = torch.zeros(num_envs) if done is None else done
@@ -87,7 +83,7 @@ def test_sampled_window_never_crosses_episode_boundary():
         # obs values were written as `t` itself, so every window's obs values
         # reveal exactly which physical positions were gathered; a boundary
         # crossing would show up as values straddling {0,1,2} and {3,4,...}.
-        obs_vals = sample.obs  # (horizon+1, B, 4)
+        obs_vals = sample.obs["state"]  # (horizon+1, B, 4)
         for b in range(obs_vals.shape[1]):
             ts = obs_vals[:, b, 0]
             assert (ts <= 2).all() or (ts >= 3).all()
@@ -119,14 +115,14 @@ def test_wraparound_does_not_produce_stale_window():
     torch.manual_seed(0)
     for _ in range(50):
         sample = buf.sample(batch_size=8)
-        obs_vals = sample.obs[:, :, 0]  # (horizon+1, B)
+        obs_vals = sample.obs["state"][:, :, 0]  # (horizon+1, B)
         # Every gathered window must be exactly consecutive integers (the
         # values we wrote), i.e. genuinely temporally contiguous.
         diffs = obs_vals[1:] - obs_vals[:-1]
         assert torch.all(diffs == 1.0)
 
 
-def test_dict_obs_window_gather_matches_box_obs_semantics():
+def test_dict_obs_window_gather_with_image_key():
     buf = _make_buffer(obs_space=_dict_obs_space(), num_envs=1, per_env_buffer_size=32, horizon=2)
     for t in range(10):
         _add_step(buf, t)
@@ -135,7 +131,7 @@ def test_dict_obs_window_gather_matches_box_obs_semantics():
     sample = buf.sample(batch_size=8)
     assert isinstance(sample.obs, dict)
     assert sample.obs["state"].shape == (3, 8, 4)
-    assert sample.obs["rgb"].shape == (3, 8, 3, 8, 8)
+    assert sample.obs["rgb_front"].shape == (3, 8, 3, 8, 8)
     diffs = sample.obs["state"][1:, :, 0] - sample.obs["state"][:-1, :, 0]
     assert torch.all(diffs == 1.0)
 
@@ -148,13 +144,13 @@ def test_sample_shapes_and_action_reward_alignment():
 
     torch.manual_seed(0)
     sample = buf.sample(batch_size=16)
-    assert sample.obs.shape == (4, 16, 4)
+    assert sample.obs["state"].shape == (4, 16, 4)
     assert sample.action.shape == (3, 16, 2)
     assert sample.reward.shape == (3, 16)
     assert sample.terminated.shape == (3, 16)
     # reward[i] must be the reward received transitioning obs[i] -> obs[i+1].
     for b in range(16):
-        t0 = int(sample.obs[0, b, 0].item())
+        t0 = int(sample.obs["state"][0, b, 0].item())
         expected = torch.tensor(rewards_seq[t0 : t0 + 3])
         assert torch.allclose(sample.reward[:, b], expected)
 

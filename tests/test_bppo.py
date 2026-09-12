@@ -10,6 +10,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import BC, BPPO, OfflineEnvSpec
+from rl_garden.observations import ObservationContractError
 
 
 def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
@@ -23,6 +24,19 @@ def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
 def _dict_env(num_envs: int = 1) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict({"state": spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)}),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _dict_image_env(num_envs: int = 1) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
+                "rgb_cam": spaces.Box(0, 255, shape=(8, 8, 3), dtype=np.uint8),
+            }
+        ),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=num_envs,
     )
@@ -47,9 +61,15 @@ def _make_agent(**kwargs) -> BPPO:
 
 def _fill(agent: BPPO, steps: int = 40, episode_len: int = 20) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- a bare Box env
+    # (as _state_env() constructs) is boundary-normalized by
+    # BaseAlgorithm.__init__ (rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    obs_shape = env.single_observation_space["state"].shape
     for t in range(steps):
-        obs = torch.rand(env.num_envs, *env.single_observation_space.shape) * 2 - 1
-        next_obs = torch.rand_like(obs) * 2 - 1
+        state = torch.rand(env.num_envs, *obs_shape) * 2 - 1
+        next_state = torch.rand_like(state) * 2 - 1
+        obs = {"state": state}
+        next_obs = {"state": next_state}
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.rand(env.num_envs)
         dones = torch.zeros(env.num_envs, dtype=torch.bool)
@@ -61,9 +81,20 @@ def _fill(agent: BPPO, steps: int = 40, episode_len: int = 20) -> None:
         )
 
 
-def test_rejects_dict_observation_space():
-    with pytest.raises(TypeError):
-        BPPO(env=_dict_env(), buffer_device="cpu", device="cpu")
+def test_accepts_state_only_dict_observation_space():
+    # BPPO's replay buffer/critic are Dict-based now -- a pure-state Dict env
+    # (no images) is exactly what a bare Box env normalizes to at the
+    # boundary, so it must construct identically to _state_env().
+    agent = BPPO(env=_dict_env(), buffer_device="cpu", device="cpu")
+    assert agent.observation_encoders.schema.keys == ("state",)
+
+
+def test_rejects_image_observation_space():
+    # BPPO is state-only by construction (BPPOCriticMixin._setup_observation_
+    # encoders's has_images guard): value_net/q_net/BCPolicy all assume a
+    # flat feature vector, with no Dict/image handling anywhere.
+    with pytest.raises(ObservationContractError, match="images"):
+        BPPO(env=_dict_image_env(), buffer_device="cpu", device="cpu")
 
 
 def test_old_policy_starts_synced_to_policy():
@@ -157,7 +188,9 @@ def test_entropy_weight_lowers_loss_not_raises_it():
     with torch.no_grad():
         old_features = agent.old_policy.extract_features(data.obs)
         action, old_log_prob = agent.old_policy.actor.action_log_prob(old_features)
-        advantage = (agent.q_net(data.obs, action) - agent.value_net(data.obs)).squeeze(-1)
+        advantage = (
+            agent.q_net(data.obs["state"], action) - agent.value_net(data.obs["state"])
+        ).squeeze(-1)
         advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         advantage = agent._weighted_advantage(advantage)
 
@@ -197,8 +230,10 @@ def test_clip_ratio_decays_then_freezes():
 def test_q_target_masks_true_terminations_and_timeout_boundary():
     agent = _make_agent(critic_warmup_steps=100)
     env = agent.env
-    obs = torch.rand(1, *env.single_observation_space.shape) * 2 - 1
-    next_obs = torch.rand(1, *env.single_observation_space.shape) * 2 - 1
+    state = torch.rand(1, *env.single_observation_space["state"].shape) * 2 - 1
+    next_state = torch.rand(1, *env.single_observation_space["state"].shape) * 2 - 1
+    obs = {"state": state}
+    next_obs = {"state": next_state}
     action = torch.rand(1, *env.single_action_space.shape) * 2 - 1
     reward = torch.rand(1)
 
@@ -283,8 +318,12 @@ def test_load_actor_from_transfers_only_policy():
     )
     for _ in range(16):
         env = bc.env
-        obs = torch.rand(1, *env.single_observation_space.shape) * 2 - 1
-        next_obs = torch.rand_like(obs)
+        # env.single_observation_space is Dict({"state": Box}) -- bc.env's
+        # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+        # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+        state = torch.rand(1, *env.single_observation_space["state"].shape) * 2 - 1
+        obs = {"state": state}
+        next_obs = {"state": torch.rand_like(state)}
         actions = torch.rand(1, *env.single_action_space.shape) * 2 - 1
         rewards = torch.rand(1)
         dones = torch.zeros(1)

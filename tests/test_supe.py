@@ -57,12 +57,14 @@ def _make_opal_checkpoint(tmp_path):
 class DummyVecEnv(gym.Env):
     def __init__(self, num_envs: int = 2) -> None:
         self.num_envs = num_envs
-        self.single_observation_space = spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32)
-        self.observation_space = spaces.Box(
-            low=np.broadcast_to(self.single_observation_space.low, (num_envs, _OBS_DIM)),
-            high=np.broadcast_to(self.single_observation_space.high, (num_envs, _OBS_DIM)),
+        state_space = spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32)
+        self.single_observation_space = spaces.Dict({"state": state_space})
+        batched_state_space = spaces.Box(
+            low=np.broadcast_to(state_space.low, (num_envs, _OBS_DIM)),
+            high=np.broadcast_to(state_space.high, (num_envs, _OBS_DIM)),
             dtype=np.float32,
         )
+        self.observation_space = spaces.Dict({"state": batched_state_space})
         self.single_action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32)
         self.action_space = spaces.Box(
             low=np.broadcast_to(self.single_action_space.low, (num_envs, _ACTION_DIM)),
@@ -72,10 +74,10 @@ class DummyVecEnv(gym.Env):
 
     def reset(self, seed=None):
         del seed
-        return torch.zeros(self.num_envs, _OBS_DIM), {}
+        return {"state": torch.zeros(self.num_envs, _OBS_DIM)}, {}
 
     def step(self, actions):
-        obs = torch.randn(self.num_envs, _OBS_DIM)
+        obs = {"state": torch.randn(self.num_envs, _OBS_DIM)}
         rewards = torch.ones(self.num_envs)
         terminations = torch.zeros(self.num_envs, dtype=torch.bool)
         truncations = torch.zeros(self.num_envs, dtype=torch.bool)

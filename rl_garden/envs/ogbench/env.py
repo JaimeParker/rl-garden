@@ -12,13 +12,16 @@ task, so this module is structurally a near-copy of
 module's docstring for the ``final_observation``/``final_info`` contract and
 the headless-rendering rationale.
 
-Pixel observations (``visual-*`` env ids) are a single flat
-``Box(0, 255, (H, W, C), uint8)`` per env, not a Dict -- rl_garden's
-``ImageFrameStackWrapper`` only supports Dict-keyed ``rgb``/``depth``
-observations, so frame stacking is out of scope here; pixel envs pass
-through as flat Box observations. Set ``vectorization="async"`` for
-``visual-*`` env ids so each instance owns its own MuJoCo renderer/GL
-context (same reasoning as the ``mujoco`` backend's own vectorization knob).
+Pixel observations (``visual-*`` env ids) come back from OGBench as a single
+flat ``Box(0, 255, (H, W, C), uint8)`` per env; ``_PixelDictWrapper`` below
+renames it into the observation contract's Dict shape,
+``Dict({"rgb_<camera>": Box})``, keyed by the single camera name
+``ObservationConfig.rgb`` asked for (OGBench has no named cameras of its
+own). ``cfg.frame_stack > 1`` then applies rl_garden's ``ImageFrameStackWrapper``
+to that ``rgb_<camera>`` key like any other Dict-keyed image backend. Set
+``vectorization="async"`` for ``visual-*`` env ids so each instance owns its
+own MuJoCo renderer/GL context (same reasoning as the ``mujoco`` backend's
+own vectorization knob).
 """
 from __future__ import annotations
 
@@ -27,9 +30,26 @@ from typing import Any
 
 import gymnasium as gym
 import numpy as np
+from gymnasium import spaces
 
 from rl_garden.envs.ogbench.config import OGBenchEnvConfig
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+
+
+class _PixelDictWrapper(gym.ObservationWrapper):
+    """Renames a ``visual-*`` env id's flat pixel ``Box`` into
+    ``Dict({"rgb_<camera>": Box})`` -- the observation contract's Dict shape,
+    keyed by the single camera name ``ObservationConfig.rgb`` asked for
+    (OGBench has no named cameras of its own; the requested name becomes the
+    key)."""
+
+    def __init__(self, env: gym.Env, *, camera: str) -> None:
+        super().__init__(env)
+        self._camera = camera
+        self.observation_space = spaces.Dict({f"rgb_{camera}": env.observation_space})
+
+    def observation(self, observation):
+        return {f"rgb_{self._camera}": observation}
 
 
 class _OGBenchEpisodeMetrics(gym.Wrapper):
@@ -69,7 +89,7 @@ class _SeededOGBenchVecEnv(TorchVectorEnvAdapter):
         return super().reset(seed=seed if seed is not None else self._seed, options=options)
 
 
-def _make_env_fn(env_id: str, env_kwargs: dict[str, Any]):
+def _make_env_fn(env_id: str, env_kwargs: dict[str, Any], pixel_camera: str | None):
     def _env_fn():
         # Registers every OGBench env id as an import side-effect; needed
         # fresh inside AsyncVectorEnv spawn workers, which don't inherit
@@ -83,7 +103,14 @@ def _make_env_fn(env_id: str, env_kwargs: dict[str, Any]):
 
         from gymnasium.wrappers import RecordEpisodeStatistics
 
-        env = RecordEpisodeStatistics(gym.make(env_id, **env_kwargs))
+        base_env = gym.make(env_id, **env_kwargs)
+        if pixel_camera is not None:
+            base_env = _PixelDictWrapper(base_env, camera=pixel_camera)
+        else:
+            from rl_garden.envs.wrappers import DictStateObservationWrapper
+
+            base_env = DictStateObservationWrapper(base_env)
+        env = RecordEpisodeStatistics(base_env)
         return _OGBenchEpisodeMetrics(env)
 
     return _env_fn
@@ -92,10 +119,19 @@ def _make_env_fn(env_id: str, env_kwargs: dict[str, Any]):
 def make_ogbench_env(cfg: OGBenchEnvConfig):
     from gymnasium.vector import AsyncVectorEnv, AutoresetMode, SyncVectorEnv
 
-    env_fns = [_make_env_fn(cfg.env_id, cfg.env_kwargs) for _ in range(cfg.num_envs)]
+    env_fns = [
+        _make_env_fn(cfg.env_id, cfg.env_kwargs, cfg.pixel_camera) for _ in range(cfg.num_envs)
+    ]
     vec_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
     vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
     adapter: gym.vector.VectorEnv = _SeededOGBenchVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+
+    if cfg.frame_stack > 1:
+        from rl_garden.envs.wrappers import ImageFrameStackWrapper
+
+        adapter = ImageFrameStackWrapper(
+            adapter, frame_stack=cfg.frame_stack, image_keys=(f"rgb_{cfg.pixel_camera}",)
+        )
 
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
         from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper

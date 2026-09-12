@@ -27,16 +27,34 @@ gradient-step loop doesn't fit env-interleaved training either.
 
 The student is a plain ``BCPolicy`` (actor-only, no critic -- exactly the
 shape a distillation student needs, zero new policy class required), built
-via the same Dict-obs dispatch (``CombinedExtractor``) that ``BC``/
-``FlowBC``/``DiffusionBC`` each already copy independently, sliced to
-``student_obs_keys``. The teacher is accepted as an already-built,
+via the shared observation-encoder factory (``build_observation_encoder``),
+sliced to ``student_obs_keys``. The teacher is accepted as an already-built,
 already-frozen ``BasePolicy`` object -- ``PolicyDistillation`` never
 constructs or loads it itself, which is what actually makes "any rl-garden
 algorithm can be the teacher" true: every algorithm's policy already
 implements the same ``predict(obs, deterministic)`` contract.
+
+Observation-encoder design note (observation-redesign Phase 2, W4): teacher
+and student each see a disjoint subset of ``env.single_observation_space``'s
+Dict keys (privileged vs. realistic obs groups) -- this is not the
+actor/critic asymmetry ``ObservationEncoderMixin`` models (one obs space, two
+consumer roles); it is two genuinely independent obs spaces. Only the
+student's encoder is built by this class (the teacher arrives already built
+and frozen -- see ``rl_garden/training/online/policy_distillation.py``'s
+``_build_teacher_policy``), so the mixin's single actor-slot resolution
+(``self._resolve_observation_encoders`` -> ``self.observation_encoders.actor``)
+is used for the student only; no critic, no ``obs_groups``, no
+``encoder_sharing`` -- this algorithm never trains a critic. Because
+rl-garden's observation contract allows only one non-image vector key
+(``"state"``) per Dict space, ``role_observation_space`` below renames each
+role's sole non-image obs key to ``"state"`` when building that role's own
+schema-compliant space; ``select_role_observation`` applies the same rename
+when slicing a live observation into a role's own keys, so the two facilities
+stay consistent for both roles (teacher and student).
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections import defaultdict
 from typing import Any, Literal, Optional, Sequence
@@ -51,17 +69,56 @@ from rl_garden.buffers.distillation_rollout_buffer import DistillationRolloutBuf
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.types import Obs
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.policies.base import BasePolicy
 from rl_garden.policies.bc_policy import BCPolicy
 
 
-def _select_keys(obs: dict, keys: Sequence[str]) -> dict:
-    return {key: obs[key] for key in keys}
+def role_obs_key_map(obs_space: spaces.Dict, keys: Sequence[str]) -> dict[str, str]:
+    """Map one teacher/student role's chosen obs keys onto the names its own
+    schema-compliant Dict space uses.
+
+    rl-garden's observation contract (``rl_garden.observations``) allows
+    exactly one non-image vector key, named ``"state"``; image keys keep
+    their ``rgb_<cam>``/``depth_<cam>`` name. A role selecting more than one
+    non-image key has no representation under that contract, so this raises
+    rather than silently dropping one.
+
+    NOTE: intentionally NOT ``ObservationSchema.from_space(obs_space)`` +
+    ``image_keys``/``key_modality`` -- teacher/student obs spaces here are
+    the *pre-contract* space a policy checkpoint was trained against (e.g. an
+    IsaacLab privileged-obs group named "privileged", not "state"), which
+    legitimately contains non-contract key names; both would raise
+    ``ObservationContractError`` on those, breaking exactly the case this
+    function exists to translate.
+    """
+    image_keys = [key for key in keys if key.startswith(("rgb_", "depth_"))]
+    vector_keys = [key for key in keys if key not in image_keys]
+    if len(vector_keys) > 1:
+        raise ValueError(
+            "PolicyDistillation supports at most one non-image observation "
+            f"key per teacher/student role (got {vector_keys} from {list(keys)}); "
+            "rl-garden's observation contract allows only a single 'state' "
+            "vector key per Dict space."
+        )
+    key_map = {key: key for key in image_keys}
+    if vector_keys:
+        key_map[vector_keys[0]] = "state"
+    return key_map
+
+
+def role_observation_space(obs_space: spaces.Dict, keys: Sequence[str]) -> spaces.Dict:
+    """Build one role's own schema-compliant Dict space from its obs keys
+    (see ``role_obs_key_map``)."""
+    key_map = role_obs_key_map(obs_space, keys)
+    return spaces.Dict({key_map[key]: obs_space[key] for key in keys})
+
+
+def select_role_observation(obs: dict, obs_space: spaces.Dict, keys: Sequence[str]) -> dict:
+    """Slice a live observation dict down to one role's keys, renamed exactly
+    as ``role_observation_space`` names them."""
+    key_map = role_obs_key_map(obs_space, keys)
+    return {key_map[key]: obs[key] for key in keys}
 
 
 class PolicyDistillation(OnPolicyAlgorithm):
@@ -93,13 +150,7 @@ class PolicyDistillation(OnPolicyAlgorithm):
         use_adamw: bool = False,
         max_grad_norm: Optional[float] = None,
         net_arch: Optional[Sequence[int]] = None,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
+        encoder_config: Optional[EncoderConfig] = None,
         actor_use_layer_norm: bool = False,
         actor_use_group_norm: bool = False,
         num_groups: int = 32,
@@ -144,7 +195,7 @@ class PolicyDistillation(OnPolicyAlgorithm):
         )
 
         obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Dict):
+        if not hasattr(obs_space, "spaces"):
             raise TypeError(
                 "PolicyDistillation requires a Dict observation space "
                 "(needs both teacher_obs_keys and student_obs_keys as Dict "
@@ -185,17 +236,7 @@ class PolicyDistillation(OnPolicyAlgorithm):
         self.std_parameterization = std_parameterization
         self.tanh_squash = tanh_squash
 
-        self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
-        self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
-        self._state_key = state_key if state_key is not None else "state"
-        self._use_proprio = use_proprio if use_proprio is not None else True
-        self._proprio_latent_dim = (
-            proprio_latent_dim if proprio_latent_dim is not None else 64
-        )
-        self._image_fusion_mode = (
-            image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-        )
-        self._enable_stacking = enable_stacking if enable_stacking is not None else False
+        self.encoder_config = encoder_config
 
         self._setup_model()
 
@@ -214,27 +255,20 @@ class PolicyDistillation(OnPolicyAlgorithm):
             "num_minibatches": self.num_minibatches,
             "actor_lr": self.actor_lr,
             "net_arch": self.net_arch,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
         }
 
     # --- model setup ---
 
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
-        student_obs_space = spaces.Dict(
-            {key: obs_space[key] for key in self.student_obs_keys}
-        )
+        student_obs_space = role_observation_space(obs_space, self.student_obs_keys)
         self._student_obs_space = student_obs_space
 
-        features_extractor = CombinedExtractor(
-            observation_space=student_obs_space,
-            image_keys=self._image_keys,
-            state_key=self._state_key,
-            image_encoder_factory=self._image_encoder_factory,
-            proprio_latent_dim=self._proprio_latent_dim,
-            use_proprio=self._use_proprio,
-            fusion_mode=self._image_fusion_mode,
-            enable_stacking=self._enable_stacking,
-        )
+        self._resolve_observation_encoders(student_obs_space)
+        features_extractor = self.observation_encoders.actor
         self.policy = BCPolicy(
             observation_space=student_obs_space,
             action_space=self.env.single_action_space,
@@ -268,8 +302,10 @@ class PolicyDistillation(OnPolicyAlgorithm):
 
     def _eval_action(self, obs: Obs) -> torch.Tensor:
         with torch.no_grad():
-            student_obs = _select_keys(
-                self._obs_to_policy_device(obs), self.student_obs_keys
+            student_obs = select_role_observation(
+                self._obs_to_policy_device(obs),
+                self.env.single_observation_space,
+                self.student_obs_keys,
             )
             return self.policy.predict(student_obs, deterministic=True)
 
@@ -284,7 +320,9 @@ class PolicyDistillation(OnPolicyAlgorithm):
             for batch in self.distillation_buffer.get(minibatch_size):
                 self._global_update += 1
                 num_updates += 1
-                student_obs = _select_keys(batch.obs, self.student_obs_keys)
+                student_obs = select_role_observation(
+                    batch.obs, self.env.single_observation_space, self.student_obs_keys
+                )
                 # Recomputed fresh from current student parameters each
                 # gradient step -- the teacher's action was stored once at
                 # rollout time (it's frozen, so recomputing it would give the
@@ -341,8 +379,9 @@ class PolicyDistillation(OnPolicyAlgorithm):
             for _ in range(self.num_steps):
                 self._global_step += self.num_envs
                 device_obs = self._obs_to_policy_device(obs)
-                student_obs = _select_keys(device_obs, self.student_obs_keys)
-                teacher_obs = _select_keys(device_obs, self.teacher_obs_keys)
+                obs_space = self.env.single_observation_space
+                student_obs = select_role_observation(device_obs, obs_space, self.student_obs_keys)
+                teacher_obs = select_role_observation(device_obs, obs_space, self.teacher_obs_keys)
                 with torch.no_grad():
                     # Student always executes its own action -- no
                     # beta-mixing.

@@ -7,7 +7,7 @@ rl-garden's ``BaseFeaturesExtractor`` conventions.
 """
 from __future__ import annotations
 
-from typing import Iterable, Literal, Optional
+from typing import Literal, Optional
 
 import numpy as np
 import torch
@@ -18,6 +18,7 @@ from torch.nn.init import trunc_normal_
 
 from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.encoders.base import BaseFeaturesExtractor, TokenAndPropFeatureConfig, image_needs_normalization
+from rl_garden.observations import ObservationSchema
 
 ViTFusionMode = Literal["per_key", "stack_channels"]
 ViTAugmentationMode = Literal["random_shift", "none"]
@@ -234,11 +235,9 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
     def __init__(
         self,
         observation_space: spaces.Dict,
-        image_keys: Iterable[str] = ("rgb", "depth"),
-        state_key: str = "state",
-        use_proprio: bool = True,
+        schema: ObservationSchema,
+        *,
         fusion_mode: ViTFusionMode = "per_key",
-        enable_stacking: bool = False,
         embed_dim: int = 128,
         depth: int = 1,
         num_heads: int = 4,
@@ -253,7 +252,8 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
                 f"fusion_mode must be 'per_key' or 'stack_channels', got {fusion_mode!r}."
             )
 
-        self.image_keys = tuple(k for k in image_keys if k in observation_space.spaces)
+        state_key = "state"
+        self.image_keys = schema.image_keys
         if not self.image_keys:
             raise ValueError("ViTTokenAndPropExtractor requires at least one image key.")
         self._needs_norm: frozenset[str] = frozenset(
@@ -261,14 +261,14 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
             if image_needs_normalization(observation_space.spaces[k])
         )
         self.state_key = state_key
-        self.has_state = use_proprio and state_key in observation_space.spaces
+        self.has_state = schema.has_state
         self.fusion_mode = fusion_mode
-        self.enable_stacking = enable_stacking
+        self.enable_stacking = any(schema.entries[k].stacked for k in self.image_keys)
         self.augmentation = augmentation
 
         specs = {
             k: self._image_space_to_hwc(
-                observation_space.spaces[k], image_key=k, enable_stacking=enable_stacking
+                observation_space.spaces[k], image_key=k, enable_stacking=self.enable_stacking
             )
             for k in self.image_keys
         }
@@ -293,14 +293,10 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
         prop_dim = 0
         if self.has_state:
             prop_dim += int(np.prod(observation_space.spaces[state_key].shape))
-        image_key_set = set(self.image_keys)
-        self.vector_keys: tuple[str, ...] = tuple(
-            key
-            for key, subspace in observation_space.spaces.items()
-            if key not in image_key_set and key != state_key and isinstance(subspace, spaces.Box)
-        )
-        for key in self.vector_keys:
-            prop_dim += int(np.prod(observation_space.spaces[key].shape))
+        # No genuine vector key can exist under the strict observation schema
+        # (state / rgb_<cam> / depth_<cam> only): schema's only non-image key
+        # is "state", already accounted for above.
+        self.vector_keys: tuple[str, ...] = ()
 
         self.num_patches = num_patches
         self.patch_dim = patch_dim

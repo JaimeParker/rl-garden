@@ -29,13 +29,21 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import _add_flat_transitions, _concat, _mc_returns, _to_tensor
+from rl_garden.buffers._dataset_common import (
+    _add_flat_transitions,
+    _concat,
+    _finalize_dataset_obs_space,
+    _match_obs_to_buffer,
+    _mc_returns,
+    _to_tensor,
+)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
 )
+from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 
 def _require_metaworld() -> Any:
@@ -49,16 +57,19 @@ def _require_metaworld() -> Any:
     return metaworld
 
 
-def infer_specs_from_metaworld(task_name: str) -> tuple[spaces.Box, spaces.Box]:
+def infer_specs_from_metaworld(task_name: str) -> tuple[spaces.Dict, spaces.Box]:
     """Read obs/action spaces directly from a throwaway single-task env --
     Meta-World's spaces are static per-task metadata, not derived from any
-    on-disk data, so no episode rollout is needed."""
+    on-disk data, so no episode rollout is needed. Meta-World's own
+    observations are flat state, so the result is always
+    ``Dict({"state": Box(float32)})``."""
     _require_metaworld()
     import gymnasium as gym
 
     env = gym.make("Meta-World/MT1", env_name=task_name)
     try:
-        return env.observation_space, env.action_space
+        space = canonicalize_floating_observation_space(env.observation_space)
+        return _finalize_dataset_obs_space(space), env.action_space
     finally:
         env.close()
 
@@ -149,6 +160,7 @@ def load_metaworld_dataset_to_replay_buffer(
 
     obs_all = _concat(obs_parts)
     next_obs_all = _concat(next_obs_parts)
+    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)

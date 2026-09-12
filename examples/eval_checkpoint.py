@@ -9,7 +9,7 @@ Example:
     python -u tools/evaluation/eval_checkpoint.py \
       --phase offline --algorithm calql \
       --checkpoint-path runs/.../calql_offline_pretrained.pt \
-      --env-id PickCube-v1 --obs-mode state \
+      --env-id PickCube-v1 \
       --num-eval-envs 16 --num-eval-episodes 50 \
       --capture-video false --output-json /tmp/calql_eval.json
 """
@@ -46,6 +46,7 @@ from rl_garden.envs.backend_registry import (
     make_evaluation_env,
     make_training_envs,
 )
+from rl_garden.observations import ObservationConfig
 
 Phase = Literal["auto", "online", "offline", "off2on"]
 
@@ -58,7 +59,7 @@ class EvalCheckpointArgs(EnvBackendArgs):
     config_path: str | None = None
 
     env_id: str = "PickCube-v1"
-    obs_mode: str = "state"
+    obs: ObservationConfig = field(default_factory=ObservationConfig)
     control_mode: str = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
     num_eval_envs: int = 16
@@ -68,11 +69,6 @@ class EvalCheckpointArgs(EnvBackendArgs):
     device: str = "auto"
     buffer_device: str = "cpu"
 
-    include_state: bool = True
-    camera_width: int | None = 64
-    camera_height: int | None = 64
-    per_camera_rgbd: bool = False
-    frame_stack: int = 1
     reward_scale: float = 1.0
     reward_bias: float = 0.0
 
@@ -233,7 +229,7 @@ def _load_training_args(
     overrides = {
         "env_backend": eval_args.env_backend,
         "env_id": eval_args.env_id,
-        "obs_mode": eval_args.obs_mode,
+        "obs": eval_args.obs,
         "control_mode": eval_args.control_mode,
         "render_mode": eval_args.render_mode,
         "num_envs": eval_args.num_eval_envs,
@@ -243,11 +239,6 @@ def _load_training_args(
         "seed": eval_args.seed,
         "device": eval_args.device,
         "buffer_device": eval_args.buffer_device,
-        "include_state": eval_args.include_state,
-        "camera_width": eval_args.camera_width,
-        "camera_height": eval_args.camera_height,
-        "per_camera_rgbd": eval_args.per_camera_rgbd,
-        "frame_stack": eval_args.frame_stack,
         "reward_scale": eval_args.reward_scale,
         "reward_bias": eval_args.reward_bias,
         "capture_video": eval_args.capture_video,
@@ -289,19 +280,14 @@ def _eval_record_dir(eval_args: EvalCheckpointArgs) -> str | None:
 
 
 def _env_request(args: Any, eval_args: EvalCheckpointArgs) -> EnvRequest:
-    is_visual = args.obs_mode != "state"
+    observation = getattr(args, "obs", None) or ObservationConfig()
     return EnvRequest(
         env_id=args.env_id,
         num_envs=args.num_eval_envs,
-        obs_mode=args.obs_mode,
+        observation=observation,
         control_mode=args.control_mode,
         render_mode=args.render_mode,
         seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
-        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
-        frame_stack=getattr(args, "frame_stack", 1),
         reward_scale=getattr(args, "reward_scale", 1.0),
         reward_bias=getattr(args, "reward_bias", 0.0),
         num_eval_envs=args.num_eval_envs,
@@ -560,7 +546,7 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
         "algorithm": algorithm,
         "env_backend": args.env_backend,
         "env_id": args.env_id,
-        "obs_mode": args.obs_mode,
+        "obs": repr(getattr(args, "obs", None)),
         "control_mode": args.control_mode,
         "num_eval_envs": args.num_eval_envs,
         "num_eval_episodes": eval_args.num_eval_episodes,

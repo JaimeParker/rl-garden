@@ -23,7 +23,9 @@ class CustomBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.custom.config import CustomEnvConfig
+        from rl_garden.envs.wrappers import require_state_only_observation
 
+        require_state_only_observation(req.observation, backend="custom")
         custom = req.backend_config  # CustomConfig or None
         return CustomEnvConfig(
             env_id=req.env_id,

@@ -74,18 +74,21 @@ rl-garden's conventions:
   key. rl-garden's BC/vision-BC kwargs already assume a single
   `state_key="state"` (see `rl_garden/training/offline/bc.py:_bc_kwargs`).
 - It names image keys `left_shoulder_rgb`/`front_rgb`/... (suffix
-  `_rgb`/`_depth`). **`discover_image_keys()`
-  (`rl_garden/encoders/combined.py`) only matches keys that *start* with
-  `"rgb"`/`"depth"`** — keeping RLBench's native names would silently
-  discover zero image keys and break every vision IL algorithm at
-  encoder-construction time, with no error.
+  `_rgb`/`_depth`) instead of rl-garden's strict `rgb_<cam>`/`depth_<cam>`
+  key vocabulary (`rl_garden.observations.schema.validate_observation_space`)
+  — keeping RLBench's native names would fail that validation.
 
 So this integration builds the observation itself
 (`rl_garden.buffers.rlbench_dataset.build_rlbench_observation`): a flat
-`"state"` `Box` when `obs_mode == "state"` (matching every other backend's
-own state-is-flat-Box convention), or a `Dict` (`"state"` plus
-`rgb_<camera>`/`depth_<camera>` keys, `camera` ∈ `{left_shoulder,
-right_shoulder, overhead, wrist, front}`) when `obs_mode == "rgb"`.
+`"state"` `Box` when `ObservationConfig` requests no cameras (matching every
+other backend's own state-is-flat-Box convention), or a `Dict` (`"state"`
+plus `rgb_<camera>`/`depth_<camera>` keys, `camera` ∈ `{left_shoulder,
+right_shoulder, overhead, wrist, front}`) when `--obs.rgb`/`--obs.depth`
+names one or more of those cameras. This is the producer mapping referenced
+from [Configuration System](configuration.md#h5-dataset-observation-layout)
+-- RLBench's own `left_shoulder_rgb`/`front_rgb`/... field names never reach
+the H5 file or the live env's observation space; both are built from this
+one shared helper instead.
 
 This same helper module is the single source of truth for both the live env
 (`rl_garden/envs/rlbench/env.py`) and the offline dataset loader below —
@@ -118,22 +121,21 @@ gripper dim (its own documented open/closed contract) — see
 ```bash
 python examples/train_online.py rlpd \
   --env_backend rlbench --env_id reach_target \
-  --obs_mode state \
   --dataset_backend rlbench --offline_dataset /data/rlbench_demos/reach_target \
   --num_envs 4 --num_eval_envs 2 \
   --total_timesteps 100000 --learning_starts 1000 --batch_size 256
 ```
 
-Vision (`obs_mode=rgb`), `async` vectorization (each instance owns its own
-CoppeliaSim renderer/GL context, same reasoning the `mujoco`/`ogbench`
+Vision (`--obs.rgb <camera>`), `async` vectorization (each instance owns its
+own CoppeliaSim renderer/GL context, same reasoning the `mujoco`/`ogbench`
 backends already document for their own visual variants). `flow_bc` (like
-`bc`) discovers image keys generically from a `Dict` obs space
-(`discover_image_keys()`), so no RLBench-specific wiring is needed there
-either:
+`bc`) resolves its encoder generically from the `Dict` observation space's
+schema (`ObservationEncoderMixin`, `rl_garden/algorithms/_observation.py`),
+so no RLBench-specific wiring is needed there either:
 
 ```bash
 python examples/pretrain_offline.py flow_bc \
-  --env_backend rlbench --env_id reach_target --obs_mode rgb \
+  --env_backend rlbench --env_id reach_target --obs.rgb left_shoulder \
   --rlbench.vectorization async \
   --dataset_backend rlbench --offline_dataset /data/rlbench_demos/reach_target
 ```
@@ -157,17 +159,20 @@ installed, not separately re-verified in this pass.
 ### Key config fields (`--rlbench.<field>`)
 
 - `device`: device for the online vector env's torch tensors.
-- `cameras`: cameras enabled when `obs_mode == "rgb"` (rgb+depth each; never
-  mask/point_cloud). Default is all 5 (RLBench's own `ObservationConfig`
-  default); trimming is a cost knob, not a correctness one.
-- `image_size`: per-camera render size (default `(128, 128)`, RLBench's own
-  default).
 - `headless`: `True` by default.
 - `env_kwargs_json`: JSON-encoded dict forwarded verbatim to
   `rlbench.environment.Environment` (`robot_setup`, `shaped_rewards`,
   `static_positions`, `arm_max_velocity`, ...). Rarely needed.
 - `vectorization`: `"sync"` (default) or `"async"` (recommended once
-  `obs_mode == "rgb"`).
+  `--obs.rgb`/`--obs.depth` is set).
+
+Camera selection and resolution are the shared `--obs.*` surface, not
+RLBench-specific fields: `--obs.rgb`/`--obs.depth` name any of the 5 cameras
+`{left_shoulder, right_shoulder, overhead, wrist, front}` (rgb+depth each;
+never mask/point_cloud) — pass none to leave every camera off (RLBench's own
+`ObservationConfig` default enables all 5; trimming here is a cost knob, not
+a correctness one). `--obs.image_size` sets the shared per-camera render size
+(default `(128, 128)`, RLBench's own default, when unset).
 
 ## Dataset format and the action-derivation convention
 
@@ -227,10 +232,10 @@ network access, no `pyrep`/CoppeliaSim install required).
 ## Known issues and fixes
 
 This backend was installed from scratch and exercised end to end (real
-CoppeliaSim + PyRep + RLBench, `reach_target` task, both `obs_mode="state"`
-and `obs_mode="rgb"`, both stored and live-generated demos, and a full `bc`
-training run with a live eval env) — the issues below are what actually
-surfaced, with their fixes, not speculation:
+CoppeliaSim + PyRep + RLBench, `reach_target` task, both state-only and
+`--obs.rgb`/`--obs.depth` vision, both stored and live-generated demos, and a
+full `bc` training run with a live eval env) — the issues below are what
+actually surfaced, with their fixes, not speculation:
 
 - **`import rlbench` fails with `ModuleNotFoundError: No module named
   'gymnasium'`** even though you never asked for the `[gym]` extra:

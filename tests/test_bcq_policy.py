@@ -7,7 +7,7 @@ from gymnasium import spaces
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.bcq_policy import BCQPolicy
 
-OBS_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
+OBS_SPACE = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)})
 ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
 
@@ -41,7 +41,7 @@ def test_vae_parameters_are_distinct_from_actor_critic_parameters():
 
 def test_predict_in_bounds():
     policy = _make_policy()
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action = policy.predict(obs, num_candidates=8)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)
@@ -74,7 +74,7 @@ def test_predict_picks_the_max_q_candidate_per_row():
 
     policy.q_values = fake_q_values
 
-    obs = torch.randn(batch_size, 6)
+    obs = {"state": torch.randn(batch_size, 6)}
 
     # vae.decode(z=None) samples from the prior, so the manual recomputation
     # below must consume the RNG in exactly the same order as predict() --

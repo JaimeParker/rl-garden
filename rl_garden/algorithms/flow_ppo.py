@@ -72,6 +72,7 @@ scratch, same as plain ``PPO``.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
 import torch
@@ -85,13 +86,9 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import (
-    CombinedExtractor,
-    ImageEncoderFactory,
-    default_image_encoder_factory,
-)
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.flow_ppo_policy import FlowPPOPolicy
 
 
@@ -187,6 +184,14 @@ class FlowPPOCore:
             "clip_std_min": self.clip_std_min,
             "sigma_safe_max": self.sigma_safe_max,
             "logprob_mode": self.logprob_mode,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "critic_encoder_config": None,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -207,6 +212,14 @@ class FlowPPOCore:
 
 class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
     _compatible_checkpoint_algorithms = ("FlowPPO",)
+    # A single shared features_extractor: the critic loss trains it
+    # (critic_optimizer includes its parameters, see _setup_model), the
+    # actor's log-prob path detaches (`features_actor = features_b.detach()`
+    # in _flow_ppo_loss) -- this is "shared_critic_grad" semantics, not
+    # "shared", despite FlowPPO being on-policy. There is no independent
+    # critic features_extractor slot in FlowPPOPolicy, so "separate" is not
+    # supported here.
+    encoder_sharing = "shared_critic_grad"
 
     def __init__(
         self,
@@ -245,7 +258,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         clip_advantage_upper_quantile: float = 1.0,
         vf_coef: float = 0.5,
         target_kl: Optional[float] = 1.0,
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -258,12 +272,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
     ) -> None:
-        obs_space = env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(
-                f"FlowPPO supports Box or Dict observation spaces, got {type(obs_space)}."
-            )
-        self.image_encoder_factory = image_encoder_factory
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -325,27 +335,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
 
         self._setup_model()
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        obs_space = self.env.single_observation_space
-        if isinstance(obs_space, spaces.Box):
-            return FlattenExtractor
-        return CombinedExtractor
-
-    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
-        if isinstance(self.env.single_observation_space, spaces.Dict):
-            return {
-                "image_encoder_factory": (
-                    self.image_encoder_factory or default_image_encoder_factory()
-                ),
-            }
-        return {}
-
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(
-            observation_space=self.env.single_observation_space,
-            **self._default_features_extractor_kwargs(),
-        )
+        return self._resolve_observation_encoders(self.env.single_observation_space).actor
 
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space

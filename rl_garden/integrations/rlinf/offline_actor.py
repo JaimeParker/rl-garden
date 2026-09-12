@@ -95,10 +95,16 @@ def _dataset_batch_to_sample(batch: dict[str, torch.Tensor]) -> ReplayBufferSamp
     RLinf's ``D4RLDataset`` (``RLinf/rlinf/data/datasets/d4rl.py``)
     yields ``masks`` = 1 - terminals (the not-done convention); rl-garden's
     ``ReplayBufferSample.dones`` is the terminal flag itself.
+
+    Every algorithm's ``OfflineEnvSpec`` is boundary-normalized to
+    ``Dict({"state": Box})`` now (``BaseAlgorithm.__init__``), so obs/
+    next_obs are always wrapped the same way here.
     """
+    obs = {"state": batch["observations"]}
+    next_obs = {"state": batch["next_observations"]}
     return ReplayBufferSample(
-        obs=batch["observations"],
-        next_obs=batch["next_observations"],
+        obs=obs,
+        next_obs=next_obs,
         actions=batch["actions"],
         rewards=batch["rewards"],
         dones=1.0 - batch["masks"],

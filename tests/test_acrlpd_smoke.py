@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.algorithms import ACRLPD
+from rl_garden.observations import ObservationContractError
 
 OBS_DIM = 4
 ACTION_DIM = 2
@@ -69,6 +71,18 @@ def _make_agent(**overrides) -> ACRLPD:
     )
     kwargs.update(overrides)
     return ACRLPD(**kwargs)
+
+
+def test_acrlpd_rejects_dict_observation_space_with_images():
+    env = _FakeEnv()
+    env.single_observation_space = spaces.Dict(
+        {
+            "state": spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+        }
+    )
+    with pytest.raises(ObservationContractError):
+        _make_agent(env=env)
 
 
 def test_acrlpd_defaults_match_qc_recipe():

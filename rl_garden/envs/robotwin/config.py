@@ -48,8 +48,14 @@ class RoboTwinEnvConfig:
     random_light: bool = False
     crazy_random_light_rate: float = 0.0
 
-    # Observation/action behavior.
-    include_wrist_cameras: bool = True
+    # Observation/action behavior. From EnvRequest.observation: cameras is a
+    # subset of ("head", "left_wrist", "right_wrist") -> "rgb_<cam>" keys;
+    # RoboTwin has no depth camera output, so ObservationConfig.depth must be
+    # empty. state toggles the flat "state" ("qpos") key. frame_stack applies
+    # ImageFrameStackWrapper uniformly (see env.py).
+    rgb_cameras: tuple[str, ...] = ("head", "left_wrist", "right_wrist")
+    state: bool = True
+    frame_stack: int = 1
     image_size: tuple[int, int] = (224, 224)
     head_camera_type: str = "D435"
     wrist_camera_type: str = "D435"

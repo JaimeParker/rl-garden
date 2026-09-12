@@ -34,6 +34,7 @@ rollout-then-batch-update loop.
 """
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
@@ -41,7 +42,6 @@ from typing import Any, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.tdmpc2 import math_utils
@@ -54,8 +54,8 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
-from rl_garden.encoders.combined import CombinedExtractor, ImageEncoderFactory, default_image_encoder_factory
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 
 
 def _compute_discount(
@@ -67,6 +67,12 @@ def _compute_discount(
 
 class TDMPC2(BaseAlgorithm):
     _compatible_checkpoint_algorithms = ("TDMPC2",)
+    # One shared encoder feeds both the policy head and the Q-heads through a
+    # single joint world-model optimizer (see module docstring) -- there is
+    # no separate actor/critic split to stop-gradient between, so "shared"
+    # (both paths train it, no detach) is the only sharing mode that makes
+    # sense here.
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -114,17 +120,9 @@ class TDMPC2(BaseAlgorithm):
         discount_denom: float = 5.0,
         discount_min: float = 0.95,
         discount_max: float = 0.995,
-        # Dict-obs (pixel) encoder kwargs -- same shape as SAC's, ignored for
-        # Box observations.
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
-        image_augmentation: Optional[str] = None,
-        random_shift_pad: Optional[int] = None,
+        # Dict-obs (pixel) encoder config -- ignored for Box observations.
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -199,19 +197,8 @@ class TDMPC2(BaseAlgorithm):
         self.discount_min = discount_min
         self.discount_max = discount_max
 
-        obs_space = self.env.single_observation_space
-        self._is_dict_obs = isinstance(obs_space, spaces.Dict)
-        if not self._is_dict_obs and not isinstance(obs_space, spaces.Box):
-            raise TypeError(f"TDMPC2 supports Box or Dict observation spaces, got {type(obs_space)}")
-        self._image_encoder_factory = image_encoder_factory or default_image_encoder_factory()
-        self._image_keys = image_keys if image_keys is not None else ("rgb", "depth")
-        self._state_key = state_key if state_key is not None else "state"
-        self._use_proprio = use_proprio if use_proprio is not None else True
-        self._proprio_latent_dim = proprio_latent_dim if proprio_latent_dim is not None else 64
-        self._image_fusion_mode = image_fusion_mode if image_fusion_mode is not None else "stack_channels"
-        self._enable_stacking = enable_stacking if enable_stacking is not None else False
-        self._image_augmentation = image_augmentation if image_augmentation is not None else "none"
-        self._random_shift_pad = random_shift_pad if random_shift_pad is not None else 4
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
         self._image_augmentation_seed = image_augmentation_seed
 
         self.std_log = std_log
@@ -230,30 +217,13 @@ class TDMPC2(BaseAlgorithm):
     # Construction
     # ------------------------------------------------------------------
 
-    def _default_features_extractor_class(self) -> type[BaseFeaturesExtractor]:
-        return CombinedExtractor if self._is_dict_obs else FlattenExtractor
-
-    def _default_features_extractor_kwargs(self) -> dict[str, Any]:
-        if not self._is_dict_obs:
-            return {}
-        return {
-            "image_keys": self._image_keys,
-            "state_key": self._state_key,
-            "image_encoder_factory": self._image_encoder_factory,
-            "proprio_latent_dim": self._proprio_latent_dim,
-            "use_proprio": self._use_proprio,
-            "fusion_mode": self._image_fusion_mode,
-            "enable_stacking": self._enable_stacking,
-            "image_augmentation": self._image_augmentation,
-            "random_shift_pad": self._random_shift_pad,
-            "augmentation_seed": self._image_augmentation_seed,
-        }
-
     def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        cls = self._default_features_extractor_class()
-        return cls(observation_space=self.env.single_observation_space, **self._default_features_extractor_kwargs())
+        return self.observation_encoders.actor
 
     def _setup_model(self) -> None:
+        self._resolve_observation_encoders(
+            self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
+        )
         action_dim = int(np.prod(self.env.single_action_space.shape))
         features_extractor = self._build_features_extractor()
 
@@ -497,6 +467,14 @@ class TDMPC2(BaseAlgorithm):
             "discount_min": self.discount_min,
             "discount_max": self.discount_max,
             "learning_starts": self.learning_starts,
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
         }
 
     def _checkpoint_path(self, name: str) -> Path:

@@ -26,7 +26,9 @@ class MujocoBackend(EnvBackend):
     @classmethod
     def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
         from rl_garden.envs.mujoco.config import MujocoEnvConfig
+        from rl_garden.envs.wrappers import require_state_only_observation
 
+        require_state_only_observation(req.observation, backend="mujoco")
         mj = req.backend_config  # MujocoConfig or None
         env_kwargs = (
             json.loads(mj.env_kwargs_json)

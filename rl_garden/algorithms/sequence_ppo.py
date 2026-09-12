@@ -18,7 +18,6 @@ import torch
 
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.buffers.recurrent_rollout_buffer import (
-    RecurrentDictRolloutBuffer,
     RecurrentRolloutBuffer,
     RecurrentRolloutBufferSample,
 )
@@ -87,8 +86,7 @@ class SequencePPO(PPO):
                 min_lr_ratio=self.lr_min_ratio,
             )
         )
-        buffer_cls = RecurrentDictRolloutBuffer if self._is_dict_obs else RecurrentRolloutBuffer
-        self.rollout_buffer = buffer_cls(
+        self.rollout_buffer = RecurrentRolloutBuffer(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_steps=self.num_steps,

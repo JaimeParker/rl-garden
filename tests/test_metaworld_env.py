@@ -19,7 +19,15 @@ from gymnasium import spaces
 from rl_garden.envs.backend_registry import EnvRequest
 from rl_garden.envs.backends.metaworld import MetaWorldBackend
 from rl_garden.envs.metaworld.config import MetaWorldEnvConfig
-from rl_garden.envs.metaworld.env import _MetaWorldEpisodeMetrics, _MetaWorldVisionWrapper, make_metaworld_env
+from rl_garden.envs.metaworld.env import (
+    _METAWORLD_CAMERAS,
+    _MetaWorldEpisodeMetrics,
+    _MetaWorldVisionWrapper,
+    _validate_cameras,
+    make_metaworld_env,
+)
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 class _FakeSingleTaskEnv(gym.Env):
@@ -98,8 +106,9 @@ def test_single_task_env_id_builds_sync_vector_env_via_gym_make(monkeypatch):
     assert [call[1]["seed"] for call in captured_calls] == [5, 6]
 
     obs, _ = env.reset()
-    assert isinstance(obs, torch.Tensor)
-    assert obs.shape == (2, 3)
+    assert set(obs.keys()) == {"state"}
+    assert isinstance(obs["state"], torch.Tensor)
+    assert obs["state"].shape == (2, 3)
     env.close()
 
 
@@ -262,7 +271,13 @@ def test_vision_wrapper_builds_dict_obs_space_and_renders_state_plus_rgbd(monkey
     _FakeRenderer.instances.clear()
     monkeypatch.setattr("rl_garden.envs.metaworld.env.MujocoRenderer", _FakeRenderer)
 
-    env = _MetaWorldVisionWrapper(_FakeStateEnvForVision(), camera="corner2", image_size=(4, 4))
+    env = _MetaWorldVisionWrapper(
+        _FakeStateEnvForVision(),
+        rgb_cameras=("corner2",),
+        depth_cameras=("corner2",),
+        image_size=(4, 4),
+        state=True,
+    )
 
     assert set(env.observation_space.spaces) == {"state", "rgb_corner2", "depth_corner2"}
     assert env.observation_space["rgb_corner2"].shape == (4, 4, 3)
@@ -281,13 +296,96 @@ def test_vision_wrapper_builds_dict_obs_space_and_renders_state_plus_rgbd(monkey
     assert _FakeRenderer.instances[0].closed
 
 
+def test_vision_wrapper_drops_state_key_when_state_false(monkeypatch):
+    _FakeRenderer.instances.clear()
+    monkeypatch.setattr("rl_garden.envs.metaworld.env.MujocoRenderer", _FakeRenderer)
+
+    env = _MetaWorldVisionWrapper(
+        _FakeStateEnvForVision(),
+        rgb_cameras=("corner2",),
+        depth_cameras=(),
+        image_size=(4, 4),
+        state=False,
+    )
+
+    assert set(env.observation_space.spaces) == {"rgb_corner2"}
+    obs, _ = env.reset()
+    assert set(obs.keys()) == {"rgb_corner2"}
+    env.close()
+
+
+def test_vision_wrapper_rejects_unknown_camera(monkeypatch):
+    monkeypatch.setattr("rl_garden.envs.metaworld.env.MujocoRenderer", _FakeRenderer)
+
+    import pytest
+
+    with pytest.raises(ObservationContractError, match="unknown camera"):
+        _MetaWorldVisionWrapper(
+            _FakeStateEnvForVision(),
+            rgb_cameras=("not_a_real_camera",),
+            depth_cameras=(),
+            image_size=(4, 4),
+            state=True,
+        )
+
+
+def test_validate_cameras_lists_available_cameras_on_unknown():
+    import pytest
+
+    with pytest.raises(ObservationContractError) as excinfo:
+        _validate_cameras(("bogus",))
+    for camera in _METAWORLD_CAMERAS:
+        assert camera in str(excinfo.value)
+
+
 def test_make_metaworld_env_rejects_vision_for_mt10(monkeypatch):
     _install_fake_metaworld(monkeypatch)
 
     import pytest
 
-    with pytest.raises(ValueError, match="MT10"):
-        make_metaworld_env(MetaWorldEnvConfig(env_id="MT10", num_envs=10, seed=0, obs_mode="rgb"))
+    with pytest.raises(ObservationContractError, match="MT10"):
+        make_metaworld_env(
+            MetaWorldEnvConfig(env_id="MT10", num_envs=10, seed=0, rgb_cameras=("corner2",))
+        )
+
+
+def test_backend_resolve_config_rejects_frame_stack_without_camera():
+    import pytest
+
+    from rl_garden.common.env_args import MetaWorldConfig
+
+    req = EnvRequest(
+        env_id="reach-v3",
+        num_envs=4,
+        control_mode="",
+        render_mode="rgb_array",
+        seed=3,
+        observation=ObservationConfig(frame_stack=3),
+        num_eval_envs=2,
+        backend_config=MetaWorldConfig(),
+    )
+    with pytest.raises(ObservationContractError, match="frame_stack"):
+        MetaWorldBackend.resolve_config(req, is_eval=False)
+
+
+def test_frame_stack_applies_image_frame_stack_wrapper(monkeypatch):
+    _install_fake_metaworld(monkeypatch)
+    _FakeRenderer.instances.clear()
+    monkeypatch.setattr("rl_garden.envs.metaworld.env.MujocoRenderer", _FakeRenderer)
+    monkeypatch.setattr("gymnasium.make", lambda env_id, **kwargs: _FakeStateEnvForVision())
+
+    cfg = MetaWorldEnvConfig(
+        env_id="reach-v3",
+        num_envs=1,
+        seed=0,
+        rgb_cameras=("corner2",),
+        image_size=(4, 4),
+        frame_stack=3,
+    )
+    env = make_metaworld_env(cfg)
+    obs, _ = env.reset()
+    assert obs["rgb_corner2"].shape == (1, 3, 4, 4, 3)
+    env.close()
 
 
 def test_backend_resolve_config_translation():
@@ -296,18 +394,14 @@ def test_backend_resolve_config_translation():
     req = EnvRequest(
         env_id="reach-v3",
         num_envs=4,
-        obs_mode="rgb",
         control_mode="",
         render_mode="rgb_array",
         seed=3,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(rgb=("corner3",), image_size=(64, 64)),
         num_eval_envs=2,
         reward_scale=2.0,
         reward_bias=0.5,
-        backend_config=MetaWorldConfig(
-            device="cpu", vectorization="async", use_one_hot=False, camera="corner3", image_size=(64, 64)
-        ),
+        backend_config=MetaWorldConfig(device="cpu", vectorization="async", use_one_hot=False),
     )
     cfg = MetaWorldBackend.resolve_config(req, is_eval=False)
     assert cfg.env_id == "reach-v3"
@@ -316,8 +410,9 @@ def test_backend_resolve_config_translation():
     assert cfg.use_one_hot is False
     assert cfg.reward_scale == 2.0
     assert cfg.reward_bias == 0.5
-    assert cfg.obs_mode == "rgb"
-    assert cfg.camera == "corner3"
+    assert cfg.rgb_cameras == ("corner3",)
+    assert cfg.depth_cameras == ()
+    assert cfg.state is True
     assert cfg.image_size == (64, 64)
 
 
@@ -334,12 +429,10 @@ def test_backend_make_train_env_uses_num_envs(monkeypatch):
     req = EnvRequest(
         env_id="reach-v3",
         num_envs=4,
-        obs_mode="state",
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(),
         num_eval_envs=2,
         backend_config=None,
     )
@@ -361,12 +454,10 @@ def test_backend_make_eval_env_uses_num_eval_envs(monkeypatch):
     req = EnvRequest(
         env_id="reach-v3",
         num_envs=4,
-        obs_mode="state",
         control_mode="",
         render_mode="rgb_array",
         seed=1,
-        camera_width=None,
-        camera_height=None,
+        observation=ObservationConfig(),
         num_eval_envs=2,
         backend_config=None,
     )

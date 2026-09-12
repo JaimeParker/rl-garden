@@ -22,7 +22,6 @@ env_backend: ogbench
 dataset_backend: ogbench
 env_id: antmaze-large-singletask-v0
 offline_dataset: antmaze-large-navigate-singletask-v0
-obs_mode: state
 
 # floq's own train script offline budget for this task family; not
 # OfflineDatasetArgs's own 100_000 default.

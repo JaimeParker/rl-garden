@@ -23,11 +23,11 @@ from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.common.optim import make_optimizer
 from rl_garden.networks import Activation, KernelInit, RewardMaskRelabeler, RNDBonus
+from rl_garden.observations import ObservationSchema, normalize_observation_space
 
 OfflineRelabelType = Literal["gt", "pred", "min"]
 
@@ -57,9 +57,12 @@ class ExPLORe(RLPD):
         rnd_kernel_init: Optional[KernelInit] = None,
         **rlpd_kwargs: Any,
     ) -> None:
-        if isinstance(env.single_observation_space, spaces.Dict):
+        schema = ObservationSchema.from_space(
+            normalize_observation_space(env.single_observation_space)
+        )
+        if schema.has_images:
             raise NotImplementedError(
-                "ExPLORe currently supports flat (Box) observation spaces only -- "
+                "ExPLORe currently supports state-only observation spaces only -- "
                 "the pixel variant additionally needs ICVF representation "
                 "pretraining, which this port does not implement."
             )
@@ -83,7 +86,9 @@ class ExPLORe(RLPD):
 
     def _setup_model(self) -> None:
         super()._setup_model()
-        obs_dim = int(np.prod(self.env.single_observation_space.shape))
+        # State-only by construction (__init__ rejects images above), so the
+        # Dict contract's single "state" key is always present.
+        obs_dim = int(np.prod(self.env.single_observation_space["state"].shape))
         action_dim = int(np.prod(self.env.single_action_space.shape))
         if self.offline_relabel_type != "gt":
             self._relabeler = RewardMaskRelabeler(
@@ -126,14 +131,14 @@ class ExPLORe(RLPD):
             )
             rewards = torch.full_like(sample.rewards, self._offline_min_reward.item())
         else:  # "pred"
-            rewards = self._relabeler.predict_reward(sample.obs, sample.actions)
-        mask = self._relabeler.predict_mask(sample.obs, sample.actions)
+            rewards = self._relabeler.predict_reward(sample.obs["state"], sample.actions)
+        mask = self._relabeler.predict_mask(sample.obs["state"], sample.actions)
         return dataclasses.replace(sample, rewards=rewards, dones=1.0 - mask)
 
     def _maybe_add_rnd_bonus(self, sample, enabled: bool):
         if self._rnd is None or not enabled:
             return sample
-        bonus = self.rnd_coeff * self._rnd.bonus(sample.obs, sample.actions)
+        bonus = self.rnd_coeff * self._rnd.bonus(sample.obs["state"], sample.actions)
         return dataclasses.replace(sample, rewards=sample.rewards + bonus)
 
     def _update_relabeler_and_rnd(self, online_sample) -> None:
@@ -144,12 +149,14 @@ class ExPLORe(RLPD):
         for j in range(steps):
             mb = self._slice_batch(online_sample, j * minibatch_size, minibatch_size)
             if self._relabeler is not None:
-                loss, _ = self._relabeler.loss(mb.obs, mb.actions, mb.rewards, 1.0 - mb.dones)
+                loss, _ = self._relabeler.loss(
+                    mb.obs["state"], mb.actions, mb.rewards, 1.0 - mb.dones
+                )
                 self._relabeler_optimizer.zero_grad()
                 loss.backward()
                 self._relabeler_optimizer.step()
             if self._rnd is not None:
-                rnd_loss = self._rnd.loss(mb.obs, mb.actions)
+                rnd_loss = self._rnd.loss(mb.obs["state"], mb.actions)
                 self._rnd_optimizer.zero_grad()
                 rnd_loss.backward()
                 self._rnd_optimizer.step()

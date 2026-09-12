@@ -11,7 +11,9 @@ from gymnasium import spaces
 from rl_garden.buffers._dataset_common import (
     _add_flat_transitions,
     _concat,
+    _finalize_dataset_obs_space,
     _load_success,
+    _match_obs_to_buffer,
     _mc_returns,
     _slice,
     _to_tensor,
@@ -48,14 +50,17 @@ def _require_minari():
     return minari
 
 
-def infer_specs_from_minari(dataset_id: str) -> tuple[spaces.Space, spaces.Space]:
-    """Return the observation/action spaces stored on a Minari dataset."""
+def infer_specs_from_minari(dataset_id: str) -> tuple[spaces.Dict, spaces.Space]:
+    """Return the strict-contract Dict observation space (plus action space)
+    for a Minari dataset. A flat Box space becomes
+    ``Dict({"state": Box(float32)})``; an already-Dict space (goal-conditioned
+    Minari datasets, etc.) must already use contract key names -- this loader
+    does no renaming of its own and raises ``ObservationContractError``
+    otherwise."""
     minari = _require_minari()
     dataset = minari.load_dataset(dataset_id, download=True)
-    return (
-        canonicalize_floating_observation_space(dataset.observation_space),
-        dataset.action_space,
-    )
+    space = canonicalize_floating_observation_space(dataset.observation_space)
+    return _finalize_dataset_obs_space(space), dataset.action_space
 
 
 def load_minari_dataset_to_replay_buffer(
@@ -160,6 +165,7 @@ def load_minari_dataset_to_replay_buffer(
 
     obs_all = _concat(obs_parts)
     next_obs_all = _concat(next_obs_parts)
+    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)

@@ -10,6 +10,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import OfflineEnvSpec, UniO4
+from rl_garden.observations import ObservationContractError
 from rl_garden.algorithms.bppo import BPPOCriticMixin
 from rl_garden.algorithms.offline import OfflineRLAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
@@ -27,6 +28,19 @@ def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
 def _dict_env(num_envs: int = 1) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict({"state": spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)}),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _dict_image_env(num_envs: int = 1) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
+                "rgb_cam": spaces.Box(0, 255, shape=(8, 8, 3), dtype=np.uint8),
+            }
+        ),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=num_envs,
     )
@@ -89,9 +103,15 @@ def _make_agent(**kwargs) -> UniO4:
 
 def _fill(agent: UniO4, steps: int = 40, episode_len: int = 20) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- a bare Box env
+    # (as _state_env() constructs) is boundary-normalized by
+    # BaseAlgorithm.__init__ (rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    obs_shape = env.single_observation_space["state"].shape
     for t in range(steps):
-        obs = torch.rand(env.num_envs, *env.single_observation_space.shape) * 2 - 1
-        next_obs = torch.rand_like(obs) * 2 - 1
+        state = torch.rand(env.num_envs, *obs_shape) * 2 - 1
+        next_state = torch.rand_like(state) * 2 - 1
+        obs = {"state": state}
+        next_obs = {"state": next_state}
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.rand(env.num_envs)
         dones = torch.zeros(env.num_envs, dtype=torch.bool)
@@ -103,9 +123,20 @@ def _fill(agent: UniO4, steps: int = 40, episode_len: int = 20) -> None:
         )
 
 
-def test_rejects_dict_observation_space():
-    with pytest.raises(TypeError):
-        UniO4(env=_dict_env(), buffer_device="cpu", device="cpu")
+def test_accepts_state_only_dict_observation_space():
+    # UniO4's replay buffer/critic are Dict-based now -- a pure-state Dict
+    # env (no images) is exactly what a bare Box env normalizes to at the
+    # boundary, so it must construct identically to _state_env().
+    agent = UniO4(env=_dict_env(), buffer_device="cpu", device="cpu")
+    assert agent.observation_encoders.schema.keys == ("state",)
+
+
+def test_rejects_image_observation_space():
+    # UniO4 is state-only by construction (BPPOCriticMixin._setup_observation_
+    # encoders's has_images guard): value_net/q_net/BC actors all assume a
+    # flat feature vector, with no Dict/image handling anywhere.
+    with pytest.raises(ObservationContractError, match="images"):
+        UniO4(env=_dict_image_env(), buffer_device="cpu", device="cpu")
 
 
 def test_registry_discovers_unio4():
@@ -284,7 +315,9 @@ def test_each_member_ppo_clip_loss_matches_hand_computation():
     with torch.no_grad():
         old_features = agent.old_actors[0].extract_features(data.obs)
         action, old_log_prob = agent.old_actors[0].actor.action_log_prob(old_features)
-        advantage = (agent.q_net(data.obs, action) - agent.value_net(data.obs)).squeeze(-1)
+        advantage = (
+            agent.q_net(data.obs["state"], action) - agent.value_net(data.obs["state"])
+        ).squeeze(-1)
         advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         advantage = agent._weighted_advantage(advantage)
     new_features = agent.actors[0].extract_features(data.obs, stop_gradient=False)
@@ -303,7 +336,7 @@ def test_each_member_ppo_clip_loss_matches_hand_computation():
 
 def test_mixture_policy_picks_higher_self_confidence_member():
     agent = _make_agent(num_policies=2)
-    obs = torch.rand(3, 4) * 2 - 1
+    obs = {"state": torch.rand(3, 4) * 2 - 1}
     action = agent.policy.predict(obs, deterministic=True)
     assert action.shape == (3, 2)
 
@@ -319,7 +352,7 @@ def test_mixture_policy_picks_higher_self_confidence_member():
         expected = torch.stack(
             [actor.actor.deterministic_action(actor.extract_features(obs)) for actor in agent.actors],
             dim=0,
-        )[winner, torch.arange(obs.shape[0])]
+        )[winner, torch.arange(obs["state"].shape[0])]
     assert torch.allclose(action, expected)
 
 

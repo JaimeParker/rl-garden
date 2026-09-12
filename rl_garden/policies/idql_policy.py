@@ -67,9 +67,6 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "IDQLPolicy requires a Box action space."
-        assert isinstance(
-            observation_space, (spaces.Box, spaces.Dict)
-        ), "IDQLPolicy supports Box or Dict observation spaces only."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
         self.observation_space = observation_space

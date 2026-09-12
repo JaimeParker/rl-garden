@@ -1,9 +1,11 @@
 """TD3-BC policy: normalized obs + deterministic tanh actor + twin-Q critic.
 
-Box observations only (no Dict/image support; matches CORL's D4RL MuJoCo
-scope). ``extract_features`` normalizes obs before the shared
-``FlattenExtractor`` so training, eval, and checkpointing all see the same
-normalized inputs (see ``rl_garden.common.obs_normalization``).
+``extract_features`` normalizes the RAW ``"state"`` entry (CORL's own
+``normalize_states`` semantics) before it reaches the features extractor,
+not the extractor's output -- meaningful for a Dict+image schema too (only
+the ``"state"`` key is normalized; any ``rgb_<cam>``/``depth_<cam>`` key
+reaches the extractor untouched). Requires ``"state"`` in the observation
+schema (see ``rl_garden.common.obs_normalization``).
 """
 from __future__ import annotations
 
@@ -17,6 +19,8 @@ from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import DeterministicTanhActor, EnsembleQCritic, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObservationSchema
+from rl_garden.observations.schema import ObservationContractError
 from rl_garden.policies.base import BasePolicy
 
 
@@ -25,7 +29,7 @@ class TD3BCPolicy(ObsNormalizingMixin, BasePolicy):
 
     def __init__(
         self,
-        observation_space: spaces.Box,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         features_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (256, 256),
@@ -41,17 +45,20 @@ class TD3BCPolicy(ObsNormalizingMixin, BasePolicy):
         backbone_type: BackboneType = "mlp",
     ) -> None:
         super().__init__()
-        assert isinstance(observation_space, spaces.Box), (
-            "TD3BCPolicy requires a Box observation space."
-        )
         assert isinstance(action_space, spaces.Box), "TD3-BC requires a Box action space."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
+        if not ObservationSchema.from_space(observation_space).has_state:
+            raise ObservationContractError(
+                "TD3BCPolicy requires a 'state' key in the observation space "
+                "-- CORL's normalize_states semantics normalize the raw "
+                "state entry, not the post-encoder features."
+            )
 
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_extractor = features_extractor
-        self._register_obs_normalizer(int(observation_space.shape[0]))
+        self._register_obs_normalizer(int(observation_space.spaces["state"].shape[0]))
 
         fd = features_extractor.features_dim
         net_arch = list(net_arch)
@@ -111,8 +118,9 @@ class TD3BCPolicy(ObsNormalizingMixin, BasePolicy):
             p.requires_grad_(False)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        obs = self._normalize_obs(obs)
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        normalized_obs = dict(obs)
+        normalized_obs["state"] = self._normalize_obs(obs["state"])
+        return self._extract_features(normalized_obs, stop_gradient=stop_gradient)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         del deterministic  # TD3-BC inference is always deterministic.

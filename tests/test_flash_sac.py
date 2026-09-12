@@ -15,10 +15,9 @@ from rl_garden.algorithms.flash_sac import (
     _sample_integer_from_cdf,
     _select_min_q_log_probs,
 )
-from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.common.distributions import safe_tanh_log_det_jacobian
-from rl_garden.common.types import NStepReplayBufferSample
 from rl_garden.networks.flash_sac_layers import UnitLinear
+from rl_garden.observations import ObservationContractError
 from rl_garden.policies.flash_sac_policy import FlashSACPolicy
 
 
@@ -111,7 +110,39 @@ def agent():
     )
 
 
+def test_flash_sac_rejects_dict_observation_space_with_images():
+    env = _FakeEnv()
+    env.single_observation_space = spaces.Dict(
+        {
+            "state": spaces.Box(-1, 1, (OBS_DIM,), np.float32),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+        }
+    )
+    with pytest.raises(ObservationContractError):
+        FlashSAC(
+            env=env,
+            buffer_size=400,
+            buffer_device="cpu",
+            learning_starts=0,
+            batch_size=8,
+            actor_hidden_dim=32,
+            actor_num_blocks=1,
+            critic_hidden_dim=64,
+            critic_num_blocks=1,
+            num_bins=11,
+            min_v=-2.0,
+            max_v=2.0,
+            device="cpu",
+            std_log=False,
+            log_freq=0,
+            eval_freq=0,
+            save_final_checkpoint=False,
+        )
+
+
 def _fill_buffer(agent: FlashSAC, n_transitions: int = 50) -> None:
+    # agent.replay_buffer is Dict-based now (a bare Box env is
+    # boundary-normalized to Dict({"state": Box}) by BaseAlgorithm.__init__).
     obs = torch.randn(NUM_ENVS, OBS_DIM)
     for i in range(n_transitions):
         next_obs = torch.randn(NUM_ENVS, OBS_DIM)
@@ -121,7 +152,9 @@ def _fill_buffer(agent: FlashSAC, n_transitions: int = 50) -> None:
         ep_end = torch.zeros(NUM_ENVS, dtype=torch.bool)
         if i % 10 == 9:
             ep_end[:] = True
-        agent.replay_buffer.add(obs, next_obs, actions, rewards, done, ep_end)
+        agent.replay_buffer.add(
+            {"state": obs}, {"state": next_obs}, actions, rewards, done, ep_end
+        )
         obs = next_obs
 
 
@@ -186,71 +219,11 @@ def test_policy_normalize_weights_called(policy):
     assert len(called) == 1, "normalize_parameters was not called"
 
 
-# ---------------------------------------------------------------------------
-# NStepTensorReplayBuffer
-# ---------------------------------------------------------------------------
-
-
-def test_nstep_tensor_buffer_sample(obs_space, act_space):
-    buf = NStepTensorReplayBuffer(
-        observation_space=obs_space,
-        action_space=act_space,
-        num_envs=NUM_ENVS,
-        buffer_size=200,
-        nstep=3,
-        gamma=0.99,
-        storage_device="cpu",
-        sample_device="cpu",
-    )
-    # Fill
-    for ep in range(5):
-        for step in range(20):
-            obs = torch.randn(NUM_ENVS, OBS_DIM)
-            next_obs = torch.randn(NUM_ENVS, OBS_DIM)
-            action = torch.randn(NUM_ENVS, ACT_DIM)
-            reward = torch.randn(NUM_ENVS)
-            done = torch.zeros(NUM_ENVS, dtype=torch.bool)
-            ep_end = torch.zeros(NUM_ENVS, dtype=torch.bool)
-            if step == 19:
-                ep_end[:] = True
-            buf.add(obs, next_obs, action, reward, done, ep_end)
-
-    sample = buf.sample(16)
-    assert isinstance(sample, NStepReplayBufferSample)
-    assert sample.obs.shape == (16, OBS_DIM)
-    assert sample.discounts.shape == (16,)
-    # Discounts should be gamma^n or gamma^k for k < n
-    assert sample.discounts.min() >= 0.0
-    assert sample.discounts.max() <= 0.99 + 1e-5
-
-
-def test_nstep_discount_is_zero_when_terminal(obs_space, act_space):
-    buf = NStepTensorReplayBuffer(
-        observation_space=obs_space,
-        action_space=act_space,
-        num_envs=1,
-        buffer_size=200,
-        nstep=3,
-        gamma=0.99,
-        storage_device="cpu",
-        sample_device="cpu",
-    )
-    # Insert: terminal at step 0
-    obs = torch.randn(1, OBS_DIM)
-    next_obs = torch.randn(1, OBS_DIM)
-    buf.add(obs, next_obs, torch.randn(1, ACT_DIM), torch.ones(1), torch.ones(1, dtype=torch.bool), torch.ones(1, dtype=torch.bool))
-    # More non-terminal steps
-    for _ in range(20):
-        buf.add(obs, next_obs, torch.randn(1, ACT_DIM), torch.ones(1), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool))
-    # Sample until we get the terminal — discount must be 0
-    found_zero = False
-    for _ in range(200):
-        s = buf.sample(1)
-        if s.dones.item():
-            assert s.discounts.item() == 0.0
-            found_zero = True
-            break
-    assert found_zero, "Did not sample a terminal transition after 200 tries"
+# N-step replay buffer semantics (terminal-vs-truncation discount handling,
+# ring-wrap rejection, etc.) are covered by NStepReplayBuffer's own tests
+# in test_replay_buffer.py -- the flat-Box n-step buffer this file used to
+# test here is gone (buffers are Dict-observation only, see
+# ~/.claude/plans/observation-redesign.md).
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +329,9 @@ def test_target_network_updated_after_train(agent):
 
 def test_zeta_noise_repeats_for_same_env(agent):
     """Same environment should produce identical actions within a noise repeat window."""
-    obs = torch.randn(NUM_ENVS, OBS_DIM)
+    # _rollout_action receives whatever the (boundary-normalized) env
+    # produces -- always Dict({"state": Box}) now.
+    obs = {"state": torch.randn(NUM_ENVS, OBS_DIM)}
 
     # First call: force reinit by setting count=0
     agent._zeta_count[:] = 0

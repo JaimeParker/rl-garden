@@ -21,7 +21,8 @@ building blocks unmodified:
 - The "fold cond_steps into batch, encode once, reshape back" trick for
   running a single-frame ``CombinedExtractor`` over a history window is
   ``DiffusionPolicy``'s Dict-obs ``_cond_from_obs_history`` trick, reused here for the
-  vision-only conditioning branch (``CombinedExtractor(use_proprio=False)``).
+  vision-only conditioning branch (``features_extractor`` built from an
+  image-only ``obs_groups``, no ``"state"`` key -- see ``A2ABC._setup_model``).
 
 New pieces: ``CNNSequenceEncoder`` (state-history and action-chunk encoding,
 two disjoint-parameter instances) and ``ActionChunkDecoder``
@@ -76,7 +77,6 @@ class A2APolicy(BasePolicy):
         *,
         horizon_steps: int = 8,
         cond_steps: int = 8,
-        state_key: str = "state",
         latent_dim: int = 512,
         cnn_num_layers: int = 3,
         cnn_hidden_channels: int = 512,
@@ -98,19 +98,12 @@ class A2APolicy(BasePolicy):
         contrastive_temperature: float = 0.1,
     ) -> None:
         super().__init__()
-        assert isinstance(action_space, spaces.Box), "A2APolicy requires a Box action space."
-        assert isinstance(observation_space, spaces.Dict), (
-            "A2APolicy requires a Dict observation space."
-        )
-        if state_key not in observation_space.spaces:
-            raise ValueError(
-                f"A2APolicy requires state_key={state_key!r} in the observation "
-                "space -- the state-history window is the flow's source (x_0), "
-                "not optional."
-            )
+        # A2ABC._setup_model already requires schema.has_state before ever
+        # constructing this policy (rl_garden/algorithms/a2a_bc.py) -- no
+        # duplicate check here.
         self.observation_space = observation_space
         self.action_space = action_space
-        self.state_key = state_key
+        self.state_key = "state"
         self.horizon_steps = horizon_steps
         self.cond_steps = cond_steps
         self.latent_dim = latent_dim
@@ -122,7 +115,7 @@ class A2APolicy(BasePolicy):
         self.flow_contrastive_weight = flow_contrastive_weight
         self.contrastive_temperature = contrastive_temperature
 
-        self.state_dim = int(np.prod(observation_space[state_key].shape))
+        self.state_dim = int(np.prod(observation_space[self.state_key].shape))
         self.action_dim = int(np.prod(action_space.shape))
 
         self.features_extractor = features_extractor
@@ -175,9 +168,10 @@ class A2APolicy(BasePolicy):
 
     def _encode_obs_latents(self, obs_history: Obs, stop_gradient: bool) -> torch.Tensor:
         """``obs_history``: Dict, each leaf ``(B, cond_steps, *leaf_shape)``.
-        Returns ``(B, latent_dim)``. ``features_extractor`` is a vision-only
-        (``use_proprio=False``) extractor, so ``state_key`` in ``obs_history``
-        is dropped automatically -- no stripping needed here."""
+        Returns ``(B, latent_dim)``. ``features_extractor`` is built from a
+        vision-only schema (no ``"state"`` key), so ``"state"`` in
+        ``obs_history`` is dropped automatically -- no stripping needed
+        here."""
         batch = obs_history[self.state_key].shape[0]
         flat_obs = flatten_leading_dims(obs_history)
         flat_features = self.features_extractor.extract(flat_obs, stop_gradient=stop_gradient)

@@ -14,9 +14,7 @@ from rl_garden.networks.discriminator import GAILDiscriminator
 
 class _FakeBoxEnv(gym.vector.VectorEnv):
     """Mirrors tests/test_ppo_normalize_obs.py's _FakeBoxEnv: constant
-    reward=1 so substitution by the discriminator reward is easy to detect.
-    Subclasses gym.vector.VectorEnv (not plain duck-typing) because
-    GAILRewardWrapper is a gym.vector.VectorWrapper, which asserts this."""
+    reward=1 so substitution by the discriminator reward is easy to detect."""
 
     def __init__(self, num_envs: int = 3, episode_len: int = 5, obs_dim: int = 5) -> None:
         self.num_envs = num_envs
@@ -51,15 +49,15 @@ def _fake_demo_loader(buffer, env_id):
     D4RL download in tests."""
     del env_id
     n = 64
-    obs_shape = buffer.obs.shape[2:]
+    obs_shape = buffer.obs["state"].shape[2:]
     act_shape = buffer.actions.shape[2:]
     for _ in range(n):
-        obs = torch.randn(1, *obs_shape)
-        next_obs = torch.randn(1, *obs_shape)
+        state = torch.randn(1, *obs_shape)
+        next_state = torch.randn(1, *obs_shape)
         action = torch.rand(1, *act_shape) * 2 - 1
         reward = torch.zeros(1)
         done = torch.zeros(1)
-        buffer.add(obs, next_obs, action, reward, done)
+        buffer.add({"state": state}, {"state": next_state}, action, reward, done)
 
 
 def _gail_kwargs() -> dict[str, object]:
@@ -143,11 +141,12 @@ def test_discriminator_reward_matches_log_sigmoid_formula():
         _obs_to_policy_device = GAIL._obs_to_policy_device
 
     dummy = _DummyGAIL()
-    obs = torch.randn(4, env.obs_dim)
+    state = torch.randn(4, env.obs_dim)
+    obs = {"state": state}
     action = torch.randn(4, 2)
     reward = dummy._discriminator_reward(obs, action)
     with torch.no_grad():
-        logits = dummy.discriminator(obs, action)
+        logits = dummy.discriminator(state, action)
     expected = -F.logsigmoid(-logits)
     assert torch.allclose(reward, expected)
 
@@ -176,7 +175,7 @@ def test_discriminator_reward_handles_cpu_env_with_gpu_discriminator():
         _obs_to_policy_device = GAIL._obs_to_policy_device
 
     dummy = _DummyGAIL()
-    obs = torch.randn(4, env.obs_dim)  # CPU
+    obs = {"state": torch.randn(4, env.obs_dim)}  # CPU
     action = torch.randn(4, 2)  # CPU
     reward = dummy._discriminator_reward(obs, action)
     assert torch.isfinite(reward).all()
@@ -184,7 +183,7 @@ def test_discriminator_reward_handles_cpu_env_with_gpu_discriminator():
 
 def test_train_discriminator_step_labels_and_loss_decreases(monkeypatch):
     agent = _build_gail(monkeypatch)
-    obs_dim = agent.env.single_observation_space.shape[0]
+    obs_dim = agent.env.single_observation_space["state"].shape[0]
     gen_obs = torch.randn(8, obs_dim)
     gen_actions = torch.rand(8, 2) * 2 - 1
     expert_obs = torch.randn(8, obs_dim) + 5.0

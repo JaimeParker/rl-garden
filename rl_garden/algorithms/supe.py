@@ -37,7 +37,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms.explore import ExPLORe
-from rl_garden.buffers._dataset_common import _add_flat_transitions
+from rl_garden.buffers._dataset_common import _add_flat_transitions, _match_obs_to_buffer
 from rl_garden.buffers.windowed_trajectory_dataset import WindowedTrajectoryDataset
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.networks.opal_vae import OPALVAE
@@ -91,7 +91,9 @@ class SUPE(ExPLORe):
     ) -> None:
         self.opal_checkpoint = opal_checkpoint
         super().__init__(env, eval_env, **explore_kwargs)
-        obs_dim = int(np.prod(self.env.single_observation_space.shape))
+        # State-only by construction (ExPLORe.__init__ rejects images), so
+        # the Dict contract's single "state" key is always present.
+        obs_dim = int(np.prod(self.env.single_observation_space["state"].shape))
         self.opal_vae = load_opal_vae(
             opal_checkpoint, obs_dim, self.env.raw_action_space, device=self.device,
         )
@@ -139,10 +141,13 @@ class SUPE(ExPLORe):
                 )
                 rewards = seq_rewards.sum(dim=-1)
                 dones = (batch.done_window.sum(dim=-1) > 0).float()
+                window_obs, next_obs = _match_obs_to_buffer(
+                    self.offline_replay_buffer, batch.obs_window[:, 0], batch.next_obs
+                )
                 loaded += _add_flat_transitions(
                     self.offline_replay_buffer,
-                    batch.obs_window[:, 0],
-                    batch.next_obs,
+                    window_obs,
+                    next_obs,
                     skills,
                     rewards,
                     dones,

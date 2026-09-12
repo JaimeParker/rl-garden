@@ -1,8 +1,9 @@
 """DiffusionCMDistillOnline run function: DPPO's online PPO fine-tuning
 fused with a per-iteration LCM one-step distillation step.
 
-Box observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-observations (inherited from DPPO's own vision support -- see
+State-only observations by default; pass ``--obs.rgb <camera>`` for
+CNN-based Dict/RGBD observations (inherited from DPPO's own vision support
+-- ``DiffusionCMDistillOnline`` subclasses ``DPPO`` directly, see
 ``rl_garden/algorithms/dppo.py``'s module docstring and
 ``rl_garden/algorithms/diffusion_cm_distill.py``, whose ``_distill_step``
 reuses ``DPPOPolicy._cond`` unmodified). Same action-chunking convention as
@@ -12,37 +13,22 @@ reuses ``DPPOPolicy._cond`` unmodified). Same action-chunking convention as
 from __future__ import annotations
 
 
-def _diffusion_cm_distill_env_request(args, run_name):
-    from rl_garden.common.cli_args import resolve_eval_record_dir
-    from rl_garden.envs.backend_registry import EnvRequest, should_create_eval_env
+def _diffusion_cm_distill_observation_kwargs(args) -> dict:
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
 
-    is_visual = args.obs_mode != "state"
-    eval_record_dir = resolve_eval_record_dir(args, run_name)
-    return EnvRequest(
-        env_id=args.env_id,
-        num_envs=args.num_envs,
-        obs_mode=args.obs_mode,
-        control_mode=args.control_mode,
-        render_mode=args.render_mode,
-        seed=args.seed,
-        camera_width=args.camera_width if is_visual else None,
-        camera_height=args.camera_height if is_visual else None,
-        include_state=args.include_state if is_visual else True,
-        per_camera_rgbd=args.per_camera_rgbd if is_visual else False,
-        frame_stack=args.frame_stack,
-        num_eval_envs=args.num_eval_envs,
-        create_eval_env=should_create_eval_env(args),
-        eval_record_dir=eval_record_dir,
-        capture_video=args.capture_video,
-        video_fps=args.video_fps,
-        num_eval_steps=args.num_eval_steps,
-        backend_config=args.resolve_backend_config(),
-    )
+    kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+        "image_augmentation_seed": args.seed + 1_000_003,
+    }
+    if args.encoder_sharing is not None:
+        kwargs["encoder_sharing"] = args.encoder_sharing
+    return kwargs
 
 
 def build_diffusion_cm_distill(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import DiffusionCMDistillOnline
-    from rl_garden.common.cli_args import image_encoder_factory_from_args
     from rl_garden.envs.wrappers import ActionChunkWrapper
     from rl_garden.training.inspection import construct_agent
 
@@ -50,12 +36,7 @@ def build_diffusion_cm_distill(args, env, eval_env, logger, checkpoint_dir):
     if eval_env is not None:
         eval_env = ActionChunkWrapper(eval_env, act_steps=args.act_steps)
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-        )
+    image_kwargs = _diffusion_cm_distill_observation_kwargs(args)
 
     agent = construct_agent(
         DiffusionCMDistillOnline,
@@ -126,14 +107,14 @@ def build_diffusion_cm_distill(args, env, eval_env, logger, checkpoint_dir):
 
 
 def run_diffusion_cm_distill(args: "DiffusionCMDistillOnlineArgs") -> None:
+    from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online._runner import run_online
 
-    is_visual = args.obs_mode != "state"
-    obs_tag = f"rgbd_{args.encoder}" if is_visual else "state"
+    obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
         obs_tag=obs_tag,
-        make_env_request=_diffusion_cm_distill_env_request,
+        make_env_request=make_env_request,
         build_agent=build_diffusion_cm_distill,
     )
 
@@ -144,22 +125,24 @@ def run_diffusion_cm_distill(args: "DiffusionCMDistillOnlineArgs") -> None:
 
 from dataclasses import dataclass
 
-from rl_garden.common.cli_args import VisionArgs
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online._args import DiffusionCMDistillOnlineTrainingArgs
 from rl_garden.training.online._registry import registry
 
 
 @dataclass
-class DiffusionCMDistillOnlineArgs(DiffusionCMDistillOnlineTrainingArgs, VisionArgs, EnvBackendArgs):
+class DiffusionCMDistillOnlineArgs(
+    DiffusionCMDistillOnlineTrainingArgs, ObservationArgs, EnvBackendArgs
+):
     """DiffusionCMDistillOnline: DPPO's online PPO fine-tuning fused with a
     per-iteration diffusion-to-consistency-model distillation step. Requires
     ``--bc_checkpoint`` (a ``DiffusionBC`` checkpoint -- state-only obs, so a
     checkpoint trained against Box obs will not load into a Dict-obs run).
-    Box observations by default; pass ``--obs_mode rgb`` for CNN-based
-    Dict/RGBD observations."""
-
-    obs_mode: str = "state"
+    State-only observations by default; pass ``--obs.rgb <camera>`` for
+    CNN-based Dict/RGBD observations."""
 
 
-registry.register("diffusion_cm_distill_online", DiffusionCMDistillOnlineArgs, run_diffusion_cm_distill)
+registry.register(
+    "diffusion_cm_distill_online", DiffusionCMDistillOnlineArgs, run_diffusion_cm_distill
+)

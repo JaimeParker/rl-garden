@@ -45,7 +45,6 @@ from __future__ import annotations
 from typing import Any, Literal, Optional, Sequence
 
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
@@ -55,8 +54,10 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.utils import polyak_update
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.spot_policy import SPOTPolicy
 
 
@@ -101,6 +102,9 @@ class SPOTCore(TD3BCCore):
         lambd_cool: bool = False,
         lambd_end: float = 0.2,
         expl_noise: float = 0.1,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
     ) -> None:
         # TD3BCCore._init_td3bc_params owns tau/lrs/net_arch/n_critics/layer
         # norms/etc.; its `alpha` field is unused here (SPOT's actor loss has
@@ -130,6 +134,9 @@ class SPOTCore(TD3BCCore):
             critic_dropout_rate=critic_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
         )
         if vae_iterations < 0:
             raise ValueError(f"vae_iterations must be >= 0, got {vae_iterations}.")
@@ -182,6 +189,9 @@ class SPOTCore(TD3BCCore):
 
     def _setup_model(self) -> None:
         # Cannot call super()._setup_model(): TD3BCCore hardcodes TD3BCPolicy.
+        self._resolve_observation_encoders(
+            self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
+        )
         features_extractor = self._build_features_extractor()
         self.policy = SPOTPolicy(
             observation_space=self.env.single_observation_space,
@@ -431,6 +441,9 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
         lambd_cool: bool = False,
         lambd_end: float = 0.2,
         expl_noise: float = 0.1,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -500,13 +513,10 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
             lambd_cool=lambd_cool,
             lambd_end=lambd_end,
             expl_noise=expl_noise,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"SPOT supports only Box observation spaces, got {type(obs_space)}"
-            )
 
         self._setup_model()
 
@@ -581,6 +591,9 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
         lambd_cool: bool = False,
         lambd_end: float = 0.2,
         expl_noise: float = 0.1,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         online_discount: float = 0.995,
         max_online_updates: int = 1_000_000,
         seed: int = 1,
@@ -596,7 +609,6 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
-        self._is_dict_obs = False  # SPOT is Box-only, no image support.
         self.online_discount = online_discount
         self.max_online_updates = max_online_updates
         self._spot_online_update_start: Optional[int] = None
@@ -660,6 +672,9 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
             lambd_cool=lambd_cool,
             lambd_end=lambd_end,
             expl_noise=expl_noise,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
         )
         self._setup_model()
         self._init_off2on_params(offline_sampling=offline_sampling)

@@ -3,7 +3,9 @@
 own loading logic (see test_{ogbench,rlbench,...}_dataset.py for those)."""
 from __future__ import annotations
 
+import numpy as np
 import pytest
+from gymnasium import spaces
 
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
@@ -12,6 +14,8 @@ from rl_garden.buffers.dataset_backend_registry import (
     load_dataset,
     register_dataset_backend,
 )
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 def _unique_name() -> str:
@@ -112,6 +116,51 @@ def test_load_dataset_dispatches_to_registered_backend(monkeypatch):
 def test_unknown_backend_name_raises_with_available_backends_listed():
     with pytest.raises(ValueError, match="Unknown dataset backend 'bogus'. Available:"):
         infer_dataset_specs(DatasetRequest(path="x"), backend_name="bogus")
+
+
+def test_infer_dataset_specs_accepts_matching_observation_config(monkeypatch):
+    name = _unique_name()
+
+    class _Fake(DatasetBackend):
+        @classmethod
+        def infer_specs(cls, req):
+            return spaces.Dict({"state": spaces.Box(-1.0, 1.0, (3,), dtype=np.float32)}), "action_space"
+
+        @classmethod
+        def load(cls, buffer, req):
+            return 0
+
+    from rl_garden.buffers import dataset_backend_registry
+
+    monkeypatch.setitem(dataset_backend_registry._REGISTRY, name, _Fake)
+
+    req = DatasetRequest(path="/some/path", observation=ObservationConfig(state=True))
+    obs_space, _ = infer_dataset_specs(req, backend_name=name)
+    assert set(obs_space.spaces) == {"state"}
+
+
+def test_infer_dataset_specs_rejects_key_set_mismatch_against_observation_config(monkeypatch):
+    name = _unique_name()
+
+    class _Fake(DatasetBackend):
+        @classmethod
+        def infer_specs(cls, req):
+            return spaces.Dict({"state": spaces.Box(-1.0, 1.0, (3,), dtype=np.float32)}), "action_space"
+
+        @classmethod
+        def load(cls, buffer, req):
+            return 0
+
+    from rl_garden.buffers import dataset_backend_registry
+
+    monkeypatch.setitem(dataset_backend_registry._REGISTRY, name, _Fake)
+
+    # Expects rgb_front + state, but the loader only produced state.
+    req = DatasetRequest(
+        path="/some/path", observation=ObservationConfig(state=True, rgb=("front",))
+    )
+    with pytest.raises(ObservationContractError, match="rgb_front"):
+        infer_dataset_specs(req, backend_name=name)
 
 
 def test_every_shipped_backend_is_registered():

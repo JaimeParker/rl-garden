@@ -6,6 +6,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import TD3
+from rl_garden.encoders.config import EncoderConfig
 
 
 class DummyDictVecEnv:
@@ -13,7 +14,7 @@ class DummyDictVecEnv:
         self.num_envs = 1
         self.single_observation_space = spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(32, 40, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(32, 40, 3), dtype=np.uint8),
                 "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
             }
         )
@@ -34,9 +35,9 @@ def _make_agent(**overrides) -> TD3:
         eval_freq=0,
         hidden_dim=16,
         feature_dim=8,
-        image_keys=("rgb",),
-        proprio_latent_dim=4,
-        image_augmentation="none",
+        encoder_config=EncoderConfig(
+            backbone="drqv2_conv", proprio_latent_dim=4, image_augmentation="none"
+        ),
     )
     kwargs.update(overrides)
     return TD3(**kwargs)
@@ -44,11 +45,11 @@ def _make_agent(**overrides) -> TD3:
 
 def _add_transition(agent: TD3, reward: float) -> None:
     obs = {
-        "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
         "state": torch.randn(1, 4),
     }
     next_obs = {
-        "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
         "state": torch.randn(1, 4),
     }
     agent.replay_buffer.add(

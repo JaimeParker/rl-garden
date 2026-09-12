@@ -8,11 +8,10 @@ from rl_garden.buffers.dataset_backend_registry import (
     infer_dataset_specs,
     load_dataset,
 )
-from rl_garden.buffers.dict_buffer import DictArray, DictReplayBuffer
+from rl_garden.buffers.replay_buffer import DictArray, ReplayBuffer
 from rl_garden.buffers.mc_buffer import (
-    MCDictReplayBuffer,
+    MCReplayBuffer,
     MCReplayBufferSample,
-    MCTensorReplayBuffer,
 )
 from rl_garden.buffers.metaworld_dataset import (
     infer_specs_from_metaworld,
@@ -28,12 +27,10 @@ from rl_garden.buffers.minari_dataset import (
     load_minari_dataset_to_replay_buffer,
 )
 from rl_garden.buffers.rollout_buffer import (
-    DictRolloutBuffer,
     RolloutBuffer,
     RolloutBufferSample,
 )
 from rl_garden.buffers.recurrent_rollout_buffer import (
-    RecurrentDictRolloutBuffer,
     RecurrentRolloutBuffer,
     RecurrentRolloutBufferSample,
 )
@@ -45,8 +42,6 @@ from rl_garden.buffers.transformer_replay_buffer import (
     TransformerReplayBuffer,
     TransformerReplayBufferSample,
 )
-from rl_garden.buffers.chunked_replay_buffer import ChunkedTensorReplayBuffer
-from rl_garden.buffers.nstep_tensor_buffer import NStepTensorReplayBuffer
 from rl_garden.buffers.ogbench_dataset import (
     infer_specs_from_ogbench,
     load_ogbench_dataset_to_replay_buffer,
@@ -61,31 +56,25 @@ from rl_garden.buffers.robomimic_dataset import (
     infer_specs_from_robomimic,
     load_robomimic_dataset_to_replay_buffer,
 )
-from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 
 __all__ = [
     "BaseReplayBuffer",
-    "ChunkedTensorReplayBuffer",
     "DatasetRequest",
     "DictArray",
-    "DictRolloutBuffer",
-    "DictReplayBuffer",
-    "MCDictReplayBuffer",
+    "RolloutBuffer",
+    "ReplayBuffer",
+    "MCReplayBuffer",
     "MCReplayBufferSample",
-    "MCTensorReplayBuffer",
-    "NStepTensorReplayBuffer",
     "PriorDataReplayMixin",
     "ReBRACReplayBuffer",
-    "RecurrentDictRolloutBuffer",
     "RecurrentReplayBuffer",
     "RecurrentReplayBufferSample",
     "RecurrentRolloutBuffer",
     "RecurrentRolloutBufferSample",
     "RolloutBuffer",
     "RolloutBufferSample",
-    "SarsaMCTensorReplayBuffer",
-    "TensorReplayBuffer",
+    "SarsaMCReplayBuffer",
     "TransformerReplayBuffer",
     "TransformerReplayBufferSample",
     "infer_box_specs_from_h5",

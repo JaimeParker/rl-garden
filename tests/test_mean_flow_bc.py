@@ -25,12 +25,12 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import MeanFlowBC, OfflineEnvSpec
-from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.policies.mean_flow_bc_policy import MeanFlowBCPolicy
 
 _TEST_IMAGE_SIZE = 16
-_test_image_encoder_factory = default_image_encoder_factory(
-    features_dim=16, plain_conv_pooling="gap"
+_test_encoder_config = EncoderConfig(
+    backbone="plain_conv", features_dim=16, plain_conv_pooling="gap"
 )
 
 _MEAN_FLOW_3RD_PARTY_DIR = os.path.join(
@@ -52,7 +52,7 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict(
             {
-                "rgb": spaces.Box(
+                "rgb_cam": spaces.Box(
                     low=0, high=255, shape=(_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=np.uint8
                 ),
                 "state": spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32),
@@ -78,10 +78,14 @@ def _make_agent(**kwargs) -> MeanFlowBC:
 
 
 def _fill(agent: MeanFlowBC, steps: int = 64) -> None:
+    # env.single_observation_space is Dict({"state": Box}) -- OfflineEnvSpec's
+    # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
     env = agent.env
+    state_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
@@ -94,11 +98,11 @@ def _fill_vision(agent: MeanFlowBC, steps: int = 64) -> None:
     img_shape = (_TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3)
     for _ in range(steps):
         obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, *obs_space["state"].shape),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, *img_shape), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, *obs_space["state"].shape),
         }
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
@@ -135,7 +139,7 @@ def test_loss_decreases_over_gradient_steps():
 
 def test_predict_respects_action_bounds():
     agent = _make_agent()
-    obs = torch.randn(8, 6)
+    obs = {"state": torch.randn(8, 6)}
     action = agent.policy.predict(obs)
     low = torch.as_tensor(agent.env.single_action_space.low)
     high = torch.as_tensor(agent.env.single_action_space.high)
@@ -147,7 +151,7 @@ def test_predict_respects_action_bounds():
 def test_predict_one_step_matches_default():
     # num_sample_steps=1 is the headline "true one-step" MeanFlow property.
     agent = _make_agent(num_sample_steps=1)
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action = agent.policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.isfinite(action).all()
@@ -156,16 +160,14 @@ def test_predict_one_step_matches_default():
 def test_vision_obs_construction_and_predict_shape():
     agent = _make_agent(
         env=_vision_env(),
-        image_encoder_factory=_test_image_encoder_factory,
-        image_keys=("rgb",),
-        state_key="state",
+        encoder_config=_test_encoder_config,
     )
     _fill_vision(agent, steps=16)
     metrics = agent.train(gradient_steps=1)
     assert np.isfinite(metrics["loss"])
 
     obs = {
-        "rgb": torch.randint(0, 256, (4, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (4, _TEST_IMAGE_SIZE, _TEST_IMAGE_SIZE, 3), dtype=torch.uint8),
         "state": torch.randn(4, 6),
     }
     action = agent.policy.predict(obs)
@@ -190,11 +192,26 @@ def test_checkpoint_round_trips_actor_mean_flow():
         assert torch.equal(p1, p2)
 
 
+def test_checkpoint_round_trips_vision_obs_with_encoder_config():
+    agent = _make_agent(env=_vision_env(), encoder_config=_test_encoder_config)
+    _fill_vision(agent, steps=32)
+    agent.train(gradient_steps=2)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "mean_flow_bc_vision.pt")
+        agent.save(path)
+
+        reloaded = _make_agent(env=_vision_env(), encoder_config=_test_encoder_config)
+        reloaded.load(path, load_replay_buffer=False)
+
+    for p1, p2 in zip(agent.policy.parameters(), reloaded.policy.parameters()):
+        assert torch.equal(p1, p2)
+
+
 def test_meanflow_and_i_meanflow_modes_both_finite_and_differ():
     torch.manual_seed(0)
     agent_mf = _make_agent(mode="meanflow")
     agent_imf = _make_agent(mode="i-meanflow")
-    obs = torch.randn(16, 6)
+    obs = {"state": torch.randn(16, 6)}
     actions = torch.rand(16, 3) * 2 - 1
 
     torch.manual_seed(1)

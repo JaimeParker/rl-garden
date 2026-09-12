@@ -15,8 +15,10 @@ import torch
 
 from rl_garden.algorithms.awac import _AWACRolloutTrainingShell
 from rl_garden.common.logger import Logger
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.observations import ObsGroups
 
 
 class Off2OnAWAC(_AWACRolloutTrainingShell):
@@ -62,6 +64,9 @@ class Off2OnAWAC(_AWACRolloutTrainingShell):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -110,6 +115,9 @@ class Off2OnAWAC(_AWACRolloutTrainingShell):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            image_augmentation_seed=image_augmentation_seed,
             seed=seed,
             device=device,
             logger=logger,

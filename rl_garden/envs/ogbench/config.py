@@ -11,6 +11,11 @@ class OGBenchEnvConfig:
     num_envs: int
     seed: int
     device: str = "cpu"
+    # From EnvRequest.observation. Exactly one of two shapes is valid,
+    # cross-checked against env_id at construction (see env.py):
+    # visual-* env id <=> pixel_camera set (single camera, e.g. "main").
+    pixel_camera: str | None = None
+    frame_stack: int = 1
     # Per-task kwargs forwarded verbatim to gym.make (rarely needed -- every
     # OGBench task variant, including obs modality, is already encoded in
     # env_id itself).

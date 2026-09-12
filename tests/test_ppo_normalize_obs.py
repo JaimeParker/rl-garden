@@ -15,7 +15,9 @@ from gymnasium.vector.utils import batch_space
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.common.obs_normalization import RunningObsNormalizer
 from rl_garden.encoders.combined import CombinedExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.observations import ObservationSchema
 
 
 class _FakeBoxEnv:
@@ -97,42 +99,40 @@ def test_flatten_extractor_normalizes_when_enabled():
     assert not torch.equal(out, torch.zeros(1, 4))  # shifted by the running mean
 
 
-def test_combined_extractor_normalizes_vector_and_state_but_not_images():
+def test_combined_extractor_normalizes_state_but_not_images():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (64, 64, 3), np.uint8),
             "state": spaces.Box(-np.inf, np.inf, (4,), np.float32),
-            "extra": spaces.Box(-np.inf, np.inf, (3,), np.float32),
         }
     )
-    extractor = CombinedExtractor(obs_space, image_keys=("rgb",), normalize_obs=True)
+    schema = ObservationSchema.from_space(obs_space)
+    extractor = CombinedExtractor(obs_space, schema, EncoderConfig(normalize_obs=True))
     extractor.train()
     assert "state" in extractor._obs_normalizers
-    assert "extra" in extractor._obs_normalizers
-    assert "rgb" not in extractor._obs_normalizers
+    assert "rgb_cam" not in extractor._obs_normalizers
 
     obs = {
-        "rgb": torch.randint(0, 256, (5, 64, 64, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (5, 64, 64, 3), dtype=torch.uint8),
         "state": torch.randn(5, 4) * 10 + 3,
-        "extra": torch.randn(5, 3) * 2 - 1,
     }
     extractor.update_normalizer(obs)
     assert extractor._obs_normalizers["state"].count.item() == 5
-    assert extractor._obs_normalizers["extra"].count.item() == 5
     extractor(obs)  # forward with normalization applied must not raise
 
 
 def test_combined_extractor_normalize_obs_off_is_unchanged():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(0, 255, (64, 64, 3), np.uint8),
+            "rgb_cam": spaces.Box(0, 255, (64, 64, 3), np.uint8),
             "state": spaces.Box(-np.inf, np.inf, (4,), np.float32),
         }
     )
-    extractor = CombinedExtractor(obs_space, image_keys=("rgb",), normalize_obs=False)
+    schema = ObservationSchema.from_space(obs_space)
+    extractor = CombinedExtractor(obs_space, schema, EncoderConfig(normalize_obs=False))
     assert len(extractor._obs_normalizers) == 0
     obs = {
-        "rgb": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),
         "state": torch.randn(2, 4),
     }
     extractor.update_normalizer(obs)  # no-op, must not raise
@@ -142,7 +142,7 @@ def test_ppo_normalize_obs_stats_move_during_rollout():
     env = _FakeBoxEnv()
     agent = PPO(
         env, num_steps=8, num_minibatches=2, update_epochs=1, device="cpu",
-        normalize_obs=True, eval_freq=0, log_freq=0, net_arch=[16],
+        encoder_config=EncoderConfig(normalize_obs=True), eval_freq=0, log_freq=0, net_arch=[16],
     )
     assert agent.policy.features_extractor.normalizer.count.item() == 0
     agent.learn(total_timesteps=8 * env.num_envs * 2)
@@ -153,7 +153,7 @@ def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
     env = _FakeBoxEnv()
     agent = PPO(
         env, num_steps=8, num_minibatches=2, update_epochs=1, device="cpu",
-        normalize_obs=True, eval_freq=0, log_freq=0, net_arch=[16],
+        encoder_config=EncoderConfig(normalize_obs=True), eval_freq=0, log_freq=0, net_arch=[16],
     )
     agent.learn(total_timesteps=8 * env.num_envs * 2)
     mean_before = agent.policy.features_extractor.normalizer._mean.clone()
@@ -162,7 +162,7 @@ def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
     path = agent.save(tmp_path / "ckpt.pt", include_replay_buffer=False)
     resumed = PPO(
         env, num_steps=8, num_minibatches=2, update_epochs=1, device="cpu",
-        normalize_obs=True, eval_freq=0, log_freq=0, net_arch=[16],
+        encoder_config=EncoderConfig(normalize_obs=True), eval_freq=0, log_freq=0, net_arch=[16],
     )
     resumed.load(path, load_replay_buffer=False)
     assert torch.equal(resumed.policy.features_extractor.normalizer._mean, mean_before)
@@ -170,7 +170,7 @@ def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
 
 
 def test_normalize_obs_reaches_extractor_through_cli_args_entrypoint():
-    """normalize_obs must survive PPOArgs -> _ppo_common_kwargs ->
+    """--encoder.normalize_obs must survive PPOArgs -> _ppo_common_kwargs ->
     construct_agent(PPO, ...) unfiltered, not just PPO(normalize_obs=...)
     called directly (every other test in this file bypasses the CLI args
     layer)."""
@@ -178,9 +178,10 @@ def test_normalize_obs_reaches_extractor_through_cli_args_entrypoint():
 
     env = _FakeBoxEnv()
     args = PPOArgs(
-        lr_schedule="constant", normalize_obs=True, num_steps=8, num_minibatches=2,
-        update_epochs=1, eval_freq=0, log_freq=0, obs_mode="state",
+        lr_schedule="constant", encoder=EncoderConfig(normalize_obs=True),
+        num_steps=8, num_minibatches=2,
+        update_epochs=1, eval_freq=0, log_freq=0,
     )
     agent = build_ppo(args, env, None, None, None)
-    assert agent.normalize_obs is True
+    assert agent.encoder_config.normalize_obs is True
     assert agent.policy.features_extractor.normalizer is not None

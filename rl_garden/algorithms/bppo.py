@@ -31,25 +31,26 @@ targets.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import warnings
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
-from rl_garden.buffers.sarsa_buffer import SarsaMCTensorReplayBuffer
+from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.flatten import FlattenExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.value import ScalarQNetwork, ValueNetwork
+from rl_garden.observations import ObservationContractError, ObsGroups
 from rl_garden.policies.bc_policy import BCPolicy
 
 
@@ -76,8 +77,35 @@ class BPPOCriticMixin:
     critic's target-update schedule to a clock it doesn't own.
     """
 
+    def _setup_observation_encoders(self) -> None:
+        """Resolve ``self.observation_encoders`` via the shared mixin, then
+        enforce this family's Box/state-only restriction (D4RL MuJoCo
+        locomotion scope) -- value_net/q_net/BCPolicy below all assume a
+        flat feature vector, with no Dict/image handling anywhere."""
+        self._resolve_observation_encoders(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
+        if self.observation_encoders.schema.has_images:
+            raise ObservationContractError(
+                f"{type(self).__name__} only supports state observations (no "
+                f"images); got image keys {self.observation_encoders.schema.image_keys}."
+            )
+
+    def _observation_checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            "encoder_sharing": self.encoder_sharing,
+            "encoder_config": (
+                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
+            ),
+            "obs_groups": (
+                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "image_augmentation_seed": self._image_augmentation_seed,
+        }
+
     def _build_critic(self) -> None:
-        obs_dim = self.env.single_observation_space.shape[0]
+        obs_dim = self.observation_encoders.actor.features_dim
         action_dim = self.env.single_action_space.shape[0]
         self.value_net = ValueNetwork(obs_dim, list(self.value_hidden_dims)).to(
             self.device
@@ -103,18 +131,24 @@ class BPPOCriticMixin:
         self._critic_step = 0
 
     def _phase_a_step(self, data) -> dict[str, float]:
-        value_pred = self.value_net(data.obs).squeeze(-1)
+        # value_net/q_net are raw flat-tensor MLPs, not schema/encoder-driven
+        # (state-only by construction -- see _setup_observation_encoders's
+        # has_images guard), so they read data.obs["state"] directly rather
+        # than going through the actor's features extractor.
+        obs = data.obs["state"]
+        next_obs = data.next_obs["state"]
+        value_pred = self.value_net(obs).squeeze(-1)
         value_loss = F.mse_loss(value_pred, data.mc_returns)
 
         with torch.no_grad():
-            target_next_q = self.q_target(data.next_obs, data.next_actions).squeeze(-1)
+            target_next_q = self.q_target(next_obs, data.next_actions).squeeze(-1)
             td_target = data.rewards + self.gamma * target_next_q
         # Two independent masks: true termination (`dones`, TD bootstrap
         # stop) and the artificial `timeouts` boundary the SARSA next-action
         # shift must not cross (`next_action_valid`) -- see
         # rl_garden/buffers/sarsa_buffer.py's module docstring.
         valid = (~data.dones.bool()) & data.next_action_valid
-        q_pred = self.q_net(data.obs, data.actions).squeeze(-1)
+        q_pred = self.q_net(obs, data.actions).squeeze(-1)
         if valid.any():
             q_loss = F.mse_loss(q_pred[valid], td_target[valid])
         else:
@@ -211,6 +245,9 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
         std_parameterization: Literal["exp", "uniform"] = "exp",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -245,11 +282,9 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"BPPO supports only Box observation spaces, got {type(obs_space)}"
-            )
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self._image_augmentation_seed = image_augmentation_seed
         if critic_warmup_steps < 0:
             raise ValueError(
                 f"critic_warmup_steps must be non-negative, got {critic_warmup_steps}."
@@ -301,13 +336,10 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
     # --- model setup ---
 
     def _build_actor_policy(self) -> BCPolicy:
-        features_extractor = FlattenExtractor(
-            observation_space=self.env.single_observation_space
-        )
         return BCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            features_extractor=self.observation_encoders.actor,
             net_arch=list(self.actor_hidden_dims),
             use_layer_norm=self.use_layer_norm,
             use_group_norm=self.use_group_norm,
@@ -319,8 +351,8 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
             tanh_squash=False,
         ).to(self.device)
 
-    def _build_replay_buffer(self) -> SarsaMCTensorReplayBuffer:
-        return SarsaMCTensorReplayBuffer(
+    def _build_replay_buffer(self) -> SarsaMCReplayBuffer:
+        return SarsaMCReplayBuffer(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,
@@ -331,6 +363,7 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         )
 
     def _setup_model(self) -> None:
+        self._setup_observation_encoders()
         self.policy = self._build_actor_policy()
         self.old_policy = self._build_actor_policy()
         self.old_policy.load_state_dict(self.policy.state_dict())
@@ -383,7 +416,10 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         with torch.no_grad():
             old_features = self.old_policy.extract_features(obs)
             action, old_log_prob = self.old_policy.actor.action_log_prob(old_features)
-            advantage = (self.q_net(obs, action) - self.value_net(obs)).squeeze(-1)
+            # value_net/q_net are raw flat-tensor MLPs (see _phase_a_step).
+            advantage = (
+                self.q_net(obs["state"], action) - self.value_net(obs["state"])
+            ).squeeze(-1)
             advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
             advantage = self._weighted_advantage(advantage)
 
@@ -506,6 +542,7 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         return {
             **super()._checkpoint_metadata(),
             **self._critic_checkpoint_metadata(),
+            **self._observation_checkpoint_metadata(),
             "actor_lr": self.actor_lr,
             "actor_hidden_dims": self.actor_hidden_dims,
             "clip_ratio": self.clip_ratio_init,

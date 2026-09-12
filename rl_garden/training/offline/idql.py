@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from gymnasium import spaces
-
 from rl_garden.training.offline._args import (
     OfflineCommonArgs,
     OfflineCriticArgs,
@@ -34,6 +32,7 @@ class IDQLArgs(
 
 
 def _idql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None) -> dict:
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
@@ -75,11 +74,12 @@ def _idql_kwargs(args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: 
         "checkpoint_freq": 0,
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
+        # IDQL has no distinct critic encoder path -- one encoder shared by
+        # value/critic/actor (encoder_sharing is a fixed "shared" class
+        # attribute, not a constructor kwarg); no critic_encoder_config.
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
     }
-    if isinstance(env_spec.single_observation_space, spaces.Dict):
-        from rl_garden.common.cli_args import image_encoder_factory_from_args
-
-        kwargs["image_encoder_factory"] = image_encoder_factory_from_args(args)
     return kwargs
 
 

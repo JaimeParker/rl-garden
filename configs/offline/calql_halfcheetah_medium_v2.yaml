@@ -9,7 +9,6 @@ env_backend: d4rl_legacy
 dataset_backend: d4rl_legacy
 env_id: halfcheetah-medium-v2
 offline_dataset: halfcheetah-medium-v2
-obs_mode: state
 num_offline_steps: 1000000
 eval_freq: 25000
 num_eval_episodes: 10

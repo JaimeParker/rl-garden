@@ -60,9 +60,6 @@ class FlowPPOPolicy(BasePolicy):
     ) -> None:
         super().__init__()
         assert isinstance(action_space, spaces.Box), "FlowPPOPolicy requires a Box action space."
-        assert isinstance(
-            observation_space, (spaces.Box, spaces.Dict)
-        ), "FlowPPOPolicy supports Box or Dict observation spaces only."
         if flow_steps <= 0:
             raise ValueError(f"flow_steps must be positive, got {flow_steps}.")
         if horizon_length < 1:

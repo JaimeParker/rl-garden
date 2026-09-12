@@ -79,7 +79,7 @@ ssh 6017 "mkdir -p /data0/liuzhaohong/Projects/rl-garden/logs && \
     cd /workspace/rl-garden && \
     export PATH=/opt/venv/openvla/bin:\$PATH && \
     export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} && \
-    MPLCONFIGDIR=/tmp python -u examples/train_online.py sac --obs_mode state \
+    MPLCONFIGDIR=/tmp python -u examples/train_online.py sac \
       --env_id PickCube-v1 \
       --num_envs 16 \
       --total_timesteps 2000000 \
@@ -152,11 +152,10 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
   cd /workspace/rl-garden &&
   export PATH=/opt/venv/openvla/bin:\$PATH &&
   export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} &&
-  MPLCONFIGDIR=/tmp python -u examples/generate_wsrl_dataset.py \
+  MPLCONFIGDIR=/tmp python -u examples/generate.py wsrl_dataset \
     --checkpoint_dir /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_dataset_sources_200k_1m/checkpoints \
     --output_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
     --total_transitions 200000 \
-    --obs_mode state \
     --num_envs 16 \
     --eval_episodes 50 \
     --policy_mix 0.3 0.3 0.4 \
@@ -185,11 +184,10 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
   cd /workspace/rl-garden &&
   export PATH=/opt/venv/openvla/bin:\$PATH &&
   export PYTHONPATH=/workspace/rl-garden:\${PYTHONPATH:-} &&
-  MPLCONFIGDIR=/tmp python -u examples/generate_wsrl_dataset.py \
+  MPLCONFIGDIR=/tmp python -u examples/generate.py wsrl_dataset \
     --checkpoint_dir /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_dataset_sources_200k_1m/checkpoints \
     --output_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.h5 \
     --total_transitions 200000 \
-    --obs_mode state \
     --num_envs 16 \
     --eval_episodes 50 \
     --policy_mix 0.3 0.3 0.4 \

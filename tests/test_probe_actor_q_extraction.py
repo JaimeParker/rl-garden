@@ -9,7 +9,8 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.encoders.combined import CombinedExtractor, default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.encoders.plain_conv import PlainConv
 
 
@@ -118,15 +119,9 @@ def test_plain_conv_activation_probe_reports_each_per_key_camera() -> None:
             "rgb_hand_camera": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
         }
     )
-    extractor = CombinedExtractor(
+    extractor = build_observation_encoder(
         obs_space,
-        image_keys=("rgb_base_camera", "rgb_hand_camera"),
-        image_encoder_factory=default_image_encoder_factory(
-            features_dim=16,
-            plain_conv_pooling="gap",
-        ),
-        use_proprio=False,
-        fusion_mode="per_key",
+        EncoderConfig(features_dim=16, plain_conv_pooling="gap", image_fusion_mode="per_key"),
     )
     obs = {
         "rgb_base_camera": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8),

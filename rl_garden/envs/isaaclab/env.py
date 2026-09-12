@@ -8,16 +8,17 @@ Wraps a raw IsaacLab env (``ManagerBasedRLEnv`` or ``DirectRLEnv``, native
 the standard Gymnasium ``(obs, reward, terminated, truncated, info)`` tuple.
 
 Observation extraction:
-- ``obs_mode="state"``: looks for a ``"state"`` key (rl-garden scaffold
-  convention) first, falling back to ``"policy"`` (every native IsaacLab
-  task's own convention -- both ``ManagerBasedRLEnv`` and ``DirectRLEnv``
-  tasks use it).
-- ``obs_mode`` in ``("rgb", "rgbd")``: requires rl-garden's own cross-backend
-  key convention directly (``"rgb"``/``"depth"``/``"rgb_<cam>"``/
-  ``"depth_<cam>"``, plus ``"state"`` if the task returns one) -- only
-  ``RLGardenDirectRLEnv``-scaffold tasks are expected to satisfy this;
-  native single-``"policy"``-image tasks (e.g. ``Isaac-Cartpole-RGB-Camera-
-  Direct-v0``) aren't supported by this backend.
+- state-only (``ObservationConfig`` requests no cameras): looks for a
+  ``"state"`` key (rl-garden scaffold convention) first, falling back to
+  ``"policy"`` (every native IsaacLab task's own convention -- both
+  ``ManagerBasedRLEnv`` and ``DirectRLEnv`` tasks use it).
+- vision requested: requires rl-garden's own cross-backend key convention
+  directly (``"rgb_<cam>"``/``"depth_<cam>"``, plus ``"state"`` if the task
+  returns one and it's kept) -- only ``RLGardenDirectRLEnv``-scaffold tasks
+  are expected to satisfy this; native single-``"policy"``-image tasks (e.g.
+  ``Isaac-Cartpole-RGB-Camera-Direct-v0``) aren't supported by this backend.
+  Camera set/resolution are baked into the task registration, not
+  runtime-selectable through ``ObservationConfig.rgb``/``.image_size``.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ import numpy as np
 import torch
 
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
+from rl_garden.observations.schema import ObservationContractError
 
 
 def _box_from_tensor(tensor: torch.Tensor) -> gym.spaces.Box:
@@ -46,10 +48,13 @@ class _IsaacLabVecEnvAdapter(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, env: Any, seed: int, obs_mode: str = "state") -> None:
+    def __init__(
+        self, env: Any, seed: int, *, is_visual: bool = False, state: bool = True
+    ) -> None:
         self._env = env
         self._seed = seed
-        self.obs_mode = obs_mode
+        self.is_visual = is_visual
+        self.state = state
         # gym.make() wraps the raw env in OrderEnforcing, which rejects
         # attribute access before the first reset() -- go through .unwrapped
         # for env-level attributes that aren't part of the standard gym.Env
@@ -76,39 +81,39 @@ class _IsaacLabVecEnvAdapter(gym.Env):
             dtype=action_space.dtype,
         )
 
-    def _extract_obs(self, obs_dict: dict):
+    def _extract_obs(self, obs_dict: dict) -> dict:
         # TODO(policy-distillation): this collapses to a single obs tensor
         # even when obs_dict also has IsaacLab's native "critic" (privileged)
         # group -- expose it as an additional Dict key here (alongside
         # "state"/"policy") so PolicyDistillation(teacher_obs_keys=[...])
         # can consume it without a bespoke env wrapper. See
         # rl_garden/algorithms/policy_distillation.py.
-        if self.obs_mode == "state":
+        if not self.is_visual:
             if "state" in obs_dict:
-                return obs_dict["state"]
+                return {"state": obs_dict["state"]}
             if "policy" in obs_dict:
-                return obs_dict["policy"]
+                return {"state": obs_dict["policy"]}
             raise ValueError(
-                "IsaacLab backend (obs_mode='state') requires a 'state' or "
+                "IsaacLab backend (state-only observation) requires a 'state' or "
                 f"'policy' observation key, got keys {sorted(obs_dict)!r}."
             )
-        image_keys = [key for key in obs_dict if key.startswith(("rgb", "depth"))]
+        image_keys = [
+            key for key in obs_dict if key.startswith(("rgb_", "depth_")) and key != "state"
+        ]
         if not image_keys:
             raise ValueError(
-                f"IsaacLab backend (obs_mode={self.obs_mode!r}) requires "
-                "'rgb'/'depth'-prefixed observation keys (rl-garden's own "
-                "cross-backend convention -- see RLGardenDirectRLEnv's "
+                "IsaacLab backend (vision observation) requires "
+                "'rgb_<cam>'/'depth_<cam>'-prefixed observation keys (rl-garden's own "
+                "cross-backend contract -- see RLGardenDirectRLEnv's "
                 f"docstring), got keys {sorted(obs_dict)!r}."
             )
         out = {key: obs_dict[key] for key in image_keys}
-        if "state" in obs_dict:
+        if self.state and "state" in obs_dict:
             out["state"] = obs_dict["state"]
         return out
 
-    def _build_observation_space(self, obs):
-        if isinstance(obs, dict):
-            return gym.spaces.Dict({key: _box_from_tensor(value) for key, value in obs.items()})
-        return _box_from_tensor(obs)
+    def _build_observation_space(self, obs: dict):
+        return gym.spaces.Dict({key: _box_from_tensor(value) for key, value in obs.items()})
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         obs_dict, info = self._env.reset(seed=seed if seed is not None else self._seed)
@@ -146,7 +151,7 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         the hang reliably), so keep this placement (once per cycle) if
         investigating further.
         """
-        if self.obs_mode != "state":
+        if self.is_visual:
             torch.cuda.synchronize()
 
     def close(self) -> None:
@@ -157,7 +162,7 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
     """Build an IsaacLab env according to ``cfg``."""
     from rl_garden.envs.isaaclab.app import get_or_launch_app
 
-    get_or_launch_app(cfg.headless, cfg.sim_device, enable_cameras=(cfg.obs_mode != "state"))
+    get_or_launch_app(cfg.headless, cfg.sim_device, enable_cameras=cfg.is_visual)
 
     import isaaclab_tasks  # noqa: F401  (registers native gym ids)
 
@@ -173,11 +178,13 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
         setattr(env_cfg, key, value)
 
     env = gym.make(cfg.env_id, cfg=env_cfg)
-    adapter = _IsaacLabVecEnvAdapter(env, seed=cfg.seed, obs_mode=cfg.obs_mode)
+    adapter = _IsaacLabVecEnvAdapter(
+        env, seed=cfg.seed, is_visual=cfg.is_visual, state=cfg.state
+    )
 
     if cfg.frame_stack > 1:
-        if cfg.obs_mode == "state":
-            raise ValueError("frame_stack > 1 requires a visual observation mode")
+        if not cfg.is_visual:
+            raise ObservationContractError("frame_stack > 1 requires a visual observation mode")
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
         wrapped = ImageFrameStackWrapper(adapter, frame_stack=cfg.frame_stack)

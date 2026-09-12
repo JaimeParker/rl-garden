@@ -15,7 +15,6 @@ env_backend: d4rl_legacy
 dataset_backend: d4rl_legacy
 env_id: halfcheetah-medium-v2
 offline_dataset: halfcheetah-medium-v2
-obs_mode: state
 num_envs: 1
 num_eval_envs: 1
 

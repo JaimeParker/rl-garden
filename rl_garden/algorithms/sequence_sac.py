@@ -323,5 +323,5 @@ class SequenceSAC(SAC):
         # precedent -- a resumed run re-zero-initializes it in _on_env_reset().
         # The replay buffer's priority tree / checkpoint side-buffer / episode
         # bookkeeping are also not persisted, matching the pre-existing gap in
-        # NStepDictReplayBuffer's checkpoint support.
+        # NStepReplayBuffer's checkpoint support.
         return super()._extra_checkpoint_state()

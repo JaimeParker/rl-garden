@@ -6,9 +6,17 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import DDPG
-from rl_garden.buffers.nstep_buffer import LazyNextNStepDictReplayBuffer
+from rl_garden.buffers.nstep_buffer import LazyNextNStepReplayBuffer
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.drqv2_conv import DrQv2Encoder
 from rl_garden.networks.ddpg_critic import DrQv2Critic
+from rl_garden.observations import ObsGroups
+
+
+def _no_aug_encoder_config(**overrides) -> EncoderConfig:
+    """DDPG's own default backbone (drqv2_conv), augmentation disabled so
+    tests get deterministic, unpadded feature shapes."""
+    return EncoderConfig(backbone="drqv2_conv", image_augmentation="none", **overrides)
 
 
 class DummyDictVecEnv:
@@ -16,7 +24,7 @@ class DummyDictVecEnv:
         self.num_envs = 1
         self.single_observation_space = spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(32, 40, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(32, 40, 3), dtype=np.uint8),
                 "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
             }
         )
@@ -84,11 +92,11 @@ def test_drqv2_critic_matches_reference_architecture():
     assert q_all.shape == (2, 5, 1)
 
 
-def test_ddpg_rejects_dict_observations_without_selected_images():
-    with pytest.raises(ValueError, match="at least one image observation key"):
+def test_ddpg_rejects_dict_observations_with_unknown_obs_group_key():
+    with pytest.raises(ValueError, match="unknown observation key"):
         DDPG(
             env=DummyPerCameraDictVecEnv(),
-            image_keys=("rgb",),
+            obs_groups=ObsGroups(actor=("rgb_cam",), critic=("rgb_cam",)),
             device="cpu",
             buffer_device="cpu",
             buffer_size=16,
@@ -96,15 +104,13 @@ def test_ddpg_rejects_dict_observations_without_selected_images():
             eval_freq=0,
             hidden_dim=16,
             feature_dim=8,
-            image_augmentation="none",
+            encoder_config=_no_aug_encoder_config(),
         )
 
 
 def test_ddpg_uses_explicit_per_camera_image_keys():
     agent = DDPG(
         env=DummyPerCameraDictVecEnv(),
-        image_keys=("rgb_base_camera", "rgb_hand_camera"),
-        image_fusion_mode="per_key",
         device="cpu",
         buffer_device="cpu",
         buffer_size=16,
@@ -112,7 +118,7 @@ def test_ddpg_uses_explicit_per_camera_image_keys():
         eval_freq=0,
         hidden_dim=16,
         feature_dim=8,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(image_fusion_mode="per_key"),
     )
 
     assert agent.policy.features_extractor.image_keys == (
@@ -128,7 +134,6 @@ def test_ddpg_uses_explicit_per_camera_image_keys():
 def test_ddpg_builds_mmap_nstep_buffer(tmp_path):
     agent = DDPG(
         env=DummyDictVecEnv(),
-        image_keys=("rgb",),
         device="cpu",
         buffer_device="cpu",
         buffer_size=16,
@@ -136,7 +141,7 @@ def test_ddpg_builds_mmap_nstep_buffer(tmp_path):
         eval_freq=0,
         hidden_dim=16,
         feature_dim=8,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(),
         mmap_dir=tmp_path,
     )
 
@@ -147,7 +152,6 @@ def test_ddpg_builds_mmap_nstep_buffer(tmp_path):
 def test_ddpg_builds_lazy_next_nstep_buffer():
     agent = DDPG(
         env=DummyDictVecEnv(),
-        image_keys=("rgb",),
         device="cpu",
         buffer_device="cpu",
         buffer_size=16,
@@ -155,12 +159,12 @@ def test_ddpg_builds_lazy_next_nstep_buffer():
         eval_freq=0,
         hidden_dim=16,
         feature_dim=8,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(),
         replay_lazy_next_obs=True,
         replay_pin_sampled_batch=True,
     )
 
-    assert isinstance(agent.replay_buffer, LazyNextNStepDictReplayBuffer)
+    assert isinstance(agent.replay_buffer, LazyNextNStepReplayBuffer)
     assert agent.replay_buffer.next_obs is None
     assert agent.replay_buffer.pin_sampled_batch is True
 
@@ -169,7 +173,6 @@ def test_ddpg_rejects_lazy_next_with_mmap(tmp_path):
     with pytest.raises(ValueError, match="lazy next_obs"):
         DDPG(
             env=DummyDictVecEnv(),
-            image_keys=("rgb",),
             device="cpu",
             buffer_device="cpu",
             buffer_size=16,
@@ -177,7 +180,7 @@ def test_ddpg_rejects_lazy_next_with_mmap(tmp_path):
             eval_freq=0,
             hidden_dim=16,
             feature_dim=8,
-            image_augmentation="none",
+            encoder_config=_no_aug_encoder_config(),
             mmap_dir=tmp_path,
             replay_lazy_next_obs=True,
         )
@@ -187,7 +190,6 @@ def test_ddpg_rejects_pinned_sampling_without_lazy_next():
     with pytest.raises(ValueError, match="requires replay_lazy_next_obs"):
         DDPG(
             env=DummyDictVecEnv(),
-            image_keys=("rgb",),
             device="cpu",
             buffer_device="cpu",
             buffer_size=16,
@@ -195,7 +197,7 @@ def test_ddpg_rejects_pinned_sampling_without_lazy_next():
             eval_freq=0,
             hidden_dim=16,
             feature_dim=8,
-            image_augmentation="none",
+            encoder_config=_no_aug_encoder_config(),
             replay_pin_sampled_batch=True,
         )
 
@@ -204,7 +206,6 @@ def test_ddpg_rejects_mmap_replay_checkpoint(tmp_path):
     with pytest.raises(ValueError, match="cannot be embedded"):
         DDPG(
             env=DummyDictVecEnv(),
-            image_keys=("rgb",),
             device="cpu",
             buffer_device="cpu",
             buffer_size=16,
@@ -212,7 +213,7 @@ def test_ddpg_rejects_mmap_replay_checkpoint(tmp_path):
             eval_freq=0,
             hidden_dim=16,
             feature_dim=8,
-            image_augmentation="none",
+            encoder_config=_no_aug_encoder_config(),
             mmap_dir=tmp_path,
             save_replay_buffer=True,
         )
@@ -237,9 +238,7 @@ def test_ddpg_policy_actor_action_applies_requested_noise_clip(monkeypatch):
         eval_freq=0,
         hidden_dim=16,
         feature_dim=8,
-        image_keys=("rgb",),
-        proprio_latent_dim=4,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(proprio_latent_dim=4),
     )
     observed: dict[str, float | None] = {}
     original_forward = agent.policy.actor.forward
@@ -257,7 +256,7 @@ def test_ddpg_policy_actor_action_applies_requested_noise_clip(monkeypatch):
 
     monkeypatch.setattr(agent.policy.actor, "forward", wrapped_forward)
     obs = {
-        "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
         "state": torch.randn(1, 4),
     }
 
@@ -277,9 +276,7 @@ def test_ddpg_rollout_does_not_clip_exploration_noise(monkeypatch):
         eval_freq=0,
         hidden_dim=16,
         feature_dim=8,
-        image_keys=("rgb",),
-        proprio_latent_dim=4,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(proprio_latent_dim=4),
     )
     observed: dict[str, float | None] = {}
     original_forward = agent.policy.actor.forward
@@ -298,7 +295,7 @@ def test_ddpg_rollout_does_not_clip_exploration_noise(monkeypatch):
     monkeypatch.setattr(agent.policy.actor, "forward", wrapped_forward)
     agent._global_step = agent.num_expl_steps
     obs = {
-        "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
         "state": torch.randn(1, 4),
     }
 
@@ -323,17 +320,15 @@ def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
         gamma=0.9,
         hidden_dim=16,
         feature_dim=8,
-        image_keys=("rgb",),
-        proprio_latent_dim=4,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(proprio_latent_dim=4),
     )
     for step in range(5):
         obs = {
-            "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
             "state": torch.randn(1, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
             "state": torch.randn(1, 4),
         }
         agent.replay_buffer.add(
@@ -391,18 +386,16 @@ def test_ddpg_one_update_uses_nstep_discount_path():
         gamma=0.9,
         hidden_dim=16,
         feature_dim=8,
-        image_keys=("rgb",),
-        proprio_latent_dim=4,
-        image_augmentation="none",
+        encoder_config=_no_aug_encoder_config(proprio_latent_dim=4),
     )
 
     for step in range(5):
         obs = {
-            "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
             "state": torch.randn(1, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
             "state": torch.randn(1, 4),
         }
         agent.replay_buffer.add(
@@ -423,12 +416,13 @@ def test_ddpg_one_update_uses_nstep_discount_path():
 def _drqv2_build_args(encoder: str):
     from types import SimpleNamespace
 
+    from rl_garden.encoders.config import EncoderConfig
+    from rl_garden.observations import ObsGroups, ObservationConfig
+
     return SimpleNamespace(
-        encoder=encoder,
-        encoder_features_dim=256,
-        pretrained_weights=None,
-        freeze_resnet_encoder=False,
-        freeze_resnet_backbone=False,
+        obs=ObservationConfig(rgb=("base_camera",), depth=("base_camera",)),
+        obs_groups=ObsGroups(),
+        encoder=EncoderConfig(backbone=encoder),
         buffer_size=1000,
         buffer_device="cpu",
         mmap_dir=None,
@@ -439,6 +433,7 @@ def _drqv2_build_args(encoder: str):
         batch_size=8,
         gamma=0.99,
         tau=0.01,
+        bootstrap_at_done="truncated",
         training_freq=1,
         utd=0.5,
         policy_lr=1e-4,
@@ -452,10 +447,6 @@ def _drqv2_build_args(encoder: str):
         weight_decay=0.0,
         use_adamw=False,
         grad_clip_norm=None,
-        image_fusion_mode="stack_channels",
-        image_augmentation="none",
-        image_random_shift_pad=4,
-        frame_stack=3,
         seed=1,
         std_log=False,
         log_freq=100,
@@ -487,7 +478,7 @@ def test_build_drqv2_warns_when_encoder_overridden(
     with pytest.warns(UserWarning, match="drqv2_conv"):
         build_drqv2(args, DummyDictVecEnv(), None, None, None)
 
-    assert captured_kwargs["image_encoder_factory"] is not None
+    assert captured_kwargs["encoder_config"].backbone == "cnn3d"
 
 
 def test_build_drqv2_default_encoder_does_not_warn(

@@ -16,7 +16,6 @@ env_backend: d4rl_legacy
 dataset_backend: d4rl_legacy
 env_id: walker2d-medium-v2
 offline_dataset: walker2d-medium-v2
-obs_mode: state
 num_envs: 1
 num_eval_envs: 1
 

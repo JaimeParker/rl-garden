@@ -32,7 +32,7 @@ from gymnasium import spaces
 
 from rl_garden.buffers._episode_slice_sampling import EpisodeSliceSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.buffers.dict_buffer import DictArray, _tree_to_device
+from rl_garden.buffers.replay_buffer import DictArray, _tree_to_device
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
 
@@ -54,7 +54,7 @@ class EpisodeSliceBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
 
     def __init__(
         self,
-        observation_space: spaces.Box | spaces.Dict,
+        observation_space: spaces.Dict,
         action_space: spaces.Box,
         num_envs: int,
         buffer_size: int,
@@ -83,20 +83,12 @@ class EpisodeSliceBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
         self.full = False
 
         shape = (self.per_env_buffer_size, num_envs)
-        self._is_dict_obs = isinstance(observation_space, spaces.Dict)
-        if self._is_dict_obs:
-            self.obs = DictArray(shape, observation_space, device=self.storage_device)
-        elif isinstance(observation_space, spaces.Box):
-            self.obs = torch.zeros(
-                shape + tuple(observation_space.shape),
-                dtype=torch.float32,
-                device=self.storage_device,
-            )
-        else:
+        if not isinstance(observation_space, spaces.Dict):
             raise TypeError(
-                "EpisodeSliceBuffer supports Box or Dict observations, got "
-                f"{type(observation_space)}."
+                "EpisodeSliceBuffer requires a Dict observation space (the "
+                f"rl-garden observation contract), got {type(observation_space)}."
             )
+        self.obs = DictArray(shape, observation_space, device=self.storage_device)
         self.actions = torch.zeros(
             shape + tuple(action_space.shape), dtype=torch.float32, device=self.storage_device
         )
@@ -132,7 +124,7 @@ class EpisodeSliceBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
         del next_obs
 
         if self.storage_device.type == "cpu":
-            obs = _tree_to_device(obs, self.storage_device) if self._is_dict_obs else obs.cpu()
+            obs = _tree_to_device(obs, self.storage_device)
             action = action.cpu()
             reward = reward.cpu()
             done = done.cpu()
@@ -141,12 +133,8 @@ class EpisodeSliceBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
         done_bool = done.to(self.storage_device).bool().reshape(self.num_envs)
         episode_end_bool = episode_end.to(self.storage_device).bool().reshape(self.num_envs)
 
-        if self._is_dict_obs:
-            assert isinstance(obs, dict)
-            self.obs[self.pos] = {k: v.to(self.storage_device) for k, v in obs.items()}
-        else:
-            assert isinstance(obs, torch.Tensor)
-            self.obs[self.pos] = obs.to(self.storage_device)
+        assert isinstance(obs, dict)
+        self.obs[self.pos] = {k: v.to(self.storage_device) for k, v in obs.items()}
         self.actions[self.pos] = action.to(self.storage_device)
         self.rewards[self.pos] = reward.reshape(self.num_envs).to(self.storage_device)
         self.dones[self.pos] = done_bool
@@ -175,10 +163,7 @@ class EpisodeSliceBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
         reward = self.rewards[idx_grid[:-1], env_grid[:-1]]
         terminated = self.dones[idx_grid[:-1], env_grid[:-1]]
 
-        if self._is_dict_obs:
-            obs = _tree_to_device(window_obs, self.sample_device)
-        else:
-            obs = window_obs.to(self.sample_device)
+        obs = _tree_to_device(window_obs, self.sample_device)
 
         return EpisodeSliceBufferSample(
             obs=obs,

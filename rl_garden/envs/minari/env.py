@@ -17,8 +17,11 @@ def make_minari_env(cfg: MinariEnvConfig) -> TorchVectorEnvAdapter:
 
     dataset = minari.load_dataset(cfg.dataset_id, download=cfg.download)
 
+    from rl_garden.envs.wrappers import DictStateObservationWrapper
+
     def _make_sub_env():
-        return RecordEpisodeStatistics(dataset.recover_environment(eval_env=cfg.eval_env))
+        env = DictStateObservationWrapper(dataset.recover_environment(eval_env=cfg.eval_env))
+        return RecordEpisodeStatistics(env)
 
     env_fns = [_make_sub_env for _ in range(cfg.num_envs)]
     vec_env = gymnasium.vector.SyncVectorEnv(

@@ -9,7 +9,11 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import _add_flat_transitions
+from rl_garden.buffers._dataset_common import (
+    _add_flat_transitions,
+    _finalize_dataset_obs_space,
+    _match_obs_to_buffer,
+)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
@@ -43,10 +47,11 @@ def _box_from_legacy(space: Any) -> spaces.Box:
     )
 
 
-def infer_specs_from_d4rl_legacy(env_id: str) -> tuple[spaces.Box, spaces.Box]:
+def infer_specs_from_d4rl_legacy(env_id: str) -> tuple[spaces.Dict, spaces.Box]:
     env = _make_legacy_env(env_id)
     try:
-        return _box_from_legacy(env.observation_space), _box_from_legacy(env.action_space)
+        obs_space = _finalize_dataset_obs_space(_box_from_legacy(env.observation_space))
+        return obs_space, _box_from_legacy(env.action_space)
     finally:
         env.close()
 
@@ -358,10 +363,13 @@ def load_d4rl_legacy_dataset_to_replay_buffer(
         if family == "antmaze" and hasattr(buffer, "_step_success")
         else None
     )
+    obs = torch.as_tensor(dataset["observations"], device=device)
+    next_obs = torch.as_tensor(dataset["next_observations"], device=device)
+    obs, next_obs = _match_obs_to_buffer(buffer, obs, next_obs)
     return _add_flat_transitions(
         buffer,
-        torch.as_tensor(dataset["observations"], device=device),
-        torch.as_tensor(dataset["next_observations"], device=device),
+        obs,
+        next_obs,
         torch.as_tensor(dataset["actions"], device=device),
         rewards,
         torch.as_tensor(dataset["terminals"], device=device),

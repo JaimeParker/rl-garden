@@ -6,11 +6,13 @@ episode-end position is already the NEXT episode's reset obs, not the true final
 one -- this side table stores the true final obs compactly (a small side array,
 not one slot per buffer position) so ``RecurrentSamplingMixin._patch_final_obs``
 can patch it back in wherever a boundary falls inside a sampled window. Mirrors
-``LazyNextNStepDictReplayBuffer``'s exact mechanism (``nstep_buffer.py``),
+``LazyNextNStepReplayBuffer``'s exact mechanism (``nstep_buffer.py``),
 generalized to Box observations too.
 
-The host buffer must expose: ``observation_space``, ``storage_device``,
-``buffer_size``, ``_is_dict_obs``.
+The host buffer must expose: ``observation_space`` (a ``spaces.Dict``, the
+rl-garden observation contract -- both current users, ``_CheckpointedSequenceReplayBuffer``
+and ``LazyNextNStepReplayBuffer``, are Dict-only), ``storage_device``,
+``buffer_size``.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from typing import Optional
 
 import torch
 
-from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.buffers.replay_buffer import DictArray
 
 
 def _copy_tree(src, dst, count: int) -> None:
@@ -44,30 +46,17 @@ class FinalObsTableMixin:
             final_obs_capacity = capacity
         else:
             final_obs_capacity = max(1024, self.buffer_size // 64)
-        if self._is_dict_obs:
-            self._final_obs = DictArray(
-                (final_obs_capacity,), self.observation_space, device=self.storage_device
-            )
-        else:
-            self._final_obs = torch.zeros(
-                (final_obs_capacity,) + tuple(self.observation_space.shape),
-                device=self.storage_device,
-            )
+        self._final_obs = DictArray(
+            (final_obs_capacity,), self.observation_space, device=self.storage_device
+        )
 
     def _grow_final_obs(self) -> None:
         current = self._final_obs.shape[0]
         new_capacity = current * 2
-        if self._is_dict_obs:
-            grown = DictArray(
-                (new_capacity,), self.observation_space, device=self.storage_device
-            )
-            _copy_tree(self._final_obs, grown, current)
-        else:
-            grown = torch.zeros(
-                (new_capacity,) + tuple(self.observation_space.shape),
-                device=self.storage_device,
-            )
-            grown[:current] = self._final_obs
+        grown = DictArray(
+            (new_capacity,), self.observation_space, device=self.storage_device
+        )
+        _copy_tree(self._final_obs, grown, current)
         self._final_obs = grown
 
     def _allocate_final_slot(self) -> int:

@@ -20,7 +20,6 @@ env_backend: ogbench
 dataset_backend: ogbench
 env_id: puzzle-3x3-singletask-v0
 offline_dataset: puzzle-3x3-play-singletask-v0
-obs_mode: state
 
 # floq's own train script offline budget for this task family; not
 # OfflineDatasetArgs's own 100_000 default.

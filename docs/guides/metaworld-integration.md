@@ -56,30 +56,34 @@ shared policy to distinguish tasks.
 - `device`: device for the online vector env's torch tensors.
 - `vectorization`: `"sync"` (default) or `"async"` (one OS process per env).
 - `use_one_hot`: only consulted when `--env_id` is `MT10`/`MT50`.
-- `camera`/`image_size`: only consulted when `--obs_mode rgb`, see below.
+
+Camera selection and resolution are the shared `--obs.*` surface, not a
+Meta-World-specific field — see below.
 
 ### Vision (rgb + depth)
 
 ```bash
 python examples/train_online.py rlpd \
-  --env_backend metaworld --env_id reach-v3 --obs_mode rgb \
-  --metaworld.camera corner2 --metaworld.image_size 84 84 \
+  --env_backend metaworld --env_id reach-v3 \
+  --obs.rgb corner2 --obs.depth corner2 --obs.image_size 84 84 \
   --num_envs 4 --num_eval_envs 2
 ```
 
 Adds a single fixed camera's rgb+depth pair on top of the state vector —
 observation becomes a `Dict` with `state`/`rgb_<camera>`/`depth_<camera>`
-keys (rl-garden's standard vision convention, same as RLBench's `rgb` mode).
-`--metaworld.camera` is any of the 6 cameras every Meta-World v3 task scene
-defines: `corner`, `corner2` (default — the common choice in Meta-World
-vision literature, e.g. DrM/DrQ-v2/TD-MPC2), `corner3`, `corner4`,
-`behindGripper`, `gripperPOV`. Default image size is `84x84` (the common
-Meta-World-vision default, not rl-garden's other backends' `128x128`).
+keys (rl-garden's standard vision convention, same as RLBench's vision mode).
+`--obs.rgb`/`--obs.depth` name any of the 6 cameras every Meta-World v3 task
+scene defines: `corner`, `corner2` (the common choice in Meta-World vision
+literature, e.g. DrM/DrQ-v2/TD-MPC2), `corner3`, `corner4`, `behindGripper`,
+`gripperPOV`. There is no built-in default camera or image size — pass
+`--obs.rgb`/`--obs.depth`/`--obs.image_size` explicitly (`84x84` is the
+common Meta-World-vision size in the literature, not rl-garden's other
+backends' `128x128`).
 
-**Single-task env ids only** — `--env_id MT10`/`MT50` with `--obs_mode rgb`
-raises a clear `ValueError`: those two env ids build their 10/50 sub-envs
-internally through `gym.make_vec`, with no per-sub-env construction hook
-this backend can attach a camera renderer to.
+**Single-task env ids only** — `--env_id MT10`/`MT50` with `--obs.rgb`/
+`--obs.depth` set raises a clear `ValueError`: those two env ids build their
+10/50 sub-envs internally through `gym.make_vec`, with no per-sub-env
+construction hook this backend can attach a camera renderer to.
 
 **Depth is raw MuJoCo NDC, not linear/metric depth** — `mujoco
 .mjr_readPixels`'s buffer, unmodified (same caveat
@@ -92,7 +96,7 @@ Verified for real on 6017 (`reach-v3`, `corner2`, 84×84): `rgb_corner2`
 (`(N, 84, 84, 3)` uint8, real scene content — nonzero per-image pixel std,
 not a blank/black frame) and `depth_corner2` (`(N, 84, 84, 1)` float32,
 values in roughly `[0.98, 1.0]`, matching the documented nonlinear-NDC
-range) both come back correctly, `--env_id MT10 --obs_mode rgb` raises the
+range) both come back correctly, `--env_id MT10 --obs.rgb corner2` raises the
 `ValueError` above for real, and a short `rlpd` run trains + evaluates
 end to end (image-key discovery, encoder construction, and
 `success_at_end` all work under vision the same as state-only). Note when
@@ -102,12 +106,13 @@ default for the live env — `--num_eval_steps` needs to comfortably exceed
 that (across all eval envs) for eval to complete even one episode, or
 `return`/`success_at_end` report `nan` (0 episodes completed) — this is a
 pre-existing characteristic of Meta-World's default episode length, not a
-vision-specific issue (reproduces identically in `--obs_mode state`).
+vision-specific issue (reproduces identically state-only, with no `--obs.rgb`/
+`--obs.depth` set).
 
 **Online/live-eval only — no offline dataset path supports vision yet**:
 both the official `metaworld/<task>/expert-v0` Minari datasets and this
 integration's own `metaworld` live-demo backend are state-only (`Box(39,)`,
-not `Dict`). Use `--obs_mode rgb` with an online algorithm (`rlpd`,
+not `Dict`). Use `--obs.rgb`/`--obs.depth` with an online algorithm (`rlpd`,
 `dagger`) or the live eval env only, not offline pretraining.
 
 ## Dataset: two independent paths

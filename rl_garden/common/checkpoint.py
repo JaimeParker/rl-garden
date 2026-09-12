@@ -13,7 +13,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.buffers.dict_buffer import DictArray
+from rl_garden.buffers.replay_buffer import DictArray
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 FORMAT_VERSION = 1

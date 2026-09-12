@@ -12,11 +12,6 @@ keeps the CQL/Cal-QL regularizer online — matching Nakamoto et al. 2023
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_garden.common.cli_args import (
-    image_encoder_factory_from_args,
-    image_keys_from_env,
-    vit_sac_kwargs_from_args,
-)
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on._args import (
     VisionWSRLTrainingArgs,
@@ -29,7 +24,8 @@ from rl_garden.training.off2on._registry import registry
 class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
     """Cal-QL off2on args: no warmup, mixed replay, CQL retained online.
 
-    For state obs pass --obs_mode state.
+    State-only observations by default; pass ``--obs.rgb <camera>`` for
+    Dict/RGBD observations.
     """
 
     warmup_steps: int = 0
@@ -54,19 +50,16 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
 
 def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnCalQL
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        factory = image_encoder_factory_from_args(args)
-        image_keys = image_keys_from_env(env, args)
-        image_kwargs = dict(
-            image_keys=image_keys,
-            image_encoder_factory=factory,
-            image_fusion_mode=args.image_fusion_mode,
-            **vit_sac_kwargs_from_args(args, image_keys),
-        )
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,

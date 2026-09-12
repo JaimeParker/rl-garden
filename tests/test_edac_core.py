@@ -33,13 +33,19 @@ def _make_agent(**kwargs) -> EDAC:
 
 def _fill(agent: EDAC, steps: int = 64) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- a bare Box env
+    # (as _state_env() constructs) is boundary-normalized by
+    # BaseAlgorithm.__init__ (rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    obs_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        state = torch.randn(env.num_envs, *obs_shape)
+        next_state = torch.randn_like(state)
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
-        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+        agent.replay_buffer.add(
+            {"state": state}, {"state": next_state}, actions, rewards, dones
+        )
 
 
 def test_default_n_critics_is_ten():
@@ -68,7 +74,7 @@ def test_gradient_step_produces_finite_losses():
 
 def test_predict_in_bounds():
     agent = _make_agent()
-    obs = torch.randn(4, 6)
+    obs = {"state": torch.randn(4, 6)}
     action = agent.policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)
@@ -146,7 +152,7 @@ def test_cuda_smoke():
     assert all(np.isfinite(v) for v in metrics.values()), metrics
 
     agent.policy.zero_grad(set_to_none=True)
-    obs = torch.randn(4, 6, device="cuda")
+    obs = {"state": torch.randn(4, 6, device="cuda")}
     action = agent.policy.predict(obs)
     assert action.shape == (4, 3)
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)

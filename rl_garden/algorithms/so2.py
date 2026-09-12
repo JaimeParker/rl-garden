@@ -26,23 +26,24 @@ precedent ``WSRL``/``Off2OnCalQL`` use to build on ``CQL``'s shell rather
 than re-deriving ``OffPolicyAlgorithm`` from scratch): SO2 needs no new
 networks and no new loss terms beyond the target-smoothing override below.
 
-Box (state) observations only for this port -- matches every env this
-targets (D4RL MuJoCo locomotion, AntMaze; both use rl-garden's existing
-``d4rl_legacy`` env/dataset backend, no new backend work needed). Dict/image
-support can be added later following IQL/CalQL's own precedent if needed.
+State-only observations are this port's primary target (D4RL MuJoCo
+locomotion, AntMaze; both use rl-garden's existing ``d4rl_legacy``
+env/dataset backend). Dict/image observations are supported too via the
+shared ``ObservationEncoderMixin`` inherited from ``SAC``/``OfflineSAC``;
+the mirroring replay buffer below is always Dict, exactly like
+``SAC._build_replay_buffer``.
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.offline import OfflineEnvSpec
 from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.sac import SAC
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 
 
 class _MirrorAddMixin:
@@ -66,7 +67,7 @@ class _MirrorAddMixin:
             self._mirror_into.add(*args, **kwargs)
 
 
-class _MirroringTensorReplayBuffer(_MirrorAddMixin, TensorReplayBuffer):
+class _MirroringReplayBuffer(_MirrorAddMixin, ReplayBuffer):
     pass
 
 
@@ -127,12 +128,9 @@ class SO2Core:
         return next_action, next_log_prob, next_actor_features
 
     def _build_replay_buffer(self):
+        # obs_space is always Dict (boundary normalization is unconditional).
         obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, spaces.Box):
-            raise TypeError(
-                f"SO2 supports Box observation spaces only, got {type(obs_space)}."
-            )
-        buffer = _MirroringTensorReplayBuffer(
+        buffer = _MirroringReplayBuffer(
             observation_space=obs_space,
             action_space=self.env.single_action_space,
             num_envs=self.num_envs,

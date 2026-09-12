@@ -134,7 +134,9 @@ class _RobomimicEpisodeMetrics(gym.Wrapper):
 
 def _make_env_fn(cfg):
     def _make_env():
-        env: gym.Env = _RobomimicGymV21Adapter(_make_robosuite_env(cfg))
+        from rl_garden.envs.wrappers import DictStateObservationWrapper
+
+        env: gym.Env = DictStateObservationWrapper(_RobomimicGymV21Adapter(_make_robosuite_env(cfg)))
         if cfg.terminate_on_success:
             env = _RobomimicSuccessTermination(env)
         env = gym.wrappers.TimeLimit(env, max_episode_steps=cfg.horizon)

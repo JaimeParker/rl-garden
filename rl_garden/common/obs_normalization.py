@@ -1,13 +1,20 @@
-"""Optional obs mean/std normalization for Box-observation policies.
+"""Optional obs mean/std normalization, applied by whichever policy owns an
+``ObsNormalizingMixin``.
 
 ``ObsNormalizingMixin`` stores normalization statistics as policy buffers so
-they round-trip through ``state_dict()`` (checkpoint save/load) automatically,
-and applies them inside ``extract_features()`` so every consumer of features
-(training, eval, and Off2On online rollout) sees normalized observations
-through a single entry point. Statistics are fit once from the offline
-dataset and frozen afterward (Off2On online rollout does not update them),
-matching CORL's ``compute_mean_std``/``normalize_states`` convention for
-TD3-BC/AWAC.
+they round-trip through ``state_dict()`` (checkpoint save/load)
+automatically. Statistics are fit once from the offline dataset and frozen
+afterward (Off2On online rollout does not update them), matching CORL's
+``compute_mean_std``/``normalize_states`` convention.
+
+WHERE the mixin's ``_normalize_obs`` is applied is each caller's own choice,
+not fixed by this module: ``TD3BCPolicy``/``BCQPolicy``/``PLASPolicy``
+normalize the raw ``"state"`` entry inside ``extract_features()`` *before*
+the features extractor runs -- CORL's own semantics, and the only choice
+that is meaningful for a Dict+image schema (the extractor's own image
+branch is never touched). ``AWACPolicy`` instead normalizes the extractor's
+output features (state-only by convention there, so numerically equivalent
+to normalizing the raw state).
 """
 from __future__ import annotations
 
@@ -15,7 +22,8 @@ import torch
 
 
 class ObsNormalizingMixin:
-    """Mixin for Box-observation policies that normalize obs by mean/std."""
+    """Mixin giving a policy mean/std buffers plus fit/normalize helpers;
+    see the module docstring for where each caller applies them."""
 
     def _register_obs_normalizer(self, obs_dim: int) -> None:
         self.register_buffer("obs_mean", torch.zeros(obs_dim))

@@ -159,6 +159,10 @@ def _make_env_fn(env_id: str):
             env = _AdroitBinaryTermination(env)
         elif "kitchen" in env_id.lower():
             env = _KitchenTerminalWrapper(env)
+        if isinstance(env.observation_space, spaces.Box):
+            from rl_garden.envs.wrappers import DictStateObservationWrapper
+
+            env = DictStateObservationWrapper(env)
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         return _D4RLEpisodeMetrics(env, env_id, legacy_env)

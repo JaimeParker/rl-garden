@@ -6,7 +6,8 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import IQL, OfflineEnvSpec
-from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
+from rl_garden.buffers import ReplayBuffer
+from rl_garden.encoders.config import EncoderConfig
 
 
 def _state_env(num_envs: int = 2) -> OfflineEnvSpec:
@@ -21,7 +22,7 @@ def _dict_env(num_envs: int = 2) -> OfflineEnvSpec:
     return OfflineEnvSpec(
         spaces.Dict(
             {
-                "rgb": spaces.Box(0, 255, shape=(64, 64, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(0, 255, shape=(64, 64, 3), dtype=np.uint8),
                 "state": spaces.Box(-np.inf, np.inf, shape=(4,), dtype=np.float32),
             }
         ),
@@ -32,9 +33,13 @@ def _dict_env(num_envs: int = 2) -> OfflineEnvSpec:
 
 def _fill_state(agent: IQL, steps: int = 8) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- OfflineEnvSpec's
+    # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    state_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
@@ -45,11 +50,11 @@ def _fill_dict(agent: IQL, steps: int = 4) -> None:
     env = agent.env
     for _ in range(steps):
         obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(env.num_envs, 4),
         }
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
@@ -76,7 +81,7 @@ def test_iql_state_train_step_and_checkpoint(tmp_path):
     info = agent.train(1)
     result = agent.learn_offline(2, save_filename="iql.pt")
 
-    assert isinstance(agent.replay_buffer, TensorReplayBuffer)
+    assert isinstance(agent.replay_buffer, ReplayBuffer)
     assert torch.isfinite(torch.tensor(info["loss"]))
     assert "value_loss" in info
     assert "behavior_log_prob" in info
@@ -94,15 +99,14 @@ def test_iql_dict_uses_dict_replay_and_combined_encoder():
         net_arch=[16],
         n_critics=2,
         critic_subsample_size=2,
-        image_keys=("rgb",),
-        image_fusion_mode="stack_channels",
+        encoder_config=EncoderConfig(image_fusion_mode="stack_channels"),
         std_log=False,
     )
     _fill_dict(agent)
 
     info = agent.train(1)
 
-    assert isinstance(agent.replay_buffer, DictReplayBuffer)
+    assert isinstance(agent.replay_buffer, ReplayBuffer)
     assert torch.isfinite(torch.tensor(info["critic_loss"]))
     assert agent.policy.features_extractor.features_dim > 0
 
@@ -145,7 +149,7 @@ def test_target_min_q_uses_target_critic(monkeypatch):
 
     monkeypatch.setattr(agent.policy, "min_q_value", _spy)
     features = agent.policy.extract_features(
-        torch.randn(8, 4), stop_gradient=True
+        {"state": torch.randn(8, 4)}, stop_gradient=True
     )
     agent._target_min_q(features, torch.randn(8, 2).clamp(-1, 1))
 
@@ -186,18 +190,13 @@ def test_iql_checkpoint_roundtrip_restores_weights(tmp_path):
         assert torch.equal(value, loaded.policy.state_dict()[key]), key
 
 
-def test_iql_box_obs_rejects_image_kwargs():
-    with pytest.raises(ValueError, match="Box observation space"):
-        _make_state_agent(image_keys=("rgb",))
-
-
 def test_iql_unsupported_obs_space_raises_type_error():
     env = OfflineEnvSpec(
         spaces.Discrete(4),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=2,
     )
-    with pytest.raises(TypeError, match="Box or Dict"):
+    with pytest.raises(ValueError, match="Box or Dict"):
         _make_state_agent(env=env)
 
 

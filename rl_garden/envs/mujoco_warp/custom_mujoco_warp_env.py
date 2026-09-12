@@ -99,8 +99,8 @@ class CustomMujocoWarpEnv(VectorEnv):
         device: str,
         observation_space: gym.Space,
         frame_skip: int = 1,
-        camera_width: Optional[int] = None,
-        camera_height: Optional[int] = None,
+        render_width: Optional[int] = None,
+        render_height: Optional[int] = None,
         render_rgb: bool = True,
         render_depth: bool = False,
         **kwargs: Any,
@@ -127,16 +127,16 @@ class CustomMujocoWarpEnv(VectorEnv):
         high = np.tile(self.single_action_space.high, (nworld, 1))
         self.action_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
 
-        self._has_camera = camera_width is not None
-        self._camera_width = camera_width
-        self._camera_height = camera_height
+        self._has_camera = render_width is not None
+        self._render_width = render_width
+        self._render_height = render_height
         self._render_rgb = render_rgb
         self._render_depth = render_depth
         self._render_ctx = (
             mjw.create_render_context(
                 self._mjm,
                 nworld=nworld,
-                cam_res=(camera_width, camera_height),
+                cam_res=(render_width, render_height),
                 render_rgb=render_rgb,
                 render_depth=render_depth,
             )
@@ -176,10 +176,14 @@ class CustomMujocoWarpEnv(VectorEnv):
 
         return obs, reward, terminated, truncated, infos
 
+    # v1 supports exactly one camera (see module docstring); its
+    # observation-key name is fixed rather than user-configurable.
+    CAMERA_NAME = "main"
+
     def _render_cameras(self) -> dict[str, torch.Tensor]:
         """Renders the (single, v1-only) configured camera into rl-garden's
-        ``rgb``/``depth`` key convention. Call this from your own
-        ``_get_obs()``; it is not invoked automatically."""
+        ``rgb_<CAMERA_NAME>``/``depth_<CAMERA_NAME>`` key convention. Call
+        this from your own ``_get_obs()``; it is not invoked automatically."""
         if self._render_ctx is None:
             return {}
         mjw.render(self.model, self.data, self._render_ctx)
@@ -190,11 +194,14 @@ class CustomMujocoWarpEnv(VectorEnv):
         # zero-size buffer that fails to reshape, not a zero-filled one.
         if self._render_rgb:
             rgb_flat = wp.to_torch(self._render_ctx.rgb_data)
-            out_shape_rgb = (self.num_envs, self._camera_height, self._camera_width, 3)
-            out["rgb"] = _unpack_rgb(rgb_flat).reshape(out_shape_rgb)
+            out_shape_rgb = (self.num_envs, self._render_height, self._render_width, 3)
+            out[f"rgb_{self.CAMERA_NAME}"] = _unpack_rgb(rgb_flat).reshape(out_shape_rgb)
         if self._render_depth:
             depth_flat = wp.to_torch(self._render_ctx.depth_data)
-            out["depth"] = depth_flat.reshape(self.num_envs, self._camera_height, self._camera_width)
+            # Contract requires depth as (H, W, 1).
+            out[f"depth_{self.CAMERA_NAME}"] = depth_flat.reshape(
+                self.num_envs, self._render_height, self._render_width, 1
+            )
         return out
 
     def close(self) -> None:

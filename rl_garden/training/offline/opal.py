@@ -26,15 +26,17 @@ from rl_garden.training.inspection import (
     prepare_standalone,
     run_preflight,
 )
+from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.training.offline._args import OPALTrainingArgs
 from rl_garden.training.offline._registry import registry
 
 
 @dataclass
-class OPALArgs(OPALTrainingArgs):
+class OPALArgs(OPALTrainingArgs, ObservationArgs):
     """OPAL VAE pretraining. Requires ``--dataset_path`` (H5 trajectory
-    file, state-only). Produces a skill-VAE checkpoint (posterior encoder,
-    obs-conditioned prior, decoder)."""
+    file, state-only in practice -- ``infer_box_specs_from_h5`` always
+    returns a flat Box space). Produces a skill-VAE checkpoint (posterior
+    encoder, obs-conditioned prior, decoder)."""
 
 
 def run_opal(args: OPALArgs) -> None:
@@ -47,6 +49,7 @@ def run_opal(args: OPALArgs) -> None:
 
 
 def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
+    from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms import OPAL, OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
     from rl_garden.training.inspection import construct_agent
@@ -62,6 +65,16 @@ def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
         raise SystemExit("--dataset_path is required for opal.")
     if args.num_offline_steps <= 0:
         raise SystemExit("--num_offline_steps must be positive.")
+    if args.obs.is_visual:
+        from rl_garden.observations import ObservationContractError
+
+        raise ObservationContractError(
+            "opal is state-only: infer_box_specs_from_h5 always returns a "
+            "flat Box space (no camera keys), so --obs.rgb/--obs.depth "
+            f"cameras {args.obs.rgb + args.obs.depth} would be silently "
+            "ignored (OPAL's own has_images guard in _setup_model can never "
+            "see them from this entrypoint)."
+        )
 
     seed_everything(args.seed)
 
@@ -102,6 +115,8 @@ def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
         OPAL,
         env=env,
         dataset_path=args.dataset_path,
+        encoder_config=args.encoder if args.obs.is_visual else None,
+        obs_groups=resolve_obs_groups_config(args),
         skill_dim=args.skill_dim,
         chunk_size=args.chunk_size,
         hidden_size=args.hidden_size,

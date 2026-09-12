@@ -13,10 +13,12 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.encoders.combined import ImageEncoderFactory
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 
 
 class Off2OnCalQL(_CalQLRolloutTrainingShell):
@@ -101,14 +103,10 @@ class Off2OnCalQL(_CalQLRolloutTrainingShell):
         use_calql: bool = True,
         calql_bound_random_actions: bool = False,
         # Dict observation encoding
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
-        detach_encoder_on_actor: bool = True,
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         # Off2on phase control
         use_td_loss: bool = True,
         online_cql_alpha: float = 5.0,
@@ -139,17 +137,15 @@ class Off2OnCalQL(_CalQLRolloutTrainingShell):
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
-        self._configure_observation_kwargs(
-            env,
-            image_encoder_factory=image_encoder_factory,
-            image_keys=image_keys,
-            state_key=state_key,
-            use_proprio=use_proprio,
-            proprio_latent_dim=proprio_latent_dim,
-            image_fusion_mode=image_fusion_mode,
-            enable_stacking=enable_stacking,
-            detach_encoder_on_actor=detach_encoder_on_actor,
-        )
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_config = encoder_config
+        self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        self.encoder_sharing = encoder_sharing
 
         super().__init__(
             env=env,

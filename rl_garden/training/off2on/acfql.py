@@ -6,16 +6,11 @@ offline data into ``agent.replay_buffer``, run offline gradient steps,
 ``switch_to_online_mode``, continue via ``learn()``), so only a
 ``build_acfql`` callback is needed here, matching ``wsrl.py``'s shape.
 
-Box observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-observations (``ChunkedDictReplayBuffer``, via ``ACFQLCore._build_replay_buffer``).
-``run_off2on``'s shared runner reads ``args.obs_mode`` unconditionally to
-build the ``EnvRequest`` (unlike ``run_online``, it has no per-algorithm
-``make_env_request`` callback) -- ``obs_mode`` defaults to ``"state"`` here
-(not ``VisionArgs``' own ``"rgb"`` default, nor ``VisionWSRLTrainingArgs``'s
-buffer_size/batch_size/utd retuning) to preserve ``acfql``'s existing CLI
-behavior byte-for-byte for every current caller that doesn't pass
-``--obs_mode``, matching ``sac_flow``'s own M1 precedent
-(``training/online/sac_flow.py``).
+State-only observations by default; pass ``--obs.rgb <camera>`` for
+CNN-based Dict/RGBD observations (``ChunkedReplayBuffer``, via
+``ACFQLCore._build_replay_buffer``). ``run_off2on``'s shared runner reads
+``args.obs`` unconditionally to build the ``EnvRequest`` (unlike
+``run_online``, it has no per-algorithm ``make_env_request`` callback).
 
 ``ACFQLArgs`` extends ``Off2OnCommonArgs`` for the orchestration fields
 ``run_off2on`` reads directly (``num_offline_steps``, ``online_replay_mode``,
@@ -34,17 +29,16 @@ from __future__ import annotations
 
 def build_acfql(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import ACFQL
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys_from_env(env, args),
-            image_fusion_mode=args.image_fusion_mode,
-        )
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         ACFQL,
@@ -83,7 +77,6 @@ def build_acfql(args, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         activation_fn=args.activation_fn,
-        encoder_sharing=args.encoder_sharing,
         offline_sampling=args.offline_sampling,
         seed=args.seed,
         logger=logger,
@@ -114,25 +107,21 @@ def run_acfql(args: "ACFQLArgs") -> None:
 from dataclasses import dataclass  # noqa: E402
 from typing import Literal, Optional  # noqa: E402
 
-from rl_garden.common.cli_args import VisionArgs  # noqa: E402
+from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.policies.acfql_policy import ActorType, EncoderSharing  # noqa: E402
+from rl_garden.policies.acfql_policy import ActorType  # noqa: E402
 from rl_garden.training.off2on._args import Off2OnCommonArgs  # noqa: E402
 from rl_garden.training.off2on._registry import registry  # noqa: E402
 
 
 @dataclass
-class ACFQLArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
+class ACFQLArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     """ACFQL -- Q-chunking's action-chunked, offline-to-online FQL (Li, Zhou,
-    Levine 2025, ``3rd_party/qc/agents/acfql.py``). Box observations by
-    default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD observations.
+    Levine 2025, ``3rd_party/qc/agents/acfql.py``). State-only observations
+    by default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD
+    observations.
     """
-
-    # See module docstring: defaults to "state" (not VisionArgs' own "rgb"
-    # default) to preserve acfql's existing CLI behavior for every caller
-    # that doesn't pass --obs_mode.
-    obs_mode: str = "state"
 
     horizon_length: int = 5
     actor_type: ActorType = "distill-ddpg"
@@ -144,7 +133,6 @@ class ACFQLArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
     hidden_dim: int = 512
     hidden_layers: int = 4
     activation_fn: Optional[Activation] = "gelu"
-    encoder_sharing: EncoderSharing = "shared"
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
 

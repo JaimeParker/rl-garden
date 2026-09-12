@@ -61,7 +61,7 @@ def test_trajectory_batch_to_sample_uses_terminations_not_dones():
         "dones": torch.tensor([[0.0], [1.0], [1.0], [0.0]]),
     }
     sample = trajectory_batch_to_sample(batch, torch.device("cpu"))
-    assert sample.obs.shape == (4, 3)
+    assert sample.obs["state"].shape == (4, 3)
     assert sample.actions.shape == (4, 2)
     assert sample.rewards.shape == (4,)
     assert torch.equal(sample.dones, torch.tensor([0.0, 0.0, 1.0, 0.0]))
@@ -96,7 +96,7 @@ class _FakeRawBuffer:
 def test_shim_sample_returns_replay_buffer_sample():
     shim = _TrajectoryReplayBufferShim(_FakeRawBuffer(), torch.device("cpu"))
     sample = shim.sample(8)
-    assert sample.obs.shape == (8, 4)
+    assert sample.obs["state"].shape == (8, 4)
     assert sample.actions.shape == (8, 2)
     assert len(shim) == 100
 
@@ -178,8 +178,8 @@ def test_replay_buffer_swap_preserves_rlpd_mixing():
     agent.offline_replay_buffer = agent._build_prior_data_buffer(32)
     for _ in range(4):
         agent.offline_replay_buffer.add(
-            torch.full((1, 4), 9.0),
-            torch.full((1, 4), 9.0),
+            {"state": torch.full((1, 4), 9.0)},
+            {"state": torch.full((1, 4), 9.0)},
             torch.full((1, 2), 9.0),
             torch.full((1,), 9.0),
             torch.zeros(1),
@@ -187,7 +187,7 @@ def test_replay_buffer_swap_preserves_rlpd_mixing():
     agent.offline_data_ratio = 0.5
 
     batch = agent._sample_train_batch(8)
-    assert batch.obs.shape == (8, 4)
+    assert batch.obs["state"].shape == (8, 4)
     assert batch.actions.shape == (8, 2)
     assert batch.rewards.shape == (8,)
 
@@ -196,6 +196,6 @@ def test_replay_buffer_swap_preserves_rlpd_mixing():
     # _FakeRawBuffer), not exclusively one or the other -- proves the
     # shim-backed online buffer and the offline buffer were both actually
     # sampled from.
-    obs_values = set(batch.obs.flatten().tolist())
+    obs_values = set(batch.obs["state"].flatten().tolist())
     assert 9.0 in obs_values, "offline buffer contributed no rows -- mixing broke"
     assert 0.0 in obs_values, "shim-backed online buffer contributed no rows -- mixing broke"

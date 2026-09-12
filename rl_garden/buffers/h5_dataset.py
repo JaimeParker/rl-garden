@@ -13,9 +13,11 @@ from gymnasium import spaces
 from rl_garden.buffers._dataset_common import (
     _add_flat_transitions,
     _concat,
+    _finalize_dataset_obs_space,
     _first_existing,
     _length,
     _load_success,
+    _match_obs_to_buffer,
     _mc_returns,
     _slice,
     _to_tensor,
@@ -29,6 +31,58 @@ from rl_garden.buffers.dataset_backend_registry import (
     register_dataset_backend,
 )
 from rl_garden.common.types import Obs
+from rl_garden.observations.schema import ObservationContractError
+
+
+def _box_from_dataset(dataset: Any) -> spaces.Box:
+    shape = tuple(dataset.shape[1:])
+    dtype = np.dtype(dataset.dtype)
+    if dtype == np.dtype(np.uint8):
+        return spaces.Box(low=0, high=255, shape=shape, dtype=np.uint8)
+    if np.issubdtype(dtype, np.integer):
+        info = np.iinfo(dtype)
+        return spaces.Box(low=info.min, high=info.max, shape=shape, dtype=dtype)
+    return spaces.Box(low=-np.inf, high=np.inf, shape=shape, dtype=np.float32)
+
+
+def _space_from_obs_node(node: Any, h5py: Any) -> spaces.Box | spaces.Dict:
+    """Map an H5 ``obs``/``observations`` node onto the strict contract.
+
+    A ``Dataset`` node is a state-only source (wrapped into
+    ``Dict({"state": Box})`` by ``_finalize_dataset_obs_space`` below). A
+    ``Group`` node's child keys must already be exactly ``"state"``,
+    ``"rgb_<cam>"``, or ``"depth_<cam>"`` -- this generic loader does no
+    renaming of its own (see module docstring); a producer with different
+    native names (RLBench, robomimic) maps them in its own loader before the
+    data ever reaches an H5 file this function reads. Every offending key is
+    collected and raised together, and a nested Group one level down is
+    rejected the same way (the contract has no nested Dict spaces).
+    """
+    if isinstance(node, h5py.Dataset):
+        return _box_from_dataset(node)
+    if isinstance(node, h5py.Group):
+        entries: dict[str, spaces.Box] = {}
+        bad_keys: list[str] = []
+        for key in node:
+            child = node[key]
+            if not isinstance(child, h5py.Dataset):
+                bad_keys.append(key)
+                continue
+            if key != "state" and not key.startswith("rgb_") and not key.startswith("depth_"):
+                bad_keys.append(key)
+                continue
+            entries[key] = _box_from_dataset(child)
+        if bad_keys:
+            raise ObservationContractError(
+                f"H5 obs group has key(s) {sorted(bad_keys)!r} that don't match "
+                "the rl-garden observation contract ('state', 'rgb_<cam>', "
+                "'depth_<cam>'); rename them in the dataset, or use a "
+                "producer-specific loader (e.g. rlbench_dataset.py, "
+                "robomimic_dataset.py) that maps known field names onto the "
+                "contract."
+            )
+        return spaces.Dict(entries)
+    raise TypeError(f"Unsupported H5 node type: {type(node)!r}")
 
 
 def infer_specs_from_h5(
@@ -36,28 +90,11 @@ def infer_specs_from_h5(
     *,
     action_low: float = -1.0,
     action_high: float = 1.0,
-) -> tuple[spaces.Box | spaces.Dict, spaces.Box]:
-    """Infer Box or Dict observation/action spaces from a trajectory H5 file."""
+) -> tuple[spaces.Dict, spaces.Box]:
+    """Infer the strict-contract Dict observation space and action space from
+    a trajectory H5 file. See ``_space_from_obs_node`` for the key-mapping
+    rules enforced on the ``obs``/``observations`` group."""
     h5py = _require_h5py()
-
-    def _box_from_dataset(dataset: Any) -> spaces.Box:
-        shape = tuple(dataset.shape[1:])
-        dtype = np.dtype(dataset.dtype)
-        if dtype == np.dtype(np.uint8):
-            return spaces.Box(low=0, high=255, shape=shape, dtype=np.uint8)
-        if np.issubdtype(dtype, np.integer):
-            info = np.iinfo(dtype)
-            return spaces.Box(low=info.min, high=info.max, shape=shape, dtype=dtype)
-        return spaces.Box(low=-np.inf, high=np.inf, shape=shape, dtype=np.float32)
-
-    def _space_from_node(node: Any) -> spaces.Box | spaces.Dict:
-        if isinstance(node, h5py.Dataset):
-            return _box_from_dataset(node)
-        if isinstance(node, h5py.Group):
-            return spaces.Dict(
-                {key: _space_from_node(node[key]) for key in node}
-            )
-        raise TypeError(f"Unsupported H5 node type: {type(node)!r}")
 
     path = Path(path)
     with h5py.File(path, "r") as f:
@@ -72,7 +109,7 @@ def infer_specs_from_h5(
             obs_node = traj["observations"]
         else:
             raise ValueError(f"No obs/observations field in {traj_keys[0]}.")
-        obs_space = _space_from_node(obs_node)
+        obs_space = _space_from_obs_node(obs_node, h5py)
 
         if "actions" in traj:
             action_node = traj["actions"]
@@ -88,7 +125,7 @@ def infer_specs_from_h5(
         shape=action_shape,
         dtype=np.float32,
     )
-    return obs_space, action_space
+    return _finalize_dataset_obs_space(obs_space), action_space
 
 
 def infer_box_specs_from_h5(
@@ -97,18 +134,23 @@ def infer_box_specs_from_h5(
     action_low: float = -1.0,
     action_high: float = 1.0,
 ) -> tuple[spaces.Box, spaces.Box]:
-    """Infer flat Box observation/action spaces from a trajectory H5 file."""
+    """Infer a flat state-only Box observation space (plus action space) from
+    a trajectory H5 file, for the handful of consumers that flatten
+    observations manually and never take an image key. Raises
+    ``NotImplementedError`` when the file's obs group carries any key other
+    than ``"state"`` (i.e. any ``rgb_<cam>``/``depth_<cam>`` image key) --
+    use ``infer_specs_from_h5`` for those."""
     obs_space, action_space = infer_specs_from_h5(
         path,
         action_low=action_low,
         action_high=action_high,
     )
-    if isinstance(obs_space, spaces.Dict):
+    if set(obs_space.spaces.keys()) != {"state"}:
         raise NotImplementedError(
             "Dict observations detected. infer_box_specs_from_h5 supports flat "
-            "Box observations only. Use infer_specs_from_h5 for RGBD/offline IQL."
+            "Box (state-only) observations only. Use infer_specs_from_h5 for RGBD/offline IQL."
         )
-    return obs_space, action_space
+    return obs_space["state"], action_space
 
 
 def _load_traj_transitions(
@@ -241,6 +283,7 @@ def load_h5_dataset_to_replay_buffer(
 
     obs_all = _concat(obs_parts)
     next_obs_all = _concat(next_obs_parts)
+    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)

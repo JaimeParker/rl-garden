@@ -276,6 +276,8 @@ gets the env:
 
 | Wrapper | When to use |
 |---------|-------------|
+| `DictStateObservationWrapper` | State-only backend: wraps a flat `Box` obs into `Dict({"state": Box})` |
+| `require_state_only_observation` | State-only backend: raises `ObservationContractError` unless `req.observation` asks only for state |
 | `ImageFrameStackWrapper` | Visual obs with `frame_stack > 1` |
 | `PerCameraRGBDWrapper` | Multi-camera envs where each camera feeds a separate encoder |
 | `RewardScaleBiasWrapper` | Dense reward normalisation (`r * scale + bias`) on a single-env `gym.Wrapper` chain, pre-vectorization |
@@ -300,14 +302,10 @@ Other reusable wrappers under `rl_garden/envs/wrappers/`, by name only:
 |-------|------|-------|
 | `env_id` | `str` | Environment identifier |
 | `num_envs` | `int` | Training parallel envs |
-| `obs_mode` | `str` | `"state"` / `"rgb"` / `"rgbd"` |
+| `observation` | `ObservationConfig` | "What is observed" — state / rgb cameras / depth cameras / image size / frame stacking. Replaces the old `obs_mode` / `camera_width` / `camera_height` / `include_state` / `per_camera_rgbd` / `frame_stack` fields this request used to carry directly (all deleted); see `rl_garden.observations`. |
 | `control_mode` | `str` | e.g. `"pd_joint_delta_pos"` |
 | `render_mode` | `str` | e.g. `"rgb_array"` |
 | `seed` | `int` | |
-| `camera_width` / `camera_height` | `Optional[int]` | `None` when `obs_mode == "state"` |
-| `include_state` | `bool` | Whether to append proprioceptive state to visual obs |
-| `per_camera_rgbd` | `bool` | Keep each camera as separate obs keys |
-| `frame_stack` | `int` | 1 = no stacking |
 | `reward_scale` / `reward_bias` | `float` | Applied by `RewardScaleBiasWrapper` if non-trivial |
 | `num_eval_envs` | `int` | Parallel eval envs |
 | `eval_record_dir` | `Optional[str]` | Path for video recording; `None` = no recording |
@@ -316,6 +314,47 @@ Other reusable wrappers under `rl_garden/envs/wrappers/`, by name only:
 | `num_eval_steps` | `int` | Steps per eval episode |
 | `create_eval_env` | `bool` | `False` → `make_training_envs` returns `(train_env, None)` |
 | `backend_config` | `Any` | Passed through from `args.resolve_backend_config()` |
+
+### `ObservationConfig` and the honor-or-raise contract
+
+`req.observation` (`rl_garden.observations.ObservationConfig`) is the single
+"what is observed" input every backend receives:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `state` | `bool` | Whether to include the flat `"state"` key |
+| `rgb` | `tuple[str, ...]` | Camera names; each renders `rgb_<cam>` |
+| `depth` | `tuple[str, ...]` | Camera names; each renders `depth_<cam>` |
+| `image_size` | `Optional[tuple[int, int]]` | `(H, W)`; `None` = backend's own default |
+| `frame_stack` | `int` | 1 = no stacking; stacks images into a leading time dimension |
+
+A backend must produce **exactly** `req.observation.expected_keys` (image
+keys first, then `"state"` if requested) or raise `ObservationContractError`
+explaining what it cannot do — never silently drop, rename, or add a key.
+State-only backends (mujoco benchmark tasks, minari, d4rl_legacy, custom,
+robomimic) call `require_state_only_observation(req.observation, backend=...)`
+(`rl_garden.envs.wrappers`) to reject any `rgb`/`depth`/`frame_stack` request
+up front, then wrap their single `Box`-observation `gym.Env` in
+`DictStateObservationWrapper` to emit `Dict({"state": Box})` — every
+state-only backend uses this wrapper instead of hand-rolling the same
+one-key dict. A backend with cameras names them by its own sensor
+vocabulary (e.g. ManiSkill `base_camera`/`hand_camera`, RoboTwin
+`head`/`left_wrist`/`right_wrist`) and validates unknown names against that
+vocabulary before touching the simulator.
+
+**Key vocabulary is strict and enforced centrally** — only `state`,
+`rgb_<cam>`, `depth_<cam>` are valid observation-space keys anywhere in
+rl-garden (`rl_garden.observations.schema.validate_observation_space`).
+Bare `rgb`/`depth` keys, `proprio`, or any other name are rejected.
+
+**Registry-level validation**: `make_training_envs`/`make_evaluation_env`
+(`rl_garden/envs/backend_registry.py::_validate_env_observation_contract`)
+calls `validate_observation_space` on the constructed env's
+`single_observation_space` and checks its key set equals
+`req.observation.expected_keys` exactly, immediately after backend
+construction. A backend that gets this wrong fails at construction time with
+`ObservationContractError`, not as a downstream shape mismatch inside an
+algorithm or buffer.
 
 ## 8. Offline-only path
 

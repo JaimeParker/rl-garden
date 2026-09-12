@@ -33,9 +33,12 @@ class SuccessClassifier(nn.Module):
     ) -> None:
         super().__init__()
         from rl_garden.encoders.combined import CombinedExtractor
-        from rl_garden.encoders.resnet import resnet_encoder_factory
+        from rl_garden.encoders.config import EncoderConfig
+        from rl_garden.observations import ObservationSchema
 
-        factory = resnet_encoder_factory(
+        encoder_config = EncoderConfig(
+            backbone="resnet10",
+            image_fusion_mode="per_key",
             pretrained_weights=pretrained_weights,
             freeze_resnet_encoder=True,
             # Matches HIL-SERL's own PreTrainedResNetEncoder (spatial-learned
@@ -45,13 +48,8 @@ class SuccessClassifier(nn.Module):
             # into on a freshly-constructed instance.
             pooling_method="spatial_learned_embeddings",
         )
-        self.encoder = CombinedExtractor(
-            observation_space,
-            image_keys=image_keys,
-            use_proprio=False,
-            image_encoder_factory=factory,
-            fusion_mode="per_key",
-        )
+        schema = ObservationSchema.from_space(observation_space).subset(tuple(image_keys))
+        self.encoder = CombinedExtractor(observation_space, schema, encoder_config)
         self.head = nn.Sequential(
             nn.Linear(self.encoder.features_dim, hidden_dim),
             nn.Dropout(dropout_rate),

@@ -34,12 +34,12 @@ off-policy learning, not a bug in the checkpoint mechanism.
 
 ```bash
 # Resume SAC training from checkpoint
-python examples/train_online.py sac --obs_mode state \
+python examples/train_online.py sac \
   --load_checkpoint runs/<run>/checkpoints/final.pt \
   --total_timesteps 500000
 
 # Load with replay buffer
-python examples/train_online.py sac --obs_mode state \
+python examples/train_online.py sac \
   --load_checkpoint runs/<run>/checkpoints/final.pt \
   --load_replay_buffer True \
   --total_timesteps 500000
@@ -61,3 +61,9 @@ Algorithm class aliases keep legacy checkpoints loadable:
 Each algorithm class declares which checkpoints it accepts via
 `_compatible_checkpoint_algorithms`. Mismatched checkpoints raise a `ValueError`
 describing the incompatibility.
+
+Checkpoints saved before the unified observation/encoder redesign (`obs`/
+`encoder`/`obs_groups`, `rl_garden/observations/`) are **not supported**.
+There is no migration script: loading one raises on the old observation
+metadata format instead of silently reinterpreting it. Retrain from scratch
+against the current `obs`/`encoder` surface.

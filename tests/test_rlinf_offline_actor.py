@@ -44,7 +44,11 @@ def test_resolve_algorithm_rejects_unknown_name():
         resolve_algorithm("not_a_real_algorithm")
 
 
-def test_dataset_batch_to_sample_inverts_masks_to_dones():
+def test_dataset_batch_to_sample_inverts_masks_to_dones_and_wraps_dict_observations():
+    # Every algorithm's OfflineEnvSpec is boundary-normalized to
+    # Dict({"state": Box}) now (see BaseAlgorithm.__init__), so obs/next_obs
+    # are always wrapped the same way -- not conditional on the active
+    # algorithm any more.
     batch = {
         "observations": torch.zeros(4, 3),
         "next_observations": torch.ones(4, 3),
@@ -54,8 +58,8 @@ def test_dataset_batch_to_sample_inverts_masks_to_dones():
         "masks": torch.tensor([1.0, 1.0, 1.0, 0.0]),
     }
     sample = _dataset_batch_to_sample(batch)
-    assert torch.equal(sample.obs, batch["observations"])
-    assert torch.equal(sample.next_obs, batch["next_observations"])
+    assert torch.equal(sample.obs["state"], batch["observations"])
+    assert torch.equal(sample.next_obs["state"], batch["next_observations"])
     assert torch.equal(sample.actions, batch["actions"])
     assert torch.equal(sample.rewards, batch["rewards"])
     assert torch.equal(sample.dones, torch.tensor([0.0, 0.0, 0.0, 1.0]))

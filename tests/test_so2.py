@@ -9,8 +9,9 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import SO2, Off2OnSO2, OfflineEnvSpec
 from rl_garden.algorithms.sac_core import SACCore
-from rl_garden.algorithms.so2 import SO2Core, _MirroringTensorReplayBuffer
-from rl_garden.buffers.tensor_buffer import TensorReplayBuffer
+from rl_garden.algorithms.so2 import SO2Core, _MirroringReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.encoders.config import EncoderConfig
 
 _OBS_DIM = 4
 _ACTION_DIM = 2
@@ -21,6 +22,23 @@ def _mock_env(num_envs: int = 2) -> MagicMock:
     env.num_envs = num_envs
     env.single_observation_space = spaces.Box(
         low=-1.0, high=1.0, shape=(_OBS_DIM,), dtype=np.float32
+    )
+    env.single_action_space = spaces.Box(
+        low=-1.0, high=1.0, shape=(_ACTION_DIM,), dtype=np.float32
+    )
+    return env
+
+
+def _mock_dict_env(num_envs: int = 2) -> MagicMock:
+    env = MagicMock()
+    env.num_envs = num_envs
+    env.single_observation_space = spaces.Dict(
+        {
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(32, 32, 3), dtype=np.uint8),
+            "state": spaces.Box(
+                low=-1.0, high=1.0, shape=(_OBS_DIM,), dtype=np.float32
+            ),
+        }
     )
     env.single_action_space = spaces.Box(
         low=-1.0, high=1.0, shape=(_ACTION_DIM,), dtype=np.float32
@@ -46,10 +64,14 @@ def _off2on_kwargs(**overrides) -> dict[str, object]:
 
 
 def _fill(agent, steps: int = 8) -> None:
+    # env.single_observation_space is Dict({"state": Box}) -- _mock_env's
+    # bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
+    # rl_garden.envs.wrappers.VectorizedDictStateWrapper).
     env = agent.env
+    state_shape = env.single_observation_space["state"].shape
     for step in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        obs = {"state": torch.randn(env.num_envs, *state_shape)}
+        next_obs = {"state": torch.randn_like(obs["state"])}
         actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
@@ -57,7 +79,7 @@ def _fill(agent, steps: int = 8) -> None:
 
 
 def _make_data(agent):
-    return SimpleNamespace(next_obs=torch.randn(agent.env.num_envs, _OBS_DIM))
+    return SimpleNamespace(next_obs={"state": torch.randn(agent.env.num_envs, _OBS_DIM)})
 
 
 # --- _smooth_target_action -------------------------------------------------
@@ -134,9 +156,9 @@ def test_target_action_log_prob_matches_base_when_std_is_zero():
 
 
 def test_mirroring_buffer_writes_into_mirror_target_when_set():
-    obs_space = spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32)})
     action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32)
-    primary = _MirroringTensorReplayBuffer(
+    primary = _MirroringReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -144,7 +166,7 @@ def test_mirroring_buffer_writes_into_mirror_target_when_set():
         storage_device="cpu",
         sample_device="cpu",
     )
-    mirror = TensorReplayBuffer(
+    mirror = ReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -154,8 +176,8 @@ def test_mirroring_buffer_writes_into_mirror_target_when_set():
     )
     primary._mirror_into = mirror
 
-    obs = torch.randn(1, _OBS_DIM)
-    next_obs = torch.randn(1, _OBS_DIM)
+    obs = {"state": torch.randn(1, _OBS_DIM)}
+    next_obs = {"state": torch.randn(1, _OBS_DIM)}
     action = torch.randn(1, _ACTION_DIM).clamp(-1, 1)
     reward = torch.ones(1)
     done = torch.zeros(1)
@@ -163,13 +185,13 @@ def test_mirroring_buffer_writes_into_mirror_target_when_set():
 
     assert len(primary) == 1
     assert len(mirror) == 1
-    assert torch.equal(mirror.obs[0], primary.obs[0])
+    assert torch.equal(mirror.obs["state"][0], primary.obs["state"][0])
 
 
 def test_mirroring_buffer_with_no_mirror_target_behaves_like_plain_buffer():
-    obs_space = spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32)})
     action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32)
-    buffer = _MirroringTensorReplayBuffer(
+    buffer = _MirroringReplayBuffer(
         observation_space=obs_space,
         action_space=action_space,
         num_envs=1,
@@ -178,8 +200,8 @@ def test_mirroring_buffer_with_no_mirror_target_behaves_like_plain_buffer():
         sample_device="cpu",
     )
     assert buffer._mirror_into is None
-    obs = torch.randn(1, _OBS_DIM)
-    next_obs = torch.randn(1, _OBS_DIM)
+    obs = {"state": torch.randn(1, _OBS_DIM)}
+    next_obs = {"state": torch.randn(1, _OBS_DIM)}
     action = torch.randn(1, _ACTION_DIM).clamp(-1, 1)
     buffer.add(obs, next_obs, action, torch.ones(1), torch.zeros(1))
     assert len(buffer) == 1
@@ -190,14 +212,14 @@ def test_offline_to_online_switch_wires_mirroring_into_offline_buffer():
     _fill(agent, steps=4)
     agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.9)
 
-    assert isinstance(agent.offline_replay_buffer, _MirroringTensorReplayBuffer)
-    assert isinstance(agent.replay_buffer, _MirroringTensorReplayBuffer)
+    assert isinstance(agent.offline_replay_buffer, _MirroringReplayBuffer)
+    assert isinstance(agent.replay_buffer, _MirroringReplayBuffer)
     assert agent.replay_buffer._mirror_into is agent.offline_replay_buffer
     assert agent.offline_replay_buffer._mirror_into is None
 
     offline_len_before = len(agent.offline_replay_buffer)
-    obs = torch.randn(agent.env.num_envs, _OBS_DIM)
-    next_obs = torch.randn_like(obs)
+    obs = {"state": torch.randn(agent.env.num_envs, _OBS_DIM)}
+    next_obs = {"state": torch.randn_like(obs["state"])}
     action = torch.randn(agent.env.num_envs, _ACTION_DIM).clamp(-1, 1)
     agent.replay_buffer.add(obs, next_obs, action, torch.ones(agent.env.num_envs), torch.zeros(agent.env.num_envs))
 
@@ -212,23 +234,23 @@ def test_offline_buffer_evicts_oldest_entries_once_full_via_mirroring():
     # serial_entry_offline2online.py:78-86.
     agent = Off2OnSO2(env=_mock_env(num_envs=1), **_off2on_kwargs(buffer_size=4))
     _fill(agent, steps=4)
-    first_obs = agent.replay_buffer.obs[0].clone()
+    first_obs = agent.replay_buffer.obs[0]["state"].clone()
     agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.9)
     assert len(agent.offline_replay_buffer) == 4
 
-    marker_obs = torch.full((1, _OBS_DIM), 7.0)
+    marker_obs = {"state": torch.full((1, _OBS_DIM), 7.0)}
     agent.replay_buffer.add(
-        marker_obs, torch.randn(1, _OBS_DIM), torch.zeros(1, _ACTION_DIM),
+        marker_obs, {"state": torch.randn(1, _OBS_DIM)}, torch.zeros(1, _ACTION_DIM),
         torch.ones(1), torch.zeros(1),
     )
 
     assert len(agent.offline_replay_buffer) == 4  # still at capacity, not grown
     assert not any(
-        torch.equal(agent.offline_replay_buffer.obs[i], first_obs)
+        torch.equal(agent.offline_replay_buffer.obs[i]["state"], first_obs)
         for i in range(4)
     ), "oldest pre-switch entry should have been evicted by the mirrored write"
     assert any(
-        torch.equal(agent.offline_replay_buffer.obs[i], marker_obs)
+        torch.equal(agent.offline_replay_buffer.obs[i]["state"], marker_obs["state"])
         for i in range(4)
     ), "the mirrored online transition should now be present in the offline buffer"
 
@@ -318,6 +340,44 @@ def test_so2_offline_construction_and_train_step():
     assert agent._checkpoint_metadata()["target_smoothing_noise_std"] == 0.3
 
 
+# --- Dict (vision) observations ---------------------------------------------
+
+
+def test_so2_dict_obs_construction_uses_dict_replay_buffer():
+    agent = Off2OnSO2(
+        env=_mock_dict_env(num_envs=1),
+        encoder_config=EncoderConfig(proprio_latent_dim=4),
+        **_off2on_kwargs(),
+    )
+    assert isinstance(agent.replay_buffer, _MirroringReplayBuffer)
+
+
+def test_so2_dict_obs_checkpoint_roundtrip_with_encoder_config(tmp_path):
+    encoder_config = EncoderConfig(proprio_latent_dim=4)
+    agent = Off2OnSO2(
+        env=_mock_dict_env(num_envs=1),
+        encoder_config=encoder_config,
+        target_smoothing_noise_std=0.42,
+        **_off2on_kwargs(),
+    )
+    path = tmp_path / "so2_dict.pt"
+    agent.save(path)
+
+    loaded = Off2OnSO2(
+        env=_mock_dict_env(num_envs=1),
+        encoder_config=encoder_config,
+        target_smoothing_noise_std=0.42,
+        **_off2on_kwargs(),
+    )
+    loaded.load(path, load_replay_buffer=False)
+
+    meta = loaded._checkpoint_metadata()
+    assert meta["encoder_config"] == {
+        field: getattr(encoder_config, field) for field in meta["encoder_config"]
+    }
+    assert meta["target_smoothing_noise_std"] == 0.42
+
+
 def test_so2_offline_class_has_no_offline_replay_buffer_attribute():
     env = OfflineEnvSpec(
         spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32),
@@ -329,5 +389,5 @@ def test_so2_offline_class_has_no_offline_replay_buffer_attribute():
         net_arch={"pi": [16], "qf": [16]}, n_critics=4, critic_subsample_size=None,
     )
     assert not hasattr(agent, "offline_replay_buffer")
-    assert isinstance(agent.replay_buffer, _MirroringTensorReplayBuffer)
+    assert isinstance(agent.replay_buffer, _MirroringReplayBuffer)
     assert agent.replay_buffer._mirror_into is None

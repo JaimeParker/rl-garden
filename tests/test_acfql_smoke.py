@@ -9,6 +9,7 @@ from gymnasium.vector.utils import batch_space
 from rl_garden.algorithms import ACFQL
 from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
 from rl_garden.encoders.combined import default_image_encoder_factory
+from rl_garden.encoders.config import EncoderConfig
 
 OBS_DIM = 4
 ACTION_DIM = 2
@@ -20,6 +21,7 @@ IMG_SIZE = 16
 _test_image_encoder_factory = default_image_encoder_factory(
     features_dim=16, plain_conv_pooling="gap"
 )
+_test_encoder_config = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 
 def _write_h5_dataset(path, *, num_traj: int, steps_per_traj: int) -> None:
@@ -87,7 +89,7 @@ def _write_dict_h5_dataset(path, *, num_traj: int, steps_per_traj: int) -> None:
                 data=rng.standard_normal((steps_per_traj + 1, OBS_DIM)).astype(np.float32),
             )
             obs.create_dataset(
-                "rgb",
+                "rgb_cam",
                 data=rng.integers(
                     0, 256, (steps_per_traj + 1, IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8
                 ),
@@ -110,7 +112,7 @@ class _FakeVisionEnv:
         self._step_count = torch.zeros(num_envs, dtype=torch.long)
         self.single_observation_space = spaces.Dict(
             {
-                "rgb": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
                 "state": spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
             }
         )
@@ -120,7 +122,7 @@ class _FakeVisionEnv:
 
     def _obs(self):
         return {
-            "rgb": torch.randint(
+            "rgb_cam": torch.randint(
                 0, 256, (self.num_envs, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8
             ),
             "state": torch.randn(self.num_envs, OBS_DIM),
@@ -207,10 +209,10 @@ def test_acfql_switch_to_online_and_learn(tmp_path):
 
 
 def test_acfql_vision_offline_and_online(tmp_path):
-    """Dict/RGBD obs, offline (H5-loaded, ChunkedDictReplayBuffer) then
+    """Dict/RGBD obs, offline (H5-loaded, ChunkedReplayBuffer) then
     online (real rollout collection) -- the milestone-3 vision path,
     end-to-end through both phases ACFQL actually supports."""
-    agent = _make_agent(env=_FakeVisionEnv(), image_encoder_factory=_test_image_encoder_factory)
+    agent = _make_agent(env=_FakeVisionEnv(), encoder_config=_test_encoder_config)
 
     path = tmp_path / "acfql_vision.h5"
     _write_dict_h5_dataset(path, num_traj=6, steps_per_traj=20)
@@ -228,7 +230,7 @@ def test_acfql_vision_offline_and_online(tmp_path):
         assert np.isfinite(value), (key, value)
 
     obs = {
-        "rgb": torch.randint(0, 256, (5, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8),
+        "rgb_cam": torch.randint(0, 256, (5, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8),
         "state": torch.randn(5, OBS_DIM),
     }
     action = agent.policy.predict(obs)
@@ -254,7 +256,7 @@ def test_acfql_best_of_n_actor_type_skips_onestep_flow_grad(tmp_path):
 def test_acfql_best_of_n_predict_shape(tmp_path):
     agent = _make_agent(actor_type="best-of-n", actor_num_samples=4)
     _load_offline(agent, tmp_path)
-    obs = torch.randn(5, OBS_DIM)
+    obs = {"state": torch.randn(5, OBS_DIM)}
     action = agent.policy.predict(obs)
     assert action.shape == (5, HORIZON * ACTION_DIM)
     assert torch.all(action <= 1.0 + 1e-4) and torch.all(action >= -1.0 - 1e-4)

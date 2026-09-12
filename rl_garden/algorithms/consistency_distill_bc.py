@@ -42,7 +42,6 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.diffusion_cm_distill import (
     _gather_coef,
@@ -52,12 +51,37 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
+from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.networks import Activation, DiffusionMLP, KernelInit
+from rl_garden.observations import (
+    ObservationContractError,
+    ObservationSchema,
+    normalize_observation_space,
+)
+from rl_garden.observations.schema import Modality, key_modality
 from rl_garden.policies.diffusion_policy import DiffusionPolicy, build_diffusion_net
 
 _MISSING = object()
+
+
+def _checkpoint_observation_has_images(observation_space_metadata: dict[str, Any]) -> bool:
+    """Whether a checkpoint's recorded ``observation_space`` metadata
+    (``rl_garden.common.checkpoint.space_metadata``) includes any image key.
+
+    Reads the metadata's own ``type``/``spaces`` shape directly instead of a
+    hyperparameter field like the former ``image_keys`` (deleted by the
+    observation-redesign migration) -- correct regardless of what a
+    ``DiffusionBC`` checkpoint's ``hyperparameters`` happen to record. Uses
+    the canonical ``key_modality`` classifier (``rl_garden.observations``)
+    rather than a hand-rolled prefix check, so the key vocabulary stays in
+    one place.
+    """
+    if observation_space_metadata.get("type") != "Dict":
+        return False
+    keys = observation_space_metadata.get("spaces", {})
+    return any(key_modality(key) != Modality.STATE for key in keys)
 
 
 class ConsistencyDistillBC(OfflineRLAlgorithm):
@@ -119,11 +143,13 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if not isinstance(self.env.single_observation_space, spaces.Box):
-            raise TypeError(
-                "ConsistencyDistillBC is state-only (Box observations), matching "
-                "its DiffusionBC teacher; vision is out of scope."
+        normalized_obs_space = normalize_observation_space(self.env.single_observation_space)
+        if ObservationSchema.from_space(normalized_obs_space).has_images:
+            raise ObservationContractError(
+                "ConsistencyDistillBC is state-only, matching its DiffusionBC "
+                "teacher; vision is out of scope."
             )
+        self._obs_dim = normalized_obs_space["state"].shape[0]
         if cm_grad_clip_norm is not None and cm_grad_clip_norm <= 0:
             raise ValueError(
                 f"cm_grad_clip_norm must be positive or None, got {cm_grad_clip_norm}."
@@ -198,8 +224,7 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
 
     def _build_net(self) -> nn.Module:
         action_dim = self.env.single_action_space.shape[0]
-        obs_dim = self.env.single_observation_space.shape[0]
-        cond_dim = obs_dim * self.cond_steps
+        cond_dim = self._obs_dim * self.cond_steps
         return build_diffusion_net(
             self.net_cls,
             action_dim=action_dim,
@@ -249,23 +274,34 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
 
     def _setup_model(self) -> None:
         checkpoint = load_checkpoint_file(self.bc_checkpoint, map_location=self.device)
-        # Dict (vision) DiffusionBC checkpoints record image_keys in their
-        # hyperparameters; this class's teacher/student networks are Box-only
-        # (self.env.single_observation_space.shape[0] is indexed unconditionally
-        # below), so reject early with a clear message instead of an
-        # AttributeError on a Dict observation space.
-        if checkpoint["metadata"]["hyperparameters"].get("image_keys") is not None:
+        # Dict (vision) DiffusionBC checkpoints record image keys in their
+        # recorded observation_space metadata; this class's teacher/student
+        # networks are state-only (self._obs_dim is a flat state dimension),
+        # so reject early with a clear message instead of a shape error
+        # downstream. Read the checkpoint's own recorded observation_space
+        # metadata (always present, see rl_garden.common.checkpoint.
+        # space_metadata) rather than a hyperparameter field -- it is a plain
+        # {"type": ..., "spaces": {...}} dict, not a real gymnasium Space, so
+        # it is inspected directly rather than through normalize_observation_
+        # space/ObservationSchema.from_space (which require real Space
+        # instances).
+        if _checkpoint_observation_has_images(checkpoint["metadata"]["observation_space"]):
             raise ValueError(
                 "--bc_checkpoint was trained with Dict (vision) observations "
-                "(its recorded hyperparameters include image_keys); "
+                "(its recorded observation_space includes an image key); "
                 "ConsistencyDistillBC's --bc_checkpoint path requires a "
-                "Box-trained DiffusionBC checkpoint."
+                "state-only DiffusionBC checkpoint."
             )
         self._validate_teacher_config(checkpoint["metadata"]["hyperparameters"])
 
+        # State-only by construction (checked in __init__), so this resolves to
+        # a parameterless FlattenExtractor; the frozen teacher's ema_net_state_dict
+        # covers policy.net only, exactly as before.
+        self._resolve_observation_encoders(self.env.single_observation_space)
         self.policy = DiffusionPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
+            features_extractor=self.observation_encoders.actor,
             horizon_steps=self.horizon_steps,
             cond_steps=self.cond_steps,
             denoising_steps=self.denoising_steps,
@@ -348,16 +384,16 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
             idx = torch.randint(
                 0, self._dataset_size, (self.batch_size,), device=self._action_chunks.device
             )
-            obs_history = self._obs_history[idx]
+            obs_history = index_obs(self._obs_history, idx)
             action_chunk = self._action_chunks[idx]
             loss_sum += self._distill_step(obs_history, action_chunk)
 
         return {"loss": loss_sum / gradient_steps}
 
-    def _distill_step(self, obs_history: torch.Tensor, action_chunk: torch.Tensor) -> float:
+    def _distill_step(self, obs_history: dict[str, torch.Tensor], action_chunk: torch.Tensor) -> float:
         batch = action_chunk.shape[0]
         device = action_chunk.device
-        cond = {"state": obs_history.reshape(batch, -1)}
+        cond = {"state": obs_history["state"].reshape(batch, -1)}
         noise = torch.randn_like(action_chunk)
 
         start_t = torch.randint(0, self.denoising_steps, (batch,), device=device)

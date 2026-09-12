@@ -1,10 +1,12 @@
 """Unit tests for WSRL with Dict vision observations."""
+import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
 from unittest.mock import MagicMock
 
 from rl_garden.algorithms import WSRL
+from rl_garden.encoders.config import EncoderConfig
 
 
 @pytest.fixture
@@ -13,10 +15,10 @@ def rgbd_env():
     env = MagicMock()
     env.num_envs = 2
     env.single_observation_space = spaces.Dict({
-        "rgb": spaces.Box(low=0, high=255, shape=(128, 128, 3), dtype="uint8"),  # HWC format
-        "state": spaces.Box(low=-1, high=1, shape=(4,), dtype=float),
+        "rgb_cam": spaces.Box(low=0, high=255, shape=(128, 128, 3), dtype="uint8"),  # HWC format
+        "state": spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32),
     })
-    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=float)
+    env.single_action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
     return env
 
 
@@ -39,10 +41,7 @@ def wsrlrgbd_agent(rgbd_env):
         cql_n_actions=4,
         cql_alpha=1.0,
         # Vision parameters
-        image_keys=("rgb",),
-        state_key="state",
-        use_proprio=True,
-        proprio_latent_dim=16,
+        encoder_config=EncoderConfig(proprio_latent_dim=16),
         # General
         device="cpu",
         seed=42,
@@ -61,27 +60,56 @@ class TestWSRLDictCreation:
     def test_dict_observation_space(self, wsrlrgbd_agent):
         obs_space = wsrlrgbd_agent.env.single_observation_space
         assert isinstance(obs_space, spaces.Dict)
-        assert "rgb" in obs_space.spaces
+        assert "rgb_cam" in obs_space.spaces
         assert "state" in obs_space.spaces
 
     def test_features_extractor_is_combined(self, wsrlrgbd_agent):
         from rl_garden.encoders.combined import CombinedExtractor
         assert isinstance(wsrlrgbd_agent.policy.features_extractor, CombinedExtractor)
 
-    def test_replay_buffer_is_mc_dict_buffer(self, wsrlrgbd_agent):
-        from rl_garden.buffers.mc_buffer import MCDictReplayBuffer
-        assert isinstance(wsrlrgbd_agent.replay_buffer, MCDictReplayBuffer)
+    def test_replay_buffer_is_mc_buffer(self, wsrlrgbd_agent):
+        from rl_garden.buffers.mc_buffer import MCReplayBuffer
+        assert isinstance(wsrlrgbd_agent.replay_buffer, MCReplayBuffer)
 
-    def test_actor_image_stop_gradient_required(self, rgbd_env):
-        with pytest.raises(ValueError, match="stop_gradient=True"):
-            WSRL(
-                env=rgbd_env,
-                buffer_size=100,
-                buffer_device="cpu",
-                batch_size=4,
-                detach_encoder_on_actor=False,  # Backward-compatible guard.
-                device="cpu",
-            )
+    def test_actor_image_stop_gradient_optional(self, rgbd_env):
+        # encoder_sharing="shared" is now a first-class supported mode (not
+        # an error): both losses train the encoder, no actor-path detach.
+        agent = WSRL(
+            env=rgbd_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            batch_size=4,
+            encoder_sharing="shared",
+            device="cpu",
+        )
+        assert agent._actor_stop_gradient() is False
+
+    def test_without_proprio(self, rgbd_env):
+        """``ObsGroups`` excluding ``state`` from both actor and critic drops
+        proprio entirely -- the encoder sees only the image key. Symmetric
+        (actor == critic) so no ``encoder_sharing='separate'`` is required."""
+        from rl_garden.observations import ObsGroups
+
+        agent = WSRL(
+            env=rgbd_env,
+            buffer_size=100,
+            buffer_device="cpu",
+            learning_starts=10,
+            batch_size=4,
+            gamma=0.99,
+            net_arch={"pi": [32, 32], "qf": [32, 32]},
+            n_critics=4,
+            critic_subsample_size=2,
+            use_cql_loss=True,
+            cql_n_actions=4,
+            cql_alpha=1.0,
+            encoder_config=EncoderConfig(proprio_latent_dim=16),
+            obs_groups=ObsGroups(actor=("rgb_cam",), critic=("rgb_cam",)),
+            device="cpu",
+            seed=42,
+        )
+        assert not agent.observation_encoders.actor.has_state
+        assert not agent.observation_encoders.schema.subset(("rgb_cam",)).has_state
 
 
 class TestWSRLDictObservations:
@@ -89,7 +117,7 @@ class TestWSRLDictObservations:
 
     def test_dict_observation_forward(self, wsrlrgbd_agent):
         obs = {
-            "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
+            "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(4, 4),
         }
 
@@ -100,7 +128,7 @@ class TestWSRLDictObservations:
 
     def test_actor_action_with_dict_obs(self, wsrlrgbd_agent):
         obs = {
-            "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
+            "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(4, 4),
         }
 
@@ -110,7 +138,7 @@ class TestWSRLDictObservations:
 
     def test_actor_stop_gradient(self, wsrlrgbd_agent):
         obs = {
-            "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
+            "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(4, 4),
         }
 
@@ -134,7 +162,7 @@ class TestWSRLDictObservations:
 
     def test_detach_encoder_alias_still_works(self, wsrlrgbd_agent):
         obs = {
-            "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),
             "state": torch.randn(4, 4),
         }
         _, _, features = wsrlrgbd_agent.policy.actor_action_log_prob(
@@ -148,11 +176,11 @@ class TestWSRLDictTraining:
 
     def test_add_dict_transitions(self, wsrlrgbd_agent):
         obs = {
-            "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
+            "rgb_cam": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(2, 4),
         }
         next_obs = {
-            "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
+            "rgb_cam": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(2, 4),
         }
         actions = torch.randn(2, 2)
@@ -167,11 +195,11 @@ class TestWSRLDictTraining:
         # MC buffer only samples complete trajectories.
         for step in range(10):
             obs = {
-                "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
+                "rgb_cam": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
                 "state": torch.randn(2, 4),
             }
             next_obs = {
-                "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
+                "rgb_cam": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
                 "state": torch.randn(2, 4),
             }
             actions = torch.randn(2, 2)
@@ -182,15 +210,15 @@ class TestWSRLDictTraining:
         # Sample batch
         batch = wsrlrgbd_agent.replay_buffer.sample(4)
         assert isinstance(batch.obs, dict)
-        assert "rgb" in batch.obs
+        assert "rgb_cam" in batch.obs
         assert "state" in batch.obs
-        assert batch.obs["rgb"].shape == (4, 128, 128, 3)  # HWC
+        assert batch.obs["rgb_cam"].shape == (4, 128, 128, 3)  # HWC
         assert batch.obs["state"].shape == (4, 4)
         assert hasattr(batch, "mc_returns")
 
     def test_actor_loss_with_dict_obs(self, wsrlrgbd_agent):
         obs = {
-            "rgb": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
+            "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(4, 4),
         }
 
@@ -203,11 +231,11 @@ class TestWSRLDictTraining:
         # step -- the MC buffer only samples complete trajectories.
         for step in range(20):
             obs = {
-                "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
+                "rgb_cam": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
                 "state": torch.randn(2, 4),
             }
             next_obs = {
-                "rgb": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
+                "rgb_cam": torch.randint(0, 255, (2, 128, 128, 3), dtype=torch.uint8),  # HWC
                 "state": torch.randn(2, 4),
             }
             actions = torch.randn(2, 2)
@@ -227,11 +255,16 @@ class TestWSRLDictConfiguration:
     """Test WSRL Dict observation configuration options."""
 
     def test_custom_image_keys(self, rgbd_env):
-        # Modify env to have depth with same size as rgb (HWC format)
+        # Modify env to have depth with same size as rgb (HWC format). Both
+        # image keys are already the only ones present, so the schema-driven
+        # default extractor includes them with no obs_groups override needed
+        # (see the observation-redesign phase-2 recipe's test-migration
+        # pattern: "just delete the kwarg" when it only selected a subset
+        # that's already the whole space).
         rgbd_env.single_observation_space = spaces.Dict({
-            "rgb": spaces.Box(low=0, high=255, shape=(128, 128, 3), dtype="uint8"),  # HWC
-            "depth": spaces.Box(low=0, high=10, shape=(128, 128, 1), dtype=float),  # HWC
-            "state": spaces.Box(low=-1, high=1, shape=(4,), dtype=float),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(128, 128, 3), dtype="uint8"),  # HWC
+            "depth_cam": spaces.Box(low=0, high=10, shape=(128, 128, 1), dtype=np.float32),  # HWC
+            "state": spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32),
         })
 
         agent = WSRL(
@@ -239,25 +272,13 @@ class TestWSRLDictConfiguration:
             buffer_size=100,
             buffer_device="cpu",
             batch_size=4,
-            image_keys=("rgb", "depth"),
-            state_key="state",
             device="cpu",
         )
 
-        assert agent._image_keys == ("rgb", "depth")
-        assert agent._state_key == "state"
+        assert agent.policy.features_extractor.features_dim > 0
+        from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
-    def test_without_proprio(self, rgbd_env):
-        agent = WSRL(
-            env=rgbd_env,
-            buffer_size=100,
-            buffer_device="cpu",
-            batch_size=4,
-            use_proprio=False,
-            device="cpu",
-        )
-
-        assert not agent._use_proprio
+        assert isinstance(agent.replay_buffer, MCReplayBuffer)
 
     def test_custom_proprio_latent_dim(self, rgbd_env):
         agent = WSRL(
@@ -265,11 +286,11 @@ class TestWSRLDictConfiguration:
             buffer_size=100,
             buffer_device="cpu",
             batch_size=4,
-            proprio_latent_dim=32,
+            encoder_config=EncoderConfig(proprio_latent_dim=32),
             device="cpu",
         )
 
-        assert agent._proprio_latent_dim == 32
+        assert agent.encoder_config.proprio_latent_dim == 32
 
 
 if __name__ == "__main__":

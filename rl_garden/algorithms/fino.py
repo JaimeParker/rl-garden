@@ -43,7 +43,6 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.fql import FQLCore
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
@@ -52,10 +51,12 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.encoders.combined import ImageEncoderFactory
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
+from rl_garden.observations import ObsGroups, resolve_obs_groups
 from rl_garden.policies.fino_policy import EncoderSharing, FINOPolicy
 
 
@@ -85,11 +86,19 @@ class FINOCore(FQLCore):
         }
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
+        observation_space = self.env.single_observation_space
+        self._resolve_observation_encoders(observation_space)
         if self.encoder_sharing == "separate":
-            actor_bc_flow_encoder = self._build_features_extractor()
-            actor_onestep_flow_encoder = self._build_features_extractor()
+            features_extractor = self.observation_encoders.critic
+            actor_onestep_flow_encoder = self.observation_encoders.actor
+            actor_keys = resolve_obs_groups(
+                self.observation_encoders.schema, self.obs_groups
+            )["actor"].keys
+            actor_bc_flow_encoder = build_observation_encoder(
+                observation_space, self.encoder_config, keys=actor_keys
+            )
         else:
+            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
             actor_onestep_flow_encoder = None
         self.policy = FINOPolicy(
@@ -144,7 +153,7 @@ class FINOCore(FQLCore):
         ]
 
     def _actor_update(self, data, obs_features: torch.Tensor) -> dict[str, float]:
-        # In "shared" mode bc/onestep/q features all alias one detached
+        # In "shared_critic_grad" mode bc/onestep/q features all alias one detached
         # forward through the shared encoder (today's behavior). In
         # "separate" mode each is a fresh, grad-enabled forward through
         # that network's own encoder -- q_features in particular cannot
@@ -252,8 +261,10 @@ class FINO(FINOCore, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared",
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
         noise_scale: float = 0.1,
         beta: float = 10.0,
         num_samples: Optional[int] = None,
@@ -317,19 +328,15 @@ class FINO(FINOCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
-            image_encoder_factory=image_encoder_factory,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
         )
         self._init_fino_params(
             noise_scale=noise_scale,
             beta=beta,
             num_samples=num_samples,
         )
-
-        obs_space = self.env.single_observation_space
-        if not isinstance(obs_space, (spaces.Box, spaces.Dict)):
-            raise TypeError(
-                f"FINO supports only Box or Dict observation spaces, got {type(obs_space)}"
-            )
 
         self._setup_model()
 
@@ -383,19 +390,14 @@ class _FINORolloutTrainingShell(Off2OnReplayMixin, FINOCore, OffPolicyAlgorithm)
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_config: Optional[EncoderConfig] = None,
+        obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
         noise_scale: float = 0.1,
         beta: float = 10.0,
         num_samples: Optional[int] = None,
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
-        # Dict observation encoding (see Off2OnReplayMixin._configure_observation_kwargs)
-        image_encoder_factory: Optional[ImageEncoderFactory] = None,
-        image_keys: Optional[tuple[str, ...]] = None,
-        state_key: Optional[str] = None,
-        use_proprio: Optional[bool] = None,
-        proprio_latent_dim: Optional[int] = None,
-        image_fusion_mode: Optional[str] = None,
-        enable_stacking: Optional[bool] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -409,16 +411,6 @@ class _FINORolloutTrainingShell(Off2OnReplayMixin, FINOCore, OffPolicyAlgorithm)
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
-        self._configure_observation_kwargs(
-            env,
-            image_encoder_factory=image_encoder_factory,
-            image_keys=image_keys,
-            state_key=state_key,
-            use_proprio=use_proprio,
-            proprio_latent_dim=proprio_latent_dim,
-            image_fusion_mode=image_fusion_mode,
-            enable_stacking=enable_stacking,
-        )
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -473,7 +465,9 @@ class _FINORolloutTrainingShell(Off2OnReplayMixin, FINOCore, OffPolicyAlgorithm)
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
-            image_encoder_factory=image_encoder_factory,
+            encoder_config=encoder_config,
+            obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
         )
         self._init_fino_params(
             noise_scale=noise_scale,

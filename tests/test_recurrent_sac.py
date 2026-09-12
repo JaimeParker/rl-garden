@@ -7,6 +7,11 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import RecurrentSAC
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.config import EncoderConfig
+
+# Small + fast: "gap" pooling (unlike the default "flatten") tolerates the
+# tiny 64x64 test image without PlainConv's flatten-layer size mismatch.
+_test_encoder_config = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 
 class DummyVecEnv:
@@ -40,7 +45,7 @@ class DummyVecEnv:
     def _obs(self):
         if isinstance(self.single_observation_space, spaces.Dict):
             return {
-                "rgb": torch.randint(
+                "rgb_cam": torch.randint(
                     0, 256, (self.num_envs, 64, 64, 3), dtype=torch.uint8
                 ),
                 "state": torch.randn(self.num_envs, 4),
@@ -98,7 +103,7 @@ def _state_space() -> spaces.Box:
 def _dict_space() -> spaces.Dict:
     return spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
         }
     )
@@ -159,7 +164,7 @@ def test_recurrent_sac_actor_loss_does_not_train_encoder_or_rnn_when_stop_gradie
     Detaching only the pre-RNN raw features (an earlier, buggy version of this
     code) does not block gradient to the RNN's own parameters."""
     env = DummyVecEnv(_dict_space(), _action_space())
-    agent = RecurrentSAC(env=env, image_keys=("rgb",), **_recurrent_sac_kwargs())
+    agent = RecurrentSAC(env=env, **_recurrent_sac_kwargs())
     assert agent._actor_stop_gradient() is True
 
     obs, _ = agent.env.reset(seed=agent.seed)
@@ -258,7 +263,7 @@ def test_recurrent_sac_priority_replay_updates_after_train_step():
 
 def test_recurrent_sac_dict_obs_smoke():
     env = DummyVecEnv(_dict_space(), _action_space())
-    agent = RecurrentSAC(env=env, image_keys=("rgb",), **_recurrent_sac_kwargs())
+    agent = RecurrentSAC(env=env, **_recurrent_sac_kwargs())
 
     agent.learn(total_timesteps=40)
 
@@ -295,6 +300,25 @@ def test_recurrent_sac_checkpoint_roundtrip(tmp_path):
     agent.save(path)
 
     loaded = RecurrentSAC(env=DummyVecEnv(_state_space(), _action_space()), **_recurrent_sac_kwargs())
+    loaded.load(path)
+
+    assert loaded._global_step == agent._global_step
+    for key, value in agent.policy.state_dict().items():
+        assert torch.equal(value, loaded.policy.state_dict()[key]), key
+
+
+def test_recurrent_sac_dict_obs_checkpoint_roundtrip_with_encoder_config(tmp_path):
+    env = DummyVecEnv(_dict_space(), _action_space())
+    agent = RecurrentSAC(env=env, encoder_config=_test_encoder_config, **_recurrent_sac_kwargs())
+    agent.learn(total_timesteps=40)
+    path = tmp_path / "recurrent_sac_dict.pt"
+    agent.save(path)
+
+    loaded = RecurrentSAC(
+        env=DummyVecEnv(_dict_space(), _action_space()),
+        encoder_config=_test_encoder_config,
+        **_recurrent_sac_kwargs(),
+    )
     loaded.load(path)
 
     assert loaded._global_step == agent._global_step

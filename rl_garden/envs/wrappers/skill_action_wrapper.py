@@ -30,8 +30,10 @@ constructs both the train and eval wrapper with ``deterministic=False``,
 matching upstream exactly. This parameter stays available as a general
 capability of the wrapper, not because SUPE's own pipeline uses ``True``.
 
-State-only (Box observations): ``features = concat(obs, skill)`` assumes a
-flat observation tensor, matching every other algorithm's state-only scope.
+State-only: ``features = concat(obs["state"], skill)`` assumes a
+``Dict({"state": Box})`` observation (rl-garden's observation contract for
+every state-only backend), matching every other algorithm's state-only
+scope.
 
 Deliberate simplification vs. upstream: ``MetaPolicyActionWrapper`` isn't
 actually a clean one-fresh-rollout-per-``step()`` wrapper -- it keeps a
@@ -78,8 +80,14 @@ class SkillActionWrapper(gym.Wrapper):
     ) -> None:
         if horizon < 1:
             raise ValueError(f"horizon must be >= 1, got {horizon}.")
-        if not isinstance(env.single_observation_space, spaces.Box):
-            raise TypeError("SkillActionWrapper supports Box observation spaces only.")
+        if (
+            not isinstance(env.single_observation_space, spaces.Dict)
+            or set(env.single_observation_space.spaces) != {"state"}
+        ):
+            raise TypeError(
+                "SkillActionWrapper supports state-only Dict({'state': Box}) "
+                f"observation spaces only, got {env.single_observation_space!r}."
+            )
         super().__init__(env)
         self.decoder = decoder
         self.horizon = int(horizon)
@@ -118,7 +126,7 @@ class SkillActionWrapper(gym.Wrapper):
         infos: dict[str, Any] = {}
 
         for _ in range(self.horizon):
-            features = torch.cat([self._last_obs, skill], dim=-1)
+            features = torch.cat([self._last_obs["state"], skill], dim=-1)
             with torch.no_grad():
                 if self.deterministic:
                     raw_action = self.decoder.deterministic_action(features)

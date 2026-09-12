@@ -59,12 +59,12 @@ RecurrentState = Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
 # Concretely, wiring this module into SAC (or DDPG, or any replay-based
 # algorithm here) requires THREE things this round does not build:
 #   (a) Replay buffer storage for a hidden state per transition or per
-#       sequence-start. `rl_garden/buffers/tensor_buffer.py`,
-#       `dict_buffer.py`, and `nstep_buffer.py` currently store only flat
-#       per-transition fields (obs/next_obs/actions/rewards/dones) with no
-#       slot for auxiliary per-timestep state.
-#   (b) A sequence-aware sampler. `TensorReplayBuffer.sample()` (see
-#       `tensor_buffer.py::sample()`) draws fully IID
+#       sequence-start. `rl_garden/buffers/replay_buffer.py` and
+#       `nstep_buffer.py` currently store only flat per-transition fields
+#       (obs/next_obs/actions/rewards/dones) with no slot for auxiliary
+#       per-timestep state.
+#   (b) A sequence-aware sampler. `ReplayBuffer.sample()` (see
+#       `replay_buffer.py::sample()`) draws fully IID
 #       `(batch_inds, env_inds)` pairs via `torch.randint(...)` for both
 #       axes -- no contiguity guarantee between consecutive samples at all.
 #       An R2D2-style sampler needs to draw a contiguous

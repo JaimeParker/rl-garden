@@ -93,15 +93,15 @@ def test_rlpd_offline_mixing_batch_shape():
     agent = _agent()
     agent.offline_replay_buffer = agent._build_prior_data_buffer(32)
     agent.offline_replay_buffer.add(
-        torch.zeros(1, 4), torch.ones(1, 4), torch.zeros(1, 2), torch.zeros(1), torch.zeros(1)
+        {"state": torch.zeros(1, 4)}, {"state": torch.ones(1, 4)}, torch.zeros(1, 2), torch.zeros(1), torch.zeros(1)
     )
     agent.replay_buffer.add(
-        torch.zeros(2, 4), torch.ones(2, 4), torch.zeros(2, 2), torch.zeros(2), torch.zeros(2)
+        {"state": torch.zeros(2, 4)}, {"state": torch.ones(2, 4)}, torch.zeros(2, 2), torch.zeros(2), torch.zeros(2)
     )
     agent.offline_data_ratio = 0.5
 
     batch = agent._sample_train_batch(8)
-    assert batch.obs.shape == (8, 4)
+    assert batch.obs["state"].shape == (8, 4)
     assert batch.actions.shape == (8, 2)
     assert batch.rewards.shape == (8,)
 

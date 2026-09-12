@@ -42,8 +42,11 @@ import importlib
 import importlib.metadata
 import pkgutil
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from rl_garden.observations.config import ObservationConfig
+from rl_garden.observations.schema import ObservationContractError, validate_observation_space
 
 _ENV_BACKEND_ENTRY_POINT_GROUP = "rlgarden.env_backends"
 
@@ -54,16 +57,15 @@ class EnvRequest:
 
     env_id: str
     num_envs: int
-    obs_mode: str  # "state" | "rgb" | "rgbd"
     control_mode: str
     render_mode: str
     seed: int
-    # Visual fields (None when obs_mode == "state"):
-    camera_width: int | None
-    camera_height: int | None
-    include_state: bool = True
-    per_camera_rgbd: bool = False
-    frame_stack: int = 1
+    # "What is observed" -- state / rgb / depth cameras, image size, frame
+    # stacking. Replaces the old per-field observation-mode/camera-resolution/
+    # frame-stacking knobs this request used to carry directly (deleted). A
+    # backend must produce exactly ``observation.expected_keys`` or raise
+    # ``ObservationContractError``; see ``rl_garden.observations``.
+    observation: ObservationConfig = field(kw_only=True)
     reward_scale: float = 1.0
     reward_bias: float = 0.0
     # Eval env:
@@ -185,16 +187,42 @@ def should_create_eval_env(args: Any) -> bool:
     )
 
 
+def _validate_env_observation_contract(env: Any, req: EnvRequest) -> None:
+    """Enforce the observation contract on a freshly constructed env.
+
+    Validates ``env.single_observation_space`` against the strict
+    ``state``/``rgb_<cam>``/``depth_<cam>`` vocabulary and checks its key set
+    matches exactly what ``req.observation`` asked for -- a backend that
+    silently drops or adds a key fails here instead of surfacing as a
+    confusing downstream shape mismatch.
+    """
+    space = env.single_observation_space
+    validate_observation_space(space)
+    actual_keys = set(space.spaces.keys()) if hasattr(space, "spaces") else {"state"}
+    expected_keys = set(req.observation.expected_keys)
+    if actual_keys != expected_keys:
+        raise ObservationContractError(
+            f"env backend produced observation keys {sorted(actual_keys)}, "
+            f"expected {sorted(expected_keys)} from {req.observation!r}"
+        )
+
+
 def make_evaluation_env(backend_name: str, req: EnvRequest):
     """Create only an evaluation environment for offline training."""
-    return _get_backend(backend_name).make_eval_env(req)
+    env = _get_backend(backend_name).make_eval_env(req)
+    _validate_env_observation_contract(env, req)
+    return env
 
 
 def make_training_envs(backend_name: str, req: EnvRequest):
     """Create train and optional evaluation environments."""
     backend = _get_backend(backend_name)
     train_env = backend.make_train_env(req)
-    eval_env = backend.make_eval_env(req) if req.create_eval_env else None
+    _validate_env_observation_contract(train_env, req)
+    eval_env = None
+    if req.create_eval_env:
+        eval_env = backend.make_eval_env(req)
+        _validate_env_observation_contract(eval_env, req)
     return train_env, eval_env
 
 

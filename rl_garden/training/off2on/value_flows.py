@@ -5,10 +5,10 @@ Reuses the shared ``run_off2on`` runner (``rl_garden/training/off2on/_runner.py`
 unmodified, matching ``floq.py``'s shape: only a ``build_value_flows``
 callback is needed here.
 
-Box observations by default; pass ``--obs_mode rgb`` for CNN-based Dict/RGBD
-observations. Mirrors ``FloQOff2OnArgs``: fields inlined against
-``Off2OnCommonArgs``, ``VisionArgs``, ``EnvBackendArgs`` rather than adding a
-new class to ``off2on/_args.py`` -- ``Off2OnValueFlows`` has no action
+State-only observations by default; pass ``--obs.rgb <camera>`` for
+CNN-based Dict/RGBD observations. Mirrors ``FloQOff2OnArgs``: fields inlined
+against ``Off2OnCommonArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
+than adding a new class to ``off2on/_args.py`` -- ``Off2OnValueFlows`` has no action
 chunking, so the FloQ-only flow-critic fields (``r_min``/``r_max``/
 ``flow_num_ensembles``/``noise_samples``/``noise_coverage``/
 ``critic_flow_steps``/``train_at_zero_only``/``embed_time``/
@@ -29,17 +29,16 @@ from __future__ import annotations
 
 def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnValueFlows
-    from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
 
-    is_visual = args.obs_mode != "state"
-    image_kwargs: dict = {}
-    if is_visual:
-        image_kwargs = dict(
-            image_encoder_factory=image_encoder_factory_from_args(args),
-            image_keys=image_keys_from_env(env, args),
-            image_fusion_mode=args.image_fusion_mode,
-        )
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnValueFlows,
@@ -75,7 +74,6 @@ def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
         activation_fn=args.activation_fn,
-        encoder_sharing=args.encoder_sharing,
         min_reward=args.min_reward,
         max_reward=args.max_reward,
         ret_agg=args.ret_agg,
@@ -115,25 +113,20 @@ def run_value_flows(args: "ValueFlowsOff2OnArgs") -> None:
 from dataclasses import dataclass  # noqa: E402
 from typing import Literal, Optional  # noqa: E402
 
-from rl_garden.common.cli_args import VisionArgs  # noqa: E402
+from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.policies.fql_policy import EncoderSharing  # noqa: E402
 from rl_garden.training.off2on._args import Off2OnCommonArgs  # noqa: E402
 from rl_garden.training.off2on._registry import registry  # noqa: E402
 
 
 @dataclass
-class ValueFlowsOff2OnArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
+class ValueFlowsOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     """Value Flows -- offline-to-online distributional flow-matching-critic
     FQL (Dong et al. 2025, ``3rd_party/value-flows/agents/value_flows.py``).
-    Box observations by default; pass ``--obs_mode rgb`` for CNN-based
-    Dict/RGBD observations.
+    State-only observations by default; pass ``--obs.rgb <camera>`` for
+    CNN-based Dict/RGBD observations.
     """
-
-    # See FloQOff2OnArgs' own precedent: defaults to "state" (not VisionArgs'
-    # own "rgb" default) so callers that don't pass --obs_mode get state obs.
-    obs_mode: str = "state"
 
     # 10.0: the reference's own get_config alpha, matching FQL's actor-side
     # BC coefficient unchanged.
@@ -144,7 +137,6 @@ class ValueFlowsOff2OnArgs(Off2OnCommonArgs, VisionArgs, EnvBackendArgs):
     hidden_dim: int = 512
     hidden_layers: int = 4
     activation_fn: Optional[Activation] = "gelu"
-    encoder_sharing: EncoderSharing = "shared"
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
 

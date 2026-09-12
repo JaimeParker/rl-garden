@@ -7,13 +7,15 @@ from rl_garden.encoders.combined import (
     ImageEncoderFactory,
     ProprioEncoder,
     default_image_encoder_factory,
-    discover_image_keys,
 )
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.drqv2_conv import DrQv2Encoder, drq_v2_encoder_factory
+from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.encoders.film import FiLM
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.encoders.plain_conv import PlainConv
 from rl_garden.encoders.pooling import AvgPool, SpatialLearnedEmbeddings, SpatialSoftmax
+from rl_garden.encoders.registry import ENCODER_REGISTRY, EncoderSpec
 from rl_garden.encoders.resnet import ResNetBlock, ResNetEncoder, resnet_encoder_factory
 from rl_garden.encoders.vit import (
     MinVit,
@@ -28,6 +30,9 @@ __all__ = [
     "CNN3DEncoder",
     "CombinedExtractor",
     "DrQv2Encoder",
+    "ENCODER_REGISTRY",
+    "EncoderConfig",
+    "EncoderSpec",
     "FiLM",
     "FlattenExtractor",
     "ImageEncoderFactory",
@@ -43,9 +48,9 @@ __all__ = [
     "SpatialSoftmax",
     "ViTTokenAndPropExtractor",
     "ViTImageEncoder",
+    "build_observation_encoder",
     "cnn3d_encoder_factory",
     "default_image_encoder_factory",
-    "discover_image_keys",
     "drq_v2_encoder_factory",
     "resnet_encoder_factory",
     "vit_image_encoder_factory",

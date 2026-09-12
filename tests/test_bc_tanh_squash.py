@@ -50,7 +50,7 @@ def test_unsquashed_actor_gives_finite_log_prob_at_action_bounds():
     degenerate. UnsquashedGaussianActor hard-clamps with no Jacobian
     correction, sidestepping this."""
     agent = _make_agent(tanh_squash=False)
-    obs = torch.zeros(4, 4)
+    obs = {"state": torch.zeros(4, 4)}
     boundary_actions = torch.tensor(
         [[1.0, 1.0, -1.0], [-1.0, -1.0, 1.0], [1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]]
     )
@@ -64,7 +64,7 @@ def test_squashed_actor_is_degenerate_at_action_bounds():
     literal +/-inf, but to a numerically-useless magnitude) at the same
     boundary actions, via the tanh Jacobian correction diverging."""
     agent = _make_agent()  # tanh_squash=True (default)
-    obs = torch.zeros(4, 4)
+    obs = {"state": torch.zeros(4, 4)}
     boundary_actions = torch.tensor(
         [[1.0, 1.0, -1.0], [-1.0, -1.0, 1.0], [1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]]
     )
@@ -75,7 +75,7 @@ def test_squashed_actor_is_degenerate_at_action_bounds():
 def test_tanh_squash_false_learns_without_crashing():
     agent = _make_agent(tanh_squash=False)
     for _ in range(8):
-        obs = torch.randn(1, 4)
+        obs = {"state": torch.randn(1, 4)}
         action = torch.rand(1, 3) * 2 - 1
         agent.replay_buffer.add(obs, obs, action, torch.zeros(1), torch.zeros(1))
     metrics = agent.train(2, compute_info=True)

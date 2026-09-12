@@ -52,6 +52,9 @@ class OfflineEnvSpec:
         action_space: spaces.Box,
         num_envs: int = 1,
     ) -> None:
+        # NOT normalized here: BaseAlgorithm.__init__ unconditionally wraps
+        # this object (via VectorizedDictStateWrapper) into the Dict
+        # contract -- the same boundary online algorithms use for a real env.
         self.single_observation_space = observation_space
         self.single_action_space = action_space
         self.observation_space = observation_space
@@ -164,7 +167,7 @@ def infer_specs_from_h5(
     *,
     action_low: float = -1.0,
     action_high: float = 1.0,
-) -> tuple[spaces.Box | spaces.Dict, spaces.Box]:
+) -> tuple[spaces.Dict, spaces.Box]:
     """Compatibility wrapper for H5 observation/action space inference."""
     return _infer_specs_from_h5(
         path,

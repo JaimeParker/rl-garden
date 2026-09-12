@@ -9,59 +9,26 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers import DictReplayBuffer, TensorReplayBuffer
+from rl_garden.buffers import ReplayBuffer
 from rl_garden.buffers.nstep_buffer import (
-    LazyNextNStepDictReplayBuffer,
-    NStepDictReplayBuffer,
+    LazyNextNStepReplayBuffer,
+    NStepReplayBuffer,
 )
 from rl_garden.common.types import ReplayBufferSample
 
 
-def test_tensor_replay_buffer_add_and_sample():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(7,), dtype=np.float32)
-    act_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
-    num_envs, buffer_size = 4, 32
-    device = torch.device("cpu")
-
-    rb = TensorReplayBuffer(
-        obs_space, act_space, num_envs=num_envs, buffer_size=buffer_size,
-        storage_device=device, sample_device=device,
-    )
-    assert rb.per_env_buffer_size == buffer_size // num_envs
-
-    for _ in range(3):
-        rb.add(
-            obs=torch.randn(num_envs, 7),
-            next_obs=torch.randn(num_envs, 7),
-            action=torch.randn(num_envs, 3),
-            reward=torch.randn(num_envs),
-            done=torch.zeros(num_envs),
-        )
-
-    assert rb.pos == 3 and not rb.full
-    assert len(rb) == 3 * num_envs
-
-    batch = rb.sample(batch_size=16)
-    assert batch.obs.shape == (16, 7)
-    assert batch.next_obs.shape == (16, 7)
-    assert batch.actions.shape == (16, 3)
-    assert batch.rewards.shape == (16,)
-    assert batch.dones.shape == (16,)
-    assert batch.obs.device == device
-
-
-def test_tensor_replay_buffer_wraps_when_full():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+def test_dict_replay_buffer_wraps_when_full():
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
     num_envs, buffer_size = 2, 8  # per_env = 4
-    rb = TensorReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=num_envs, buffer_size=buffer_size,
         storage_device="cpu", sample_device="cpu",
     )
     for i in range(5):
         rb.add(
-            obs=torch.full((num_envs, 2), float(i)),
-            next_obs=torch.full((num_envs, 2), float(i + 1)),
+            obs={"state": torch.full((num_envs, 2), float(i))},
+            next_obs={"state": torch.full((num_envs, 2), float(i + 1))},
             action=torch.full((num_envs, 1), float(i)),
             reward=torch.full((num_envs,), float(i)),
             done=torch.zeros(num_envs),
@@ -72,7 +39,7 @@ def test_tensor_replay_buffer_wraps_when_full():
 def test_dict_replay_buffer_add_and_sample():
     obs_space = spaces.Dict(
         {
-            "rgb": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+            "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
             "state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
         }
     )
@@ -80,14 +47,14 @@ def test_dict_replay_buffer_add_and_sample():
     num_envs, buffer_size = 2, 8
     device = torch.device("cpu")
 
-    rb = DictReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=num_envs, buffer_size=buffer_size,
         storage_device=device, sample_device=device,
     )
 
     def make_obs():
         return {
-            "rgb": torch.randint(0, 256, (num_envs, 64, 64, 3), dtype=torch.uint8),
+            "rgb_cam": torch.randint(0, 256, (num_envs, 64, 64, 3), dtype=torch.uint8),
             "state": torch.randn(num_envs, 5),
         }
 
@@ -102,10 +69,10 @@ def test_dict_replay_buffer_add_and_sample():
 
     batch = rb.sample(batch_size=5)
     assert isinstance(batch.obs, dict)
-    assert batch.obs["rgb"].shape == (5, 64, 64, 3)
-    assert batch.obs["rgb"].dtype == torch.uint8
+    assert batch.obs["rgb_cam"].shape == (5, 64, 64, 3)
+    assert batch.obs["rgb_cam"].dtype == torch.uint8
     assert batch.obs["state"].shape == (5, 5)
-    assert batch.next_obs["rgb"].shape == (5, 64, 64, 3)
+    assert batch.next_obs["rgb_cam"].shape == (5, 64, 64, 3)
     assert batch.actions.shape == (5, 4)
     assert batch.rewards.shape == (5,)
     assert batch.dones.shape == (5,)
@@ -119,7 +86,7 @@ def test_dict_replay_buffer_grasp_penalty_add_and_sample_round_trip():
     )
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
     num_envs, buffer_size = 2, 8
-    rb = DictReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=num_envs, buffer_size=buffer_size,
         storage_device="cpu", sample_device="cpu", store_grasp_penalty=True,
     )
@@ -152,7 +119,7 @@ def test_dict_replay_buffer_rejects_grasp_penalty_when_not_enabled():
         {"state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)}
     )
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
-    rb = DictReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=1, buffer_size=4,
         storage_device="cpu", sample_device="cpu",
     )
@@ -169,7 +136,7 @@ def test_dict_replay_buffer_without_grasp_penalty_returns_plain_sample():
         {"state": spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)}
     )
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
-    rb = DictReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=1, buffer_size=4,
         storage_device="cpu", sample_device="cpu",
     )
@@ -187,7 +154,7 @@ def _mmap_obs_space() -> spaces.Dict:
         {
             "camera": spaces.Dict(
                 {
-                    "rgb": spaces.Box(
+                    "pixels": spaces.Box(
                         low=0, high=255, shape=(2, 2, 3), dtype=np.uint8
                     )
                 }
@@ -200,7 +167,7 @@ def _mmap_obs_space() -> spaces.Dict:
 
 
 def test_dict_replay_buffer_mmap_keeps_obs_and_next_obs_separate(tmp_path):
-    rb = DictReplayBuffer(
+    rb = ReplayBuffer(
         _mmap_obs_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -212,13 +179,13 @@ def test_dict_replay_buffer_mmap_keeps_obs_and_next_obs_separate(tmp_path):
     rb.add(
         obs={
             "camera": {
-                "rgb": torch.full((1, 2, 2, 3), 1, dtype=torch.uint8)
+                "pixels": torch.full((1, 2, 2, 3), 1, dtype=torch.uint8)
             },
             "state": torch.tensor([[1.0, 2.0]]),
         },
         next_obs={
             "camera": {
-                "rgb": torch.full((1, 2, 2, 3), 9, dtype=torch.uint8)
+                "pixels": torch.full((1, 2, 2, 3), 9, dtype=torch.uint8)
             },
             "state": torch.tensor([[8.0, 9.0]]),
         },
@@ -229,21 +196,21 @@ def test_dict_replay_buffer_mmap_keeps_obs_and_next_obs_separate(tmp_path):
     rb.flush()
 
     assert torch.equal(
-        rb.obs["camera"]["rgb"][0, 0],
+        rb.obs["camera"]["pixels"][0, 0],
         torch.full((2, 2, 3), 1, dtype=torch.uint8),
     )
     assert torch.equal(
-        rb.next_obs["camera"]["rgb"][0, 0],
+        rb.next_obs["camera"]["pixels"][0, 0],
         torch.full((2, 2, 3), 9, dtype=torch.uint8),
     )
-    assert (tmp_path / "obs" / "camera" / "rgb.bin").is_file()
-    assert (tmp_path / "next_obs" / "camera" / "rgb.bin").is_file()
+    assert (tmp_path / "obs" / "camera" / "pixels.bin").is_file()
+    assert (tmp_path / "next_obs" / "camera" / "pixels.bin").is_file()
 
 
 def test_dict_replay_buffer_mmap_open_restores_complete_buffer(tmp_path):
     obs_space = _mmap_obs_space()
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    source = DictReplayBuffer(
+    source = ReplayBuffer(
         obs_space,
         action_space,
         num_envs=1,
@@ -254,11 +221,11 @@ def test_dict_replay_buffer_mmap_open_restores_complete_buffer(tmp_path):
     )
     source.add(
         obs={
-            "camera": {"rgb": torch.zeros((1, 2, 2, 3), dtype=torch.uint8)},
+            "camera": {"pixels": torch.zeros((1, 2, 2, 3), dtype=torch.uint8)},
             "state": torch.tensor([[1.0, 2.0]]),
         },
         next_obs={
-            "camera": {"rgb": torch.ones((1, 2, 2, 3), dtype=torch.uint8)},
+            "camera": {"pixels": torch.ones((1, 2, 2, 3), dtype=torch.uint8)},
             "state": torch.tensor([[3.0, 4.0]]),
         },
         action=torch.tensor([[0.5]]),
@@ -267,7 +234,7 @@ def test_dict_replay_buffer_mmap_open_restores_complete_buffer(tmp_path):
     )
     source.flush()
 
-    restored = DictReplayBuffer(
+    restored = ReplayBuffer(
         obs_space,
         action_space,
         num_envs=1,
@@ -289,11 +256,11 @@ def test_dict_replay_buffer_mmap_open_restores_complete_buffer(tmp_path):
 
     restored.add(
         obs={
-            "camera": {"rgb": torch.zeros((1, 2, 2, 3), dtype=torch.uint8)},
+            "camera": {"pixels": torch.zeros((1, 2, 2, 3), dtype=torch.uint8)},
             "state": torch.tensor([[5.0, 6.0]]),
         },
         next_obs={
-            "camera": {"rgb": torch.ones((1, 2, 2, 3), dtype=torch.uint8)},
+            "camera": {"pixels": torch.ones((1, 2, 2, 3), dtype=torch.uint8)},
             "state": torch.tensor([[7.0, 8.0]]),
         },
         action=torch.tensor([[0.75]]),
@@ -306,7 +273,7 @@ def test_dict_replay_buffer_mmap_open_restores_complete_buffer(tmp_path):
 def test_dict_replay_buffer_mmap_rejects_overwrite_and_schema_mismatch(tmp_path):
     obs_space = _mmap_obs_space()
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    DictReplayBuffer(
+    ReplayBuffer(
         obs_space,
         action_space,
         num_envs=1,
@@ -317,7 +284,7 @@ def test_dict_replay_buffer_mmap_rejects_overwrite_and_schema_mismatch(tmp_path)
     )
 
     with pytest.raises(FileExistsError, match="already contains"):
-        DictReplayBuffer(
+        ReplayBuffer(
             obs_space,
             action_space,
             num_envs=1,
@@ -327,7 +294,7 @@ def test_dict_replay_buffer_mmap_rejects_overwrite_and_schema_mismatch(tmp_path)
             mmap_dir=tmp_path,
         )
     with pytest.raises(ValueError, match="manifest does not match"):
-        DictReplayBuffer(
+        ReplayBuffer(
             obs_space,
             action_space,
             num_envs=1,
@@ -341,7 +308,7 @@ def test_dict_replay_buffer_mmap_rejects_overwrite_and_schema_mismatch(tmp_path)
 
 def test_dict_replay_buffer_mmap_requires_cpu_storage(tmp_path):
     with pytest.raises(ValueError, match="CPU storage"):
-        DictReplayBuffer(
+        ReplayBuffer(
             _mmap_obs_space(),
             spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
             num_envs=1,
@@ -359,7 +326,7 @@ def _nstep_state_space() -> spaces.Dict:
 
 
 def _add_nstep_transition(
-    rb: NStepDictReplayBuffer,
+    rb: NStepReplayBuffer,
     step: int,
     reward: float,
     done: bool = False,
@@ -391,12 +358,12 @@ def _make_nstep_buffer_pair(buffer_size: int = 8):
         storage_device="cpu",
         sample_device="cpu",
     )
-    return NStepDictReplayBuffer(**common), LazyNextNStepDictReplayBuffer(**common)
+    return NStepReplayBuffer(**common), LazyNextNStepReplayBuffer(**common)
 
 
 def _assert_nstep_transition_equal(
-    left: NStepDictReplayBuffer,
-    right: NStepDictReplayBuffer,
+    left: NStepReplayBuffer,
+    right: NStepReplayBuffer,
     t: int,
 ) -> None:
     assert left._valid_nstep(t, 0)
@@ -468,7 +435,7 @@ def test_lazy_nstep_sample_matches_regular_vectorized_output():
 
 
 def test_nstep_buffer_returns_accumulated_reward_and_discount():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -495,7 +462,7 @@ def test_nstep_buffer_returns_accumulated_reward_and_discount():
 
 
 def test_nstep_buffer_stops_at_terminal_transition():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -518,7 +485,7 @@ def test_nstep_buffer_stops_at_terminal_transition():
 
 
 def test_nstep_buffer_truncation_stops_window_but_keeps_bootstrap_discount():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -541,7 +508,7 @@ def test_nstep_buffer_truncation_stops_window_but_keeps_bootstrap_discount():
 
 
 def test_nstep_buffer_does_not_cross_episode_when_bootstrap_continues():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -563,7 +530,7 @@ def test_nstep_buffer_does_not_cross_episode_when_bootstrap_continues():
 
 
 def test_nstep_buffer_rejects_ring_wrap_without_temporal_contiguity():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -582,7 +549,7 @@ def test_nstep_buffer_rejects_ring_wrap_without_temporal_contiguity():
 
 
 def test_nstep_vectorized_helpers_match_scalar_semantics():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -620,7 +587,7 @@ def test_nstep_vectorized_helpers_match_scalar_semantics():
 
 
 def test_nstep_vectorized_helpers_match_scalar_across_ring_wrap():
-    rb = NStepDictReplayBuffer(
+    rb = NStepReplayBuffer(
         _nstep_state_space(),
         spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
         num_envs=1,
@@ -658,7 +625,7 @@ def test_nstep_vectorized_helpers_match_scalar_across_ring_wrap():
 
 def test_nstep_mmap_open_restores_temporal_tracking(tmp_path):
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    source = NStepDictReplayBuffer(
+    source = NStepReplayBuffer(
         _nstep_state_space(),
         action_space,
         num_envs=1,
@@ -674,7 +641,7 @@ def test_nstep_mmap_open_restores_temporal_tracking(tmp_path):
     _add_nstep_transition(source, 2, 3.0)
     source.flush()
 
-    restored = NStepDictReplayBuffer(
+    restored = NStepReplayBuffer(
         _nstep_state_space(),
         action_space,
         num_envs=1,
@@ -702,14 +669,14 @@ def test_nstep_mmap_open_restores_temporal_tracking(tmp_path):
 # ----------------------------------------------------------------------------
 
 
-def _fill_tensor_buffer(buf, num_steps):
-    obs_dim = buf.obs.shape[-1]
+def _fill_buffer(buf, num_steps):
+    obs_dim = buf.obs["state"].shape[-1]
     act_dim = buf.actions.shape[-1]
     n = buf.num_envs
     for step in range(num_steps):
         buf.add(
-            obs=torch.full((n, obs_dim), float(step)),
-            next_obs=torch.full((n, obs_dim), float(step + 1)),
+            obs={"state": torch.full((n, obs_dim), float(step))},
+            next_obs={"state": torch.full((n, obs_dim), float(step + 1))},
             action=torch.zeros(n, act_dim),
             reward=torch.full((n,), float(step)),
             done=torch.zeros(n),
@@ -717,25 +684,27 @@ def _fill_tensor_buffer(buf, num_steps):
 
 
 def test_sample_without_repeat_no_duplicates_within_epoch():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    rb = TensorReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=4, buffer_size=20,
         storage_device="cpu", sample_device="cpu",
     )
-    _fill_tensor_buffer(rb, num_steps=5)  # 5 * 4 = 20 transitions
+    _fill_buffer(rb, num_steps=5)  # 5 * 4 = 20 transitions
+
+
 def test_sample_without_repeat_visits_all_indices_in_epoch():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    rb = TensorReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=4, buffer_size=20,
         storage_device="cpu", sample_device="cpu",
     )
     # Fill with per-env distinct values so we can identify each transition
     for step in range(5):
         rb.add(
-            obs=torch.tensor([[step, e] for e in range(4)], dtype=torch.float32),
-            next_obs=torch.zeros(4, 2),
+            obs={"state": torch.tensor([[step, e] for e in range(4)], dtype=torch.float32)},
+            next_obs={"state": torch.zeros(4, 2)},
             action=torch.zeros(4, 1),
             reward=torch.zeros(4),
             done=torch.zeros(4),
@@ -745,48 +714,48 @@ def test_sample_without_repeat_visits_all_indices_in_epoch():
     batch_size = 5
     for _ in range(epoch // batch_size):
         sample = rb.sample_without_repeat(batch_size)
-        for o in sample.obs:
+        for o in sample.obs["state"]:
             seen.add((int(o[0].item()), int(o[1].item())))
     assert len(seen) == 20  # all distinct (t, env) pairs visited
 
 
 def test_sample_without_repeat_reshuffles_after_exhaustion():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    rb = TensorReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=2, buffer_size=8,
         storage_device="cpu", sample_device="cpu",
     )
-    _fill_tensor_buffer(rb, num_steps=4)  # 8 transitions
+    _fill_buffer(rb, num_steps=4)  # 8 transitions
     # Exhaust epoch: 8/2 = 4 batches
     for _ in range(4):
         rb.sample_without_repeat(2)
     # Next sample triggers reshuffle (not a new add); should still return valid sample
     sample = rb.sample_without_repeat(2)
-    assert sample.obs.shape == (2, 2)
+    assert sample.obs["state"].shape == (2, 2)
 
 
 def test_sample_without_repeat_invalidates_after_pos_change():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    rb = TensorReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=2, buffer_size=20,
         storage_device="cpu", sample_device="cpu",
     )
-    _fill_tensor_buffer(rb, num_steps=5)  # 10 transitions
+    _fill_buffer(rb, num_steps=5)  # 10 transitions
     sample1 = rb.sample_without_repeat(2)
     pos_before = rb.pos
     # Add more data → pos changes → permutation should rebuild on next call
-    _fill_tensor_buffer(rb, num_steps=2)
+    _fill_buffer(rb, num_steps=2)
     assert rb.pos != pos_before
     sample2 = rb.sample_without_repeat(2)
-    assert sample2.obs.shape == (2, 2)
+    assert sample2.obs["state"].shape == (2, 2)
 
 
 def test_sample_without_repeat_empty_buffer_raises():
-    obs_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    obs_space = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)})
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    rb = TensorReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=2, buffer_size=10,
         storage_device="cpu", sample_device="cpu",
     )
@@ -795,12 +764,12 @@ def test_sample_without_repeat_empty_buffer_raises():
         rb.sample_without_repeat(1)
 
 
-def test_dict_buffer_sample_without_repeat():
+def test_buffer_sample_without_repeat():
     obs_space = spaces.Dict({
         "state": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
     })
     act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
-    rb = DictReplayBuffer(
+    rb = ReplayBuffer(
         obs_space, act_space, num_envs=2, buffer_size=8,
         storage_device="cpu", sample_device="cpu",
     )

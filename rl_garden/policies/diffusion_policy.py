@@ -5,23 +5,25 @@ supervised-training half: one denoiser network, no actor/actor_ft split, no
 RL sampling extras (those belong to ``DPPOPolicy``, which reuses the same
 ``DiffusionProcess`` mixin).
 
-Handles both Box (state-only) and Dict (vision) observations as an
-``isinstance(observation_space, spaces.Box/Dict)`` branch, matching
-``FlowBC``'s convention (``rl_garden/algorithms/flow_bc.py``) -- this class
-absorbs the former standalone ``VisionDiffusionPolicy``. The Box branch never
-builds or stores a ``features_extractor``: it conditions directly on the raw
-flat obs tensor, exactly as before the merge, so ``net.*`` state-dict keys
-and ``cond_dim`` stay byte-identical to the pre-merge Box-only class -- this
-is required because ``DPPOPolicy.load_actor_weights``
-(``rl_garden/policies/dppo_policy.py``) loads ``DiffusionBC`` Box checkpoints
-directly into ``DPPOPolicy``'s own network. The Dict branch builds a
-``BaseFeaturesExtractor`` (typically ``CombinedExtractor``, image+proprio
-fusion), run once per conditioning frame, folding the ``cond_steps`` time
-axis into the batch dimension before the encoder forward and reshaping back
-after -- the same trick ``real-stanford/diffusion_policy``'s own
-``MultiImageObsEncoder`` uses for its observation history. Both branches
-route through the same ``build_diffusion_net`` dispatch below; only
-``cond_dim`` (an input shape, not a key name) differs between them.
+Handles both state-only and vision (Dict, ``rgb_<cam>``/``depth_<cam>`` keys)
+observations through a single pre-built ``features_extractor`` -- obs is
+always a ``Dict`` (the algorithm boundary normalizes a bare ``Box`` env
+before any policy ever sees it), mirroring ``SACPolicy`` (see
+``rl_garden/policies/sac_policy.py``) -- this class absorbs the former
+standalone ``VisionDiffusionPolicy``. The caller (``DiffusionBC``) always
+builds the extractor via the schema-driven observation-encoder mixin
+(``rl_garden.algorithms._observation``): a ``FlattenExtractor`` (no
+learnable parameters) for a state-only schema, or a ``CombinedExtractor``
+(image+proprio fusion) for one with images. Because ``FlattenExtractor`` has
+no parameters, ``net.*`` state-dict keys and ``cond_dim`` stay byte-identical
+to the pre-redesign Box-only class in the state-only case -- this is what
+``DPPOPolicy.load_actor_weights`` (``rl_garden/policies/dppo_policy.py``)
+relies on when loading a state-only ``DiffusionBC`` checkpoint's ``net.*``
+weights directly into ``DPPOPolicy``'s own network. The extractor is run
+once per conditioning frame, folding the ``cond_steps`` time axis into the
+batch dimension before the encoder forward and reshaping back after -- the
+same trick ``real-stanford/diffusion_policy``'s own ``MultiImageObsEncoder``
+uses for its observation history.
 
 ``net_cls`` defaults to ``DiffusionMLP`` (this class's original, only
 network) and is a straight constructor swap -- ``net_cls`` must accept
@@ -96,7 +98,7 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
         self,
         observation_space: spaces.Box | spaces.Dict,
         action_space: spaces.Box,
-        features_extractor: Optional[BaseFeaturesExtractor] = None,
+        features_extractor: BaseFeaturesExtractor,
         *,
         horizon_steps: int,
         cond_steps: int,
@@ -123,29 +125,8 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
 
         action_dim = int(np.prod(action_space.shape))
 
-        if isinstance(observation_space, spaces.Box):
-            if features_extractor is not None:
-                raise TypeError(
-                    "DiffusionPolicy with Box observation space does not accept a "
-                    "features_extractor (no encoder is used for state-only "
-                    "observations); pass features_extractor only for Dict "
-                    "observations."
-                )
-            obs_dim = int(np.prod(observation_space.shape))
-            cond_dim = obs_dim * cond_steps
-        elif isinstance(observation_space, spaces.Dict):
-            if features_extractor is None:
-                raise TypeError(
-                    "DiffusionPolicy with Dict observation space requires a "
-                    "features_extractor."
-                )
-            self.features_extractor = features_extractor
-            cond_dim = features_extractor.features_dim * cond_steps
-        else:
-            raise TypeError(
-                "DiffusionPolicy supports Box or Dict observation spaces, got "
-                f"{type(observation_space)}"
-            )
+        self.features_extractor = features_extractor
+        cond_dim = features_extractor.features_dim * cond_steps
 
         self.net = build_diffusion_net(
             net_cls,
@@ -174,25 +155,19 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
     def _cond_from_obs_history(
         self, obs_history: Obs, stop_gradient: bool = False
     ) -> torch.Tensor:
-        """Box: ``obs_history`` is already ``(B, cond_steps, obs_dim)``, returned
-        unchanged (no encoder). Dict: ``obs_history`` is a Dict of tensors each
-        ``(B, cond_steps, *leaf_shape)``; returns ``(B, cond_steps,
-        features_dim)`` by folding ``cond_steps`` into the batch dimension
-        before the features-extractor forward and reshaping back after."""
-        if isinstance(self.observation_space, spaces.Dict):
-            assert isinstance(obs_history, dict)
-            batch = next(iter(obs_history.values())).shape[0]
-            flat_obs = flatten_leading_dims(obs_history)
-            flat_features = self.features_extractor.extract(
-                flat_obs, stop_gradient=stop_gradient
-            )
-            return flat_features.reshape(batch, self.cond_steps, -1)
-        return obs_history
+        """``obs_history`` is a Dict of tensors each ``(B, cond_steps,
+        *leaf_shape)``. Returns ``(B, cond_steps, features_dim)`` by folding
+        ``cond_steps`` into the batch dimension before the
+        features-extractor forward and reshaping back after."""
+        batch = next(iter(obs_history.values())).shape[0]
+        flat_obs = flatten_leading_dims(obs_history)
+        flat_features = self.features_extractor.extract(flat_obs, stop_gradient=stop_gradient)
+        return flat_features.reshape(batch, self.cond_steps, -1)
 
     def loss(self, obs_history: Obs, action_chunk: torch.Tensor) -> torch.Tensor:
-        """``obs_history``: (B, cond_steps, obs_dim) for Box, or a Dict of
-        tensors each ``(B, cond_steps, *leaf_shape)`` for Dict. ``action_chunk``:
-        (B, horizon_steps, action_dim). Epsilon-prediction MSE at random t."""
+        """``obs_history``: a Dict of tensors each ``(B, cond_steps,
+        *leaf_shape)``. ``action_chunk``: (B, horizon_steps, action_dim).
+        Epsilon-prediction MSE at random t."""
         batch = action_chunk.shape[0]
         t = torch.randint(
             0, self.denoising_steps, (batch,), device=action_chunk.device
@@ -201,31 +176,23 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
         return self.p_losses(self.net, action_chunk, {"state": cond}, t)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        """``obs``: a raw ``Tensor`` for Box (single frame ``(B, obs_dim)``,
+        """``obs``: a Dict (each leaf ``(B, *leaf_shape)`` single frame,
         broadcast to ``cond_steps``, or explicit history ``(B, cond_steps,
-        obs_dim)``), or a Dict for Dict observations (each leaf ``(B,
-        *leaf_shape)`` single frame, broadcast to ``cond_steps``, or explicit
-        history ``(B, cond_steps, *leaf_shape)``). Returns the full predicted
-        action chunk, ``(B, horizon_steps, action_dim)`` -- chunk
-        execution/slicing is the caller's concern."""
-        if isinstance(obs, dict):
-            sample_key = next(iter(obs))
-            leaf_ndim = len(self.observation_space[sample_key].shape)
-            is_single_frame = obs[sample_key].dim() == leaf_ndim + 1
-            if is_single_frame:
-                obs_history = {
-                    key: value.unsqueeze(1).expand(
-                        -1, self.cond_steps, *([-1] * (value.dim() - 1))
-                    )
-                    for key, value in obs.items()
-                }
-            else:
-                obs_history = obs
+        *leaf_shape)``). Returns the full predicted action chunk, ``(B,
+        horizon_steps, action_dim)`` -- chunk execution/slicing is the
+        caller's concern."""
+        sample_key = next(iter(obs))
+        leaf_ndim = len(self.observation_space[sample_key].shape)
+        is_single_frame = obs[sample_key].dim() == leaf_ndim + 1
+        if is_single_frame:
+            obs_history = {
+                key: value.unsqueeze(1).expand(
+                    -1, self.cond_steps, *([-1] * (value.dim() - 1))
+                )
+                for key, value in obs.items()
+            }
         else:
-            assert isinstance(obs, torch.Tensor)
-            obs_history = (
-                obs if obs.dim() == 3 else obs.unsqueeze(1).expand(-1, self.cond_steps, -1)
-            )
+            obs_history = obs
         cond = {"state": self._cond_from_obs_history(obs_history, stop_gradient=True)}
         action_chunk, _ = self.sample_chain(
             cond,

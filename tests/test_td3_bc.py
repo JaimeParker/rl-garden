@@ -4,7 +4,6 @@ import os
 import tempfile
 
 import numpy as np
-import pytest
 import torch
 from gymnasium import spaces
 
@@ -27,6 +26,19 @@ def _dict_env(num_envs: int = 1) -> OfflineEnvSpec:
     )
 
 
+def _dict_image_env(num_envs: int = 1) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32),
+                "rgb_cam": spaces.Box(0, 255, shape=(8, 8, 3), dtype=np.uint8),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
 def _make_agent(**kwargs) -> TD3BC:
     defaults = dict(
         env=_state_env(),
@@ -41,18 +53,73 @@ def _make_agent(**kwargs) -> TD3BC:
 
 def _fill(agent: TD3BC, steps: int = 64) -> None:
     env = agent.env
+    # env.single_observation_space is Dict({"state": Box}) -- a bare Box env
+    # (as _state_env() constructs) is boundary-normalized by
+    # BaseAlgorithm.__init__ (rl_garden.envs.wrappers.VectorizedDictStateWrapper).
+    obs_shape = env.single_observation_space["state"].shape
     for _ in range(steps):
-        obs = torch.randn(env.num_envs, *env.single_observation_space.shape)
-        next_obs = torch.randn_like(obs)
+        state = torch.randn(env.num_envs, *obs_shape)
+        next_state = torch.randn_like(state)
         actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
         rewards = torch.randn(env.num_envs)
         dones = torch.zeros(env.num_envs)
-        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+        agent.replay_buffer.add(
+            {"state": state}, {"state": next_state}, actions, rewards, dones
+        )
 
 
-def test_rejects_dict_observation_space():
-    with pytest.raises(TypeError):
-        TD3BC(env=_dict_env(), buffer_device="cpu", device="cpu")
+def test_accepts_state_only_dict_observation_space():
+    # TD3BC's replay buffer is Dict-based now -- a pure-state Dict env (no
+    # images) is exactly what a bare Box env normalizes to at the boundary,
+    # so it must construct identically to _state_env().
+    agent = TD3BC(env=_dict_env(), buffer_device="cpu", device="cpu")
+    assert agent.observation_encoders.schema.keys == ("state",)
+
+
+def test_accepts_dict_observation_space_with_images():
+    # TD3BC accepts encoder_config/obs_groups like the rest of the codebase
+    # (schema-driven encoder resolution) -- a Dict env with an image key
+    # must construct without error.
+    agent = TD3BC(env=_dict_image_env(), buffer_device="cpu", device="cpu")
+    assert agent.observation_encoders.schema.has_images
+
+
+def test_dict_image_construction_normalizes_raw_state_not_features():
+    """Regression test for the obs-normalization semantics fix: obs_mean/
+    obs_std must be sized to the raw 'state' dim (6), not
+    features_extractor.features_dim (much larger once an image branch is
+    fused in), and extract_features must normalize obs['state'] itself
+    before the extractor runs, leaving the image key untouched -- not
+    normalize the extractor's post-encoder output (CORL's own
+    normalize_states semantics)."""
+    # 64x64 (not the construction-only _dict_image_env()'s 8x8): this test
+    # runs a real forward pass through the default plain_conv backbone,
+    # which needs a larger input than 8x8 survives after its stride-2 layers.
+    env = OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32),
+                "rgb_cam": spaces.Box(0, 255, shape=(64, 64, 3), dtype=np.uint8),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+        num_envs=1,
+    )
+    agent = TD3BC(env=env, buffer_size=8, buffer_device="cpu", device="cpu")
+    assert agent.policy.obs_mean.shape == (6,)
+    assert agent.policy.features_extractor.features_dim != 6
+
+    agent.policy.obs_mean.fill_(5.0)
+    agent.policy.obs_std.fill_(2.0)
+
+    state = torch.randn(3, 6)
+    rgb = torch.randint(0, 256, (3, 64, 64, 3), dtype=torch.uint8)
+    obs = {"state": state, "rgb_cam": rgb}
+
+    normalized_state = (state - 5.0) / 2.0
+    expected = agent.policy._extract_features({"state": normalized_state, "rgb_cam": rgb})
+    actual = agent.policy.extract_features(obs)
+    assert torch.allclose(actual, expected)
 
 
 def test_gradient_step_produces_finite_losses():
@@ -101,11 +168,11 @@ def test_policy_freq_delays_actor_and_target_updates():
 def test_obs_normalizer_fits_dataset_mean_std():
     agent = _make_agent()
     env = agent.env
-    obs = torch.randn(500, *env.single_observation_space.shape) * 3.0 + 5.0
+    obs = torch.randn(500, *env.single_observation_space["state"].shape) * 3.0 + 5.0
     for i in range(obs.shape[0] - 1):
         agent.replay_buffer.add(
-            obs[i : i + 1],
-            obs[i + 1 : i + 2],
+            {"state": obs[i : i + 1]},
+            {"state": obs[i + 1 : i + 2]},
             torch.zeros(1, 3),
             torch.zeros(1),
             torch.zeros(1),

@@ -110,7 +110,7 @@ class RecurrentSamplingMixin:
         observation, not the true final one -- patch it in from the compact
         final-obs side table wherever a boundary falls inside the window (needed
         for truncation bootstrapping; harmless but also applied at true
-        terminations for consistency, matching ``LazyNextNStepDictReplayBuffer``'s
+        terminations for consistency, matching ``LazyNextNStepReplayBuffer``'s
         existing precedent)."""
         slot_at_pos = self._final_slot_ids[idx_grid, env_grid]
         boundary = self.episode_ends[idx_grid, env_grid] & (slot_at_pos >= 0)
