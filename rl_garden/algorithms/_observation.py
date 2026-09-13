@@ -37,6 +37,7 @@ from rl_garden.observations import (
     ObservationContractError,
     ObservationSchema,
     normalize_observation_space,
+    resolve_encoder_sharing,
     resolve_obs_groups,
 )
 
@@ -140,8 +141,22 @@ class ObservationEncoderMixin:
     """
 
     #: Overridable per algorithm class. See module docstring for the three
-    #: values' meaning.
+    #: values' meaning. This is the *default* used only when nothing else
+    #: (an explicit request, an asymmetric obs_groups, or a critic_encoder)
+    #: determines the value -- see resolve_encoder_sharing.
     encoder_sharing: EncoderSharing = "shared_critic_grad"
+
+    #: Overridable per algorithm class: the resolved encoder_sharing values
+    #: this algorithm actually supports (checked by _resolve_encoder_sharing
+    #: after resolution, and by algorithm_registry's static preflight via the
+    #: same values read off the class). Narrowed by the FQL family/QAM (no
+    #: "shared" -- see FQLCore/QAMCore) and by the single-RNN Recurrent/
+    #: Sequence family (no "separate" -- see SequenceSAC/SequencePPO).
+    encoder_sharing_choices: tuple[EncoderSharing, ...] = (
+        "shared_critic_grad",
+        "shared",
+        "separate",
+    )
 
     #: Class-level defaults so a concrete algorithm that never sets one of
     #: these (e.g. a state-only algorithm with no obs_groups/critic-encoder
@@ -154,9 +169,58 @@ class ObservationEncoderMixin:
 
     observation_encoders: ObservationEncoders
 
+    #: Set by _resolve_encoder_sharing: a human-readable trace of where the
+    #: resolved self.encoder_sharing came from -- "explicit", "<ClassName>
+    #: default", or "inferred (asymmetric obs_groups)" / "inferred
+    #: (critic_encoder)". Surfaced in --print-config and checkpoint metadata.
+    encoder_sharing_origin: str
+
+    def _resolve_encoder_sharing(self, observation_space) -> EncoderSharing:
+        """Resolve ``self.encoder_sharing`` (possibly ``None``, meaning
+        "infer from obs_groups/critic_encoder_config, else use this class's
+        own default") against the observation contract, storing the result
+        and its origin on the instance (``self.encoder_sharing``,
+        ``self.encoder_sharing_origin``).
+
+        Idempotent and cheap -- builds no encoder, so it never shifts RNG
+        consumption or wastes compute (see ``_policy_extractor_kwargs``'s
+        own RNG-avoidance for the same reason), and safe to call more than
+        once (e.g. an algorithm that builds more than one policy): the
+        second call is a no-op reading back the already-resolved value,
+        instead of re-resolving the now-concrete value as a fresh "explicit"
+        request and losing an "inferred"/"default" origin.
+        """
+        if getattr(self, "_encoder_sharing_resolved", False):
+            return self.encoder_sharing
+        normalized_space = normalize_observation_space(observation_space)
+        schema = ObservationSchema.from_space(normalized_space)
+        resolved_groups = resolve_obs_groups(schema, self.obs_groups)
+        asymmetric = resolved_groups["actor"].keys != resolved_groups["critic"].keys
+        value, origin = resolve_encoder_sharing(
+            requested=self.encoder_sharing,
+            class_default=type(self).encoder_sharing,
+            asymmetric=asymmetric,
+            has_critic_encoder=self.critic_encoder_config is not None,
+        )
+        if origin == "default":
+            origin = f"{type(self).__name__} default"
+        choices = type(self).encoder_sharing_choices
+        if value not in choices:
+            raise ObservationContractError(
+                f"{type(self).__name__} resolved encoder_sharing={value!r} "
+                f"(via {origin}), but this algorithm only supports "
+                f"{choices}; make obs_groups symmetric / drop critic_encoder, "
+                "or pass an explicit encoder_sharing value from that set."
+            )
+        self.encoder_sharing = value
+        self.encoder_sharing_origin = origin
+        self._encoder_sharing_resolved = True
+        return value
+
     def _resolve_observation_encoders(
         self, observation_space, *, augmentation_seed: Optional[int] = None
     ) -> ObservationEncoders:
+        self._resolve_encoder_sharing(observation_space)
         self.observation_encoders = resolve_observation_encoders(
             observation_space,
             self.encoder_config,
@@ -179,8 +243,12 @@ class ObservationEncoderMixin:
         """Resolve ``{"actor_extractor", "critic_extractor",
         "encoder_sharing"}`` for building this algorithm's policy.
 
-        Defaults to the schema-driven encoder(s) from
-        ``_resolve_observation_encoders`` (lazily -- not resolved at all when
+        ``self.encoder_sharing`` is resolved first (cheap, no encoder built
+        -- see ``_resolve_encoder_sharing``), so the returned
+        ``"encoder_sharing"`` is always a concrete value even when both
+        extractor roles are overridden below. The extractor(s) themselves
+        default to the schema-driven encoder(s) from
+        ``_resolve_observation_encoders`` (lazily -- not built at all when
         both roles are overridden below, so building schema-driven encoders
         just to discard them never wastes compute or shifts RNG consumption).
         ``self.policy_kwargs`` may override either role directly with
@@ -190,6 +258,7 @@ class ObservationEncoderMixin:
         that role entirely; a ``*_kwargs`` given without its ``*_class``
         raises (it would be silently ignored).
         """
+        self._resolve_encoder_sharing(observation_space)
         policy_kwargs = getattr(self, "policy_kwargs", None) or {}
         actor_class = policy_kwargs.get("actor_extractor_class")
         critic_class = policy_kwargs.get("critic_extractor_class")

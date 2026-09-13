@@ -271,6 +271,7 @@ class CQLCore(SACCore):
             "cql_diff_clip_mode": self.cql_diff_clip_mode,
             "cql_alpha_param": self.cql_alpha_param,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config)
                 if getattr(self, "encoder_config", None) is not None
@@ -1021,7 +1022,7 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -1056,11 +1057,6 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config

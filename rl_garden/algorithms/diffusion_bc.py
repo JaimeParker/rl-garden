@@ -207,6 +207,7 @@ class DiffusionBC(OfflineRLAlgorithm):
             "net_cls": self.net_cls.__name__,
             "net_kwargs": self.net_kwargs,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

@@ -76,7 +76,7 @@ class Off2OnSO2(_SO2RolloutTrainingShell):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         target_smoothing_noise_std: float = 0.3,

@@ -95,7 +95,7 @@ class ReBRACCore(TD3BCCore):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
         # TD3BCCore._init_td3bc_params owns tau/lrs/net_arch/n_critics/layer
@@ -309,7 +309,7 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",

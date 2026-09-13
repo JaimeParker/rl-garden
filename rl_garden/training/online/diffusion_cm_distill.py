@@ -143,6 +143,15 @@ class DiffusionCMDistillOnlineArgs(
     CNN-based Dict/RGBD observations."""
 
 
+def _diffusion_cm_distill_algorithm_cls() -> type:
+    from rl_garden.algorithms import DiffusionCMDistillOnline
+
+    return DiffusionCMDistillOnline
+
+
 registry.register(
-    "diffusion_cm_distill_online", DiffusionCMDistillOnlineArgs, run_diffusion_cm_distill
+    "diffusion_cm_distill_online",
+    DiffusionCMDistillOnlineArgs,
+    run_diffusion_cm_distill,
+    algorithm_cls=_diffusion_cm_distill_algorithm_cls,
 )

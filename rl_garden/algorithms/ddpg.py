@@ -96,7 +96,7 @@ class DDPG(OffPolicyAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         # --- Misc ---
         policy_kwargs: Optional[dict[str, Any]] = None,
@@ -187,11 +187,6 @@ class DDPG(OffPolicyAlgorithm):
             else EncoderConfig(backbone="drqv2_conv", image_augmentation="random_shift")
         )
         self.obs_groups = obs_groups
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_sharing = encoder_sharing
         self.critic_encoder_config = critic_encoder_config
         self._image_augmentation_seed = image_augmentation_seed
@@ -503,6 +498,7 @@ class DDPG(OffPolicyAlgorithm):
             "replay_lazy_next_obs": self.replay_lazy_next_obs,
             "replay_pin_sampled_batch": self.replay_pin_sampled_batch,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

@@ -106,7 +106,7 @@ class Off2OnCalQL(_CalQLRolloutTrainingShell):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         # Off2on phase control
         use_td_loss: bool = True,
         online_cql_alpha: float = 5.0,
@@ -137,11 +137,6 @@ class Off2OnCalQL(_CalQLRolloutTrainingShell):
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config

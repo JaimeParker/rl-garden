@@ -112,4 +112,10 @@ class FlowPPOArgs(FlowPPOTrainingArgs, ObservationArgs, EnvBackendArgs):
     CNN-based Dict/RGBD observations."""
 
 
-registry.register("flow_ppo", FlowPPOArgs, run_flow_ppo)
+def _flow_ppo_algorithm_cls() -> type:
+    from rl_garden.algorithms import FlowPPO
+
+    return FlowPPO
+
+
+registry.register("flow_ppo", FlowPPOArgs, run_flow_ppo, algorithm_cls=_flow_ppo_algorithm_cls)

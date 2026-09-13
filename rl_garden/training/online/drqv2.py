@@ -154,4 +154,10 @@ class DrQv2Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     replay_pin_sampled_batch: bool = False
 
 
-registry.register("drqv2", DrQv2Args, run_drqv2)
+def _drqv2_algorithm_cls() -> type:
+    from rl_garden.algorithms.ddpg import DDPG
+
+    return DDPG
+
+
+registry.register("drqv2", DrQv2Args, run_drqv2, algorithm_cls=_drqv2_algorithm_cls)

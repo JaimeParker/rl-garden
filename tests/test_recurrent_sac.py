@@ -281,17 +281,17 @@ def test_recurrent_sac_rejects_token_and_prop_features():
 
 
 def test_recurrent_sac_rejects_separate_encoder_sharing():
-    """RecurrentSACPolicy's single recurrent_encoder is one RNN shared between
-    the encoder and both actor/critic heads -- there is no way to route a
-    second, independently-trained critic_extractor's output through it. See
-    RecurrentSACPolicy.__init__'s guard (rl_garden/policies/recurrent_sac_policy.py):
-    RecurrentSAC itself has no separate "reject asymmetric obs_groups" check
-    (per the policy-extractor-contract recipe's "Single-RNN policies" section)
-    -- encoder_sharing="separate" alone is enough to make
-    _policy_extractor_kwargs resolve a real, non-None critic_extractor, which
-    the policy constructor then rejects."""
+    """SequenceSAC.encoder_sharing_choices == ("shared_critic_grad", "shared")
+    (rl_garden/algorithms/sequence_sac.py) -- a single RNN sits between the
+    encoder and both actor/critic heads, so there is no way to route a
+    second, independently-trained critic_extractor's output through it.
+    ObservationEncoderMixin._resolve_encoder_sharing (rl_garden/algorithms/
+    _observation.py) checks the resolved value against that tuple and
+    raises before a policy is ever built; RecurrentSACPolicy.__init__ keeps
+    the same guard for the direct-construction / policy_kwargs override case
+    (see test_recurrent_sac_rejects_critic_extractor_kwargs_override below)."""
     env = DummyVecEnv(_state_space(), _action_space())
-    with pytest.raises(ValueError, match="does not support a separate"):
+    with pytest.raises(ValueError, match="only supports"):
         RecurrentSAC(
             env=env,
             encoder_sharing="separate",

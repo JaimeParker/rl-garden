@@ -63,8 +63,15 @@ class TransformerPPOArgs(VisionTransformerPPOTrainingArgs, EnvBackendArgs):
     """
 
 
+def _transformer_ppo_algorithm_cls() -> type:
+    from rl_garden.algorithms import TransformerPPO
+
+    return TransformerPPO
+
+
 registry.register(
     "transformer_ppo",
     TransformerPPOArgs,
     run_transformer_ppo,
+    algorithm_cls=_transformer_ppo_algorithm_cls,
 )

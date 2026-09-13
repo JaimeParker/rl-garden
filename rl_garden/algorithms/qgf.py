@@ -232,6 +232,7 @@ class QGFCore:
             "net_arch": self.net_arch,
             "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),
@@ -552,7 +553,7 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -623,11 +624,6 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_sharing = encoder_sharing
         self.critic_encoder_config = critic_encoder_config
         self._image_augmentation_seed = image_augmentation_seed

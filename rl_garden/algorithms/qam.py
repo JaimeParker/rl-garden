@@ -83,6 +83,15 @@ from rl_garden.policies.qam_policy import CriticLossType, QAMPolicy
 class QAMCore:
     """Shared QAM loss/network logic. See module docstring."""
 
+    # QAM's actor optimizer never includes the encoder (see
+    # QAMPolicy.actor_parameters/critic_and_value_parameters) -- "shared"
+    # (which would mean the actor loss also trains it) has no meaningful
+    # implementation here, matching the FQL family's identical restriction
+    # (rl_garden/algorithms/fql.py). Checked by ObservationEncoderMixin.
+    # _resolve_encoder_sharing against the resolved value, and read
+    # statically by algorithm_registry's preflight.
+    encoder_sharing_choices: tuple = ("shared_critic_grad", "separate")
+
     def _init_qam_params(
         self,
         *,
@@ -217,6 +226,7 @@ class QAMCore:
             "net_arch": self.net_arch,
             "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),
@@ -589,7 +599,7 @@ class QAM(QAMCore, OfflineRLAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -667,11 +677,6 @@ class QAM(QAMCore, OfflineRLAlgorithm):
         # (which would mean the actor loss also trains it) has no meaningful
         # implementation here, matching QAMPolicy's own restriction and the
         # FQL family's identical reasoning (rl_garden/algorithms/fql.py).
-        if encoder_sharing not in ("shared_critic_grad", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad' or 'separate' for "
-                f"QAM, got {encoder_sharing!r}."
-            )
         self.encoder_sharing = encoder_sharing
         self.critic_encoder_config = critic_encoder_config
         self._image_augmentation_seed = image_augmentation_seed

@@ -123,4 +123,10 @@ class JSRLArgs(JSRLTrainingArgs, ObservationArgs, EnvBackendArgs):
     """
 
 
-registry.register("jsrl", JSRLArgs, run_jsrl)
+def _jsrl_algorithm_cls() -> type:
+    from rl_garden.algorithms import JSRL
+
+    return JSRL
+
+
+registry.register("jsrl", JSRLArgs, run_jsrl, algorithm_cls=_jsrl_algorithm_cls)

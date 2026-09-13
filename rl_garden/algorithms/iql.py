@@ -181,6 +181,7 @@ class IQLCore:
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),
@@ -550,7 +551,7 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -605,11 +606,6 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
         )
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
@@ -701,7 +697,7 @@ class IQL(IQLCore, OfflineRLAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -791,11 +787,6 @@ class IQL(IQLCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
         )
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config

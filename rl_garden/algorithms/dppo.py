@@ -161,6 +161,7 @@ class DPPOCore:
             "actor_mlp_dims": self.actor_mlp_dims,
             "critic_mlp_dims": self.critic_mlp_dims,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),
@@ -244,7 +245,7 @@ class DPPO(DPPOCore, OnPolicyAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -258,11 +259,6 @@ class DPPO(DPPOCore, OnPolicyAlgorithm):
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
     ) -> None:
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_sharing = encoder_sharing
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups

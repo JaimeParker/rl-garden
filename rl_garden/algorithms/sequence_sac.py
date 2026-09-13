@@ -25,6 +25,16 @@ from rl_garden.policies.recurrent_sac_policy import RecurrentSACPolicy
 
 
 class SequenceSAC(SAC):
+    # A single SequenceLatentEncoder (RNN/GTrXL) sits between the encoder
+    # and both actor/critic heads -- there is no way to route a second,
+    # independently-trained critic extractor's output through it, so
+    # "separate" is not supported (RecurrentSACPolicy/RecurrentPPOPolicy's
+    # critic_extractor guard). "shared_critic_grad"/"shared" both use one
+    # encoder instance and stay valid. Checked by ObservationEncoderMixin.
+    # _resolve_encoder_sharing against the resolved value, and read
+    # statically by algorithm_registry's preflight.
+    encoder_sharing_choices: tuple = ("shared_critic_grad", "shared")
+
     def __init__(
         self,
         env: Any,

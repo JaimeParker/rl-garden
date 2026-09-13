@@ -71,4 +71,10 @@ class GAILArgs(GAILTrainingArgs, ObservationArgs, EnvBackendArgs):
     """
 
 
-registry.register("gail", GAILArgs, run_gail)
+def _gail_algorithm_cls() -> type:
+    from rl_garden.algorithms import GAIL
+
+    return GAIL
+
+
+registry.register("gail", GAILArgs, run_gail, algorithm_cls=_gail_algorithm_cls)

@@ -45,7 +45,9 @@ class RecurrentPPOPolicy(PPOPolicy):
                 "RecurrentPPOPolicy does not support a separate "
                 "critic_extractor: recurrent_encoder is a single RNN "
                 "shared between the encoder and both actor/value heads, so "
-                "there is no way to route a second encoder's output through it."
+                "there is no way to route a second encoder's output through "
+                "it. Make obs_groups symmetric / drop critic_encoder; this "
+                "algorithm cannot use separate encoders."
             )
         # recurrent_encoder.features_dim is read here (a plain property, safe
         # before nn.Module registration); self.recurrent_encoder is assigned

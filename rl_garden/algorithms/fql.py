@@ -81,6 +81,14 @@ class FQLCore:
         {"actor_extractor_class", "actor_extractor_kwargs"}
     )
 
+    # The FQL family has no "shared" mode (both actor and critic losses
+    # training one encoder with no stop-gradient): only "shared_critic_grad"
+    # (one encoder, actor path detached -- the default) or "separate" (three
+    # independent encoder instances, matching the JAX reference) make sense.
+    # Checked by ObservationEncoderMixin._resolve_encoder_sharing against the
+    # resolved value, and read statically by algorithm_registry's preflight.
+    encoder_sharing_choices: tuple = ("shared_critic_grad", "separate")
+
     def _init_fql_params(
         self,
         *,
@@ -109,7 +117,7 @@ class FQLCore:
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -123,11 +131,6 @@ class FQLCore:
         if grad_clip_norm is not None and grad_clip_norm <= 0:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
-            )
-        if encoder_sharing not in ("shared_critic_grad", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad' or 'separate' for "
-                f"the FQL family, got {encoder_sharing!r}."
             )
 
         self.tau = tau
@@ -186,6 +189,7 @@ class FQLCore:
             "n_critics": self.n_critics,
             "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),
@@ -499,7 +503,7 @@ class FQL(FQLCore, OfflineRLAlgorithm):
         kernel_init: Optional[KernelInit] = "xavier_uniform",
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,

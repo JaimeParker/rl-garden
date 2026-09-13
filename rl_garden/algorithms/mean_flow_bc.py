@@ -167,6 +167,7 @@ class MeanFlowBC(OfflineRLAlgorithm):
             "adaptive_l2_gamma": self.adaptive_l2_gamma,
             "adaptive_l2_c": self.adaptive_l2_c,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

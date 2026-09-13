@@ -94,7 +94,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        encoder_sharing: EncoderSharing = "shared_critic_grad",
+        encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
@@ -199,11 +199,6 @@ class SAC(SACCore, OffPolicyAlgorithm):
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
         self.critic_backbone_type = critic_backbone_type
 
-        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
-            raise ValueError(
-                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
-                f"'separate', got {encoder_sharing!r}."
-            )
         self.encoder_sharing = encoder_sharing
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -247,6 +242,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "actor_log_std_min": self.actor_log_std_min,
             "actor_log_std_mode": self.actor_log_std_mode,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

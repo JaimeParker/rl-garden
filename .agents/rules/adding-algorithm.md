@@ -213,13 +213,18 @@ for free. A concrete algorithm opts in by:
    self.policy = MyPolicy(..., **extractor_kwargs)
    ```
 
-3. Optionally overriding the class attribute `encoder_sharing:
-   Literal["shared_critic_grad", "shared", "separate"]`. `"shared"` is the
-   class default for BC-only algorithms (no critic) and for IDQL/QGF; every
-   other critic-bearing algorithm defaults to `"shared_critic_grad"` (the
+3. **Required:** declaring a class attribute `encoder_sharing: Literal["shared_critic_grad", "shared", "separate"]`.
+   `"shared"` is the class default for BC-only algorithms (no critic) and for IDQL/QGF;
+   every other critic-bearing algorithm defaults to `"shared_critic_grad"` (the
    actor path is still stop-gradiented). `"separate"` is needed whenever
-   `obs_groups.actor != obs_groups.critic` or a distinct `critic_encoder_config`
-   is given. Sharing/asymmetry violations raise `ObservationContractError`
+   asymmetric `obs_groups.actor != obs_groups.critic` or a distinct
+   `critic_encoder_config` is provided by the user. Do NOT declare encoder_sharing
+   as a constructor default; instead accept `encoder_sharing: EncoderSharing | None = None`
+   and let the resolution logic infer the final value. Optionally restrict allowed
+   values by defining a class attribute `encoder_sharing_choices: tuple[Literal[...], ...]`.
+   Recurrent/transformer algorithms (RecurrentSAC, RecurrentPPO, TransformerSAC, TransformerPPO)
+   must declare `encoder_sharing_choices = ("shared_critic_grad", "shared")` to prevent
+   `separate` at preflight. Sharing/asymmetry violations raise `ObservationContractError`
    (a `ValueError` subclass). BC-only algorithms have no encoder-sharing attribute.
 
 **Out-of-contract exceptions** (documented, plain `nn.Module`s):
@@ -305,7 +310,12 @@ class MyAlgoArgs(MyAlgoTrainingArgs, EnvBackendArgs):
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
     """
 
-registry.register("my_algo", MyAlgoArgs, run_my_algo)
+def _my_algo_algorithm_cls() -> type:
+    from rl_garden.algorithms.my_algo import MyAlgo
+
+    return MyAlgo
+
+registry.register("my_algo", MyAlgoArgs, run_my_algo, algorithm_cls=_my_algo_algorithm_cls)
 ```
 
 `registry.register` rejects both a duplicate `name` and a duplicate `args_cls` —
@@ -371,7 +381,12 @@ def run_my_algo(args: MyAlgoArgs) -> None:
 
     run_offline(args, build_agent=build_my_algo)
 
-registry.register("my_algo", MyAlgoArgs, run_my_algo)
+def _my_algo_algorithm_cls() -> type:
+    from rl_garden.algorithms.my_algo import MyAlgo
+
+    return MyAlgo
+
+registry.register("my_algo", MyAlgoArgs, run_my_algo, algorithm_cls=_my_algo_algorithm_cls)
 ```
 
 `OfflineCommonArgs` (`offline/_args.py`) already composes `LoggingArgs,
@@ -502,12 +517,17 @@ python -c "from rl_garden.algorithms import Off2OnMyAlgo; print([c.__name__ for 
 
 ## Checklist — files a new algorithm touches
 
-1. `rl_garden/algorithms/my_algo.py` — the algorithm class(es).
+1. `rl_garden/algorithms/my_algo.py` — the algorithm class(es), including
+   `encoder_sharing` class attribute (required for all critic-bearing algorithms;
+   use `"shared_critic_grad"` for most, `"shared"` for IDQL/QGF, restrict to
+   `("shared_critic_grad", "shared")` for recurrent/transformer variants).
 2. `rl_garden/algorithms/__init__.py` — one import line (+ `__all__` entry).
 3. The phase `_args.py` (`training/{online,offline,off2on}/_args.py`) —
    hyperparameter dataclass(es).
 4. `rl_garden/training/<phase>/my_algo.py` — the run module (env/dataset
    request, `build_my_algo`, `run_my_algo`, `Args`, `registry.register`).
+   **Required:** pass `algorithm_cls=_my_algo_algorithm_cls` to `registry.register()`
+   (see Part B/C for the pattern).
 5. `rl_garden/training/algorithm_registry.py`'s `_validate_config` allowlist
    tuple — **only** for a bespoke offline algorithm requiring `--dataset_path`
    (see Part C).

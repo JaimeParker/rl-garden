@@ -115,7 +115,6 @@ obs:
 obs_groups:
   actor: [rgb_base_camera, state]
   critic: [rgb_base_camera, state, state_object_pose, state_gripper_state]
-encoder_sharing: separate
 ```
 
 All state keys (base `state` plus each `state_<name>`) are concatenated
@@ -131,23 +130,20 @@ obs: {state: true, extra_state: [object_pose]}
 obs_groups:
   actor: [state]
   critic: [state, state_object_pose]
-encoder_sharing: separate
 ```
 
 CLI equivalent:
 
 ```bash
 --obs.state true --obs.extra-state object_pose \
-  --obs-groups.actor state --obs-groups.critic state state_object_pose \
-  --encoder-sharing separate
+  --obs-groups.actor state --obs-groups.critic state state_object_pose
 ```
 
 ### Actor/critic encoder asymmetry
 
 `obs_groups` optionally splits which observation keys the actor and critic
 each consume (asymmetric/privileged critic); `critic_encoder` optionally
-gives the critic its own encoder hyperparameters, meaningful only together
-with `obs_groups`/`encoder_sharing: separate`:
+gives the critic its own encoder hyperparameters:
 
 ```yaml
 obs_groups:
@@ -156,20 +152,24 @@ obs_groups:
 critic_encoder:
   backbone: resnet18    # different from encoder.backbone
   features_dim: 512
-encoder_sharing: separate   # shared_critic_grad | shared | separate
 ```
+
+When asymmetric `obs_groups` are provided (actor observes different keys than
+critic), `encoder_sharing` is automatically inferred to `separate`. Use
+`--print-config` or `--explain-param encoder_sharing` to inspect the resolved
+value and its origin (`inferred (asymmetric obs_groups)`, `inferred (critic_encoder)`,
+or `<algo> default`). You may explicitly set `--encoder-sharing` to override
+the default, but a non-`separate` value that contradicts asymmetric groups
+raises `ObservationContractError` at construction time.
 
 Algorithms that support asymmetric `obs_groups` all have a critic/value head
 (every algorithm except BC-only families: BC, DiffusionBC, FlowBC, MeanFlowBC,
 A2ABC, ConsistencyDistillBC, DAgger). Algorithms with recurrent or transformer
 state abstractions (RecurrentSAC, RecurrentPPO, TransformerSAC, TransformerPPO)
-cannot use `encoder_sharing="separate"` because there is only one RNN/attention
-mechanism shared between the encoder and the heads; attempting to pass
-`obs_groups.actor != obs_groups.critic` or `encoder_sharing="separate"` to
-these families raises `ObservationContractError` at construction time.
-
-`encoder_sharing` overrides the algorithm's own actor/critic encoder-sharing
-default; leave it unset to use the algorithm's default.
+cannot use separate encoders (both cannot use `encoder_sharing="separate"`) because
+there is only one RNN/attention mechanism shared between the encoder and the heads;
+attempting to pass asymmetric `obs_groups` to these families raises
+`ObservationContractError` at construction time.
 
 **Activation rule:** `obs_groups` and `encoder_sharing` are always active.
 `critic_encoder` and the image-specific fields of `encoder` (all except

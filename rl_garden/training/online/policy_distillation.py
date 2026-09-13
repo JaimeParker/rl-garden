@@ -146,4 +146,15 @@ class PolicyDistillationArgs(PolicyDistillationTrainingArgs, ObservationArgs, En
     """
 
 
-registry.register("policy_distillation", PolicyDistillationArgs, run_policy_distillation)
+def _policy_distillation_algorithm_cls() -> type:
+    from rl_garden.algorithms import PolicyDistillation
+
+    return PolicyDistillation
+
+
+registry.register(
+    "policy_distillation",
+    PolicyDistillationArgs,
+    run_policy_distillation,
+    algorithm_cls=_policy_distillation_algorithm_cls,
+)

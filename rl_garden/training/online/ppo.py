@@ -137,4 +137,10 @@ class PPOArgs(VisionPPOTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("ppo", PPOArgs, run_ppo)
+def _ppo_algorithm_cls() -> type:
+    from rl_garden.algorithms import PPO
+
+    return PPO
+
+
+registry.register("ppo", PPOArgs, run_ppo, algorithm_cls=_ppo_algorithm_cls)

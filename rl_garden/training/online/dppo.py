@@ -131,4 +131,10 @@ class DPPOArgs(DPPOTrainingArgs, ObservationArgs, EnvBackendArgs):
     Dict/RGBD observations."""
 
 
-registry.register("dppo", DPPOArgs, run_dppo)
+def _dppo_algorithm_cls() -> type:
+    from rl_garden.algorithms import DPPO
+
+    return DPPO
+
+
+registry.register("dppo", DPPOArgs, run_dppo, algorithm_cls=_dppo_algorithm_cls)

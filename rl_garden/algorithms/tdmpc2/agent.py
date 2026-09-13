@@ -468,6 +468,7 @@ class TDMPC2(BaseAlgorithm):
             "discount_max": self.discount_max,
             "learning_starts": self.learning_starts,
             "encoder_sharing": self.encoder_sharing,
+            "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

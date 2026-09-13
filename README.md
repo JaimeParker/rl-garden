@@ -29,7 +29,8 @@ platforms can be integrated without creating platform-specific training entrypoi
   ``rgb_<camera>``/``depth_<camera>`` image keys. Actor and critic can use
   asymmetric observation groups, allowing privileged state visible only to the
   critic (every critic-bearing algorithm except the recurrent/transformer
-  variants; requires ``encoder_sharing: separate``).
+  variants; ``encoder_sharing`` is inferred automatically when asymmetric
+  ``obs_groups`` are provided).
 - **Visual encoders:** PlainConv, ResNet, DrQ-v2 conv, 3D CNN, and ViT backbones
   with configurable image-key fusion, pooling, augmentation, and proprioception
   fusion. Actor and critic share one encoder by default; SAC-family and PPO-family
@@ -273,12 +274,16 @@ while leaving the pooling/bottleneck head trainable.
 
 Actor/critic encoder sharing is the per-algorithm `encoder_sharing` default
 (`shared_critic_grad` for almost every algorithm, including PPO; `shared`
-only for IDQL/QGF) — override it with `--encoder-sharing separate`.
+only for IDQL/QGF). When asymmetric `obs_groups` (actor observes different
+keys than critic) are provided, `encoder_sharing` is automatically inferred to
+`separate`; use `--print-config` to inspect the resolved value and its origin.
+You may override this with `--encoder-sharing` to explicitly choose a value,
+though a non-`separate` override contradicting asymmetric groups raises an error.
 `--obs-groups.actor`/`--obs-groups.critic` split
 which observation keys each consumes (asymmetric/privileged critic, e.g. a
 state-only critic paired with an image-observing actor); `--critic-encoder.*`
 gives the critic its own encoder hyperparameters, meaningful only together with
-`--obs-groups`/`--encoder-sharing separate`:
+asymmetric `--obs-groups`:
 
 ```bash
 python examples/train_online.py sac \
@@ -286,7 +291,6 @@ python examples/train_online.py sac \
   --obs.rgb base_camera \
   --obs-groups.actor rgb_base_camera \
   --obs-groups.critic rgb_base_camera state \
-  --encoder-sharing separate \
   --critic-encoder.backbone resnet10
 ```
 

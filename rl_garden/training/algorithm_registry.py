@@ -15,7 +15,7 @@ from typing import Optional
 
 import tyro
 
-from rl_garden.common.cli_args import resolve_num_eval_steps
+from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_num_eval_steps
 from rl_garden.common.effective_config import (
     ConfigError,
     FieldSource,
@@ -29,6 +29,7 @@ from rl_garden.common.effective_config import (
     resolve_effective_config,
     runtime_metadata,
 )
+from rl_garden.observations import ObservationContractError, resolve_encoder_sharing
 
 
 @dataclass(frozen=True)
@@ -311,46 +312,72 @@ class BaseAlgorithmRegistry:
                         f"--obs-groups.{group_name} has key(s) {unknown} not in "
                         f"--obs's expected keys {sorted(expected_keys)}."
                     )
-            # Resolved (not just syntactic) actor/critic key-set mismatch
-            # requires two independent encoders (encoder_sharing="separate").
-            # Checked against an *explicit* --encoder-sharing override when
-            # given; otherwise against the algorithm class's own class-level
-            # `encoder_sharing` default (registered, per algorithm, via
-            # register()'s `algorithm_cls=` factory -- see AlgorithmEntry --
-            # so this stays a static, zero-instantiation lookup). Algorithms
-            # that didn't register a factory aren't statically checkable
-            # here; their mismatch is instead caught at agent-construction
-            # time by ``resolve_observation_encoders`` (rl_garden/algorithms/
-            # _observation.py), just not this early.
-            actor_keys = (
-                set(obs_groups.actor) if obs_groups.actor is not None else expected_keys
+        # encoder_sharing preflight: the same resolve_encoder_sharing rule
+        # ObservationEncoderMixin._resolve_encoder_sharing applies at
+        # algorithm-construction time (rl_garden/algorithms/_observation.py),
+        # so a config never needs to spell out `--encoder-sharing separate`
+        # when it is already implied by asymmetric --obs-groups or a
+        # distinct --critic-encoder. Runs for every algorithm exposing
+        # `encoder_sharing` on its args -- independent of whether obs_groups
+        # was actually given -- so --print-config always shows the resolved
+        # value and its origin. Statically checkable (no agent instantiation)
+        # only for algorithms that registered an `algorithm_cls` factory
+        # (AlgorithmEntry); algorithms without one defer the mismatch to
+        # agent-construction time, the same documented gap as before.
+        if hasattr(args, "encoder_sharing"):
+            if obs is not None and obs_groups is not None:
+                expected_keys = set(obs.expected_keys)
+                actor_keys = (
+                    set(obs_groups.actor) if obs_groups.actor is not None else expected_keys
+                )
+                critic_keys = (
+                    set(obs_groups.critic) if obs_groups.critic is not None else expected_keys
+                )
+                asymmetric = actor_keys != critic_keys
+            else:
+                asymmetric = False
+            has_critic_encoder = resolve_critic_encoder_config(args) is not None
+            entry = self._entries.get(command.algorithm)
+            algorithm_cls = (
+                entry.algorithm_cls() if entry is not None and entry.algorithm_cls else None
             )
-            critic_keys = (
-                set(obs_groups.critic) if obs_groups.critic is not None else expected_keys
-            )
-            encoder_sharing = getattr(args, "encoder_sharing", None)
-            if actor_keys != critic_keys:
-                if encoder_sharing is not None:
-                    effective_sharing: object | None = encoder_sharing
-                    sharing_origin = "--encoder-sharing"
-                else:
-                    entry = self._entries.get(command.algorithm)
-                    algorithm_cls = (
-                        entry.algorithm_cls() if entry is not None and entry.algorithm_cls else None
+            if algorithm_cls is not None:
+                requested = args.encoder_sharing
+                class_default = getattr(algorithm_cls, "encoder_sharing", "shared_critic_grad")
+                try:
+                    value, origin = resolve_encoder_sharing(
+                        requested=requested,
+                        class_default=class_default,
+                        asymmetric=asymmetric,
+                        has_critic_encoder=has_critic_encoder,
                     )
-                    effective_sharing = (
-                        getattr(algorithm_cls, "encoder_sharing", "shared_critic_grad")
-                        if algorithm_cls is not None
-                        else None
-                    )
-                    sharing_origin = f"{command.algorithm}'s default encoder_sharing"
-                if effective_sharing is not None and effective_sharing != "separate":
+                except ObservationContractError as exc:
+                    raise ConfigError(str(exc)) from exc
+                choices = getattr(
+                    algorithm_cls,
+                    "encoder_sharing_choices",
+                    ("shared_critic_grad", "shared", "separate"),
+                )
+                if value not in choices:
                     raise ConfigError(
-                        "--obs-groups resolves to different actor "
-                        f"({sorted(actor_keys)}) and critic ({sorted(critic_keys)}) "
-                        "observation keys, which requires two independent encoders; "
-                        f"pass --encoder-sharing separate ({sharing_origin} is "
-                        f"{effective_sharing!r})."
+                        f"{command.algorithm}'s encoder_sharing resolved to "
+                        f"{value!r} (via {origin}), but this algorithm only "
+                        f"supports {choices}; make --obs-groups symmetric / "
+                        "drop --critic-encoder, or pass an explicit "
+                        "--encoder-sharing value from that set."
+                    )
+                if value != requested:
+                    args.encoder_sharing = value
+                    command.derived["encoder_sharing"] = {
+                        "before": json_value(requested),
+                        "after": json_value(value),
+                        "reason": origin,
+                    }
+                    override_sources(
+                        command.sources,
+                        {"encoder_sharing"},
+                        kind="runtime-derived",
+                        detail=origin,
                     )
         if self.phase_name == "offline":
             if command.algorithm == "tdmpc2_multitask":

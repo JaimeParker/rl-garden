@@ -1143,13 +1143,14 @@ def test_resolve_num_eval_steps_is_idempotent() -> None:
 # _validate_config, resolved via AlgorithmEntry.algorithm_cls) ---
 
 
-def test_static_preflight_rejects_asymmetric_obs_groups_via_algorithm_class_default():
-    """--obs-groups resolving asymmetric with no explicit --encoder-sharing
-    must still fail at --print-config time when the algorithm's own class
-    default isn't "separate". SAC registers an ``algorithm_cls`` factory
-    (see rl_garden/training/online/sac.py's ``_sac_algorithm_cls``), whose
-    class default is "shared_critic_grad"."""
-    from rl_garden.common.effective_config import ConfigError
+def test_static_preflight_infers_separate_for_asymmetric_obs_groups_via_algorithm_class_default():
+    """encoder-sharing-inference.md: --obs-groups resolving asymmetric with
+    no explicit --encoder-sharing must now succeed at --print-config time --
+    encoder_sharing is inferred to "separate" (the only value that can build
+    two independent encoders), not checked against the algorithm's own
+    "shared_critic_grad" class default. SAC registers an ``algorithm_cls``
+    factory (see rl_garden/training/online/sac.py's ``_sac_algorithm_cls``),
+    so this is a static, zero-instantiation resolution."""
     from rl_garden.observations import ObsGroups
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
@@ -1162,7 +1163,73 @@ def test_static_preflight_rejects_asymmetric_obs_groups_via_algorithm_class_defa
     )
     command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
 
+    registry._validate_config(command)  # must not raise
+
+    assert command.args.encoder_sharing == "separate"
+    assert command.derived["encoder_sharing"]["reason"] == "inferred (asymmetric obs_groups)"
+
+
+def test_static_preflight_rejects_explicit_contradicting_encoder_sharing():
+    """The inference above never overrides an *explicit*, contradicting
+    --encoder-sharing -- that stays a hard error (resolve_encoder_sharing's
+    "explicit non-separate with asymmetric/has_critic_encoder" branch)."""
+    from rl_garden.common.effective_config import ConfigError
+    from rl_garden.observations import ObsGroups
+    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.sac import SACArgs
+
+    registry.discover()
+    args = SACArgs(
+        obs=ObservationConfig(extra_state=("object_pose",)),
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
+        encoder_sharing="shared_critic_grad",
+    )
+    command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
+
     with pytest.raises(ConfigError, match="requires two independent encoders"):
+        registry._validate_config(command)
+
+
+def test_static_preflight_infers_separate_from_critic_encoder_alone():
+    """A distinct --critic-encoder with no --obs-groups also infers
+    "separate" -- resolve_encoder_sharing's has_critic_encoder branch."""
+    from rl_garden.encoders.config import EncoderConfig
+    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.sac import SACArgs
+
+    registry.discover()
+    args = SACArgs(critic_encoder=EncoderConfig(features_dim=17))
+    command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
+
+    registry._validate_config(command)  # must not raise
+
+    assert command.args.encoder_sharing == "separate"
+    assert command.derived["encoder_sharing"]["reason"] == "inferred (critic_encoder)"
+
+
+def test_static_preflight_rejects_asymmetric_obs_groups_for_recurrent_sac():
+    """encoder-sharing-inference.md item 3: RecurrentSAC (registered with an
+    ``algorithm_cls`` factory, rl_garden/training/online/recurrent_sac.py)
+    has encoder_sharing_choices == ("shared_critic_grad", "shared")
+    (rl_garden/algorithms/sequence_sac.py) -- asymmetric --obs-groups infers
+    "separate", which isn't in that tuple, so this now fails statically at
+    --print-config time instead of only at agent-construction time."""
+    from rl_garden.common.effective_config import ConfigError
+    from rl_garden.observations import ObsGroups
+    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.recurrent_sac import RecurrentSACArgs
+
+    registry.discover()
+    args = RecurrentSACArgs(
+        obs=ObservationConfig(extra_state=("object_pose",)),
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
+    )
+    command = ParsedCommand(args, "recurrent_sac", "print_config", None, {}, (), {})
+
+    with pytest.raises(ConfigError, match="only supports"):
         registry._validate_config(command)
 
 
@@ -1209,24 +1276,31 @@ def test_static_preflight_allows_asymmetric_obs_groups_with_explicit_separate_sh
 
 
 def test_static_preflight_skips_algorithms_without_a_registered_class_factory():
-    """PPO hasn't opted into ``AlgorithmEntry.algorithm_cls`` (register()'s
-    ``algorithm_cls=`` factory, rl_garden/training/algorithm_registry.py);
-    a defaulted mismatch for it is instead caught later, at
-    agent-construction time, by ``resolve_observation_encoders`` -- a
-    documented gap in the static preflight's coverage, not a bug."""
+    """dagger hasn't opted into ``AlgorithmEntry.algorithm_cls`` (register()'s
+    ``algorithm_cls=`` factory, rl_garden/training/algorithm_registry.py) --
+    it is critic-less, one of the fixed-sharing/no-critic entries exempted by
+    ``scripts/check_observation_invariants.sh``'s algorithm_cls gate (every
+    critic-bearing algorithm, including drqv2 and the PPO family, now
+    registers one per encoder-sharing-inference.md item 4). For dagger, a
+    defaulted mismatch is instead caught later, at agent-construction time,
+    by ``ObservationEncoderMixin._resolve_encoder_sharing`` -- a documented
+    gap in the static preflight's coverage, not a bug."""
     from rl_garden.observations import ObsGroups
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.ppo import PPOArgs
+    from rl_garden.training.online.dagger import DAggerArgs
 
     registry.discover()
-    args = PPOArgs(
+    entry = registry._entries["dagger"]
+    assert entry.algorithm_cls is None
+    args = DAggerArgs(
         obs=ObservationConfig(extra_state=("object_pose",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
     )
-    command = ParsedCommand(args, "ppo", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "dagger", "print_config", None, {}, (), {})
 
     registry._validate_config(command)  # must not raise
+    assert command.args.encoder_sharing is None
 
 
 def test_state_only_privileged_critic_print_config_sac(capsys) -> None:

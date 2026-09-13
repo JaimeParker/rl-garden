@@ -139,4 +139,10 @@ def run_unio4_ope(args: UniO4OPEArgs) -> None:
     run_offline(args, build_agent=build_unio4_ope)
 
 
-registry.register("unio4_ope", UniO4OPEArgs, run_unio4_ope)
+def _unio4_ope_algorithm_cls() -> type:
+    from rl_garden.algorithms import UniO4OPE
+
+    return UniO4OPE
+
+
+registry.register("unio4_ope", UniO4OPEArgs, run_unio4_ope, algorithm_cls=_unio4_ope_algorithm_cls)

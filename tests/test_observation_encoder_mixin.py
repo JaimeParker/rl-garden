@@ -23,7 +23,7 @@ from rl_garden.algorithms._observation import (
 from rl_garden.encoders.combined import CombinedExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.flatten import FlattenExtractor
-from rl_garden.observations import ObservationContractError, ObsGroups
+from rl_garden.observations import ObservationContractError, ObsGroups, resolve_encoder_sharing
 from rl_garden.policies.base import BasePolicy
 
 
@@ -106,6 +106,83 @@ def test_resolve_unknown_obs_group_key_raises_contract_error():
     groups = ObsGroups(actor=("not_a_real_key",))
     with pytest.raises(ObservationContractError):
         resolve_observation_encoders(RGBD_SPACE, None, groups, "shared_critic_grad")
+
+
+# --- resolve_encoder_sharing: the encoder_sharing inference rule (see plan
+# encoder-sharing-inference.md) -- the five branches, independent of any
+# algorithm or observation space. ---
+
+
+def test_resolve_encoder_sharing_infers_separate_from_asymmetric_obs_groups():
+    value, origin = resolve_encoder_sharing(
+        requested=None,
+        class_default="shared_critic_grad",
+        asymmetric=True,
+        has_critic_encoder=False,
+    )
+    assert value == "separate"
+    assert origin == "inferred (asymmetric obs_groups)"
+
+
+def test_resolve_encoder_sharing_infers_separate_from_critic_encoder():
+    value, origin = resolve_encoder_sharing(
+        requested=None,
+        class_default="shared_critic_grad",
+        asymmetric=False,
+        has_critic_encoder=True,
+    )
+    assert value == "separate"
+    assert origin == "inferred (critic_encoder)"
+
+
+def test_resolve_encoder_sharing_falls_back_to_class_default():
+    value, origin = resolve_encoder_sharing(
+        requested=None,
+        class_default="shared",
+        asymmetric=False,
+        has_critic_encoder=False,
+    )
+    assert value == "shared"
+    assert origin == "default"
+
+
+def test_resolve_encoder_sharing_explicit_separate_is_always_accepted():
+    value, origin = resolve_encoder_sharing(
+        requested="separate",
+        class_default="shared_critic_grad",
+        asymmetric=False,
+        has_critic_encoder=False,
+    )
+    assert value == "separate"
+    assert origin == "explicit"
+
+
+def test_resolve_encoder_sharing_explicit_contradiction_raises():
+    with pytest.raises(ObservationContractError, match="requires two independent encoders"):
+        resolve_encoder_sharing(
+            requested="shared_critic_grad",
+            class_default="shared_critic_grad",
+            asymmetric=True,
+            has_critic_encoder=False,
+        )
+    with pytest.raises(ObservationContractError, match="requires two independent encoders"):
+        resolve_encoder_sharing(
+            requested="shared",
+            class_default="shared_critic_grad",
+            asymmetric=False,
+            has_critic_encoder=True,
+        )
+
+
+def test_resolve_encoder_sharing_explicit_non_separate_without_contradiction_passes_through():
+    value, origin = resolve_encoder_sharing(
+        requested="shared",
+        class_default="shared_critic_grad",
+        asymmetric=False,
+        has_critic_encoder=False,
+    )
+    assert value == "shared"
+    assert origin == "explicit"
 
 
 # --- ObservationEncoderMixin: the per-algorithm helper ---
@@ -258,7 +335,41 @@ def test_sac_obs_groups_round_trips_through_checkpoint_metadata():
     assert set(agent.policy.critic_extractor.image_keys) == {"rgb_cam", "depth_cam"}
 
 
-def test_sac_asymmetric_obs_groups_without_separate_sharing_raises():
+def test_sac_asymmetric_obs_groups_without_encoder_sharing_infers_separate():
+    """encoder-sharing-inference.md: asymmetric obs_groups with no explicit
+    --encoder-sharing/encoder_sharing kwarg no longer raises -- it infers
+    "separate" (the only value that can build two independent encoders)."""
     groups = ObsGroups(actor=("rgb_cam", "state"), critic=("rgb_cam", "depth_cam", "state"))
-    with pytest.raises(ValueError, match="encoder_sharing='separate'"):
-        SAC(env=DummyVecEnv(RGBD_SPACE, ACT_SPACE), obs_groups=groups, **_sac_kwargs())
+    agent = SAC(env=DummyVecEnv(RGBD_SPACE, ACT_SPACE), obs_groups=groups, **_sac_kwargs())
+    assert agent.encoder_sharing == "separate"
+    assert agent.encoder_sharing_origin == "inferred (asymmetric obs_groups)"
+    meta = agent._checkpoint_metadata()
+    assert meta["encoder_sharing"] == "separate"
+    assert meta["encoder_sharing_origin"] == "inferred (asymmetric obs_groups)"
+
+
+def test_sac_asymmetric_obs_groups_with_explicit_contradicting_sharing_raises():
+    groups = ObsGroups(actor=("rgb_cam", "state"), critic=("rgb_cam", "depth_cam", "state"))
+    with pytest.raises(ValueError, match="requires two independent encoders"):
+        SAC(
+            env=DummyVecEnv(RGBD_SPACE, ACT_SPACE),
+            obs_groups=groups,
+            encoder_sharing="shared_critic_grad",
+            **_sac_kwargs(),
+        )
+
+
+def test_sac_critic_encoder_config_without_encoder_sharing_infers_separate():
+    cfg = EncoderConfig(features_dim=17)
+    agent = SAC(
+        env=DummyVecEnv(RGBD_SPACE, ACT_SPACE),
+        critic_encoder_config=cfg,
+        **_sac_kwargs(),
+    )
+    assert agent.encoder_sharing == "separate"
+    assert agent.encoder_sharing_origin == "inferred (critic_encoder)"
+
+
+def test_sac_default_encoder_sharing_origin_names_the_class():
+    agent = SAC(env=DummyVecEnv(STATE_SPACE, ACT_SPACE), **_sac_kwargs())
+    assert agent.encoder_sharing_origin == "SAC default"

@@ -56,8 +56,15 @@ class RecurrentPPOArgs(VisionRecurrentPPOTrainingArgs, EnvBackendArgs):
     """
 
 
+def _recurrent_ppo_algorithm_cls() -> type:
+    from rl_garden.algorithms import RecurrentPPO
+
+    return RecurrentPPO
+
+
 registry.register(
     "recurrent_ppo",
     RecurrentPPOArgs,
     run_recurrent_ppo,
+    algorithm_cls=_recurrent_ppo_algorithm_cls,
 )

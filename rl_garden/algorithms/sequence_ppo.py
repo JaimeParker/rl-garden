@@ -27,6 +27,16 @@ from rl_garden.policies.recurrent_ppo_policy import RecurrentPPOPolicy
 
 
 class SequencePPO(PPO):
+    # A single SequenceLatentEncoder (RNN/GTrXL) sits between the encoder
+    # and both actor/value heads -- there is no way to route a second,
+    # independently-trained critic extractor's output through it, so
+    # "separate" is not supported (RecurrentPPOPolicy's critic_extractor
+    # guard). "shared_critic_grad"/"shared" both use one encoder instance
+    # and stay valid. Checked by ObservationEncoderMixin._resolve_encoder_
+    # sharing against the resolved value, and read statically by
+    # algorithm_registry's preflight.
+    encoder_sharing_choices: tuple = ("shared_critic_grad", "shared")
+
     def _build_sequence_encoder(self, actor_extractor) -> SequenceLatentEncoder:
         raise NotImplementedError
 
