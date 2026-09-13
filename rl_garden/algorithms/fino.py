@@ -87,10 +87,8 @@ class FINOCore(FQLCore):
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
-        self._resolve_observation_encoders(observation_space)
+        extractor_kwargs = self._policy_extractor_kwargs(observation_space)
         if self.encoder_sharing == "separate":
-            features_extractor = self.observation_encoders.critic
-            actor_onestep_flow_encoder = self.observation_encoders.actor
             actor_keys = resolve_obs_groups(
                 self.observation_encoders.schema, self.obs_groups
             )["actor"].keys
@@ -98,13 +96,10 @@ class FINOCore(FQLCore):
                 observation_space, self.encoder_config, keys=actor_keys
             )
         else:
-            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
-            actor_onestep_flow_encoder = None
         self.policy = FINOPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -116,12 +111,11 @@ class FINOCore(FQLCore):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             activation_fn=self.activation_fn,
-            encoder_sharing=self.encoder_sharing,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
             beta=self.beta,
             num_samples=self.num_samples,
             q_agg=self.q_agg,
+            **extractor_kwargs,
         ).to(self.device)
         # Resolve None -> concrete int so _checkpoint_metadata() reports the
         # value actually used, independent of the action-space arithmetic

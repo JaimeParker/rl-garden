@@ -54,6 +54,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn as nn
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.bppo import BPPOCriticMixin
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
@@ -76,6 +77,17 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
     """Uni-O4: BC-ensemble + shared-critic PPO-clip improvement. Box obs only."""
 
     _compatible_checkpoint_algorithms = ("UniO4",)
+    # No class-level override: like BPPO (rl_garden/algorithms/bppo.py),
+    # value_net/q_net read through the critic-role extractor too
+    # (BPPOCriticMixin._build_critic/_phase_a_step), so
+    # ObservationEncoderMixin's "shared_critic_grad" default is meaningful
+    # here -- each ensemble member's actor update
+    # (_bc_ensemble_step/_improve_step) reads features via
+    # extract_actor_features (BCPolicy), so BasePolicy's stop-gradient rule
+    # (actor_features_detached) applies uniformly: under
+    # "shared_critic_grad" the actor loss does not train the shared
+    # encoder; under "separate" each member's own actor extractor is
+    # trained only by that member's actor losses.
 
     def __init__(
         self,
@@ -117,6 +129,8 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -154,6 +168,13 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
         if critic_warmup_steps < 0:
             raise ValueError(
@@ -219,7 +240,7 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         return BCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=self.observation_encoders.actor,
+            actor_extractor=self.observation_encoders.actor,
             net_arch=list(self.actor_hidden_dims),
             use_layer_norm=self.use_layer_norm,
             use_group_norm=self.use_group_norm,
@@ -229,6 +250,7 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
             tanh_squash=False,
+            encoder_sharing=self.encoder_sharing,
         ).to(self.device)
 
     def _build_replay_buffer(self) -> SarsaMCReplayBuffer:
@@ -278,7 +300,7 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
 
         if self.num_policies == 1:
             actor = self.actors[0]
-            features = actor.extract_features(obs, stop_gradient=False)
+            features = actor.extract_actor_features(obs)
             log_prob = actor.actor.evaluate_action_log_prob(features, actions).squeeze(-1)
             loss = (-log_prob).mean()
             optimizer = self.actor_optimizer_0
@@ -297,7 +319,7 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
             ]
 
         for i in range(self.num_policies):
-            features_i = self.actors[i].extract_features(obs, stop_gradient=False)
+            features_i = self.actors[i].extract_actor_features(obs)
             log_prob_i = self.actors[i].actor.evaluate_action_log_prob(
                 features_i, actions
             ).squeeze(-1)
@@ -340,15 +362,19 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
                 action, old_log_prob = self.old_actors[i].actor.action_log_prob(
                     old_features
                 )
-                # value_net/q_net are raw flat-tensor MLPs (BPPOCriticMixin
-                # is state-only by construction -- has_images guard).
+                # value_net/q_net read through the critic-role extractor
+                # (see BPPOCriticMixin._build_critic/_phase_a_step), not a
+                # raw obs["state"] read -- this also concatenates any extra
+                # state_<name> keys the same way those nets were sized for.
+                critic_features = self.observation_encoders.critic_or_actor.extract(obs)
                 advantage = (
-                    self.q_net(obs["state"], action) - self.value_net(obs["state"])
+                    self.q_net(critic_features, action)
+                    - self.value_net(critic_features)
                 ).squeeze(-1)
                 advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
                 advantage = self._weighted_advantage(advantage)
 
-            new_features = self.actors[i].extract_features(obs, stop_gradient=False)
+            new_features = self.actors[i].extract_actor_features(obs)
             new_log_prob = self.actors[i].actor.evaluate_action_log_prob(
                 new_features, action
             )

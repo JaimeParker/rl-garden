@@ -112,4 +112,11 @@ def run_floq(args: FloQArgs) -> None:
     run_offline(args, build_agent=build_floq)
 
 
-registry.register("floq", FloQArgs, run_floq)
+
+
+def _flo_q_algorithm_cls() -> type:
+    from rl_garden.algorithms import FloQ
+
+    return FloQ
+
+registry.register("floq", FloQArgs, run_floq, algorithm_cls=_flo_q_algorithm_cls)

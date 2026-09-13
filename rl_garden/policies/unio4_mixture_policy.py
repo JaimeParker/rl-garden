@@ -7,6 +7,15 @@ proposes its own deterministic action and scores that action under its own
 distribution (a self-confidence/peakiness measure); the member with the
 highest self-log-prob "wins" and its action is used. This is Uni-O4's own
 deployed/inference policy, not any single ensemble member evaluated alone.
+
+Not a ``BasePolicy`` -- that ABC's contract (one actor/critic feature encoder
+pair owned directly by the policy) doesn't fit this shape: each ensemble
+member is already its own ``BCPolicy``, with its own ``actor_extractor``, so
+there is no single encoder for this wrapper to hold. It also has no
+critic/value head of its own to route through ``extract_critic_features``
+-- Uni-O4's shared V/Q critic lives on the ``UniO4`` algorithm object
+(``BPPOCriticMixin``), never on any policy. Same reasoning as
+``HILPPolicy``/``FlashSACPolicy`` (see ``rl_garden/policies/hilp_policy.py``).
 """
 from __future__ import annotations
 
@@ -16,11 +25,10 @@ import torch
 import torch.nn as nn
 
 from rl_garden.common.types import Obs
-from rl_garden.policies.base import BasePolicy
 from rl_garden.policies.bc_policy import BCPolicy
 
 
-class UniO4MixturePolicy(BasePolicy):
+class UniO4MixturePolicy(nn.Module):
     """Wraps an ensemble of ``BCPolicy`` actors; ``predict`` picks the member
     most confident in its own (deterministic) action at each state.
 

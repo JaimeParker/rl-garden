@@ -78,7 +78,7 @@ class FQLCore:
     """Shared FQL loss/network logic."""
 
     _SUPPORTED_POLICY_KWARGS = frozenset(
-        {"features_extractor_class", "features_extractor_kwargs"}
+        {"actor_extractor_class", "actor_extractor_kwargs"}
     )
 
     def _init_fql_params(
@@ -227,17 +227,13 @@ class FQLCore:
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
-        self._resolve_observation_encoders(observation_space)
+        # Mixin resolves the actor/critic pair (actor_onestep_flow's own
+        # encoder + critic's own encoder, or one shared encoder). FQL needs a
+        # third encoder for actor_bc_flow -- the plan's documented single
+        # exception to the actor_extractor/critic_extractor contract -- built
+        # directly over the same key subset as the actor role.
+        extractor_kwargs = self._policy_extractor_kwargs(observation_space)
         if self.encoder_sharing == "separate":
-            # Mixin resolves the actor/critic pair; FQL needs a third encoder
-            # (two actor networks + the critic's own) -- see the recipe's
-            # "FQL family encoder_sharing value mapping" section. The mixin's
-            # "actor" role backs actor_onestep_flow, "critic" role backs
-            # FQLPolicy's features_extractor (the critic's own encoder), and
-            # the extra actor_bc_flow encoder is built directly, over the
-            # same key subset as the "actor" role.
-            features_extractor = self.observation_encoders.critic
-            actor_onestep_flow_encoder = self.observation_encoders.actor
             actor_keys = resolve_obs_groups(
                 self.observation_encoders.schema, self.obs_groups
             )["actor"].keys
@@ -245,16 +241,10 @@ class FQLCore:
                 observation_space, self.encoder_config, keys=actor_keys
             )
         else:
-            # Single encoder instance, doing double duty as both the
-            # critic's own encoder and the actor's (detached) encoder --
-            # exactly what FQLPolicy's "shared_critic_grad" branch assumes.
-            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
-            actor_onestep_flow_encoder = None
         self.policy = FQLPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -266,9 +256,8 @@ class FQLCore:
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             activation_fn=self.activation_fn,
-            encoder_sharing=self.encoder_sharing,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
+            **extractor_kwargs,
         ).to(self.device)
 
         self.critic_optimizer = make_optimizer(
@@ -330,7 +319,7 @@ class FQLCore:
 
     def _critic_update(self, data, obs_features: torch.Tensor) -> dict[str, float]:
         with torch.no_grad():
-            next_features_critic = self.policy.extract_features(data.next_obs)
+            next_features_critic = self.policy.extract_critic_features(data.next_obs)
             if self.encoder_sharing == "separate":
                 next_features_actor = self.policy.extract_actor_onestep_features(
                     data.next_obs
@@ -453,9 +442,10 @@ class FQLCore:
             data = self._sample_train_batch(self.batch_size)
 
             # Critic's own encoding of obs -- grad-enabled, backprops into
-            # the encoder via critic_loss (the encoder IS self.features_extractor
-            # in both encoder_sharing modes; only the actor's encoder(s) differ).
-            obs_features = self.policy.extract_features(data.obs)
+            # the encoder via critic_loss (the encoder IS the policy's
+            # critic_extractor, or actor_extractor when shared; only the
+            # actor's encoder(s) differ).
+            obs_features = self.policy.extract_critic_features(data.obs)
 
             critic_metrics = self._critic_update(data, obs_features)
             actor_metrics = self._actor_update(data, obs_features)

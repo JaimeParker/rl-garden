@@ -34,4 +34,10 @@ def run_calql(args: CalQLArgs) -> None:
     run_offline(args, build_agent=build_calql)
 
 
-registry.register("calql", CalQLArgs, run_calql)
+def _calql_algorithm_cls() -> type:
+    from rl_garden.algorithms import CalQL
+
+    return CalQL
+
+
+registry.register("calql", CalQLArgs, run_calql, algorithm_cls=_calql_algorithm_cls)

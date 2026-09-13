@@ -205,8 +205,11 @@ class SPOTOff2OnHyperparamArgs:
 class SPOTOff2OnTrainingArgs(Off2OnCommonArgs, SPOTOff2OnHyperparamArgs):
     """SPOT off2on args: ``Off2OnCommonArgs`` + SPOT-specific hyperparameters.
 
-    SPOT is Box-observation only: no ``ObservationArgs`` mixed in, so it has
-    no ``--obs``/``--encoder`` CLI surface at all.
+    This class alone has no ``--obs``/``--encoder`` CLI surface;
+    ``SPOTOff2OnArgs`` (``rl_garden/training/off2on/spot.py``) mixes in
+    ``ObservationArgs`` separately, so SPOT does accept Box or Dict
+    (vision) observations, ``obs_groups``, and ``critic_encoder``/
+    ``encoder_sharing`` at the CLI.
     """
 
 

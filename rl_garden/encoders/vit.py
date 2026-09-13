@@ -252,7 +252,6 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
                 f"fusion_mode must be 'per_key' or 'stack_channels', got {fusion_mode!r}."
             )
 
-        state_key = "state"
         self.image_keys = schema.image_keys
         if not self.image_keys:
             raise ValueError("ViTTokenAndPropExtractor requires at least one image key.")
@@ -260,7 +259,7 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
             k for k in self.image_keys
             if image_needs_normalization(observation_space.spaces[k])
         )
-        self.state_key = state_key
+        self.state_keys = schema.state_keys
         self.has_state = schema.has_state
         self.fusion_mode = fusion_mode
         self.enable_stacking = any(schema.entries[k].stacked for k in self.image_keys)
@@ -292,10 +291,13 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
 
         prop_dim = 0
         if self.has_state:
-            prop_dim += int(np.prod(observation_space.spaces[state_key].shape))
+            prop_dim += sum(
+                int(np.prod(observation_space.spaces[k].shape)) for k in self.state_keys
+            )
         # No genuine vector key can exist under the strict observation schema
-        # (state / rgb_<cam> / depth_<cam> only): schema's only non-image key
-        # is "state", already accounted for above.
+        # (state / state_<name> / rgb_<cam> / depth_<cam> only): schema's
+        # non-image keys are exactly self.state_keys, already accounted for
+        # above.
         self.vector_keys: tuple[str, ...] = ()
 
         self.num_patches = num_patches
@@ -420,8 +422,8 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
     def _encode_prop(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         props = []
         if self.has_state:
-            state = obs[self.state_key]
-            props.append(state.float().flatten(1))
+            for key in self.state_keys:
+                props.append(obs[key].float().flatten(1))
         for key in self.vector_keys:
             props.append(obs[key].float().flatten(1))
         if not props:

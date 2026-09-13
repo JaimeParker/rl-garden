@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.algorithms.gail import GAIL
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs.wrappers.gail_reward import GAILRewardWrapper
 from rl_garden.networks.discriminator import GAILDiscriminator
+from rl_garden.observations import ObsGroups
 
 
 class _FakeBoxEnv(gym.vector.VectorEnv):
@@ -88,12 +91,11 @@ def _build_gail(monkeypatch, env=None) -> GAIL:
 
 
 def test_gail_discriminator_forward_shape():
-    obs_space = spaces.Box(-1.0, 1.0, (5,), np.float32)
     action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
-    disc = GAILDiscriminator(obs_space, action_space, net_arch=(16,))
-    obs = torch.randn(7, 5)
+    disc = GAILDiscriminator(5, action_space, net_arch=(16,))
+    features = torch.randn(7, 5)
     action = torch.randn(7, 2)
-    logits = disc(obs, action)
+    logits = disc(features, action)
     assert logits.shape == (7,)
 
 
@@ -126,6 +128,17 @@ def test_gail_reward_wrapper_last_obs_is_a_clone_not_alias():
     assert not torch.equal(wrapped._last_obs, obs0)
 
 
+class _IdentityCriticFeaturesPolicy:
+    """Stand-in for a real BasePolicy: ``extract_critic_features`` is an
+    identity passthrough of the ``"state"`` key, matching FlattenExtractor's
+    actual behavior for a state-only Box observation with no normalization
+    (see rl_garden/encoders/flatten.py) -- exactly what GAIL's default
+    (shared, unconfigured) extractor produces."""
+
+    def extract_critic_features(self, obs):
+        return obs["state"]
+
+
 def test_discriminator_reward_matches_log_sigmoid_formula():
     env = _FakeBoxEnv()
 
@@ -133,9 +146,9 @@ def test_discriminator_reward_matches_log_sigmoid_formula():
         device = torch.device("cpu")
 
         def __init__(self):
-            obs_space = env.single_observation_space
+            self.policy = _IdentityCriticFeaturesPolicy()
             action_space = env.single_action_space
-            self.discriminator = GAILDiscriminator(obs_space, action_space, net_arch=(16,))
+            self.discriminator = GAILDiscriminator(env.obs_dim, action_space, net_arch=(16,))
 
         _discriminator_reward = GAIL._discriminator_reward
         _obs_to_policy_device = GAIL._obs_to_policy_device
@@ -167,8 +180,9 @@ def test_discriminator_reward_handles_cpu_env_with_gpu_discriminator():
         device = torch.device("cuda")
 
         def __init__(self):
+            self.policy = _IdentityCriticFeaturesPolicy()
             self.discriminator = GAILDiscriminator(
-                env.single_observation_space, env.single_action_space, net_arch=(16,)
+                env.obs_dim, env.single_action_space, net_arch=(16,)
             ).to(self.device)
 
         _discriminator_reward = GAIL._discriminator_reward
@@ -184,9 +198,9 @@ def test_discriminator_reward_handles_cpu_env_with_gpu_discriminator():
 def test_train_discriminator_step_labels_and_loss_decreases(monkeypatch):
     agent = _build_gail(monkeypatch)
     obs_dim = agent.env.single_observation_space["state"].shape[0]
-    gen_obs = torch.randn(8, obs_dim)
+    gen_obs = {"state": torch.randn(8, obs_dim)}
     gen_actions = torch.rand(8, 2) * 2 - 1
-    expert_obs = torch.randn(8, obs_dim) + 5.0
+    expert_obs = {"state": torch.randn(8, obs_dim) + 5.0}
     expert_actions = torch.rand(8, 2) * 2 - 1
 
     losses = []
@@ -234,3 +248,193 @@ def test_gail_registered_in_online_registry():
 
     registry.discover()
     assert "gail" in registry._entries
+
+
+# --- asymmetric actor/critic encoders (policy-extractor-contract) ---
+
+
+class _AsymmetricVecEnv:
+    """A ``rgb_cam`` + ``state`` + ``state_object_pose`` env: ``rgb_cam``/
+    ``state`` are shared by actor and critic (both get a real, trainable
+    ``CombinedExtractor``); ``state_object_pose`` (Section A's ``state_<name>``
+    family) is critic-only -- and, via GAIL's discriminator being a
+    critic-role consumer, discriminator-only."""
+
+    def __init__(self, num_envs: int = 2) -> None:
+        self.num_envs = num_envs
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+                "state_object_pose": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+            }
+        )
+        self.observation_space = batch_space(self.single_observation_space, num_envs)
+        self.single_action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
+        self.action_space = batch_space(self.single_action_space, num_envs)
+        self._t = torch.zeros(num_envs, dtype=torch.long)
+
+    def _obs(self):
+        return {
+            "rgb_cam": torch.randint(0, 256, (self.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(self.num_envs, 4),
+            "state_object_pose": torch.randn(self.num_envs, 3),
+        }
+
+    def reset(self, seed=None):
+        del seed
+        self._t.zero_()
+        return self._obs(), {}
+
+    def step(self, action):
+        self._t += 1
+        terminated = torch.zeros(self.num_envs, dtype=torch.bool)
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool)
+        reward = torch.ones(self.num_envs)
+        return self._obs(), reward, terminated, truncated, {}
+
+    def close(self) -> None:
+        return None
+
+
+def _fake_asymmetric_demo_loader(buffer, env_id):
+    """Like ``_fake_demo_loader``, but fills every key (``rgb_cam``/``state``/
+    ``state_object_pose``) instead of just ``state`` -- this test's own
+    stand-in for a demo pipeline that can supply privileged/image keys (see
+    ``rl_garden/algorithms/gail.py``'s module docstring open question: the
+    real ``load_d4rl_legacy_dataset_to_replay_buffer`` cannot do this)."""
+    del env_id
+    n = 64
+    act_shape = buffer.actions.shape[2:]
+    for _ in range(n):
+        obs = {
+            "rgb_cam": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(1, 4),
+            "state_object_pose": torch.randn(1, 3),
+        }
+        next_obs = {
+            "rgb_cam": torch.randint(0, 256, (1, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(1, 4),
+            "state_object_pose": torch.randn(1, 3),
+        }
+        action = torch.rand(1, *act_shape) * 2 - 1
+        reward = torch.zeros(1)
+        done = torch.zeros(1)
+        buffer.add(obs, next_obs, action, reward, done)
+
+
+def test_gail_demo_buffer_raises_for_critic_keys_the_demo_dataset_cannot_provide():
+    """``demo_dataset_backend="d4rl_legacy"`` only ever supplies a flat
+    ``"state"`` key (``rl_garden.buffers._dataset_common._match_obs_to_buffer``
+    wraps every flat loader output as ``{"state": ...}``); an
+    ``obs_groups.critic`` asking for anything else must raise
+    ``ObservationContractError`` naming it, not silently zero-fill it (see
+    ``GAIL._build_demo_buffer``). Raises before ever calling the real loader,
+    so no monkeypatch is needed here."""
+    from rl_garden.observations import ObservationContractError
+
+    with pytest.raises(ObservationContractError, match="state_object_pose"):
+        GAIL(
+            _AsymmetricVecEnv(),
+            device="cpu",
+            num_steps=8,
+            num_minibatches=1,
+            update_epochs=1,
+            eval_freq=0,
+            log_freq=0,
+            target_kl=None,
+            net_arch=[16],
+            demo_env_id="halfcheetah-expert-v2",
+            demo_buffer_size=64,
+            demo_batch_size=8,
+            n_disc_updates_per_round=1,
+            disc_net_arch=(16,),
+            encoder_config=EncoderConfig(proprio_latent_dim=4),
+            obs_groups=ObsGroups(
+                actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+            ),
+            encoder_sharing="separate",
+        )
+
+
+def test_gail_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not(monkeypatch):
+    """End-to-end asymmetric actor/critic encoders via state_<name>: the
+    discriminator (critic-side -- see GAILDiscriminator's docstring) sees
+    state_object_pose, the actor does not, encoder_sharing="separate".
+    Asserts the actor extractor's schema lacks the key and, over one real
+    rollout+update step (PPO update + discriminator update), the
+    discriminator loss's gradient reaches only critic_extractor, never
+    actor_extractor.
+
+    Patches ``_build_demo_buffer`` itself (not just the loader) because a
+    real ``demo_dataset_backend="d4rl_legacy"`` can never supply
+    ``state_object_pose`` (see the raise test above) -- this test's own
+    concern is the encoder-sharing/gradient-isolation wiring downstream of
+    an already-built demo buffer, not the demo-loading contract."""
+
+    def _fake_build_demo_buffer(self) -> "ReplayBuffer":
+        from rl_garden.buffers.replay_buffer import ReplayBuffer
+
+        buffer = ReplayBuffer(
+            observation_space=self.env.single_observation_space,
+            action_space=self.env.single_action_space,
+            num_envs=1,
+            buffer_size=self.demo_buffer_size,
+            storage_device=self.device,
+            sample_device=self.device,
+        )
+        _fake_asymmetric_demo_loader(buffer, self.demo_env_id)
+        return buffer
+
+    monkeypatch.setattr(GAIL, "_build_demo_buffer", _fake_build_demo_buffer)
+    agent = GAIL(
+        _AsymmetricVecEnv(),
+        device="cpu",
+        num_steps=8,
+        num_minibatches=1,
+        update_epochs=1,
+        eval_freq=0,
+        log_freq=0,
+        target_kl=None,
+        net_arch=[16],
+        demo_env_id="halfcheetah-expert-v2",
+        demo_buffer_size=64,
+        demo_batch_size=8,
+        n_disc_updates_per_round=1,
+        disc_net_arch=(16,),
+        encoder_config=EncoderConfig(proprio_latent_dim=4),
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+        ),
+        encoder_sharing="separate",
+    )
+
+    actor_extractor = agent.policy.actor_extractor
+    critic_extractor = agent.policy.critic_extractor
+    assert critic_extractor is not None and critic_extractor is not actor_extractor
+    assert "state_object_pose" not in actor_extractor.state_keys
+    assert "state_object_pose" in critic_extractor.state_keys
+
+    # A real end-to-end rollout+update step (PPO policy/value update, then
+    # the discriminator update) runs cleanly with the asymmetric schema.
+    agent.learn(total_timesteps=agent.env.num_envs * agent.num_steps * 2)
+    losses = agent.train()
+    assert "disc_loss" in losses and "disc_acc" in losses
+
+    # Discriminator-loss gradient isolation.
+    gen_sample = next(agent.rollout_buffer.get(agent.demo_batch_size))
+    expert_sample = agent._demo_buffer.sample(agent.demo_batch_size)
+    gen_features = agent.policy.extract_critic_features(gen_sample.obs)
+    expert_features = agent.policy.extract_critic_features(expert_sample.obs)
+    features = torch.cat([expert_features, gen_features], dim=0)
+    actions = torch.cat([expert_sample.actions, gen_sample.actions], dim=0)
+    disc_loss = agent.discriminator(features, actions).sum()
+
+    grad_on_critic = torch.autograd.grad(
+        disc_loss, list(critic_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in grad_on_critic)
+    grad_on_actor = torch.autograd.grad(
+        disc_loss, list(actor_extractor.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in grad_on_actor)

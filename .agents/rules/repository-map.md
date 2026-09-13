@@ -4,17 +4,21 @@ Top-level layout of `rl-garden`. Read `AGENTS.md` first for the project-level
 agent rules; this file is a plain orientation reference, not a rules doc.
 
 - `rl_garden/algorithms/` — online, offline, and off-to-online algorithms.
-  `_observation.py` holds `ObservationEncoderMixin`/`resolve_observation_encoders`
-  (Layer C: turns an algorithm's `encoder_config`/`obs_groups`/
-  `critic_encoder_config`/`encoder_sharing` into built feature extractors).
+  `_observation.py` holds `ObservationEncoderMixin` (Layer C: turns an
+  algorithm's `encoder_config`/`obs_groups`/`critic_encoder_config`/
+  `encoder_sharing` into built feature extractors via `_policy_extractor_kwargs()`).
 - `rl_garden/observations/` — the observation composition contract (Layer A):
-  `ObservationConfig` ("what is observed" — state/rgb/depth cameras, image
-  size, frame stacking), `ObservationSchema`/`Modality`/`ObsEntry` (derived
-  from an observation space), `ObsGroups`/`resolve_obs_groups` (asymmetric
-  actor/critic observation keys), and the strict `state`/`rgb_<cam>`/
-  `depth_<cam>` key-vocabulary validation every backend/dataset loader must
-  satisfy.
+  `ObservationConfig` ("what is observed" — state/rgb/depth cameras/extra_state
+  auxiliary keys, image size, frame stacking), `ObservationSchema`/`Modality`/
+  `ObsEntry` (derived from an observation space), `ObsGroups`/`resolve_obs_groups`
+  (asymmetric actor/critic observation keys), and the strict `state`/`state_<name>`/
+  `rgb_<cam>`/`depth_<cam>` key-vocabulary validation every backend/dataset loader
+  must satisfy.
 - `rl_garden/policies/` — policy composition and actor/critic modules.
+  `BasePolicy` owns the extractor contract: policies subclass it, call
+  `super().__init__(..., actor_extractor=..., critic_extractor=...,
+  encoder_sharing=...)`, and use `extract_actor_features()`/`extract_critic_features()`
+  and their dimension properties for head construction.
 - `rl_garden/buffers/` — tensor, dict, Monte-Carlo, and rollout buffers.
 - `rl_garden/encoders/` — state, CNN, RGBD/proprio, pooling, FiLM, and ResNet
   encoders (Layer B — "how observations are encoded"). `config.py` holds

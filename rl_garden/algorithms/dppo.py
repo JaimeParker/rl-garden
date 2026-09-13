@@ -366,14 +366,13 @@ class DPPO(DPPOCore, OnPolicyAlgorithm):
             shape=self.env.single_action_space.shape[1:],
             dtype=self.env.single_action_space.dtype,
         )
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             obs_space, augmentation_seed=self._image_augmentation_seed
         )
         self.policy = DPPOPolicy(
             observation_space=obs_space,
-            features_extractor=self.observation_encoders.actor,
-            critic_features_extractor=self.observation_encoders.critic,
             action_space=raw_action_space,
+            **extractor_kwargs,
             horizon_steps=self.horizon_steps,
             act_steps=self.act_steps,
             denoising_steps=self.denoising_steps,
@@ -548,17 +547,6 @@ class DPPO(DPPOCore, OnPolicyAlgorithm):
         metrics["explained_variance"] = explained_var
         return metrics
 
-    def _actor_stop_gradient(self) -> bool:
-        # Two distinct extractors (encoder_sharing="separate"):
-        # policy.features_extractor is actor-exclusive and needs the actor
-        # loss's own gradient -- nothing else would ever train it. Otherwise,
-        # stop-gradient only under "shared_critic_grad" (encoder trained by
-        # the critic/value loss only, matching SACPolicy's convention);
-        # "shared" would train the encoder from both losses.
-        if self.policy.critic_features_extractor is not self.policy.features_extractor:
-            return False
-        return self.encoder_sharing == "shared_critic_grad"
-
     def _dppo_loss(
         self,
         cond_b: dict,
@@ -573,15 +561,16 @@ class DPPO(DPPOCore, OnPolicyAlgorithm):
     ) -> tuple[torch.Tensor, dict[str, float]]:
         # Gradient isolation: critic_cond_b's features are grad-enabled (the
         # critic loss below, `self.policy.critic(critic_cond_b["state"])`,
-        # trains policy.critic_features_extractor). The actor's log-prob path
+        # trains policy.critic_extractor). The actor's log-prob path
         # must not also backprop into a shared encoder under
-        # encoder_sharing="shared_critic_grad" (see _actor_stop_gradient),
-        # or the PPO policy loss would additionally train it every step --
-        # detach the copy fed to the actor in that case rather than
-        # re-running the (possibly image) encoder a second time.
+        # encoder_sharing="shared_critic_grad" (see
+        # BasePolicy.actor_features_detached), or the PPO policy loss would
+        # additionally train it every step -- detach the copy fed to the
+        # actor in that case rather than re-running the (possibly image)
+        # encoder a second time.
         cond_actor = (
             {k: v.detach() for k, v in cond_b.items()}
-            if self._actor_stop_gradient()
+            if self.policy.actor_features_detached
             else cond_b
         )
         newlogprobs = self.policy.get_logprobs_subsample(

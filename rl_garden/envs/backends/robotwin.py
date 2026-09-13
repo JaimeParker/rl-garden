@@ -36,6 +36,8 @@ class RoboTwinBackend(EnvBackend):
             raise ObservationContractError(
                 "robotwin: frame_stack > 1 requires at least one rgb camera"
             )
+        if obs.extra_state:
+            raise ObservationContractError("robotwin has no extra state sources")
         collect_wrist = bool({"left_wrist", "right_wrist"} & set(obs.rgb))
 
         rt = req.backend_config  # RoboTwinConfig or None

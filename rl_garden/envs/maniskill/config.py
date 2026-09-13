@@ -58,6 +58,10 @@ class ManiSkillEnvConfig:
         translates ``image_size`` (H, W) into ManiSkill's own per-sensor
         ``camera_width``/``camera_height`` fields.
         """
+        if obs.extra_state:
+            from rl_garden.observations.schema import ObservationContractError
+
+            raise ObservationContractError("maniskill has no extra state sources")
         height, width = obs.image_size if obs.image_size is not None else (None, None)
         return cls(
             rgb_cameras=obs.rgb,

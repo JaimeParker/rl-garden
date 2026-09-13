@@ -11,11 +11,15 @@ critic encoder-sharing convention every algorithm needs
 ``ObservationEncoderMixin`` is meant to sit on ``BaseAlgorithm`` (see
 ``rl_garden/algorithms/base_algorithm.py``): every algorithm inherits the
 ``encoder_sharing`` class attribute and the ``_resolve_observation_encoders``/
-``_actor_features``/``_critic_features`` helpers for free, at zero
-constructor-signature cost. Concrete algorithms opt in by accepting
-``encoder_config``/``obs_groups``/``critic_encoder_config`` constructor
-kwargs themselves (see ``SAC`` for the reference implementation) -- these
-are *not* threaded through ``BaseAlgorithm.__init__``/
+``_policy_extractor_kwargs`` helpers for free, at zero constructor-signature
+cost. ``_policy_extractor_kwargs`` returns the
+``{"actor_extractor", "critic_extractor", "encoder_sharing"}`` kwargs an
+algorithm's ``_setup_model`` passes straight into its ``BasePolicy``
+subclass (see ``rl_garden.policies.base.BasePolicy`` for the actor/critic
+extractor contract and stop-gradient rule those feed). Concrete algorithms
+opt in by accepting ``encoder_config``/``obs_groups``/``critic_encoder_config``
+constructor kwargs themselves (see ``SAC`` for the reference implementation)
+-- these are *not* threaded through ``BaseAlgorithm.__init__``/
 ``OffPolicyAlgorithm.__init__``/etc., matching the existing convention where
 observation-related kwargs live on the concrete algorithm class, not the
 shared training-loop base classes.
@@ -23,15 +27,14 @@ shared training-loop base classes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
-
-import torch
+from typing import Any, Literal, Optional
 
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.observations import (
     ObsGroups,
+    ObservationContractError,
     ObservationSchema,
     normalize_observation_space,
     resolve_obs_groups,
@@ -75,9 +78,10 @@ def resolve_observation_encoders(
     """Build the actor (and, when ``encoder_sharing == "separate"``, critic)
     features extractor for ``observation_space``.
 
-    Raises ``ValueError`` when ``obs_groups`` asks for asymmetric actor/critic
-    keys, or ``critic_encoder_config`` is given, while ``encoder_sharing`` is
-    not ``"separate"`` -- both require two independent encoder instances.
+    Raises ``ObservationContractError`` (a ``ValueError`` subclass) when
+    ``obs_groups`` asks for asymmetric actor/critic keys, or
+    ``critic_encoder_config`` is given, while ``encoder_sharing`` is not
+    ``"separate"`` -- both require two independent encoder instances.
     """
     normalized_space = normalize_observation_space(observation_space)
     schema = ObservationSchema.from_space(normalized_space)
@@ -92,7 +96,7 @@ def resolve_observation_encoders(
             if asymmetric
             else "a critic_encoder_config was given"
         )
-        raise ValueError(
+        raise ObservationContractError(
             f"{reason}, which requires two independent encoders; set "
             f"encoder_sharing='separate' (got {encoder_sharing!r})."
         )
@@ -163,18 +167,77 @@ class ObservationEncoderMixin:
         )
         return self.observation_encoders
 
-    def _actor_features(self, obs, stop_gradient: Optional[bool] = None) -> torch.Tensor:
-        """Actor-role features for ``obs``.
+    #: Optional per algorithm; algorithms that accept a ``policy_kwargs``
+    #: constructor dict set this (via an algorithm's own
+    #: ``_normalize_policy_kwargs``) before calling
+    #: ``_policy_extractor_kwargs``.
+    policy_kwargs: dict
 
-        ``stop_gradient`` defaults to the sharing rule: detached when
-        ``encoder_sharing == "shared_critic_grad"`` (the encoder is trained
-        only by the critic loss), passed straight through otherwise.
+    def _policy_extractor_kwargs(
+        self, observation_space, *, augmentation_seed: Optional[int] = None
+    ) -> dict[str, Any]:
+        """Resolve ``{"actor_extractor", "critic_extractor",
+        "encoder_sharing"}`` for building this algorithm's policy.
+
+        Defaults to the schema-driven encoder(s) from
+        ``_resolve_observation_encoders`` (lazily -- not resolved at all when
+        both roles are overridden below, so building schema-driven encoders
+        just to discard them never wastes compute or shifts RNG consumption).
+        ``self.policy_kwargs`` may override either role directly with
+        ``"actor_extractor_class"``/``"actor_extractor_kwargs"`` and
+        ``"critic_extractor_class"``/``"critic_extractor_kwargs"`` -- an
+        explicit ``*_class`` skips resolving the schema-driven encoder for
+        that role entirely; a ``*_kwargs`` given without its ``*_class``
+        raises (it would be silently ignored).
         """
-        if stop_gradient is None:
-            stop_gradient = self.encoder_sharing == "shared_critic_grad"
-        return self.observation_encoders.actor.extract(obs, stop_gradient=stop_gradient)
+        policy_kwargs = getattr(self, "policy_kwargs", None) or {}
+        actor_class = policy_kwargs.get("actor_extractor_class")
+        critic_class = policy_kwargs.get("critic_extractor_class")
 
-    def _critic_features(self, obs, stop_gradient: bool = False) -> torch.Tensor:
-        """Critic-role features for ``obs`` (the critic's own encoder when
-        ``encoder_sharing == "separate"``, else the shared actor encoder)."""
-        return self.observation_encoders.critic_or_actor.extract(obs, stop_gradient=stop_gradient)
+        def _build(cls_: type, kwargs_key: str, class_key: str) -> BaseFeaturesExtractor:
+            if not isinstance(cls_, type) or not issubclass(cls_, BaseFeaturesExtractor):
+                raise TypeError(
+                    f"policy_kwargs[{class_key!r}] must be a BaseFeaturesExtractor subclass."
+                )
+            extra = policy_kwargs.get(kwargs_key) or {}
+            return cls_(observation_space=observation_space, **extra)
+
+        if actor_class is None and policy_kwargs.get("actor_extractor_kwargs"):
+            raise ValueError(
+                "policy_kwargs['actor_extractor_kwargs'] was given without "
+                "policy_kwargs['actor_extractor_class']; it would be silently "
+                "ignored (the default extractor takes no such kwargs)."
+            )
+        if critic_class is None and policy_kwargs.get("critic_extractor_kwargs"):
+            raise ValueError(
+                "policy_kwargs['critic_extractor_kwargs'] was given without "
+                "policy_kwargs['critic_extractor_class']; it would be silently "
+                "ignored (the default extractor takes no such kwargs)."
+            )
+
+        need_resolved = actor_class is None or (
+            self.encoder_sharing == "separate" and critic_class is None
+        )
+        if need_resolved:
+            self._resolve_observation_encoders(
+                observation_space, augmentation_seed=augmentation_seed
+            )
+
+        actor_extractor = (
+            _build(actor_class, "actor_extractor_kwargs", "actor_extractor_class")
+            if actor_class is not None
+            else self.observation_encoders.actor
+        )
+        critic_extractor: Optional[BaseFeaturesExtractor] = None
+        if critic_class is not None:
+            critic_extractor = _build(
+                critic_class, "critic_extractor_kwargs", "critic_extractor_class"
+            )
+        elif self.encoder_sharing == "separate":
+            critic_extractor = self.observation_encoders.critic
+
+        return {
+            "actor_extractor": actor_extractor,
+            "critic_extractor": critic_extractor,
+            "encoder_sharing": self.encoder_sharing,
+        }

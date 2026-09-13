@@ -247,7 +247,7 @@ def test_transformer_ppo_rejects_structured_vit_features():
     with pytest.raises(NotImplementedError):
         TransformerPPO(
             env=env,
-            policy_kwargs={"features_extractor_class": StructuredFeaturesExtractor},
+            policy_kwargs={"actor_extractor_class": StructuredFeaturesExtractor},
             **_ppo_kwargs(),
             **_transformer_kwargs(),
         )

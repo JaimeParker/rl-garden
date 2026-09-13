@@ -10,7 +10,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import BC, BPPO, OfflineEnvSpec
-from rl_garden.observations import ObservationContractError
+from rl_garden.observations import ObservationContractError, ObsGroups
 
 
 def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
@@ -95,6 +95,154 @@ def test_rejects_image_observation_space():
     # flat feature vector, with no Dict/image handling anywhere.
     with pytest.raises(ObservationContractError, match="images"):
         BPPO(env=_dict_image_env(), buffer_device="cpu", device="cpu")
+
+
+def _multi_key_state_env(num_envs: int = 1) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
+                "state_object_pose": spaces.Box(-1.0, 1.0, shape=(3,), dtype=np.float32),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def test_multi_key_state_observation_trains_one_step():
+    # Regression test: value_net/q_net used to be sized from the actor
+    # extractor's width (which concatenates every state_<name> key) but read
+    # a raw data.obs["state"] tensor at forward time -- a shape mismatch
+    # crash whenever more than one state key was present. Both nets now read
+    # through the critic-role extractor (BPPOCriticMixin._build_critic/
+    # _phase_a_step), which performs the same concatenation.
+    agent = BPPO(
+        env=_multi_key_state_env(),
+        buffer_size=256,
+        buffer_device="cpu",
+        batch_size=32,
+        device="cpu",
+        critic_warmup_steps=3,
+        value_hidden_dims=(16,),
+        q_hidden_dims=(16,),
+        actor_hidden_dims=(16,),
+        target_update_freq=1,
+    )
+    assert agent.observation_encoders.critic_or_actor.features_dim == 7
+
+    env = agent.env
+    state_shape = env.single_observation_space["state"].shape
+    pose_shape = env.single_observation_space["state_object_pose"].shape
+    for t in range(40):
+        obs = {
+            "state": torch.rand(env.num_envs, *state_shape) * 2 - 1,
+            "state_object_pose": torch.rand(env.num_envs, *pose_shape) * 2 - 1,
+        }
+        next_obs = {
+            "state": torch.rand(env.num_envs, *state_shape) * 2 - 1,
+            "state_object_pose": torch.rand(env.num_envs, *pose_shape) * 2 - 1,
+        }
+        actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
+        rewards = torch.rand(env.num_envs)
+        dones = torch.zeros(env.num_envs, dtype=torch.bool)
+        episode_end = torch.zeros(env.num_envs, dtype=torch.bool)
+        if (t + 1) % 20 == 0:
+            episode_end[:] = True
+        agent.replay_buffer.add(
+            obs, next_obs, actions, rewards, dones, episode_end=episode_end
+        )
+
+    shared_extractor = agent.observation_encoders.critic_or_actor
+    assert shared_extractor is agent.policy.actor_extractor
+
+    agent.train(2)  # Phase A (critic warmup)
+    agent.train(1)  # Phase B (actor, post-warmup)
+
+    # BPPO/UniO4 are state-only (Box obs only, per test_rejects_image_
+    # observation_space), so the shared extractor is always a FlattenExtractor
+    # with zero learnable parameters -- there is nothing for a before/after
+    # parameter-movement check to observe. Assert the underlying mechanism
+    # directly instead: under "shared_critic_grad" (the default here),
+    # policy.extract_actor_features detaches (BasePolicy.
+    # actor_features_detached), so gradient never reaches the shared
+    # extractor through the actor path, while extract_critic_features (used
+    # by BPPOCriticMixin._build_critic/_phase_a_step) never detaches.
+    probe_obs = {
+        "state": (torch.rand(env.num_envs, *state_shape) * 2 - 1).requires_grad_(),
+        "state_object_pose": (
+            torch.rand(env.num_envs, *pose_shape) * 2 - 1
+        ).requires_grad_(),
+    }
+    assert not agent.policy.extract_actor_features(probe_obs).requires_grad
+    assert shared_extractor.extract(probe_obs).requires_grad
+
+
+def test_multi_key_state_privileged_critic_separate_encoders_trains_one_step():
+    # The state-only privileged-critic idiom: actor sees only "state", critic
+    # sees "state" + "state_object_pose", with independent encoders.
+    agent = BPPO(
+        env=_multi_key_state_env(),
+        buffer_size=256,
+        buffer_device="cpu",
+        batch_size=32,
+        device="cpu",
+        critic_warmup_steps=3,
+        value_hidden_dims=(16,),
+        q_hidden_dims=(16,),
+        actor_hidden_dims=(16,),
+        target_update_freq=1,
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
+        encoder_sharing="separate",
+    )
+    assert agent.observation_encoders.actor.features_dim == 4
+    assert agent.observation_encoders.critic.features_dim == 7
+    assert agent.observation_encoders.actor is not agent.observation_encoders.critic
+
+    env = agent.env
+    state_shape = env.single_observation_space["state"].shape
+    pose_shape = env.single_observation_space["state_object_pose"].shape
+    for t in range(40):
+        obs = {
+            "state": torch.rand(env.num_envs, *state_shape) * 2 - 1,
+            "state_object_pose": torch.rand(env.num_envs, *pose_shape) * 2 - 1,
+        }
+        next_obs = {
+            "state": torch.rand(env.num_envs, *state_shape) * 2 - 1,
+            "state_object_pose": torch.rand(env.num_envs, *pose_shape) * 2 - 1,
+        }
+        actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
+        rewards = torch.rand(env.num_envs)
+        dones = torch.zeros(env.num_envs, dtype=torch.bool)
+        episode_end = torch.zeros(env.num_envs, dtype=torch.bool)
+        if (t + 1) % 20 == 0:
+            episode_end[:] = True
+        agent.replay_buffer.add(
+            obs, next_obs, actions, rewards, dones, episode_end=episode_end
+        )
+
+    actor_extractor = agent.observation_encoders.actor
+    critic_extractor = agent.observation_encoders.critic
+
+    agent.train(2)  # Phase A (critic warmup)
+    agent.train(1)  # Phase B (actor, post-warmup)
+
+    # Same reasoning as test_multi_key_state_observation_trains_one_step:
+    # both extractors are parameter-free FlattenExtractors here (state-only
+    # obs), so assert the mechanism instead of a param diff. Under
+    # "separate", actor_extractor is not agent.observation_encoders.critic,
+    # so BasePolicy.actor_features_detached is False and neither role
+    # detaches -- each extractor is a genuinely independent object trained
+    # only by its own role's loss.
+    probe_obs = {
+        "state": (torch.rand(env.num_envs, *state_shape) * 2 - 1).requires_grad_(),
+        "state_object_pose": (
+            torch.rand(env.num_envs, *pose_shape) * 2 - 1
+        ).requires_grad_(),
+    }
+    assert agent.policy.extract_actor_features(probe_obs).requires_grad
+    assert critic_extractor.extract(probe_obs).requires_grad
+    assert actor_extractor is not critic_extractor
 
 
 def test_old_policy_starts_synced_to_policy():

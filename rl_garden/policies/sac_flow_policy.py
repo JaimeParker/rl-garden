@@ -1,6 +1,6 @@
 """SACPolicy variant with a FlowMatchingActor instead of a Gaussian actor.
 
-Reuses SACPolicy's features_extractor/critic/critic_target construction
+Reuses SACPolicy's actor_extractor/critic/critic_target construction
 unchanged; only the actor changes. SACPolicy.__init__ builds ``self.actor``
 inline (no ``_build_actor()`` hook), so this subclass lets the parent build
 its throwaway SquashedGaussianActor and immediately replaces it -- cheaper
@@ -17,6 +17,7 @@ from gymnasium import spaces
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, CriticImpl, FlowMatchingActor, KernelInit
+from rl_garden.policies.base import EncoderSharing
 from rl_garden.policies.sac_policy import SACPolicy
 
 
@@ -29,7 +30,7 @@ class SACFlowPolicy(SACPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         *,
         n_critics: int = 2,
@@ -46,11 +47,13 @@ class SACFlowPolicy(SACPolicy):
         noise_std: float = 0.3,
         flow_use_layer_norm: bool = False,
         flow_kernel_init: Optional[KernelInit] = "xavier_uniform",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: "EncoderSharing" = "shared_critic_grad",
     ) -> None:
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor,
             net_arch,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
@@ -61,6 +64,8 @@ class SACFlowPolicy(SACPolicy):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
             critic_impl=critic_impl,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
         )
         # Parent __init__ already built a throwaway SquashedGaussianActor on
         # self._actor_fd -- replace it rather than duplicating critic setup.

@@ -30,7 +30,7 @@ class FINOPolicy(FQLPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         n_critics: int = 2,
@@ -44,8 +44,8 @@ class FINOPolicy(FQLPolicy):
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
-        actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         beta: float = 10.0,
         num_samples: Optional[int] = None,
         q_agg: Literal["mean", "min"] = "mean",
@@ -53,7 +53,7 @@ class FINOPolicy(FQLPolicy):
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor,
             net_arch,
             n_critics=n_critics,
             actor_use_layer_norm=actor_use_layer_norm,
@@ -66,8 +66,8 @@ class FINOPolicy(FQLPolicy):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
+            critic_extractor=critic_extractor,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
         )
         action_dim = int(np.prod(action_space.shape))
         self.beta = beta
@@ -115,9 +115,9 @@ class FINOPolicy(FQLPolicy):
     def sample_actions(self, obs: Obs, *, deterministic: bool) -> torch.Tensor:
         if self.encoder_sharing == "separate":
             actor_features = self.extract_actor_onestep_features(obs)
-            q_features = self.extract_features(obs)
+            q_features = self.extract_critic_features(obs)
         else:
-            features = self.extract_features(obs)
+            features = self.extract_critic_features(obs)
             actor_features = features
             q_features = features
 

@@ -15,7 +15,7 @@ from rl_garden.networks import (
     KernelInit,
     ValueNetwork,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 def get_ppo_arch(
@@ -37,7 +37,7 @@ class PPOPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         *,
         features_dim: Optional[int] = None,
@@ -51,25 +51,25 @@ class PPOPolicy(BasePolicy):
         value_dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
-        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         critic_backbone_type: Optional[BackboneType] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
         if not isinstance(action_space, spaces.Box):
             raise TypeError("PPOPolicy only supports Box action spaces.")
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
-        # Unset -> literally the same object as features_extractor (not just
-        # equal config); see SACPolicy's identical pattern for why identity
-        # is the source of truth here.
-        self.critic_features_extractor = critic_features_extractor or features_extractor
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         actor_arch, value_arch = get_ppo_arch(net_arch)
-        fd = features_dim if features_dim is not None else features_extractor.features_dim
+        fd = features_dim if features_dim is not None else actor_extractor.features_dim
         critic_fd = (
             fd
-            if self.critic_features_extractor is features_extractor
-            else self.critic_features_extractor.features_dim
+            if self.critic_extractor is None
+            else self.critic_extractor.features_dim
         )
         self.actor = DiagGaussianActor(
             fd,
@@ -95,21 +95,27 @@ class PPOPolicy(BasePolicy):
         )
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for diagnostics/back-compat callers. The rollout/
+        train paths below use ``extract_actor_features`` (``BasePolicy``) by
+        default, which applies the ``encoder_sharing`` rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
 
-    def extract_critic_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self.critic_features_extractor.extract(obs, stop_gradient=stop_gradient)
+    def _actor_role_features(self, obs: Obs, stop_gradient_actor: Optional[bool]) -> torch.Tensor:
+        if stop_gradient_actor is None:
+            return self.extract_actor_features(obs)
+        return self.extract_features(obs, stop_gradient=stop_gradient_actor)
 
     def forward(
         self,
         obs: Obs,
         deterministic: bool = False,
         *,
-        stop_gradient_actor: bool = False,
+        stop_gradient_actor: Optional[bool] = None,
         sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
-        value_features = self.extract_critic_features(obs, stop_gradient=False)
+        actor_features = self._actor_role_features(obs, stop_gradient_actor)
+        value_features = self.extract_critic_features(obs)
         actions, log_prob, entropy = self.actor.action_log_prob(
             actor_features, deterministic=deterministic, sum_dims=sum_dims
         )
@@ -117,25 +123,25 @@ class PPOPolicy(BasePolicy):
         return actions, values, log_prob, entropy
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         if deterministic:
             return self.actor.clamp_action(self.actor.deterministic_action(features))
         action, _, _ = self.actor.action_log_prob(features, deterministic=False)
         return self.actor.clamp_action(action)
 
     def predict_values(self, obs: Obs) -> torch.Tensor:
-        return self.value_net(self.extract_critic_features(obs, stop_gradient=False))
+        return self.value_net(self.extract_critic_features(obs))
 
     def evaluate_actions(
         self,
         obs: Obs,
         actions: torch.Tensor,
         *,
-        stop_gradient_actor: bool = False,
+        stop_gradient_actor: Optional[bool] = None,
         sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
-        value_features = self.extract_critic_features(obs, stop_gradient=False)
+        actor_features = self._actor_role_features(obs, stop_gradient_actor)
+        value_features = self.extract_critic_features(obs)
         log_prob, entropy = self.actor.evaluate_action_log_prob(
             actor_features, actions, sum_dims=sum_dims
         )
@@ -161,13 +167,8 @@ class PPOPolicy(BasePolicy):
     def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
         return self.actor.clamp_action(actions)
 
-    def update_obs_normalizer(self, obs: Obs) -> None:
-        self.features_extractor.update_normalizer(obs)
-        if self.critic_features_extractor is not self.features_extractor:
-            self.critic_features_extractor.update_normalizer(obs)
-
     def act_with_value_logprob_and_dist_params(
-        self, obs: Obs, deterministic: bool = False, *, stop_gradient_actor: bool = False
+        self, obs: Obs, deterministic: bool = False, *, stop_gradient_actor: Optional[bool] = None
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
     ]:
@@ -175,8 +176,8 @@ class PPOPolicy(BasePolicy):
         Gaussian's ``(mean, log_std)`` -- the "old" distribution params the
         adaptive-KL LR schedule (``lr_schedule="adaptive_kl"``) needs. Single
         actor forward pass, no duplicate compute."""
-        actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
-        value_features = self.extract_critic_features(obs, stop_gradient=False)
+        actor_features = self._actor_role_features(obs, stop_gradient_actor)
+        value_features = self.extract_critic_features(obs)
         dist = self.actor(actor_features)
         action = dist.mean if deterministic else dist.sample()
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
@@ -186,13 +187,13 @@ class PPOPolicy(BasePolicy):
         return action, values, log_prob, entropy, dist.mean, log_std
 
     def evaluate_actions_with_dist_params(
-        self, obs: Obs, actions: torch.Tensor, *, stop_gradient_actor: bool = False
+        self, obs: Obs, actions: torch.Tensor, *, stop_gradient_actor: Optional[bool] = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Like ``evaluate_actions``, but also returns the current policy's
         ``(mean, log_std)`` -- the "new" distribution params the adaptive-KL
         LR schedule needs. Single actor forward pass, no duplicate compute."""
-        actor_features = self.extract_features(obs, stop_gradient=stop_gradient_actor)
-        value_features = self.extract_critic_features(obs, stop_gradient=False)
+        actor_features = self._actor_role_features(obs, stop_gradient_actor)
+        value_features = self.extract_critic_features(obs)
         dist = self.actor(actor_features)
         log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
         entropy = dist.entropy().sum(-1, keepdim=True)

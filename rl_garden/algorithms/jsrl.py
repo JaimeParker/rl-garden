@@ -69,7 +69,7 @@ def _load_guide_policy(
     come from the checkpoint's own ``metadata["hyperparameters"]`` where the
     source algorithm records them; critic/value submodules are built with
     best-effort/default shapes since they're provably unused by
-    ``predict()`` -- only actor/features_extractor/obs-normalizer key
+    ``predict()`` -- only actor/encoder/obs-normalizer key
     mismatches are treated as fatal below.
 
     ``std_parameterization`` is not recorded in IQL's or AWAC's checkpoint
@@ -86,13 +86,16 @@ def _load_guide_policy(
     checkpoint = load_checkpoint_file(checkpoint_path, map_location=device)
     hp = checkpoint["metadata"]["hyperparameters"]
     policy_state = checkpoint["state"]["policy"]
-    features_extractor = FlattenExtractor(observation_space=observation_space)
+    actor_extractor = FlattenExtractor(observation_space=observation_space)
 
     if guide_algorithm == "iql":
+        # IQLPolicy has migrated to the actor/critic extractor contract
+        # (Phase B1: FQL family + CQL/Cal-QL/WSRL + IQL) -- uses the new
+        # actor_extractor= kwarg, matching the other branches below.
         policy: BasePolicy = IQLPolicy(
             observation_space=observation_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch=hp.get("net_arch", (256, 256)),
             n_critics=hp.get("n_critics", 2),
             critic_subsample_size=hp.get("critic_subsample_size"),
@@ -100,10 +103,13 @@ def _load_guide_policy(
             std_parameterization=std_parameterization,
         ).to(device)
     elif guide_algorithm == "awac":
+        # AWACPolicy has migrated to the actor/critic extractor contract
+        # (Phase B2-T5: awac-idql) -- uses the new actor_extractor= kwarg,
+        # matching the calql/wsrl (SACPolicy) branch below.
         policy = AWACPolicy(
             observation_space=observation_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch=hp.get("net_arch", (256, 256, 256)),
             n_critics=hp.get("n_critics", 2),
             std_parameterization=std_parameterization,
@@ -112,10 +118,12 @@ def _load_guide_policy(
         # log_std_mode/log_std_min are hard-coded to match CQL's own
         # _setup_model() (rl_garden/algorithms/cql.py:483-485) exactly --
         # not user-configurable there either, so not read from metadata.
+        # SACPolicy already migrated (Phase A reference implementation), so
+        # this call site uses the new actor_extractor= kwarg.
         policy = SACPolicy(
             observation_space=observation_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch=hp.get("net_arch", (256, 256, 256)),
             n_critics=hp.get("n_critics", 2),
             critic_subsample_size=hp.get("critic_subsample_size"),

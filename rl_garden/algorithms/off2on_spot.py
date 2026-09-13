@@ -14,6 +14,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.spot import _SPOTRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType
@@ -80,6 +81,8 @@ class Off2OnSPOT(_SPOTRolloutTrainingShell):
         expl_noise: float = 0.1,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         online_discount: float = 0.995,
         max_online_updates: int = 1_000_000,
@@ -145,6 +148,8 @@ class Off2OnSPOT(_SPOTRolloutTrainingShell):
             expl_noise=expl_noise,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
             online_discount=online_discount,
             max_online_updates=max_online_updates,

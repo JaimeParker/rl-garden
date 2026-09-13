@@ -39,6 +39,11 @@ class A2ABC(OfflineRLAlgorithm):
     needed here."""
 
     _compatible_checkpoint_algorithms = ("A2ABC",)
+    # No critic -- extract_actor_features must never stop-gradient (the
+    # encoder is trained end-to-end by the flow/reconstruction/consistency
+    # losses, the only losses that ever touch it); see BC's identical
+    # class-attribute override for the full rationale.
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -216,22 +221,21 @@ class A2ABC(OfflineRLAlgorithm):
                 "for vision conditioning."
             )
         if self.obs_groups is None:
-            # The features extractor is vision-only by design (state history
-            # is encoded separately by A2APolicy's history_encoder) -- default
+            # The actor extractor is vision-only by design (state history is
+            # encoded separately by A2APolicy's history_encoder) -- default
             # both actor/critic groups to the image keys so the symmetric
             # check in resolve_observation_encoders doesn't force
             # encoder_sharing="separate" (A2ABC has no critic to build one
             # for).
             self.obs_groups = ObsGroups(actor=schema.image_keys, critic=schema.image_keys)
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             observation_space, augmentation_seed=self._image_augmentation_seed
         )
-        features_extractor = self.observation_encoders.actor
 
         self.policy = A2APolicy(
             observation_space=observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            actor_extractor=extractor_kwargs["actor_extractor"],
             horizon_steps=self.horizon_steps,
             cond_steps=self.cond_steps,
             latent_dim=self.latent_dim,
@@ -253,6 +257,7 @@ class A2ABC(OfflineRLAlgorithm):
             enc_contrastive_weight=self.enc_contrastive_weight,
             flow_contrastive_weight=self.flow_contrastive_weight,
             contrastive_temperature=self.contrastive_temperature,
+            encoder_sharing=extractor_kwargs["encoder_sharing"],
         ).to(self.device)
 
         self.actor_optimizer = make_optimizer(

@@ -11,17 +11,19 @@ from rl_garden.common.obs_utils import flatten_leading_dims
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, KernelInit, RecurrentLatentEncoder, RecurrentState
+from rl_garden.observations import ObservationContractError
+from rl_garden.policies.base import EncoderSharing
 from rl_garden.policies.ppo_policy import PPOPolicy
 
 
 class RecurrentPPOPolicy(PPOPolicy):
-    """PPOPolicy with a RecurrentLatentEncoder between features_extractor and the heads."""
+    """PPOPolicy with a RecurrentLatentEncoder between actor_extractor and the heads."""
 
     def __init__(
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         recurrent_encoder: RecurrentLatentEncoder,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         *,
@@ -35,12 +37,13 @@ class RecurrentPPOPolicy(PPOPolicy):
         value_dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
-        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        if critic_features_extractor is not None:
-            raise ValueError(
+        if critic_extractor is not None:
+            raise ObservationContractError(
                 "RecurrentPPOPolicy does not support a separate "
-                "critic_features_extractor: recurrent_encoder is a single RNN "
+                "critic_extractor: recurrent_encoder is a single RNN "
                 "shared between the encoder and both actor/value heads, so "
                 "there is no way to route a second encoder's output through it."
             )
@@ -52,7 +55,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor,
             net_arch,
             features_dim=recurrent_encoder.features_dim,
             log_std_init=log_std_init,
@@ -65,6 +68,7 @@ class RecurrentPPOPolicy(PPOPolicy):
             value_dropout_rate=value_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+            encoder_sharing=encoder_sharing,
         )
         self.recurrent_encoder = recurrent_encoder
 
@@ -78,7 +82,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         stop_gradient_actor: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, RecurrentState]:
         """Single rollout step. Returns (actions, values, log_prob, entropy, new_hidden)."""
-        raw = self._extract_features(obs, stop_gradient=False)
+        raw = self.extract_features(obs, stop_gradient=False)
         latent, new_hidden = self.recurrent_encoder.step(raw, hidden, episode_starts)
         actor_latent = latent.detach() if stop_gradient_actor else latent
         actions, log_prob, entropy = self.actor.action_log_prob(
@@ -108,7 +112,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         ``(mean, log_std)`` -- the "old" distribution params the adaptive-KL
         LR schedule (``lr_schedule="adaptive_kl"``) needs. Single actor
         forward pass, no duplicate compute."""
-        raw = self._extract_features(obs, stop_gradient=False)
+        raw = self.extract_features(obs, stop_gradient=False)
         latent, new_hidden = self.recurrent_encoder.step(raw, hidden, episode_starts)
         actor_latent = latent.detach() if stop_gradient_actor else latent
         dist = self.actor(actor_latent)
@@ -126,7 +130,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         episode_starts: torch.Tensor,
         deterministic: bool = False,
     ) -> tuple[torch.Tensor, RecurrentState]:
-        raw = self._extract_features(obs, stop_gradient=False)
+        raw = self.extract_features(obs, stop_gradient=False)
         latent, new_hidden = self.recurrent_encoder.step(raw, hidden, episode_starts)
         if deterministic:
             action = self.actor.clamp_action(self.actor.deterministic_action(latent))
@@ -138,7 +142,7 @@ class RecurrentPPOPolicy(PPOPolicy):
     def predict_values_recurrent(
         self, obs: Obs, hidden: RecurrentState, episode_starts: torch.Tensor
     ) -> tuple[torch.Tensor, RecurrentState]:
-        raw = self._extract_features(obs, stop_gradient=False)
+        raw = self.extract_features(obs, stop_gradient=False)
         latent, new_hidden = self.recurrent_encoder.step(raw, hidden, episode_starts)
         return self.value_net(latent), new_hidden
 
@@ -159,7 +163,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         """
         num_steps, num_envs = actions.shape[0], actions.shape[1]
         flat_obs = flatten_leading_dims(obs)
-        raw = self._extract_features(flat_obs, stop_gradient=False)
+        raw = self.extract_features(flat_obs, stop_gradient=False)
         raw = raw.reshape(num_steps, num_envs, -1)
         latent, _ = self.recurrent_encoder.forward_sequence(raw, initial_hidden, episode_starts)
 
@@ -198,7 +202,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         are (T, B, ...)-shaped, matching ``evaluate_actions_sequence``."""
         num_steps, num_envs = actions.shape[0], actions.shape[1]
         flat_obs = flatten_leading_dims(obs)
-        raw = self._extract_features(flat_obs, stop_gradient=False)
+        raw = self.extract_features(flat_obs, stop_gradient=False)
         raw = raw.reshape(num_steps, num_envs, -1)
         latent, _ = self.recurrent_encoder.forward_sequence(raw, initial_hidden, episode_starts)
 

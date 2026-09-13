@@ -20,7 +20,7 @@ from rl_garden.networks import (
     SquashedGaussianActor,
     UnsquashedGaussianActor,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 from rl_garden.policies.sac_policy import LOG_STD_MAX, WSRL_LOG_STD_MIN
 
 
@@ -31,7 +31,7 @@ class BCPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (256, 256),
         use_layer_norm: bool = False,
         use_group_norm: bool = False,
@@ -44,14 +44,17 @@ class BCPolicy(BasePolicy):
         log_std_min: float = WSRL_LOG_STD_MIN,
         log_std_max: float = LOG_STD_MAX,
         tanh_squash: bool = True,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "BCPolicy requires a Box action space."
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
 
-        fd = features_extractor.features_dim
+        fd = self.actor_features_dim
         actor_kwargs = dict(
             hidden_dims=list(net_arch),
             use_layer_norm=use_layer_norm,
@@ -81,27 +84,39 @@ class BCPolicy(BasePolicy):
             self.actor = UnsquashedGaussianActor(fd, action_space, **actor_kwargs)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for callers that need to pick the flag themselves.
+        The actor-loss path (``behavior_log_prob``) does not use this by
+        default; it calls ``extract_actor_features`` (``BasePolicy``), which
+        applies the ``encoder_sharing`` stop-gradient rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
 
     def forward(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         return self.predict(obs, deterministic=deterministic)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         if deterministic:
             return self.actor.deterministic_action(features)
         action, _ = self.actor.action_log_prob(features)
         return action
 
     def behavior_log_prob(
-        self, obs: Obs, actions: torch.Tensor, stop_gradient: bool = True
+        self, obs: Obs, actions: torch.Tensor, stop_gradient: Optional[bool] = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (log_prob, deterministic_action) for expert actions from a dataset.
 
         Matches IQLPolicy.behavior_log_prob signature so BC losses can be written
-        in the same style as IQL actor losses.
+        in the same style as IQL actor losses. ``stop_gradient=None`` (the
+        default, used by BC's own training loss) applies
+        ``extract_actor_features``'s ``encoder_sharing`` rule; an explicit
+        ``True``/``False`` is a raw override via ``extract_features``.
         """
-        features = self.extract_features(obs, stop_gradient=stop_gradient)
+        features = (
+            self.extract_actor_features(obs)
+            if stop_gradient is None
+            else self.extract_features(obs, stop_gradient=stop_gradient)
+        )
         log_prob = self.actor.evaluate_action_log_prob(features, actions)
         det_action = self.actor.deterministic_action(features)
         return log_prob, det_action

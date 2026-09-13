@@ -132,4 +132,11 @@ def run_cql(args: CQLArgs) -> None:
     run_offline(args, build_agent=build_cql)
 
 
-registry.register("cql", CQLArgs, run_cql)
+
+
+def _cql_algorithm_cls() -> type:
+    from rl_garden.algorithms import CQL
+
+    return CQL
+
+registry.register("cql", CQLArgs, run_cql, algorithm_cls=_cql_algorithm_cls)

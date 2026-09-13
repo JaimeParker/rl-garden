@@ -20,6 +20,7 @@ from rl_garden.networks.actor_critic import (
     SquashedGaussianActor as Actor,
     get_actor_critic_arch,
 )
+from rl_garden.policies.base import EncoderSharing
 from rl_garden.policies.sac_policy import SACPolicy
 
 
@@ -28,7 +29,7 @@ class RLPDPolicy(SACPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
@@ -45,13 +46,14 @@ class RLPDPolicy(SACPolicy):
         log_std_mode: Literal["clamp", "tanh"] = "clamp",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
-        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         critic_backbone_type: Optional[BackboneType] = None,
+        encoder_sharing: "EncoderSharing" = "shared_critic_grad",
     ) -> None:
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch=net_arch,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
@@ -67,20 +69,21 @@ class RLPDPolicy(SACPolicy):
             log_std_mode=log_std_mode,
             actor_feature_dim=actor_feature_dim,
             critic_spatial_emb_dim=critic_spatial_emb_dim,
-            critic_features_extractor=critic_features_extractor,
+            critic_extractor=critic_extractor,
             critic_backbone_type=critic_backbone_type,
+            encoder_sharing=encoder_sharing,
         )
         if not use_pnorm:
             return
-        if critic_features_extractor is not None:
+        if critic_extractor is not None:
             raise ValueError(
-                "use_pnorm=True is not supported with critic_features_extractor "
+                "use_pnorm=True is not supported with critic_extractor "
                 "set: the pnorm rebuild below reconstructs critic/actor from a "
-                "single shared features_extractor and would silently discard "
+                "single shared actor_extractor and would silently discard "
                 "the separate critic encoder SACPolicy.__init__ already built."
             )
 
-        sc = features_extractor.structured_feature_config()
+        sc = actor_extractor.structured_feature_config()
         if sc is not None and sc.get("layout") == "token_and_prop":
             raise ValueError(
                 "use_pnorm=True is not supported with a 'token_and_prop' "
@@ -90,7 +93,7 @@ class RLPDPolicy(SACPolicy):
             )
 
         actor_arch, critic_arch = get_actor_critic_arch(net_arch)
-        fd = features_extractor.features_dim
+        fd = actor_extractor.features_dim
         critic_kwargs = dict(
             hidden_dims=critic_arch,
             n_critics=n_critics,

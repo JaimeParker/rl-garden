@@ -161,7 +161,10 @@ def test_combined_extractor_stop_gradient_detaches_only_image_features():
     }
 
     image = ce._encode_images(obs, stop_gradient=True)[0]
-    proprio = ce._encode_proprio(obs["state"])
+    # _encode_proprio takes the full obs dict now (it internally concatenates
+    # every schema.state_keys entry via _concat_state), not a bare state
+    # tensor -- see rl_garden/encoders/combined.py.
+    proprio = ce._encode_proprio(obs)
     assert not image.requires_grad
     assert proprio.requires_grad
 
@@ -303,7 +306,7 @@ def test_sac_policy_critic_updates_image_encoder_but_actor_does_not():
     policy = SACPolicy(
         obs_space,
         action_space,
-        features_extractor=extractor,
+        actor_extractor=extractor,
         net_arch={"pi": [16], "qf": [16]},
     )
     obs = {

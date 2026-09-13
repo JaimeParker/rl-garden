@@ -9,8 +9,8 @@ frozen ``actor``/trainable ``actor_ft`` for PPO fine-tuning.
 Handles both Box (state-only) and Dict (vision) observations through the
 schema-driven observation-encoder mixin (``rl_garden.algorithms._observation``,
 see the observation-redesign plan docs) -- this class absorbs the former
-standalone ``VisionDiffusionBC``. ``self.observation_encoders.actor`` is
-always passed to ``DiffusionPolicy`` as its ``features_extractor``: a
+standalone ``VisionDiffusionBC``. ``self._policy_extractor_kwargs()``'s
+``actor_extractor`` is always passed to ``DiffusionPolicy``: a
 ``FlattenExtractor`` (no learnable parameters) for a state-only schema, a
 ``CombinedExtractor`` for one with images, trained jointly with the
 diffusion net in the same ``actor_optimizer`` (both ``DiffusionBC`` and the
@@ -18,10 +18,13 @@ former ``VisionDiffusionBC`` already trained the whole policy, encoder
 included, in one optimizer). ``ema_net_state_dict`` (``self.ema_policy.net``)
 is unaffected either way -- it never included the features extractor, only
 the denoising network, so ``DPPOPolicy.load_actor_weights`` keeps working
-unmodified. This algorithm has no critic, so ``encoder_sharing``/
-``critic_encoder_config`` are irrelevant and unused (kept at the mixin's
-default / always ``None`` for checkpoint-metadata-shape consistency with
-every other migrated algorithm).
+unmodified. This algorithm has no critic, so ``encoder_sharing`` is fixed to
+``"shared"`` (never exposed as a constructor kwarg -- the encoder is trained
+end-to-end by the actor loss, and ``"shared_critic_grad"`` would otherwise
+stop-gradient it whenever ``critic_extractor is None``, see
+``BasePolicy.extract_actor_features``) and ``critic_encoder_config`` is
+unused (always ``None`` for checkpoint-metadata-shape consistency with every
+other migrated algorithm).
 
 Training is step-based (random mini-batches via ``torch.randint``), not the
 reference's epoch-based ``DataLoader`` loop -- matches every other
@@ -72,6 +75,9 @@ class _EMA:
 
 class DiffusionBC(OfflineRLAlgorithm):
     _compatible_checkpoint_algorithms = ("DiffusionBC",)
+    # See module docstring: no critic, so extract_actor_features must never
+    # stop-gradient.
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -237,14 +243,14 @@ class DiffusionBC(OfflineRLAlgorithm):
     # --- model / data setup ---
 
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             self.env.single_observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
         self.policy = DiffusionPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=self.observation_encoders.actor,
+            actor_extractor=extractor_kwargs["actor_extractor"],
             horizon_steps=self.horizon_steps,
             cond_steps=self.cond_steps,
             denoising_steps=self.denoising_steps,
@@ -259,6 +265,7 @@ class DiffusionBC(OfflineRLAlgorithm):
             min_sampling_denoising_std=self.min_sampling_denoising_std,
             net_cls=self.net_cls,
             net_kwargs=self.net_kwargs,
+            encoder_sharing=extractor_kwargs["encoder_sharing"],
         ).to(self.device)
         self.ema_policy = copy.deepcopy(self.policy)
         for p in self.ema_policy.parameters():

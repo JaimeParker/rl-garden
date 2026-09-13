@@ -6,7 +6,7 @@ RL sampling extras (those belong to ``DPPOPolicy``, which reuses the same
 ``DiffusionProcess`` mixin).
 
 Handles both state-only and vision (Dict, ``rgb_<cam>``/``depth_<cam>`` keys)
-observations through a single pre-built ``features_extractor`` -- obs is
+observations through a single pre-built ``actor_extractor`` -- obs is
 always a ``Dict`` (the algorithm boundary normalizes a bare ``Box`` env
 before any policy ever sees it), mirroring ``SACPolicy`` (see
 ``rl_garden/policies/sac_policy.py``) -- this class absorbs the former
@@ -52,7 +52,7 @@ from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import Activation, DiffusionMLP, KernelInit
 from rl_garden.policies._diffusion_process import DiffusionProcess
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 def build_diffusion_net(
@@ -98,7 +98,7 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
         self,
         observation_space: spaces.Box | spaces.Dict,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         *,
         horizon_steps: int,
         cond_steps: int,
@@ -114,19 +114,22 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
         min_sampling_denoising_std: float = 0.1,
         net_cls: type[nn.Module] = DiffusionMLP,
         net_kwargs: Optional[dict[str, Any]] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "DiffusionPolicy requires a Box action space."
-        self.observation_space = observation_space
-        self.action_space = action_space
         self.horizon_steps = horizon_steps
         self.cond_steps = cond_steps
         self.min_sampling_denoising_std = min_sampling_denoising_std
 
         action_dim = int(np.prod(action_space.shape))
 
-        self.features_extractor = features_extractor
-        cond_dim = features_extractor.features_dim * cond_steps
+        cond_dim = self.actor_features_dim * cond_steps
 
         self.net = build_diffusion_net(
             net_cls,
@@ -152,16 +155,33 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
         self.register_buffer("action_low", low)
         self.register_buffer("action_high", high)
 
+    def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for callers that need to pick the flag themselves
+        (e.g. an inference-time read). The training loss path
+        (``_cond_from_obs_history``'s default) uses ``extract_actor_features``
+        instead, which applies the ``encoder_sharing`` stop-gradient rule
+        automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
+
     def _cond_from_obs_history(
-        self, obs_history: Obs, stop_gradient: bool = False
+        self, obs_history: Obs, stop_gradient: Optional[bool] = None
     ) -> torch.Tensor:
         """``obs_history`` is a Dict of tensors each ``(B, cond_steps,
         *leaf_shape)``. Returns ``(B, cond_steps, features_dim)`` by folding
         ``cond_steps`` into the batch dimension before the
-        features-extractor forward and reshaping back after."""
+        features-extractor forward and reshaping back after.
+        ``stop_gradient=None`` (the default, used by the training loss)
+        applies ``extract_actor_features``'s ``encoder_sharing`` rule; an
+        explicit ``True``/``False`` is a raw override via
+        ``extract_features``."""
         batch = next(iter(obs_history.values())).shape[0]
         flat_obs = flatten_leading_dims(obs_history)
-        flat_features = self.features_extractor.extract(flat_obs, stop_gradient=stop_gradient)
+        flat_features = (
+            self.extract_actor_features(flat_obs)
+            if stop_gradient is None
+            else self.extract_features(flat_obs, stop_gradient=stop_gradient)
+        )
         return flat_features.reshape(batch, self.cond_steps, -1)
 
     def loss(self, obs_history: Obs, action_chunk: torch.Tensor) -> torch.Tensor:
@@ -172,7 +192,7 @@ class DiffusionPolicy(DiffusionProcess, BasePolicy):
         t = torch.randint(
             0, self.denoising_steps, (batch,), device=action_chunk.device
         )
-        cond = self._cond_from_obs_history(obs_history, stop_gradient=False)
+        cond = self._cond_from_obs_history(obs_history)
         return self.p_losses(self.net, action_chunk, {"state": cond}, t)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:

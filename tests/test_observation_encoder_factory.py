@@ -145,6 +145,52 @@ def test_asymmetric_actor_images_critic_state_only_does_not_raise():
     assert isinstance(encoders.critic, FlattenExtractor)
 
 
+EXTRA_STATE_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+
+
+def test_flatten_extractor_concatenates_multiple_state_keys():
+    space = spaces.Dict({"state": STATE_SPACE, "state_object_pose": EXTRA_STATE_SPACE})
+    ext = build_observation_encoder(space)
+    assert isinstance(ext, FlattenExtractor)
+    assert ext.features_dim == 8 + 3
+    out = ext({"state": torch.zeros(2, 8), "state_object_pose": torch.zeros(2, 3)})
+    assert out.shape == (2, 11)
+
+
+def test_combined_extractor_proprio_branch_concatenates_state_keys():
+    space = spaces.Dict(
+        {"rgb_cam1": RGB_SPACE, "state": STATE_SPACE, "state_object_pose": EXTRA_STATE_SPACE}
+    )
+    ext = build_observation_encoder(space)
+    assert isinstance(ext, CombinedExtractor)
+    assert ext.state_keys == ("state", "state_object_pose")
+    out = ext(
+        {
+            "rgb_cam1": torch.zeros(2, 64, 64, 3, dtype=torch.uint8),
+            "state": torch.zeros(2, 8),
+            "state_object_pose": torch.zeros(2, 3),
+        }
+    )
+    assert out.shape == (2, ext.features_dim)
+
+
+def test_asymmetric_critic_sees_extra_state_actor_does_not():
+    from rl_garden.algorithms._observation import resolve_observation_encoders
+    from rl_garden.observations import ObsGroups
+
+    space = spaces.Dict(
+        {"rgb_cam1": RGB_SPACE, "state": STATE_SPACE, "state_object_pose": EXTRA_STATE_SPACE}
+    )
+    encoders = resolve_observation_encoders(
+        space,
+        EncoderConfig(),
+        ObsGroups(actor=("rgb_cam1", "state"), critic=("rgb_cam1", "state", "state_object_pose")),
+        "separate",
+    )
+    assert "state_object_pose" not in encoders.actor.state_keys
+    assert "state_object_pose" in encoders.critic.state_keys
+
+
 def test_combined_extractor_direct_construction():
     """CombinedExtractor's only constructor: (observation_space, schema,
     encoder_config)."""

@@ -1,15 +1,15 @@
 """Observation contract: strict key vocabulary, schema derivation, validation.
 
 Every observation space in rl-garden is (or is normalized to) a
-``spaces.Dict`` using exactly the keys ``"state"``, ``"rgb_<cam>"``, and
-``"depth_<cam>"``. This module is the single place that vocabulary and the
-per-modality shape/dtype rules are enforced.
+``spaces.Dict`` using exactly the keys ``"state"``, ``"state_<name>"``,
+``"rgb_<cam>"``, and ``"depth_<cam>"``. This module is the single place that
+vocabulary and the per-modality shape/dtype rules are enforced.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Mapping
 
 import numpy as np
 from gymnasium import spaces
@@ -26,19 +26,27 @@ class Modality(str, Enum):
 
 
 def key_modality(key: str) -> Modality:
-    """Classify an observation key. ``"state"``, ``"rgb_<cam>"``, and
-    ``"depth_<cam>"`` are valid; anything else (including bare rgb/depth)
-    raises.
+    """Classify an observation key. ``"state"``, ``"state_<name>"``,
+    ``"rgb_<cam>"``, and ``"depth_<cam>"`` are valid; anything else (including
+    bare rgb/depth) raises.
     """
     if key == "state":
+        return Modality.STATE
+    if key.startswith("state_"):
+        name = key[len("state_"):]
+        if not name or "/" in name:
+            raise ObservationContractError(
+                f"invalid state key {key!r}; expected 'state_<name>' with a "
+                "non-empty <name> containing no '/'"
+            )
         return Modality.STATE
     if key.startswith("rgb_"):
         return Modality.RGB
     if key.startswith("depth_"):
         return Modality.DEPTH
     raise ObservationContractError(
-        f"unknown observation key {key!r}; expected 'state', 'rgb_<cam>', or "
-        "'depth_<cam>'"
+        f"unknown observation key {key!r}; expected 'state', 'state_<name>', "
+        "'rgb_<cam>', or 'depth_<cam>'"
     )
 
 
@@ -109,8 +117,14 @@ class ObservationSchema:
         return tuple(rgb + depth)
 
     @property
-    def state_key(self) -> Optional[str]:
-        return "state" if "state" in self.entries else None
+    def state_keys(self) -> tuple[str, ...]:
+        """``"state"`` first if present, then other ``state_<name>`` keys in
+        space order."""
+        others = [
+            k for k, e in self.entries.items() if e.modality == Modality.STATE and k != "state"
+        ]
+        state = ["state"] if "state" in self.entries else []
+        return tuple(state + others)
 
     @property
     def has_images(self) -> bool:
@@ -118,7 +132,7 @@ class ObservationSchema:
 
     @property
     def has_state(self) -> bool:
-        return self.state_key is not None
+        return bool(self.state_keys)
 
     def subset(self, keys: "tuple[str, ...] | list[str]") -> "ObservationSchema":
         unknown = [k for k in keys if k not in self.entries]

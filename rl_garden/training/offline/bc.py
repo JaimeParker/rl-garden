@@ -83,4 +83,11 @@ def run_bc(args: BCArgs) -> None:
     run_offline(args, build_agent=build_bc)
 
 
-registry.register("bc", BCArgs, run_bc)
+
+
+def _bc_algorithm_cls() -> type:
+    from rl_garden.algorithms import BC
+
+    return BC
+
+registry.register("bc", BCArgs, run_bc, algorithm_cls=_bc_algorithm_cls)

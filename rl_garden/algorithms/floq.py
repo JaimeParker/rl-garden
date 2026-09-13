@@ -40,15 +40,16 @@ inherited unchanged from ``FQLCore`` (it only ever queries the plain
   no gradient at all, it is a pure TD-style target for the distilled critic.
   In shared-encoder mode this unroll runs on ``obs_features.detach()``
   (repeated), an intentional simplification of the official reference's
-  separate ``target_floq_encoder`` -- floq has only one encoder
-  (``features_extractor``, shared with the plain critic) in this port, so
+  separate ``target_floq_encoder`` -- floq has only one encoder (the
+  policy's ``critic_extractor``, or ``actor_extractor`` when shared) in
+  this port, so
   there is no separate encoder to route the no-grad current-returns unroll
   through; detaching the shared encoder's features here is the equivalent.
 - Flow-matching loss: ``x_0 = noise_ratios*noise_max + (1-noise_ratios)*noise_min``
   ``(B*R,1)``; ``x_1`` = the (no-grad) target returns broadcast to
   ``(E,B*R,1)``; ``x_t = (1-t)*x_0 + t*x_1``; ``pred = floq(features, actions,
   x_t, t)`` (grad-enabled: this is the term that trains both ``floq`` and,
-  via the shared encoder, ``features_extractor``); ``floq_loss =
+  via the shared encoder); ``floq_loss =
   ((pred-(x_1-x_0))**2)`` reshaped ``(E,B,R)`` and summed over ``R`` ->
   ``(E,B)``.
 - Distilled loss: the plain critic's ``(q_all - mean_current_returns)**2``
@@ -163,10 +164,8 @@ class FloQCore(FQLCore):
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
-        self._resolve_observation_encoders(observation_space)
+        extractor_kwargs = self._policy_extractor_kwargs(observation_space)
         if self.encoder_sharing == "separate":
-            features_extractor = self.observation_encoders.critic
-            actor_onestep_flow_encoder = self.observation_encoders.actor
             actor_keys = resolve_obs_groups(
                 self.observation_encoders.schema, self.obs_groups
             )["actor"].keys
@@ -174,13 +173,10 @@ class FloQCore(FQLCore):
                 observation_space, self.encoder_config, keys=actor_keys
             )
         else:
-            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
-            actor_onestep_flow_encoder = None
         self.policy = FloQPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -192,9 +188,7 @@ class FloQCore(FQLCore):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             activation_fn=self.activation_fn,
-            encoder_sharing=self.encoder_sharing,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
             flow_num_ensembles=self.flow_num_ensembles,
             embed_time=self.embed_time,
             time_embed_dim=self.time_embed_dim,
@@ -204,6 +198,7 @@ class FloQCore(FQLCore):
             num_bins=self.num_bins,
             sigma=self.sigma,
             critic_flow_net_arch=self.critic_flow_net_arch,
+            **extractor_kwargs,
         ).to(self.device)
 
         self.critic_optimizer = make_optimizer(
@@ -236,7 +231,7 @@ class FloQCore(FQLCore):
         device, dtype = obs_features.device, obs_features.dtype
 
         with torch.no_grad():
-            next_features_critic = self.policy.extract_features(data.next_obs)
+            next_features_critic = self.policy.extract_critic_features(data.next_obs)
             if self.encoder_sharing == "separate":
                 next_features_actor = self.policy.extract_actor_onestep_features(
                     data.next_obs
@@ -288,7 +283,8 @@ class FloQCore(FQLCore):
             # This current-returns unroll runs entirely inside the enclosing
             # torch.no_grad() block. Shared-encoder-mode simplification: the
             # reference routes it through a separate `target_floq_encoder`;
-            # this port has only one encoder (features_extractor), so it
+            # this port has only one encoder (critic_extractor, or
+            # actor_extractor when shared), so it
             # reuses the critic's own features in place of that target encoder.
             current_features_r = obs_features.repeat_interleave(repeat, dim=0)
             current_returns = integrate_returns(

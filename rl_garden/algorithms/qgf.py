@@ -87,12 +87,12 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
@@ -238,6 +238,11 @@ class QGFCore:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 
@@ -263,12 +268,6 @@ class QGFCore:
         high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
         return spaces.Box(low=low, high=high, dtype=np.float32)
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        return self._resolve_observation_encoders(
-            self.env.single_observation_space,
-            augmentation_seed=self._image_augmentation_seed,
-        ).actor
-
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).
         return ChunkedReplayBuffer(
@@ -284,11 +283,9 @@ class QGFCore:
 
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
-        features_extractor = self._build_features_extractor()
         self.policy = QGFPolicy(
             observation_space=obs_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -308,6 +305,9 @@ class QGFCore:
             actor_num_samples=self.actor_num_samples,
             robust_critic_lr=self.robust_critic_lr,
             robust_critic_t_emb_size=self.robust_critic_t_emb_size,
+            **self._policy_extractor_kwargs(
+                obs_space, augmentation_seed=self._image_augmentation_seed
+            ),
         ).to(self.device)
 
         self.critic_value_optimizer = make_optimizer(
@@ -370,23 +370,32 @@ class QGFCore:
 
     def _compute_losses(self, data) -> tuple[torch.Tensor, dict[str, float]]:
         flat_actions = data.actions.reshape(data.actions.shape[0], -1)
-        features = self.policy.extract_features(data.obs, stop_gradient=False)
+        # `critic_features_for` reuses `features`'s own graph when the
+        # encoder is shared (this algorithm's default), so the combined
+        # critic+value+bc-actor `total_loss.backward()` below trains the one
+        # shared encoder from all three losses exactly as before; under a
+        # genuinely separate critic_extractor, `critic_features` gets its own
+        # graph and only the critic/value terms train it.
+        features = self.policy.extract_actor_features(data.obs)
+        critic_features = self.policy.critic_features_for(data.obs, features)
 
         # --- critic: Q(obs, action_chunk) -> rewards + discounts * next_v ---
         # (next_v from the LIVE value net, not a target one -- QGF has none;
         # matches rl-garden IQL's own convention, iql.py:483-493.)
         with torch.no_grad():
-            next_features = self.policy.extract_features(data.next_obs, stop_gradient=False)
+            next_features = self.policy.extract_critic_features(data.next_obs)
             next_v = self.policy.value(next_features)
             target_q = data.rewards.unsqueeze(-1) + data.discounts.unsqueeze(-1) * next_v
-        q_all = self.policy.q_values_all(features, flat_actions, target=False)
+        q_all = self.policy.q_values_all(critic_features, flat_actions, target=False)
         critic_loss = F.mse_loss(q_all, target_q.unsqueeze(0).expand_as(q_all))
 
         # --- value: expectile regression onto aggregate_q(target_critic) ---
         with torch.no_grad():
-            target_qs = self.policy.q_values_all(features.detach(), flat_actions, target=True)
+            target_qs = self.policy.q_values_all(
+                critic_features.detach(), flat_actions, target=True
+            )
             target_q_for_value = self.policy._aggregate_q(target_qs)
-        values = self.policy.value(features)
+        values = self.policy.value(critic_features)
         value_loss = self._expectile_loss(target_q_for_value - values).mean()
 
         # --- policy: BC flow matching, unmasked (matches qgf.py:56-81) ---
@@ -421,15 +430,17 @@ class QGFCore:
         only setting; matches IFQL's own convention of always using
         ``jax.random.uniform`` too)."""
         flat_actions = data.actions.reshape(data.actions.shape[0], -1)
-        features = self.policy.extract_features(data.obs, stop_gradient=False)
+        critic_features = self.policy.extract_critic_features(data.obs)
         with torch.no_grad():
-            target_qs = self.policy.q_values_all(features.detach(), flat_actions, target=True)
+            target_qs = self.policy.q_values_all(
+                critic_features.detach(), flat_actions, target=True
+            )
             target_q = self.policy._aggregate_q(target_qs)
 
         x0 = torch.randn_like(flat_actions)
         t = torch.rand(flat_actions.shape[0], 1, device=flat_actions.device, dtype=flat_actions.dtype)
         a_t = x0 * (1 - t) + flat_actions * t
-        robust_q = self.policy._robust_q_value(features.detach(), a_t, t)
+        robust_q = self.policy._robust_q_value(critic_features.detach(), a_t, t)
         robust_critic_loss = F.mse_loss(robust_q, target_q.unsqueeze(0).expand_as(robust_q))
         return robust_critic_loss, {
             "robust_critic_loss": float(robust_critic_loss.detach().item()),
@@ -540,6 +551,8 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         activation_fn: Optional[Activation] = "gelu",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -610,6 +623,13 @@ class QGF(QGFCore, OfflineRLAlgorithm):
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
+        self.critic_encoder_config = critic_encoder_config
         self._image_augmentation_seed = image_augmentation_seed
 
         self._setup_model()

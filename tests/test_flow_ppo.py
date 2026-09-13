@@ -15,6 +15,7 @@ from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs.wrappers import ActionChunkWrapper
 from rl_garden.networks.actor_vector_field import ActorVectorField, flow_sde_step
+from rl_garden.observations import ObsGroups
 
 OBS_DIM = 5
 ACTION_DIM = 2
@@ -242,7 +243,7 @@ def test_old_logprobs_match_recomputed_logprobs_immediately_after_rollout():
     batch_inds = torch.arange(total)
     for step in range(k):
         flow_step_inds = torch.full((total,), step, dtype=torch.long)
-        features_b = agent.policy._features(index_obs(obs_flat, batch_inds))
+        features_b = agent.policy.extract_actor_features(index_obs(obs_flat, batch_inds))
         chains_prev_b = chains_flat[batch_inds, flow_step_inds]
         chains_next_b = chains_flat[batch_inds, flow_step_inds + 1]
         with torch.no_grad():
@@ -331,7 +332,7 @@ def test_vision_learn_runs_and_produces_finite_losses():
 
 def test_vision_encoder_only_in_critic_optimizer():
     """Gradient-isolation structural check (mirrors FQL's/DPPO's own
-    precedent). The shared features_extractor must be trained only by the
+    precedent). The shared actor_extractor must be trained only by the
     critic loss (FlowPPO._flow_ppo_loss detaches the copy fed to the
     actor's log-prob computation) -- so its params must sit in
     critic_optimizer and nowhere in actor_optimizer."""
@@ -339,10 +340,10 @@ def test_vision_encoder_only_in_critic_optimizer():
         env=_make_vision_env(num_envs=4, horizon_length=2),
         encoder_config=_test_encoder_config,
     )
-    encoder_params = {id(p) for p in agent.policy.features_extractor.parameters()}
+    encoder_params = {id(p) for p in agent.policy.actor_extractor.parameters()}
     actor_params = {id(p) for group in agent.actor_optimizer.param_groups for p in group["params"]}
     critic_params = {id(p) for group in agent.critic_optimizer.param_groups for p in group["params"]}
-    assert encoder_params, "features_extractor has no parameters -- test is vacuous"
+    assert encoder_params, "actor_extractor has no parameters -- test is vacuous"
     assert encoder_params.isdisjoint(actor_params)
     assert encoder_params.issubset(critic_params)
 
@@ -361,14 +362,14 @@ def test_vision_encoder_not_called_once_per_flow_step():
         encoder_config=_test_encoder_config,
     )
     call_count = 0
-    original_extract = agent.policy.features_extractor.extract
+    original_extract = agent.policy.actor_extractor.extract
 
     def _counting_extract(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         return original_extract(*args, **kwargs)
 
-    agent.policy.features_extractor.extract = _counting_extract
+    agent.policy.actor_extractor.extract = _counting_extract
     env = agent.env
     obs, _ = env.reset(seed=0)
     episode_starts = torch.ones(env.num_envs, dtype=torch.bool)
@@ -378,3 +379,102 @@ def test_vision_encoder_not_called_once_per_flow_step():
         f"{flow_steps}); got {call_count} calls -- the encoder is being "
         "re-run inside the K-step SDE loop instead of once per step."
     )
+
+
+class _FakeVisionExtraStateEnv(gym.Env):
+    """``_FakeVisionEnv`` plus a critic-only ``state_object_pose`` key
+    (Section A's ``state_<name>`` family), for the asymmetric
+    actor/critic-encoder end-to-end test below."""
+
+    def __init__(self, num_envs: int = 4) -> None:
+        self.num_envs = num_envs
+        self._step_count = torch.zeros(num_envs, dtype=torch.long)
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+                "state": spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
+                "state_object_pose": spaces.Box(-1.0, 1.0, (3,), np.float32),
+            }
+        )
+        self.observation_space = batch_space(self.single_observation_space, num_envs)
+        self.single_action_space = spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32)
+        self.action_space = batch_space(self.single_action_space, num_envs)
+
+    def _obs(self):
+        return {
+            "rgb_cam": torch.randint(
+                0, 256, (self.num_envs, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8
+            ),
+            "state": torch.randn(self.num_envs, OBS_DIM),
+            "state_object_pose": torch.rand(self.num_envs, 3) * 2 - 1,
+        }
+
+    def reset(self, *, seed=None, options=None):
+        del seed, options
+        self._step_count.zero_()
+        return self._obs(), {}
+
+    def step(self, action):
+        del action
+        self._step_count += 1
+        done = self._step_count >= EPISODE_LEN
+        reward = torch.ones(self.num_envs)
+        info = {}
+        if done.any():
+            info = {
+                "final_observation": self._obs(),
+                "_final_observation": done.clone(),
+                "final_info": {"episode": {"return": (self._step_count.float() * reward)}},
+                "_final_info": done.clone(),
+            }
+            self._step_count[done] = 0
+        terminated = done.clone()
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool)
+        return self._obs(), reward, terminated, truncated, info
+
+
+def _make_extra_state_env(num_envs: int, horizon_length: int) -> ActionChunkWrapper:
+    return ActionChunkWrapper(_FakeVisionExtraStateEnv(num_envs), act_steps=horizon_length)
+
+
+def test_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
+    """End-to-end asymmetric actor/critic encoders via state_<name>: critic
+    sees state_object_pose, actor does not, encoder_sharing="separate".
+    Asserts the actor extractor's schema lacks the key, that gradients from
+    each role's loss reach only that role's own extractor's optimizer, and
+    that one real rollout+train() step runs to completion."""
+    agent = _make_agent(
+        env=_make_extra_state_env(num_envs=4, horizon_length=2),
+        encoder_config=_test_encoder_config,
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"),
+            critic=("rgb_cam", "state", "state_object_pose"),
+        ),
+        encoder_sharing="separate",
+    )
+
+    actor_extractor = agent.policy.actor_extractor
+    critic_extractor = agent.policy.critic_extractor
+    assert critic_extractor is not None and critic_extractor is not actor_extractor
+    assert "state_object_pose" not in actor_extractor.state_keys
+    assert "state_object_pose" in critic_extractor.state_keys
+
+    # Gradient-isolation structural check (mirrors
+    # test_vision_encoder_only_in_critic_optimizer's precedent, extended to
+    # the "separate" case): each extractor's params sit only in its own
+    # role's optimizer.
+    actor_extractor_params = {id(p) for p in actor_extractor.parameters()}
+    critic_extractor_params = {id(p) for p in critic_extractor.parameters()}
+    actor_opt_params = {id(p) for group in agent.actor_optimizer.param_groups for p in group["params"]}
+    critic_opt_params = {id(p) for group in agent.critic_optimizer.param_groups for p in group["params"]}
+    assert actor_extractor_params, "actor_extractor has no parameters -- test is vacuous"
+    assert critic_extractor_params, "critic_extractor has no parameters -- test is vacuous"
+    assert actor_extractor_params.issubset(actor_opt_params)
+    assert actor_extractor_params.isdisjoint(critic_opt_params)
+    assert critic_extractor_params.issubset(critic_opt_params)
+    assert critic_extractor_params.isdisjoint(actor_opt_params)
+
+    agent.learn(total_timesteps=3 * 4 * 2)
+    losses = agent.train()
+    for key, value in losses.items():
+        assert np.isfinite(value), (key, value)

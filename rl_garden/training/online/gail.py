@@ -52,12 +52,17 @@ from rl_garden.training.online._registry import registry  # noqa: E402
 class GAILArgs(GAILTrainingArgs, ObservationArgs, EnvBackendArgs):
     """GAIL (Ho & Ermon 2016) -- PPO generator + adversarial discriminator.
 
-    State-only in practice: ``GAILDiscriminator`` is a bespoke state-action
-    MLP that rejects any image key at construction (see ``GAIL._setup_model``'s
-    ``ObservationContractError`` guard), so ``build_gail`` never wires an
-    encoder into the agent even though ``ObservationArgs`` is present (for
-    CLI/config uniformity -- ``--obs.rgb`` parses but fails fast at
-    construction rather than being silently ignored).
+    State-only in practice: ``build_gail`` never forwards
+    ``encoder_config``/``obs_groups``/``critic_encoder_config`` from the CLI
+    (it calls ``_ppo_common_kwargs`` with an empty ``image_kwargs``), even
+    though ``ObservationArgs`` is present (for CLI/config uniformity --
+    ``--obs.rgb`` parses but is silently unused by this entrypoint). This is
+    a CLI-wiring choice, not a discriminator limitation:
+    ``GAILDiscriminator`` reads critic-role features
+    (``self.policy.extract_critic_features``/``critic_features_dim``, see
+    ``rl_garden/algorithms/gail.py``) and is schema-agnostic, so direct
+    construction with ``obs_groups``/``critic_encoder_config`` (bypassing
+    this CLI entrypoint) already supports asymmetric/image observations.
 
     Env backend: ``--env_backend d4rl_legacy`` (D4RL MuJoCo locomotion).
     Expert demonstrations are loaded separately via ``--demo_env_id``

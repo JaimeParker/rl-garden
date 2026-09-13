@@ -24,7 +24,6 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.bc_policy import BCPolicy
@@ -35,8 +34,14 @@ class BC(OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("BC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
-        {"features_extractor_class", "features_extractor_kwargs"}
+        {"actor_extractor_class", "actor_extractor_kwargs"}
     )
+    # BC has no critic, so extract_actor_features must never stop-gradient
+    # (the encoder is trained end-to-end by the actor loss, the only loss
+    # that ever touches it) -- see BasePolicy.extract_actor_features's
+    # formula, which would otherwise detach under the mixin's
+    # "shared_critic_grad" default whenever critic_extractor is None.
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -177,11 +182,14 @@ class BC(OfflineRLAlgorithm):
     # --- model setup ---
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
+        extractor_kwargs = self._policy_extractor_kwargs(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
         self.policy = BCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            actor_extractor=extractor_kwargs["actor_extractor"],
             net_arch=self.net_arch,
             use_layer_norm=self.actor_use_layer_norm,
             use_group_norm=self.actor_use_group_norm,
@@ -191,6 +199,7 @@ class BC(OfflineRLAlgorithm):
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
             tanh_squash=self.tanh_squash,
+            encoder_sharing=extractor_kwargs["encoder_sharing"],
         ).to(self.device)
 
         self.actor_optimizer = make_optimizer(
@@ -279,44 +288,17 @@ class BC(OfflineRLAlgorithm):
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs, supported_keys=self._SUPPORTED_POLICY_KWARGS
-        )
-
-    def _ensure_observation_encoders(self):
-        """Resolve ``self.observation_encoders`` lazily, on first actual
-        need -- not called at all when ``policy_kwargs`` fully overrides the
-        features extractor (see ``SAC._ensure_observation_encoders`` for the
-        rationale: building the schema-driven encoder only to discard it
-        would waste compute and shift RNG consumption)."""
-        if not hasattr(self, "observation_encoders"):
-            self._resolve_observation_encoders(
-                self.env.single_observation_space,
-                augmentation_seed=self._image_augmentation_seed,
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
             )
-        return self.observation_encoders
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """The actor's (BC's only) features extractor: ``policy_kwargs``
-        explicit override (raw escape hatch, unchanged), else the
-        schema-driven extractor resolved onto ``self.observation_encoders``."""
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self._ensure_observation_encoders().actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
-            )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
+        return normalized
 
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).

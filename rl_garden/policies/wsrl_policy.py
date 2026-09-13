@@ -13,6 +13,7 @@ from gymnasium import spaces
 
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, KernelInit
+from rl_garden.policies.base import EncoderSharing
 from rl_garden.policies.sac_policy import (
     SACPolicy,
     TemperatureLagrange,
@@ -27,7 +28,7 @@ class WSRLPolicy(SACPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256),
         n_critics: int = 10,
         critic_subsample_size: Optional[int] = 2,
@@ -45,11 +46,13 @@ class WSRLPolicy(SACPolicy):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch=net_arch,
             n_critics=n_critics,
             critic_subsample_size=critic_subsample_size,
@@ -69,6 +72,8 @@ class WSRLPolicy(SACPolicy):
             log_std_min=WSRL_LOG_STD_MIN,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
         )
 
 

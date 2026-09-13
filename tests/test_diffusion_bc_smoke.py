@@ -119,12 +119,12 @@ def test_diffusion_bc_loss_decreases_and_checkpoint_roundtrips(tmp_path):
     late = agent.train(80)["loss"]
     assert late < early
 
-    # State-only purity pin: the Box path's features_extractor is a
+    # State-only purity pin: the Box path's actor_extractor is a
     # parameterless FlattenExtractor, so a Box-trained checkpoint's
     # state_dict stays byte-identical to before the observation redesign
     # (required for DPPOPolicy.load_actor_weights, which only loads
     # ``net.*`` keys).
-    assert not any("features_extractor" in k for k in agent.policy.state_dict())
+    assert not any("actor_extractor" in k for k in agent.policy.state_dict())
 
     ckpt_path = agent.save(tmp_path / "diffusion_bc.pt")
     ema_state_before = {
@@ -194,7 +194,7 @@ def test_predict_returns_action_chunk_within_bounds():
     policy = DiffusionPolicy(
         observation_space=obs_space,
         action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
-        features_extractor=FlattenExtractor(obs_space),
+        actor_extractor=FlattenExtractor(obs_space),
         horizon_steps=3,
         cond_steps=2,
         denoising_steps=5,
@@ -272,7 +272,7 @@ def test_kernel_init_is_forwarded_to_non_default_backbone():
         return DiffusionPolicy(
             observation_space=obs_space,
             action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
-            features_extractor=FlattenExtractor(obs_space),
+            actor_extractor=FlattenExtractor(obs_space),
             horizon_steps=2,
             cond_steps=1,
             denoising_steps=10,
@@ -291,11 +291,11 @@ def test_kernel_init_is_forwarded_to_non_default_backbone():
     assert differs, "kernel_init should change DiffusionUNet1D's initial parameters"
 
 
-def test_dict_obs_features_extractor_attribute_present(tmp_path):
+def test_dict_obs_actor_extractor_attribute_present(tmp_path):
     path = tmp_path / "vision_bc_dataset.h5"
     _write_vision_h5_dataset(path, num_traj=6, steps_per_traj=10, state_dim=4, action_dim=2)
     agent = _make_dict_agent(path)
-    assert hasattr(agent.policy, "features_extractor")
+    assert hasattr(agent.policy, "actor_extractor")
 
 
 def test_dict_obs_loss_decreases_and_checkpoint_roundtrips(tmp_path):

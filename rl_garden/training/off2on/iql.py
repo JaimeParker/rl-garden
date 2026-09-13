@@ -34,17 +34,17 @@ class IQLOff2OnArgs(VisionIQLOff2OnTrainingArgs, EnvBackendArgs):
 
 
 def build_iql(args: IQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.algorithms import Off2OnIQL
     from rl_garden.training.inspection import construct_agent
 
-    # IQL doesn't support a distinct critic encoder (encoder_config is
-    # ignored for critic role; see IQL.__init__'s own comment) -- no
-    # critic_encoder_config/encoder_sharing kwarg.
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnIQL,
@@ -117,4 +117,11 @@ def run_iql(args: IQLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_iql, algorithm="iql")
 
 
-registry.register("iql", IQLOff2OnArgs, run_iql)
+
+
+def _off2_on_iql_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnIQL
+
+    return Off2OnIQL
+
+registry.register("iql", IQLOff2OnArgs, run_iql, algorithm_cls=_off2_on_iql_algorithm_cls)

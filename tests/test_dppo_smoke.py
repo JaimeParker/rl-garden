@@ -116,6 +116,61 @@ def _make_vision_env(num_envs: int, act_steps: int) -> ActionChunkWrapper:
     return ActionChunkWrapper(_FakeVisionEnv(num_envs), act_steps=act_steps)
 
 
+class _FakeAsymmetricVisionEnv(gym.Env):
+    """``_FakeVisionEnv`` sibling with an extra critic-only
+    ``state_object_pose`` key (Section A's ``state_<name>`` family)."""
+
+    def __init__(self, num_envs: int = 4) -> None:
+        self.num_envs = num_envs
+        self._step_count = torch.zeros(num_envs, dtype=torch.long)
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8),
+                "state": spaces.Box(-np.inf, np.inf, (OBS_DIM,), np.float32),
+                "state_object_pose": spaces.Box(-np.inf, np.inf, (3,), np.float32),
+            }
+        )
+        self.observation_space = batch_space(self.single_observation_space, num_envs)
+        self.single_action_space = spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32)
+        self.action_space = batch_space(self.single_action_space, num_envs)
+
+    def _obs(self):
+        return {
+            "rgb_cam": torch.randint(
+                0, 256, (self.num_envs, IMG_SIZE, IMG_SIZE, 3), dtype=torch.uint8
+            ),
+            "state": torch.randn(self.num_envs, OBS_DIM),
+            "state_object_pose": torch.randn(self.num_envs, 3),
+        }
+
+    def reset(self, *, seed=None, options=None):
+        del seed, options
+        self._step_count.zero_()
+        return self._obs(), {}
+
+    def step(self, action):
+        del action
+        self._step_count += 1
+        done = self._step_count >= EPISODE_LEN
+        reward = torch.ones(self.num_envs)
+        info = {}
+        if done.any():
+            info = {
+                "final_observation": self._obs(),
+                "_final_observation": done.clone(),
+                "final_info": {"episode": {"return": (self._step_count.float() * reward)}},
+                "_final_info": done.clone(),
+            }
+            self._step_count[done] = 0
+        terminated = done.clone()
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool)
+        return self._obs(), reward, terminated, truncated, info
+
+
+def _make_asymmetric_vision_env(num_envs: int, act_steps: int) -> ActionChunkWrapper:
+    return ActionChunkWrapper(_FakeAsymmetricVisionEnv(num_envs), act_steps=act_steps)
+
+
 def test_dppo_vision_learn_runs_and_produces_finite_losses():
     torch.manual_seed(0)
     env = _make_vision_env(num_envs=4, act_steps=2)
@@ -144,7 +199,7 @@ def test_dppo_vision_encoder_only_in_critic_optimizer():
     """Gradient-isolation structural check (mirrors FQL's own precedent:
     "a correctness test here checks parameter-set disjointness between
     actor_optimizer and the critic's encoder, not the size of any
-    particular .grad"). The shared features_extractor must be trained only
+    particular .grad"). The shared actor_extractor must be trained only
     by the critic loss (DPPO._dppo_loss detaches the copy fed to the actor's
     log-prob computation) -- so its params must sit in critic_optimizer and
     nowhere in actor_optimizer."""
@@ -162,10 +217,10 @@ def test_dppo_vision_encoder_only_in_critic_optimizer():
         device="cpu",
         encoder_config=_test_encoder_config,
     )
-    encoder_params = {id(p) for p in agent.policy.features_extractor.parameters()}
+    encoder_params = {id(p) for p in agent.policy.actor_extractor.parameters()}
     actor_params = {id(p) for group in agent.actor_optimizer.param_groups for p in group["params"]}
     critic_params = {id(p) for group in agent.critic_optimizer.param_groups for p in group["params"]}
-    assert encoder_params, "features_extractor has no parameters -- test is vacuous"
+    assert encoder_params, "actor_extractor has no parameters -- test is vacuous"
     assert encoder_params.isdisjoint(actor_params)
     assert encoder_params.issubset(critic_params)
 
@@ -196,14 +251,14 @@ def test_dppo_vision_encoder_not_called_once_per_denoising_step():
         encoder_config=_test_encoder_config,
     )
     call_count = 0
-    original_extract = agent.policy.features_extractor.extract
+    original_extract = agent.policy.actor_extractor.extract
 
     def _counting_extract(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         return original_extract(*args, **kwargs)
 
-    agent.policy.features_extractor.extract = _counting_extract
+    agent.policy.actor_extractor.extract = _counting_extract
     obs, _ = env.reset(seed=0)
     episode_starts = torch.ones(env.num_envs, dtype=torch.bool)
     agent._rollout_step(obs, None, episode_starts)
@@ -382,3 +437,81 @@ def test_dppo_rejects_dict_trained_bc_checkpoint(tmp_path):
             critic_mlp_dims=[16, 16, 16],
             device="cpu",
         )
+
+
+def test_dppo_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
+    """End-to-end asymmetric actor/critic encoders via state_<name>: critic
+    sees state_object_pose, actor does not, encoder_sharing="separate".
+    Asserts the actor extractor's schema lacks the key and, over a direct
+    probe of the actor path (policy._cond) and critic path
+    (policy.predict_values), gradients reach only the matching extractor in
+    BOTH directions -- DPPO's critic_extractor is genuinely separate here, so
+    DPPO's actor-stop-gradient hook (see its own documented formula,
+    mirroring BasePolicy.extract_actor_features) resolves to False and
+    _cond does not detach, giving total isolation both ways unlike SAC's
+    image-branch-only caveat. Also runs one real learn()+train() step
+    end-to-end."""
+    from rl_garden.observations import ObsGroups
+
+    torch.manual_seed(0)
+    env = _make_asymmetric_vision_env(num_envs=4, act_steps=2)
+    agent = DPPO(
+        env=env,
+        num_steps=3,
+        horizon_steps=2,
+        act_steps=2,
+        denoising_steps=5,
+        ft_denoising_steps=3,
+        actor_mlp_dims=[16, 16, 16],
+        critic_mlp_dims=[16, 16, 16],
+        update_epochs=1,
+        update_batch_size=8,
+        eval_freq=0,
+        device="cpu",
+        encoder_config=_test_encoder_config,
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+        ),
+        encoder_sharing="separate",
+    )
+
+    actor_extractor = agent.policy.actor_extractor
+    critic_extractor = agent.policy.critic_extractor
+    assert critic_extractor is not None and critic_extractor is not actor_extractor
+    assert "state_object_pose" not in actor_extractor.state_keys
+    assert "state_object_pose" in critic_extractor.state_keys
+
+    obs, _ = env.reset(seed=0)
+    obs_t = agent._obs_to_policy_device(obs)
+
+    actor_features = agent.policy._cond(obs_t)["state"].squeeze(1)
+    actor_grad_on_actor = torch.autograd.grad(
+        actor_features.sum(),
+        list(actor_extractor.parameters()),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    assert any(g is not None and torch.any(g != 0) for g in actor_grad_on_actor)
+    actor_grad_on_critic = torch.autograd.grad(
+        actor_features.sum(), list(critic_extractor.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in actor_grad_on_critic)
+
+    values = agent.policy.predict_values(obs_t)
+    critic_grad_on_critic = torch.autograd.grad(
+        values.sum(),
+        list(critic_extractor.parameters()),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    assert any(g is not None and torch.any(g != 0) for g in critic_grad_on_critic)
+    critic_grad_on_actor = torch.autograd.grad(
+        values.sum(), list(actor_extractor.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in critic_grad_on_actor)
+
+    # A real end-to-end rollout+update step also runs cleanly.
+    agent.learn(total_timesteps=3 * 4 * 2)
+    losses = agent.train()
+    for key, value in losses.items():
+        assert np.isfinite(value), (key, value)

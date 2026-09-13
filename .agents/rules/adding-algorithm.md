@@ -145,48 +145,106 @@ All network tensors and replay buffers must stay on `self.device`; CPU-backed
 env observations are moved by `_obs_to_policy_device()` before inference — no
 ad-hoc `.cuda()` calls. Avoid NumPy in rollout/replay/update hot paths.
 
-### 5. Observation encoding (`ObservationEncoderMixin`)
+### 5. Observation encoding and policy contract
 
 Every algorithm is observation-type agnostic: it never branches on
 `isinstance(obs_space, spaces.Box/Dict)`. Observation space is always
-`spaces.Dict` with keys `state`/`rgb_<cam>`/`depth_<cam>`
+`spaces.Dict` with keys `state`/`state_<name>`/`rgb_<cam>`/`depth_<cam>`
 (`rl_garden.observations`); a state-only Box is normalized to
 `Dict({"state": Box})` before an algorithm ever sees it.
 
-`ObservationEncoderMixin` (`rl_garden/algorithms/_observation.py`) sits on
-`BaseAlgorithm`, so every algorithm gets it for free. A concrete algorithm
-opts in by:
+**Policy contract** (`rl_garden/policies/base.py`):
+
+A policy subclass inherits from `BasePolicy` and calls its `__init__` first
+with the observation and action spaces plus extractor(s):
+
+```python
+class MyPolicy(BasePolicy):
+    def __init__(self, observation_space, action_space, *,
+                 actor_extractor: BaseFeaturesExtractor,
+                 critic_extractor: BaseFeaturesExtractor | None = None,
+                 encoder_sharing: EncoderSharing = "shared_critic_grad",
+                 ...):
+        super().__init__(
+            observation_space, action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
+        # Now build heads with extracted features
+```
+
+`critic_extractor=None` means the critic reads through `actor_extractor`
+(both `"shared_critic_grad"` and `"shared"` modes); a real `critic_extractor`
+means `"separate"`.
+
+Stop-gradient lives **only** in `BasePolicy.extract_actor_features()`, which
+detaches iff `encoder_sharing == "shared_critic_grad"` and the two extractors
+are the same object. Every policy consumer picks a role:
+
+- **Actor heads** (policy nets, BC/flow/diffusion nets, distill heads,
+  teacher/student actors): call `self.extract_actor_features(obs)` and read
+  dims from `self.actor_features_dim`.
+- **Critic heads** (Q-nets, V-nets, TD-target nets, discriminators,
+  reward heads): call `self.extract_critic_features(obs)` and read dims from
+  `self.critic_features_dim`. Pass `stop_gradient=True` only for genuinely
+  unrelated reasons (frozen-encoder training, eval-only reads); never to
+  express the encoder-sharing rule.
+
+**Algorithm setup** (`rl_garden/algorithms/_observation.py`):
+
+`ObservationEncoderMixin` sits on `BaseAlgorithm`, so every algorithm gets it
+for free. A concrete algorithm opts in by:
 
 1. Accepting `encoder_config: EncoderConfig | None = None`,
-   `obs_groups: ObsGroups | None = None`, and — only if it supports an
-   asymmetric/privileged critic — `critic_encoder_config: EncoderConfig |
-   None = None` as constructor kwargs, and storing them as
-   `self.encoder_config`/`self.obs_groups`/`self.critic_encoder_config`.
-2. Calling `self._resolve_observation_encoders(observation_space)` from its
-   own `_setup_model()`. This builds the actor's (and, when
-   `encoder_sharing == "separate"`, the critic's own) feature extractor via
-   the Layer B factory (`rl_garden.encoders.build_observation_encoder`) and
-   stores the result on `self.observation_encoders`.
-3. Calling `self._actor_features(obs)` / `self._critic_features(obs)` in its
-   `train()`/inference code instead of hand-rolling encoder calls.
-   `_actor_features` defaults to detaching gradients when
-   `encoder_sharing == "shared_critic_grad"`.
-4. Optionally overriding the class attribute `encoder_sharing:
-   Literal["shared_critic_grad", "shared", "separate"]` (default
-   `"shared_critic_grad"` — used by almost every algorithm, PPO included:
-   the actor path is still stop-gradiented even on-policy) — `"shared"`
-   (both actor and critic losses train the one shared encoder) is only used
-   by IDQL/QGF, which have no `encoder_sharing="shared_critic_grad"`-style
-   actor/critic split to begin with; `"separate"` is needed whenever
-   `obs_groups.actor != obs_groups.critic` or a distinct
-   `critic_encoder_config` is given.
+   `obs_groups: ObsGroups | None = None`, `critic_encoder_config: EncoderConfig |
+   None = None`, and `encoder_sharing: EncoderSharing | None = None` as
+   constructor kwargs, and storing them as `self.encoder_config`/
+   `self.obs_groups`/`self.critic_encoder_config`/`self.encoder_sharing`.
+   Algorithms without a critic (BC-only) omit `critic_encoder_config` and
+   `encoder_sharing`.
 
-See `SAC` (`rl_garden/algorithms/sac.py`) for the reference implementation.
-There is no separate vision-specific wiring path and no `Vision*` sibling
-class — a `Dict` observation with `rgb_<cam>`/`depth_<cam>` keys is handled
-by the same code path as a state-only one, driven entirely by
-`encoder_config`/`obs_groups` and the schema derived from the observation
-space.
+2. Calling `self._policy_extractor_kwargs(observation_space,
+   augmentation_seed=...)` in `_setup_model()`. This returns a dict of
+   `{"actor_extractor", "critic_extractor", "encoder_sharing"}` (or fewer keys
+   for BC-only). Pass the dict unpacked into the policy constructor:
+   ```python
+   extractor_kwargs = self._policy_extractor_kwargs(observation_space)
+   self.policy = MyPolicy(..., **extractor_kwargs)
+   ```
+
+3. Optionally overriding the class attribute `encoder_sharing:
+   Literal["shared_critic_grad", "shared", "separate"]`. `"shared"` is the
+   class default for BC-only algorithms (no critic) and for IDQL/QGF; every
+   other critic-bearing algorithm defaults to `"shared_critic_grad"` (the
+   actor path is still stop-gradiented). `"separate"` is needed whenever
+   `obs_groups.actor != obs_groups.critic` or a distinct `critic_encoder_config`
+   is given. Sharing/asymmetry violations raise `ObservationContractError`
+   (a `ValueError` subclass). BC-only algorithms have no encoder-sharing attribute.
+
+**Out-of-contract exceptions** (documented, plain `nn.Module`s):
+
+The following policy classes do not follow the contract above:
+
+- `HILPPolicy`, `FlashSACPolicy` — plain `nn.Module`s, no `BasePolicy`
+  inheritance.
+- `UniO4MixturePolicy` — plain `nn.Module`, wraps sub-policies.
+- `RecedingHorizonPolicy` — inherits `BasePolicy` but does not accept
+  `critic_extractor` (always `None`).
+- `TDMPC2Policy`, `MultitaskTDMPC2Policy` — world-model-owned encoders,
+  not policy-side.
+
+The FQL family (`FQLPolicy`, `FloQPolicy`, `ValueFlowsPolicy`, `FINOPolicy`)
+is an in-contract exception: under `encoder_sharing="separate"`, it keeps an
+extra actor-side `actor_bc_flow` encoder built separately by the algorithm
+through `FQLCore`; the critic uses `critic_extractor` as normal.
+
+See `SAC` and `PPO` (`rl_garden/algorithms/sac.py`, `ppo.py`) for the
+reference implementations. There is no separate vision-specific wiring path
+and no `Vision*` sibling class — a `Dict` observation with
+`rgb_<cam>`/`depth_<cam>` keys is handled by the same code path as a
+state-only one, driven entirely by `encoder_config`/`obs_groups` and the
+schema derived from the observation space.
 
 ### 6. Export the class
 

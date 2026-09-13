@@ -186,4 +186,11 @@ class ACRLPDArgs(SACTrainingArgs, ObservationArgs, EnvBackendArgs):
     success_key: str | None = None
 
 
-registry.register("acrlpd", ACRLPDArgs, run_acrlpd)
+
+
+def _acrlpd_algorithm_cls() -> type:
+    from rl_garden.algorithms import ACRLPD
+
+    return ACRLPD
+
+registry.register("acrlpd", ACRLPDArgs, run_acrlpd, algorithm_cls=_acrlpd_algorithm_cls)

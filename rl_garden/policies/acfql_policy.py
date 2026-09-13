@@ -22,9 +22,9 @@ neither could silently diverge -- verified against ``acfql.py``'s
 else, not a training-only shortcut.
 
 ``best_of_n_action`` assumes ``encoder_sharing="shared_critic_grad"`` (uses
-``extract_features``, the critic/shared encoder, for both the BC-flow
-sampling and the Q evaluation) -- correct for v1's Box-only, shared-encoder
-default; not exercised under ``encoder_sharing="separate"``.
+``extract_critic_features``, the critic/shared encoder, for both the
+BC-flow sampling and the Q evaluation) -- correct for v1's Box-only,
+shared-encoder default; not exercised under ``encoder_sharing="separate"``.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class ACFQLPolicy(FQLPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         n_critics: int = 2,
@@ -61,8 +61,8 @@ class ACFQLPolicy(FQLPolicy):
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
-        actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         actor_type: ActorType = "distill-ddpg",
         actor_num_samples: int = 32,
         flow_steps: int = 10,
@@ -71,7 +71,7 @@ class ACFQLPolicy(FQLPolicy):
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor,
             net_arch,
             n_critics=n_critics,
             actor_use_layer_norm=actor_use_layer_norm,
@@ -84,8 +84,8 @@ class ACFQLPolicy(FQLPolicy):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
+            critic_extractor=critic_extractor,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
         )
         if actor_type not in ("distill-ddpg", "best-of-n"):
             raise ValueError(f"actor_type must be 'distill-ddpg' or 'best-of-n', got {actor_type!r}.")
@@ -104,7 +104,7 @@ class ACFQLPolicy(FQLPolicy):
         return self.best_of_n_action(obs)
 
     def best_of_n_action(self, obs: Obs) -> torch.Tensor:
-        features = self.extract_features(obs)
+        features = self.extract_critic_features(obs)
         batch, n = features.shape[0], self.actor_num_samples
         rep_features = features.repeat_interleave(n, dim=0)
         noises = torch.randn(

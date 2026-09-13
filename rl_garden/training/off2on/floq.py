@@ -170,4 +170,11 @@ class FloQOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     critic_flow_net_arch: Optional[list[int]] = None
 
 
-registry.register("floq", FloQOff2OnArgs, run_floq)
+
+
+def _off2_on_flo_q_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnFloQ
+
+    return Off2OnFloQ
+
+registry.register("floq", FloQOff2OnArgs, run_floq, algorithm_cls=_off2_on_flo_q_algorithm_cls)

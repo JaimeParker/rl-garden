@@ -67,12 +67,12 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
@@ -223,6 +223,11 @@ class QAMCore:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 
@@ -248,12 +253,6 @@ class QAMCore:
         high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
         return spaces.Box(low=low, high=high, dtype=np.float32)
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        return self._resolve_observation_encoders(
-            self.env.single_observation_space,
-            augmentation_seed=self._image_augmentation_seed,
-        ).actor
-
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).
         return ChunkedReplayBuffer(
@@ -268,11 +267,9 @@ class QAMCore:
         )
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
         self.policy = QAMPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -295,6 +292,10 @@ class QAMCore:
             edit_scale=self.edit_scale,
             edit_target_entropy=self.edit_target_entropy,
             edit_target_entropy_multiplier=self.edit_target_entropy_multiplier,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
         ).to(self.device)
 
         self.critic_optimizer = make_optimizer(
@@ -347,10 +348,10 @@ class QAMCore:
         return weight * diff.pow(2)
 
     def _critic_loss(
-        self, data, features: torch.Tensor, flat_actions: torch.Tensor
+        self, data, critic_features: torch.Tensor, flat_actions: torch.Tensor
     ) -> tuple[torch.Tensor, dict[str, float]]:
         with torch.no_grad():
-            next_features = self.policy.extract_features(data.next_obs, stop_gradient=False)
+            next_features = self.policy.extract_critic_features(data.next_obs)
             if self.critic_loss_type == "ddpg":
                 next_action = self.policy.predict(data.next_obs, deterministic=False)
                 next_qs = self.policy.q_values_all(next_features, next_action, target=True)
@@ -361,7 +362,7 @@ class QAMCore:
                 next_q = self.policy.value(next_features)
             target_q = data.rewards.unsqueeze(-1) + data.discounts.unsqueeze(-1) * next_q
 
-        q_all = self.policy.q_values_all(features, flat_actions, target=False)
+        q_all = self.policy.q_values_all(critic_features, flat_actions, target=False)
         critic_loss = F.mse_loss(q_all, target_q.unsqueeze(0).expand_as(q_all))
         info = {
             "critic_loss": float(critic_loss.detach().item()),
@@ -370,9 +371,11 @@ class QAMCore:
 
         if self.critic_loss_type == "iql":
             with torch.no_grad():
-                target_qs = self.policy.q_values_all(features.detach(), flat_actions, target=True)
+                target_qs = self.policy.q_values_all(
+                    critic_features.detach(), flat_actions, target=True
+                )
                 q_for_value = target_qs.min(dim=0).values
-            values = self.policy.value(features)
+            values = self.policy.value(critic_features)
             value_loss = self._expectile_loss(q_for_value - values, self.expectile).mean()
             critic_loss = critic_loss + value_loss
             info["value_loss"] = float(value_loss.detach().item())
@@ -381,7 +384,10 @@ class QAMCore:
         return critic_loss, info
 
     def _actor_loss(
-        self, features: torch.Tensor, flat_actions: torch.Tensor
+        self,
+        features: torch.Tensor,
+        critic_features: torch.Tensor,
+        flat_actions: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         batch_size = flat_actions.shape[0]
         device, dtype = flat_actions.device, flat_actions.dtype
@@ -395,7 +401,7 @@ class QAMCore:
         actor_loss = flow_loss
         info: dict[str, float] = {"flow_loss": float(flow_loss.detach().item())}
 
-        xs, adjs, ts, pre_adj_info = self.policy.adj_matching(features)
+        xs, adjs, ts, pre_adj_info = self.policy.adj_matching(features, critic_features)
         h = 1.0 / self.flow_steps
         sigmas = torch.sqrt(2 * (1 - ts + h) / (ts + h))
         obs_expanded = features.unsqueeze(0).expand(self.flow_steps, batch_size, -1)
@@ -424,7 +430,7 @@ class QAMCore:
             os_actions = self.policy.one_step_actor(features, fql_noises)
             fql_distill_loss = F.mse_loss(os_actions, flow_actions)
             os_clipped = os_actions.clamp(self.policy.action_low, self.policy.action_high)
-            fql_qs = self.policy.q_values_all(features, os_clipped, target=False)
+            fql_qs = self.policy.q_values_all(critic_features, os_clipped, target=False)
             fql_q_loss = -fql_qs.mean(dim=0).mean()
             actor_loss = actor_loss + fql_q_loss + self.fql_alpha * fql_distill_loss
             info["fql_distill_loss"] = float(fql_distill_loss.detach().item())
@@ -444,7 +450,7 @@ class QAMCore:
             edited = (flow_actions + edit * self.edit_scale).clamp(
                 self.policy.action_low, self.policy.action_high
             )
-            qs = self.policy.q_values_all(features, edited, target=False)
+            qs = self.policy.q_values_all(critic_features, edited, target=False)
             edit_q_loss = -qs.mean(dim=0).mean()
 
             alpha_detached = self.policy.edit_alpha.current_alpha().detach()
@@ -478,8 +484,8 @@ class QAMCore:
             flat_actions = data.actions.reshape(data.actions.shape[0], -1)
 
             # --- critic (+ value in iql mode) ---
-            obs_features = self.policy.extract_features(data.obs)
-            critic_loss, critic_info = self._critic_loss(data, obs_features, flat_actions)
+            critic_features = self.policy.extract_critic_features(data.obs)
+            critic_loss, critic_info = self._critic_loss(data, critic_features, flat_actions)
 
             self.critic_optimizer.zero_grad(set_to_none=True)
             critic_loss.backward()
@@ -488,11 +494,19 @@ class QAMCore:
             if self._lr_schedulers[0] is not None:
                 self._lr_schedulers[0].step()
 
-            # --- actor: detached features (encoder_sharing="shared_critic_grad",
-            # the only mode QAM supports -- the encoder is trained by the
-            # critic loss only) ---
-            actor_features = obs_features.detach()
-            actor_loss, actor_info = self._actor_loss(actor_features, flat_actions)
+            # --- actor: BasePolicy.extract_actor_features applies the
+            # encoder_sharing stop-gradient rule (matches this loop's old
+            # manual features.detach() exactly when encoder_sharing==
+            # "shared_critic_grad", the default); the Q(s, pi(s)) terms below
+            # re-extract critic-role features (stop_gradient=True) via
+            # critic_features_for, mirroring SACCore's own convention. ---
+            actor_features = self.policy.extract_actor_features(data.obs)
+            actor_critic_features = self.policy.critic_features_for(
+                data.obs, actor_features, stop_gradient=True
+            )
+            actor_loss, actor_info = self._actor_loss(
+                actor_features, actor_critic_features, flat_actions
+            )
 
             self.actor_optimizer.zero_grad(set_to_none=True)
             if self.policy.edit_alpha is not None:
@@ -574,6 +588,8 @@ class QAM(QAMCore, OfflineRLAlgorithm):
         activation_fn: Optional[Activation] = "gelu",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -646,6 +662,18 @@ class QAM(QAMCore, OfflineRLAlgorithm):
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        # QAM's actor optimizer never includes the encoder (see
+        # QAMPolicy.actor_parameters/critic_and_value_parameters) -- "shared"
+        # (which would mean the actor loss also trains it) has no meaningful
+        # implementation here, matching QAMPolicy's own restriction and the
+        # FQL family's identical reasoning (rl_garden/algorithms/fql.py).
+        if encoder_sharing not in ("shared_critic_grad", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad' or 'separate' for "
+                f"QAM, got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
+        self.critic_encoder_config = critic_encoder_config
         self._image_augmentation_seed = image_augmentation_seed
 
         self._setup_model()

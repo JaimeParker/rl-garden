@@ -31,8 +31,10 @@ def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
         if args.critic_encoder != EncoderConfig():
             raise SystemExit(
                 "sac_flow does not support --critic-encoder.* (a separate "
-                "critic-only image encoder): SACFlowPolicy always shares "
-                "one encoder between actor and critic, unlike SACPolicy."
+                "critic-only image encoder): SACFlowPolicy inherits "
+                "SACPolicy's critic_extractor support unchanged, but this "
+                "entrypoint deliberately does not wire a separate critic "
+                "encoder config through to it."
             )
         image_kwargs = dict(
             encoder_config=args.encoder,
@@ -133,4 +135,11 @@ class SACFlowArgs(VisionSACFlowTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("sac_flow", SACFlowArgs, run_sac_flow)
+
+
+def _sac_flow_algorithm_cls() -> type:
+    from rl_garden.algorithms import SACFlow
+
+    return SACFlow
+
+registry.register("sac_flow", SACFlowArgs, run_sac_flow, algorithm_cls=_sac_flow_algorithm_cls)

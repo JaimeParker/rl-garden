@@ -46,6 +46,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
@@ -104,6 +105,8 @@ class SPOTCore(TD3BCCore):
         expl_noise: float = 0.1,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
         # TD3BCCore._init_td3bc_params owns tau/lrs/net_arch/n_critics/layer
@@ -136,6 +139,8 @@ class SPOTCore(TD3BCCore):
             backbone_type=backbone_type,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
         if vae_iterations < 0:
@@ -189,14 +194,13 @@ class SPOTCore(TD3BCCore):
 
     def _setup_model(self) -> None:
         # Cannot call super()._setup_model(): TD3BCCore hardcodes TD3BCPolicy.
-        self._resolve_observation_encoders(
-            self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
-        )
-        features_extractor = self._build_features_extractor()
         self.policy = SPOTPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -272,7 +276,11 @@ class SPOTCore(TD3BCCore):
         last_loss = {}
         for _ in range(self.vae_iterations):
             data = self.replay_buffer.sample(self.batch_size)
-            features = self.policy.extract_features(data.obs)
+            # VAE pretraining is a frozen-encoder phase (its own optimizer
+            # never includes the extractor's parameters) -- explicit
+            # stop_gradient=True via the raw escape hatch, unrelated to the
+            # encoder_sharing rule that extract_actor_features applies.
+            features = self.policy.extract_features(data.obs, stop_gradient=True)
             losses = vae.loss(features, data.actions, self.beta)
 
             self.vae_optimizer.zero_grad(set_to_none=True)
@@ -309,9 +317,9 @@ class SPOTCore(TD3BCCore):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
 
-            obs_features = self.policy.extract_features(data.obs)
+            critic_features = self.policy.extract_critic_features(data.obs)
             with torch.no_grad():
-                next_features = self.policy.extract_features(data.next_obs)
+                next_features = self.policy.extract_critic_features(data.next_obs)
                 noise = (torch.randn_like(data.actions) * self.policy_noise).clamp(
                     -self.noise_clip, self.noise_clip
                 )
@@ -325,7 +333,7 @@ class SPOTCore(TD3BCCore):
                     1.0 - data.dones.unsqueeze(-1)
                 ) * target_q_all.min(dim=0).values
 
-            q_all = self.policy.q_values_all(obs_features, data.actions, target=False)
+            q_all = self.policy.q_values_all(critic_features, data.actions, target=False)
             critic_loss = self._critic_loss(q_all, target_q)
 
             self.critic_optimizer.zero_grad(set_to_none=True)
@@ -341,22 +349,30 @@ class SPOTCore(TD3BCCore):
             counts["critic_loss"] = counts.get("critic_loss", 0) + 1
 
             if self._global_update % self.policy_freq == 0:
-                features_detached = obs_features.detach()
-                pi_action = self.policy.actor(features_detached)
+                actor_features = self.policy.extract_actor_features(data.obs)
+                pi_action = self.policy.actor(actor_features)
+                q_features = self.policy.critic_features_for(
+                    data.obs, actor_features, stop_gradient=True
+                )
                 q_pi = self.policy.q_values_all(
-                    features_detached, pi_action, target=False
+                    q_features, pi_action, target=False
                 )[0]
                 # NOTE: no alpha numerator here (unlike TD3BCCore's
                 # `lmbda = self.alpha / q_pi.abs().mean()`) -- spot.py:634.
                 norm_q = (1.0 / q_pi.abs().mean()).detach()
 
+                # The VAE is sized off actor_features_dim (SPOTPolicy) --
+                # feed it actor_features (same encoder-sharing gradient
+                # behavior as the actor's own forward pass), never
+                # q_features (which may have a different dim under
+                # encoder_sharing="separate").
                 if self.iwae:
                     neg_log_beta = -self.policy.vae.iwae_ll(
-                        features_detached, pi_action, self.beta, self.num_samples
+                        actor_features, pi_action, self.beta, self.num_samples
                     )
                 else:
                     neg_log_beta = self.policy.vae.elbo_loss(
-                        features_detached, pi_action, self.beta, self.num_samples
+                        actor_features, pi_action, self.beta, self.num_samples
                     )
                 lambd = self._current_lambd()
                 actor_loss = -norm_q * q_pi.mean() + lambd * neg_log_beta.mean()
@@ -443,6 +459,8 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
         expl_noise: float = 0.1,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -515,6 +533,8 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
             expl_noise=expl_noise,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
 
@@ -593,6 +613,8 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
         expl_noise: float = 0.1,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         online_discount: float = 0.995,
         max_online_updates: int = 1_000_000,
@@ -674,6 +696,8 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
             expl_noise=expl_noise,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
         self._setup_model()

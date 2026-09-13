@@ -209,7 +209,7 @@ def test_recurrent_ppo_adaptive_kl_rollout_mean_matches_stored_buffer_provenance
     episode_starts = torch.zeros(agent.num_envs)
     for t in range(6):
         with torch.no_grad():
-            raw = agent.policy._extract_features(stored_obs[t], stop_gradient=False)
+            raw = agent.policy.extract_features(stored_obs[t], stop_gradient=False)
             latent, _ = agent.policy.recurrent_encoder.step(raw, stored_hidden[t], episode_starts)
             expected_mean = agent.policy.actor(latent).mean
         assert torch.allclose(agent.rollout_buffer.means[t], expected_mean, atol=1e-6)

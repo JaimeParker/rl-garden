@@ -37,9 +37,9 @@ class RecurrentPPO(SequencePPO):
         self.rnn_num_layers = rnn_num_layers
         super().__init__(env, **ppo_kwargs)
 
-    def _build_sequence_encoder(self, features_extractor) -> RecurrentLatentEncoder:
+    def _build_sequence_encoder(self, actor_extractor) -> RecurrentLatentEncoder:
         return RecurrentLatentEncoder(
-            input_dim=features_extractor.features_dim,
+            input_dim=actor_extractor.features_dim,
             hidden_size=self.rnn_hidden_size,
             rnn_type=self.rnn_type,
             num_layers=self.rnn_num_layers,

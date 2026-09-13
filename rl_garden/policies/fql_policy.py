@@ -18,16 +18,22 @@ TD3BC's two-term actor loss already does.
 
 ``encoder_sharing`` controls how the vision encoder is owned:
 
-- ``"shared_critic_grad"`` (default) -- one ``features_extractor``, matching AGENTS.md's
-  project convention ("RGBD actor and critic share the encoder; actor
-  updates detach encoder features", also SACPolicy's own convention). The
-  critic trains it via ``critic_loss``; the actor path gets detached
-  features so neither actor network can leak gradient into it.
+- ``"shared_critic_grad"`` (default) -- one encoder (``actor_extractor``,
+  ``critic_extractor`` left ``None``), matching AGENTS.md's project
+  convention ("RGBD actor and critic share the encoder; actor updates detach
+  encoder features", also SACPolicy's own convention). The critic trains it
+  via ``critic_loss``; the actor path gets detached features so neither
+  actor network can leak gradient into it.
 - ``"separate"`` -- matches FQL's own JAX reference, which builds three
   independent encoder instances (critic, ``actor_bc_flow``,
-  ``actor_onestep_flow``, disjoint weights). No detach is used here: the
-  critic's own encoder (``features_extractor``) is called with
-  ``stop_gradient=False`` for the actor's q_loss term, so gradient DOES
+  ``actor_onestep_flow``, disjoint weights). ``critic_extractor`` (the
+  ``BasePolicy`` slot) is the critic's own encoder; ``actor_extractor`` (the
+  other ``BasePolicy`` slot) is ``actor_onestep_flow``'s own encoder;
+  ``actor_bc_flow_encoder`` is a THIRD encoder, built directly by
+  ``FQLCore`` and kept outside the ``BasePolicy`` actor/critic contract --
+  the one documented exception this family takes (see the plan's "FQL
+  family" note). No detach is used for the actor's q_loss term: the critic's
+  own encoder is called with ``stop_gradient=False``, so gradient DOES
   accumulate into its ``.grad`` buffer during ``actor_loss.backward()`` --
   it is simply never applied, because ``actor_optimizer``'s parameter list
   never includes it (the same "isolation via optimizer grouping, not
@@ -73,7 +79,7 @@ class FQLPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         n_critics: int = 2,
@@ -87,10 +93,9 @@ class FQLPolicy(BasePolicy):
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
-        actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
     ) -> None:
-        super().__init__()
         assert isinstance(action_space, spaces.Box), "FQL requires a Box action space."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
@@ -100,34 +105,37 @@ class FQLPolicy(BasePolicy):
                 f"{encoder_sharing!r}."
             )
         if encoder_sharing == "separate":
-            if actor_bc_flow_encoder is None or actor_onestep_flow_encoder is None:
+            if critic_extractor is None or actor_bc_flow_encoder is None:
                 raise ValueError(
-                    "encoder_sharing='separate' requires both actor_bc_flow_encoder "
-                    "and actor_onestep_flow_encoder."
+                    "encoder_sharing='separate' requires both critic_extractor "
+                    "and actor_bc_flow_encoder."
                 )
-        elif actor_bc_flow_encoder is not None or actor_onestep_flow_encoder is not None:
+        elif critic_extractor is not None or actor_bc_flow_encoder is not None:
             raise ValueError(
                 "encoder_sharing='shared_critic_grad' does not accept "
-                "actor_bc_flow_encoder/actor_onestep_flow_encoder -- pass "
+                "critic_extractor/actor_bc_flow_encoder -- pass "
                 "encoder_sharing='separate'."
             )
-
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.encoder_sharing = encoder_sharing
-        # features_extractor is always the critic's own encoder -- in
-        # "shared_critic_grad" mode it is also the actor's encoder (with detach).
-        self.features_extractor = features_extractor
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
+        # actor_bc_flow_encoder is FQL's one documented exception to the
+        # actor_extractor/critic_extractor contract: a third, independent
+        # encoder for the BC-flow teacher, only present under "separate".
         if encoder_sharing == "separate":
             self.actor_bc_flow_encoder = actor_bc_flow_encoder
-            self.actor_onestep_flow_encoder = actor_onestep_flow_encoder
 
-        fd = features_extractor.features_dim
+        actor_fd = self.actor_features_dim
+        critic_fd = self.critic_features_dim
         action_dim = int(np.prod(action_space.shape))
         net_arch = list(net_arch)
 
         self.actor_bc_flow = ActorVectorField(
-            fd,
+            actor_fd,
             action_dim,
             hidden_dims=net_arch,
             use_time_conditioning=True,
@@ -136,7 +144,7 @@ class FQLPolicy(BasePolicy):
             activation_fn=activation_fn,
         )
         self.actor_onestep_flow = ActorVectorField(
-            fd,
+            actor_fd,
             action_dim,
             hidden_dims=net_arch,
             use_time_conditioning=False,
@@ -146,7 +154,7 @@ class FQLPolicy(BasePolicy):
         )
 
         self.critic = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=net_arch,
             n_critics=n_critics,
@@ -159,7 +167,7 @@ class FQLPolicy(BasePolicy):
             activation_fn=activation_fn,
         )
         self.critic_target = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=net_arch,
             n_critics=n_critics,
@@ -180,17 +188,12 @@ class FQLPolicy(BasePolicy):
         self.register_buffer("action_low", low)
         self.register_buffer("action_high", high)
 
-    def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        """Critic's own encoder -- also the actor's encoder in 'shared' mode."""
-        return self._extract_features(obs, stop_gradient=stop_gradient)
-
     def extract_actor_onestep_features(self, obs: Obs) -> torch.Tensor:
-        """``actor_onestep_flow``'s own encoding of ``obs``. Used both at
+        """``actor_onestep_flow``'s own encoding of ``obs`` (``actor_extractor``
+        -- the critic's own encoder too, in 'shared' mode). Used both at
         inference (``predict``) and for the critic-target next-action
         computation (always called under ``torch.no_grad()`` there)."""
-        if self.encoder_sharing == "separate":
-            return self.actor_onestep_flow_encoder.extract(obs, stop_gradient=False)
-        return self.features_extractor.extract(obs, stop_gradient=False)
+        return self.actor_extractor.extract(obs, stop_gradient=False)
 
     def extract_actor_loss_features(
         self, obs: Obs, critic_features: torch.Tensor
@@ -199,24 +202,33 @@ class FQLPolicy(BasePolicy):
         q_features).
 
         ``critic_features`` is the critic block's own already-computed,
-        grad-enabled encoding of this same ``obs`` (from ``extract_features``
-        earlier in the training step). In 'shared' mode all three returned
-        features alias ``critic_features.detach()`` -- reusing it (instead of
-        a fresh forward pass) avoids doubling the encoder's compute cost
-        every step. In 'separate' mode each is instead a fresh, grad-enabled
-        forward through that network's own encoder -- q_features specifically
-        *must* be freshly computed, not ``critic_features`` itself: PyTorch
-        frees that tensor's graph after ``critic_loss.backward()`` runs
-        (earlier in the same step), so a second backward through it would
-        raise. This also matches the JAX reference's own behavior of
-        re-encoding obs on every ``network.select(...)`` call rather than
-        caching across the critic/actor loss functions."""
+        grad-enabled encoding of this same ``obs`` (from
+        ``extract_critic_features`` earlier in the training step). In
+        'shared' mode all three returned features alias
+        ``critic_features.detach()`` -- reusing it (instead of a fresh
+        forward pass) avoids doubling the encoder's compute cost every step.
+        In 'separate' mode each is instead a fresh, grad-enabled forward
+        through that network's own encoder -- q_features specifically *must*
+        be freshly computed, not ``critic_features`` itself: PyTorch frees
+        that tensor's graph after ``critic_loss.backward()`` runs (earlier in
+        the same step), so a second backward through it would raise. This
+        also matches the JAX reference's own behavior of re-encoding obs on
+        every ``network.select(...)`` call rather than caching across the
+        critic/actor loss functions."""
         if self.encoder_sharing == "separate":
             bc_features = self.actor_bc_flow_encoder.extract(obs, stop_gradient=False)
-            onestep_features = self.actor_onestep_flow_encoder.extract(obs, stop_gradient=False)
-            q_features = self.features_extractor.extract(obs, stop_gradient=False)
+            onestep_features = self.actor_extractor.extract(obs, stop_gradient=False)
+            q_features = self.critic_extractor.extract(obs, stop_gradient=False)
             return bc_features, onestep_features, q_features
-        features = critic_features.detach()
+        # Not "separate" -> one shared extractor for all three roles.
+        # actor_features_detached (BasePolicy's single stop-gradient rule)
+        # decides whether to detach, rather than hardcoding it: today FQL's
+        # own encoder_sharing validation only ever allows
+        # "shared_critic_grad" here (always detached), but this stays
+        # correct if that were ever relaxed to "shared" too.
+        features = (
+            critic_features.detach() if self.actor_features_detached else critic_features
+        )
         return features, features, features
 
     def sample_noise(self, batch_size: int, *, device, dtype) -> torch.Tensor:
@@ -251,8 +263,8 @@ class FQLPolicy(BasePolicy):
         yield from self.actor_onestep_flow.parameters()
         if self.encoder_sharing == "separate":
             yield from self.actor_bc_flow_encoder.parameters()
-            yield from self.actor_onestep_flow_encoder.parameters()
+            yield from self.actor_extractor.parameters()
 
     def critic_and_encoder_parameters(self):
         yield from self.critic.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()

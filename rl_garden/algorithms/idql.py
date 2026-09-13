@@ -3,13 +3,17 @@ value/critic regression paired with a diffusion actor instead of a Gaussian
 one. Box or Dict (CNN-based vision) observations -- ``DiffusionMLP`` is
 features-agnostic (``forward(x, time, cond)`` reshapes ``cond["state"]``,
 which is just a dict-key label, not a raw-obs assumption), and
-``IDQLPolicy`` already calls ``extract_features(obs)`` exactly once per obs,
-reusing that one tensor across the N-sample repeat-interleave and every
-denoising step. Encoder selection is the shared observation-redesign mixin
-(``encoder_config``/``obs_groups``, ``rl_garden/algorithms/_observation.py``)
--- one encoder shared by value/critic/actor (``encoder_sharing="shared"``,
-see the class attribute below), IDQL has no ``policy_kwargs`` mechanism of
-its own and no asymmetric-critic path (so no ``critic_encoder_config``).
+``IDQLPolicy`` calls ``extract_actor_features``/``extract_critic_features``
+(the policy-extractor contract, ``rl_garden/policies/base.py``) once per obs
+per role, reusing each tensor across the N-sample repeat-interleave and
+every denoising step. Encoder selection is the shared observation-redesign
+mixin (``encoder_config``/``obs_groups``/``critic_encoder_config``,
+``rl_garden/algorithms/_observation.py``) -- default ``encoder_sharing`` is
+``"shared"`` (one encoder trained by every loss term; see the class
+attribute below), and ``encoder_sharing="separate"`` with an asymmetric
+``obs_groups`` or a distinct ``critic_encoder_config`` gives value/critic
+their own encoder, independent from the diffusion actor's. IDQL has no
+``policy_kwargs`` mechanism of its own.
 
 Standalone -- does not subclass ``IQLCore`` (`rl_garden/algorithms/iql.py`).
 ``IQLCore``'s value/critic math is literally the same math IDQL needs, but
@@ -52,7 +56,6 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.idql_policy import IDQLPolicy
@@ -62,11 +65,15 @@ ActorObjective = Literal["bc", "soft_adv", "hard_adv", "exp_adv"]
 
 class IDQL(OfflineRLAlgorithm):
     _compatible_checkpoint_algorithms = ("IDQL",)
-    # `_compute_losses`/`diffusion_loss` both call `extract_features(...,
-    # stop_gradient=False)`, and value/critic/actor losses sum into one
-    # `.backward()` before `critic_value_optimizer.step()` (which owns
-    # `features_extractor.parameters()`) -- the encoder is trained by every
-    # loss term, matching "shared" (not the inherited "shared_critic_grad").
+    # Class-level default (read by algorithm_registry's static preflight,
+    # see rl_garden/algorithms/_observation.py), overridable via the
+    # `encoder_sharing` constructor kwarg below. Under the default "shared"
+    # (not the mixin's inherited "shared_critic_grad"): `_compute_losses`/
+    # `diffusion_loss` extract features via `extract_critic_features`/
+    # `extract_actor_features` with no stop-gradient, and value/critic/actor
+    # losses sum into one `.backward()` before `critic_value_optimizer.step()`
+    # (which owns the shared extractor's parameters) -- the encoder is
+    # trained by every loss term.
     encoder_sharing: EncoderSharing = "shared"
 
     def __init__(
@@ -104,6 +111,8 @@ class IDQL(OfflineRLAlgorithm):
         offline_sampling: str = "with_replace",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -164,15 +173,16 @@ class IDQL(OfflineRLAlgorithm):
         self.grad_clip_norm = grad_clip_norm
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
 
         self._setup_model()
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """One shared encoder for value/critic/actor -- see
-        ``encoder_sharing`` above; no ``critic_encoder_config``/asymmetric
-        critic path exists for IDQL (unlike SAC)."""
-        return self.observation_encoders.actor
 
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).
@@ -186,15 +196,14 @@ class IDQL(OfflineRLAlgorithm):
         )
 
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             self.env.single_observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
-        features_extractor = self._build_features_extractor()
         self.policy = IDQLPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            **extractor_kwargs,
             critic_hidden_dims=self.critic_hidden_dims,
             value_hidden_dims=self.value_hidden_dims,
             n_critics=self.n_critics,
@@ -257,22 +266,22 @@ class IDQL(OfflineRLAlgorithm):
         raise ValueError(f"Unknown actor_objective: {self.actor_objective!r}")
 
     def _compute_losses(self, data) -> tuple[torch.Tensor, dict[str, float]]:
-        features = self.policy.extract_features(data.obs, stop_gradient=False)
+        critic_features = self.policy.extract_critic_features(data.obs)
 
         with torch.no_grad():
             target_q_for_value = self.policy.min_q_value(
-                features.detach(),
+                critic_features.detach(),
                 data.actions,
                 subsample_size=self.critic_subsample_size,
                 target=True,
             )
-        values = self.policy.value(features)
+        values = self.policy.value(critic_features)
         value_loss = self._expectile_loss(target_q_for_value - values).mean()
 
-        q_pred = self.policy.q_values_all(features, data.actions, target=False)
+        q_pred = self.policy.q_values_all(critic_features, data.actions, target=False)
         with torch.no_grad():
-            next_features = self.policy.extract_features(data.next_obs, stop_gradient=False)
-            next_v = self.policy.value(next_features)
+            next_critic_features = self.policy.extract_critic_features(data.next_obs)
+            next_v = self.policy.value(next_critic_features)
             target_q = (
                 data.rewards.unsqueeze(-1)
                 + self.gamma * (1.0 - data.dones.unsqueeze(-1)) * next_v
@@ -368,6 +377,11 @@ class IDQL(OfflineRLAlgorithm):
             ),
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
             ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }

@@ -268,11 +268,11 @@ class PolicyDistillation(OnPolicyAlgorithm):
         self._student_obs_space = student_obs_space
 
         self._resolve_observation_encoders(student_obs_space)
-        features_extractor = self.observation_encoders.actor
+        actor_extractor = self.observation_encoders.actor
         self.policy = BCPolicy(
             observation_space=student_obs_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch=self.net_arch,
             use_layer_norm=self.actor_use_layer_norm,
             use_group_norm=self.actor_use_group_norm,

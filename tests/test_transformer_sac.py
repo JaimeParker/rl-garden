@@ -159,7 +159,7 @@ def test_transformer_sac_handles_episode_termination_across_windows():
 def test_transformer_sac_actor_loss_does_not_train_encoder_or_gtrxl_when_stop_gradient_actor():
     env = DummyVecEnv(_dict_space(), _action_space())
     agent = TransformerSAC(env=env, **_transformer_sac_kwargs())
-    assert agent._actor_stop_gradient() is True
+    assert agent.policy.actor_features_detached is True
 
     obs, _ = agent.env.reset(seed=agent.seed)
     agent._on_env_reset(obs)
@@ -182,7 +182,7 @@ def test_transformer_sac_actor_loss_does_not_train_encoder_or_gtrxl_when_stop_gr
     agent.policy.zero_grad()
     actor_loss.backward()
 
-    for name, param in agent.policy.features_extractor.named_parameters():
+    for name, param in agent.policy.actor_extractor.named_parameters():
         assert param.grad is None or torch.all(param.grad == 0), f"encoder param {name} got actor grad"
     for name, param in agent.policy.recurrent_encoder.named_parameters():
         assert param.grad is None or torch.all(param.grad == 0), f"GTrXL param {name} got actor grad"
@@ -260,7 +260,7 @@ def test_transformer_sac_rejects_token_and_prop_features():
     with pytest.raises(NotImplementedError):
         TransformerSAC(
             env=env,
-            policy_kwargs={"features_extractor_class": StructuredFeaturesExtractor},
+            policy_kwargs={"actor_extractor_class": StructuredFeaturesExtractor},
             **_transformer_sac_kwargs(),
         )
 

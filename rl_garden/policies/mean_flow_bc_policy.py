@@ -30,7 +30,7 @@ from rl_garden.networks.mean_flow_field import (
     MeanFlowMode,
     mean_flow_loss_from_samples,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 class MeanFlowBCPolicy(BasePolicy):
@@ -40,7 +40,7 @@ class MeanFlowBCPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         use_layer_norm: bool = False,
@@ -52,8 +52,14 @@ class MeanFlowBCPolicy(BasePolicy):
         time_dist_sigma: float = 1.0,
         adaptive_l2_gamma: float = 0.0,
         adaptive_l2_c: float = 1e-2,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(
             action_space, spaces.Box
         ), "MeanFlowBCPolicy requires a Box action space."
@@ -61,9 +67,6 @@ class MeanFlowBCPolicy(BasePolicy):
             raise ValueError(f"num_sample_steps must be >= 1, got {num_sample_steps}.")
         if mode not in ("meanflow", "i-meanflow"):
             raise ValueError(f"Unknown mode: {mode!r}")
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
         self.num_sample_steps = num_sample_steps
         self.mode = mode
         self.time_dist_mu = time_dist_mu
@@ -71,7 +74,7 @@ class MeanFlowBCPolicy(BasePolicy):
         self.adaptive_l2_gamma = adaptive_l2_gamma
         self.adaptive_l2_c = adaptive_l2_c
 
-        fd = features_extractor.features_dim
+        fd = self.actor_features_dim
         action_dim = int(np.prod(action_space.shape))
         self.actor_mean_flow = MeanFlowActorField(
             fd,
@@ -88,14 +91,19 @@ class MeanFlowBCPolicy(BasePolicy):
         self.register_buffer("action_high", high)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for callers that need to pick the flag themselves.
+        ``mean_flow_loss`` does not use this; it calls
+        ``extract_actor_features`` (``BasePolicy``), which applies the
+        ``encoder_sharing`` stop-gradient rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         # MeanFlow has no separate deterministic eval path: sampling always
         # integrates from a fresh N(0,1) latent, same stance as FlowBCPolicy
         # / FQLPolicy.
         del deterministic
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         batch_size = features.shape[0]
         device, dtype = features.device, features.dtype
         x = torch.randn(
@@ -136,7 +144,7 @@ class MeanFlowBCPolicy(BasePolicy):
         derivation. Returns ``(total_loss, aux)`` where ``aux`` carries
         upstream's own logged breakdown (``fm_loss``, ``mf_loss``,
         ``mf_v_mse``)."""
-        features = self.extract_features(obs, stop_gradient=False)
+        features = self.extract_actor_features(obs)
         batch_size = actions.shape[0]
         device, dtype = actions.device, actions.dtype
         x_0 = torch.randn_like(actions)

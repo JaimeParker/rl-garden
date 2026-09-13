@@ -25,7 +25,6 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups
@@ -38,8 +37,12 @@ class FlowBC(OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("FlowBC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
-        {"features_extractor_class", "features_extractor_kwargs"}
+        {"actor_extractor_class", "actor_extractor_kwargs"}
     )
+    # FlowBC has no critic, so extract_actor_features must never
+    # stop-gradient (the encoder is trained end-to-end by the actor loss) --
+    # see BC's identical class-attribute override for the full rationale.
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -173,20 +176,20 @@ class FlowBC(OfflineRLAlgorithm):
     # --- model setup ---
 
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             self.env.single_observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
-        features_extractor = self._build_features_extractor()
         self.policy = FlowBCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            actor_extractor=extractor_kwargs["actor_extractor"],
             net_arch=self.net_arch,
             use_layer_norm=self.actor_use_layer_norm,
             kernel_init=self.kernel_init,
             activation_fn=self.activation_fn,
             flow_steps=self.flow_steps,
+            encoder_sharing=extractor_kwargs["encoder_sharing"],
         ).to(self.device)
 
         self.actor_optimizer = make_optimizer(
@@ -264,34 +267,20 @@ class FlowBC(OfflineRLAlgorithm):
             list(self.policy.actor_parameters()), self.grad_clip_norm
         )
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """``policy_kwargs`` explicit override (raw escape hatch, unchanged),
-        else the schema-driven extractor resolved onto
-        ``self.observation_encoders`` by ``_resolve_observation_encoders``."""
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self.observation_encoders.actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
-            )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
-
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs, supported_keys=self._SUPPORTED_POLICY_KWARGS
-        )
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
+            )
+        return normalized
 
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).

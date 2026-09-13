@@ -42,8 +42,8 @@ class RecurrentReplayBufferSample:
     obs: Obs                                   # (window_len, B, *obs_shape)
     # Always None -- this buffer has no separate next_obs concept (the window
     # itself covers "next" positions internally); present only so
-    # SACCore.train()'s unconditional features_extractor.prepare_batch(obs,
-    # next_obs) call has something to pass without a special case there.
+    # SACCore.train()'s unconditional policy.prepare_batch_all(obs, next_obs)
+    # call has something to pass without a special case there.
     next_obs: Optional[Obs]
     actions: torch.Tensor                       # (learning_len, B, act_dim)
     rewards: torch.Tensor                       # (learning_len, B) -- pre-accumulated n-step

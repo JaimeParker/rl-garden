@@ -2,9 +2,11 @@
 
 Ported from ``sfujim/BCQ/continuous_BCQ/BCQ.py`` (the official reference --
 CORL has no BCQ implementation to cross-check against). Pure offline, no
-online fine-tuning variant in the reference. Box observations only.
-Verified against a full clone of the upstream repo (``BCQ.py``, ``main.py``
-read in full), not just fetched raw files.
+online fine-tuning variant in the reference. Box or Dict (vision)
+observations via ``encoder_config``/``obs_groups`` (schema-driven, like every
+other algorithm); either way at least one ``state``/``state_<name>`` key is
+required (see ``BCQPolicy``). Verified against a full clone of the upstream
+repo (``BCQ.py``, ``main.py`` read in full), not just fetched raw files.
 
 Deliberately NOT built on ``TD3BCCore``/``SPOTCore``: BCQ has no
 ``policy_freq``-delayed updates (actor and both target networks update every
@@ -60,12 +62,12 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.mlp import KernelInit
@@ -77,10 +79,6 @@ _NUM_TARGET_CANDIDATES = 10
 
 class BCQCore:
     """Shared BCQ loss/network logic. See module docstring."""
-
-    #: BCQ is state-only (no critic_features_extractor on BCQPolicy): one
-    #: encoder trained by the critic loss, actor path detached.
-    encoder_sharing = "shared_critic_grad"
 
     def _init_bcq_params(
         self,
@@ -113,6 +111,8 @@ class BCQCore:
         soft_q_lambda: float = 0.75,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
         if not (0.0 < tau <= 1.0):
@@ -122,6 +122,11 @@ class BCQCore:
         if grad_clip_norm is not None and grad_clip_norm <= 0:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+            )
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
             )
 
         self.tau = tau
@@ -152,6 +157,8 @@ class BCQCore:
         self.soft_q_lambda = soft_q_lambda
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
 
     def _optimizer_names(self) -> tuple[str, ...]:
@@ -185,6 +192,11 @@ class BCQCore:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 
@@ -203,9 +215,6 @@ class BCQCore:
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        return self.observation_encoders.actor
-
     def _build_replay_buffer(self) -> ReplayBuffer:
         obs_space = self.env.single_observation_space
         return ReplayBuffer(
@@ -218,14 +227,13 @@ class BCQCore:
         )
 
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
-            self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
-        )
-        features_extractor = self._build_features_extractor()
         self.policy = BCQPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
             net_arch=self.net_arch,
             actor_use_layer_norm=self.actor_use_layer_norm,
             critic_use_layer_norm=self.critic_use_layer_norm,
@@ -270,10 +278,14 @@ class BCQCore:
 
     def fit_obs_normalizer(self) -> None:
         # buf.obs is always a DictArray now (boundary normalization always on);
-        # same pattern as AWAC.fit_obs_normalizer.
+        # same pattern as AWAC.fit_obs_normalizer. Concatenate every schema
+        # state key (BCQPolicy._state_keys, in schema.state_keys order) to
+        # match BCQPolicy._normalize_state_obs's own concatenation.
         buf = self.replay_buffer
-        raw_obs = buf.obs["state"]
-        obs = raw_obs[: buf.size].reshape(-1, raw_obs.shape[-1]).to(self.device)
+        raw = torch.cat(
+            [buf.obs[k][: buf.size] for k in self.policy._state_keys], dim=-1
+        )
+        obs = raw.reshape(-1, raw.shape[-1]).to(self.device)
         self.policy.fit_obs_normalizer(obs)
 
     def _sample_train_batch(self, batch_size: int):
@@ -303,25 +315,37 @@ class BCQCore:
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
-            obs_features = self.policy.extract_features(data.obs)
-            features_detached = obs_features.detach()
+            critic_features = self.policy.extract_critic_features(data.obs)
+            actor_features = self.policy.extract_actor_features(data.obs)
 
-            vae_losses = self.policy.vae.loss(features_detached, data.actions, self.beta)
+            vae_losses = self.policy.vae.loss(actor_features, data.actions, self.beta)
             self.vae_optimizer.zero_grad(set_to_none=True)
-            vae_losses["vae_loss"].backward()
+            # retain_graph: actor_features is reused below (vae.decode +
+            # self.actor + actor_loss.backward()) -- only matters when
+            # actor_extractor is genuinely separate (a real, non-detached
+            # graph node); a no-op when it's the usual detached-leaf case.
+            vae_losses["vae_loss"].backward(retain_graph=True)
             self.vae_optimizer.step()
 
             with torch.no_grad():
-                next_features = self.policy.extract_features(data.next_obs)
-                tiled_next_features = next_features.repeat_interleave(
+                # vae.decode/actor_target are the actor-role generative nets
+                # (trained on actor_extractor's representation in the live
+                # path above); q_values is the critic-role net -- each target
+                # net must be fed the same-role features it was trained on.
+                next_actor_features = self.policy.extract_actor_features(data.next_obs)
+                next_critic_features = self.policy.extract_critic_features(data.next_obs)
+                tiled_next_actor_features = next_actor_features.repeat_interleave(
                     _NUM_TARGET_CANDIDATES, dim=0
                 )
-                sampled_next_actions = self.policy.vae.decode(tiled_next_features, clip=0.5)
+                tiled_next_critic_features = next_critic_features.repeat_interleave(
+                    _NUM_TARGET_CANDIDATES, dim=0
+                )
+                sampled_next_actions = self.policy.vae.decode(tiled_next_actor_features, clip=0.5)
                 perturbed_next_actions = self.policy.actor_target(
-                    tiled_next_features, sampled_next_actions
+                    tiled_next_actor_features, sampled_next_actions
                 )
                 q1_t, q2_t = self.policy.q_values(
-                    tiled_next_features, perturbed_next_actions, target=True
+                    tiled_next_critic_features, perturbed_next_actions, target=True
                 )
                 mixed_q = self.soft_q_lambda * torch.min(q1_t, q2_t) + (
                     1.0 - self.soft_q_lambda
@@ -333,7 +357,7 @@ class BCQCore:
                     1.0 - data.dones.unsqueeze(-1)
                 ) * mixed_q
 
-            q1, q2 = self.policy.q_values(obs_features, data.actions, target=False)
+            q1, q2 = self.policy.q_values(critic_features, data.actions, target=False)
             critic_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
 
             self.critic_optimizer.zero_grad(set_to_none=True)
@@ -343,9 +367,14 @@ class BCQCore:
             if self._lr_schedulers[0] is not None:
                 self._lr_schedulers[0].step()
 
-            sampled_actions = self.policy.vae.decode(features_detached, clip=0.5)
-            perturbed_actions = self.policy.actor(features_detached, sampled_actions)
-            q1_pi, _ = self.policy.q_values(features_detached, perturbed_actions, target=False)
+            sampled_actions = self.policy.vae.decode(actor_features, clip=0.5)
+            perturbed_actions = self.policy.actor(actor_features, sampled_actions)
+            # Actor loss's Q(s, pi(s)) term re-extracts critic-role features
+            # with stop_gradient=True (matches SAC's actor-loss pattern):
+            # the actor is scored by the live critic, but must not push
+            # gradient into the critic's own encoder.
+            q_features = self.policy.extract_critic_features(data.obs, stop_gradient=True)
+            q1_pi, _ = self.policy.q_values(q_features, perturbed_actions, target=False)
             actor_loss = -q1_pi.mean()
 
             self.actor_optimizer.zero_grad(set_to_none=True)
@@ -419,6 +448,8 @@ class BCQ(BCQCore, OfflineRLAlgorithm):
         soft_q_lambda: float = 0.75,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -482,6 +513,8 @@ class BCQ(BCQCore, OfflineRLAlgorithm):
             soft_q_lambda=soft_q_lambda,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
 

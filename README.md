@@ -24,8 +24,12 @@ platforms can be integrated without creating platform-specific training entrypoi
 - **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, and ACFQL pretraining,
   warm start, and online fine-tuning.
 - **Observations:** a single strict Dict contract -- a ``state`` vector key
-  (any low-dim signal, proprioception included, folds into it) plus any
-  number of ``rgb_<camera>``/``depth_<camera>`` image keys.
+  (any low-dim signal, proprioception included, folds into it), optional
+  ``state_<name>`` auxiliary/privileged low-dim keys, and any number of
+  ``rgb_<camera>``/``depth_<camera>`` image keys. Actor and critic can use
+  asymmetric observation groups, allowing privileged state visible only to the
+  critic (every critic-bearing algorithm except the recurrent/transformer
+  variants; requires ``encoder_sharing: separate``).
 - **Visual encoders:** PlainConv, ResNet, DrQ-v2 conv, 3D CNN, and ViT backbones
   with configurable image-key fusion, pooling, augmentation, and proprioception
   fusion. Actor and critic share one encoder by default; SAC-family and PPO-family

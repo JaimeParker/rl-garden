@@ -203,9 +203,9 @@ class ACRLPDCore:
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self._actor_action_log_prob(
-            obs, stop_gradient=self._actor_stop_gradient()
-        )
+        # No explicit stop_gradient: SACPolicy.actor_action_log_prob applies
+        # BasePolicy.extract_actor_features's encoder_sharing rule by default.
+        action, log_prob, features = self._actor_action_log_prob(obs)
         qs = self.policy.q_values_subsampled(features, action, subsample_size=None, target=False)
         # acrlpd.py:84's actor_loss hardcodes `q = jnp.mean(qs, axis=0)` --
         # unlike the critic target, q_agg ("min" vs "mean") only applies to
@@ -221,9 +221,7 @@ class ACRLPDCore:
         if self.bc_alpha <= 0.0:
             return actor_loss, log_prob_detached
         # data.actions is already flattened by _sample_train_batch.
-        bc_log_prob = self.policy.evaluate_action_log_prob(
-            data.obs, data.actions, stop_gradient=self._actor_stop_gradient()
-        )
+        bc_log_prob = self.policy.evaluate_action_log_prob(data.obs, data.actions)
         bc_loss = -bc_log_prob.mean() * self.bc_alpha
         return actor_loss + bc_loss, log_prob_detached
 

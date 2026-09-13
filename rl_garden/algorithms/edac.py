@@ -94,7 +94,7 @@ class EDAC(OfflineSAC):
         return {**super()._checkpoint_metadata(), "eta": self.eta}
 
     def _critic_diversity_loss(self, data) -> torch.Tensor:
-        features = self.policy.extract_features(data.obs)
+        features = self.policy.extract_critic_features(data.obs)
         actions = data.actions.detach().requires_grad_(True)
         qs = self.policy.critic.forward(features, actions)
         grads = []

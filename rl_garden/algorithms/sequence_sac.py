@@ -65,7 +65,7 @@ class SequenceSAC(SAC):
 
     # --- subclass hooks ---
 
-    def _build_sequence_encoder(self, features_extractor) -> SequenceLatentEncoder:
+    def _build_sequence_encoder(self, actor_extractor) -> SequenceLatentEncoder:
         raise NotImplementedError
 
     def _initial_state_from_sample(self, data) -> SequenceState:
@@ -73,17 +73,21 @@ class SequenceSAC(SAC):
 
     # --- model construction (override existing SAC hooks, no _setup_model rewrite) ---
 
-    def _build_policy(self, features_extractor) -> RecurrentSACPolicy:
-        if features_extractor.structured_feature_config() is not None:
+    def _build_policy(self) -> RecurrentSACPolicy:
+        extractor_kwargs = self._policy_extractor_kwargs(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
+        actor_extractor = extractor_kwargs["actor_extractor"]
+        if actor_extractor.structured_feature_config() is not None:
             raise NotImplementedError(
                 f"{type(self).__name__} only supports flat-latent feature "
                 "extractors this round (ViT token_and_prop layouts untested)."
             )
-        sequence_encoder = self._build_sequence_encoder(features_extractor)
+        sequence_encoder = self._build_sequence_encoder(actor_extractor)
         return RecurrentSACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             recurrent_encoder=sequence_encoder,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
@@ -94,10 +98,11 @@ class SequenceSAC(SAC):
             log_std_min=self.actor_log_std_min,
             log_std_mode=self.actor_log_std_mode,
             # Threaded through (rather than omitted) so a misconfigured
-            # policy_kwargs['critic_features_extractor_class'] raises
+            # policy_kwargs['critic_extractor_class'] (or asymmetric
+            # obs_groups/encoder_sharing="separate") raises
             # RecurrentSACPolicy's clear guard, instead of being silently
             # dropped.
-            critic_features_extractor=self._build_critic_features_extractor(),
+            **extractor_kwargs,
         )
 
     # --- rollout hidden-state carry (pure subclass overrides of existing hooks) ---
@@ -257,7 +262,7 @@ class SequenceSAC(SAC):
         # sequence encoder itself still trained by the actor loss. Matches
         # RecurrentPPOPolicy's identical "detach latent, not raw features" fix
         # for the same shared-trunk problem.
-        if self._actor_stop_gradient():
+        if self.policy.actor_features_detached:
             features = features.detach()
         hidden_size = features.shape[-1]
         flat_features = features.reshape(-1, hidden_size)

@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import tyro
 
@@ -34,6 +35,15 @@ from rl_garden.common.effective_config import (
 class AlgorithmEntry:
     args_cls: type
     run_fn: Callable
+    #: Optional, zero-arg factory returning the algorithm class -- a thunk
+    #: rather than the class itself so registration (which runs at module
+    #: import time, during ``discover()``) never has to import
+    #: ``rl_garden.algorithms`` eagerly; see ``_validate_config``'s static
+    #: encoder_sharing preflight, the only caller. Training modules opt in by
+    #: passing e.g. ``algorithm_cls=lambda: SAC`` (with the import inside the
+    #: lambda) to ``register()``; omitted for algorithms the preflight
+    #: doesn't check.
+    algorithm_cls: Optional[Callable[[], type]] = None
 
 
 @dataclass(frozen=True)
@@ -63,12 +73,14 @@ class BaseAlgorithmRegistry:
         name: str,
         args_cls: type,
         run_fn: Callable,
+        *,
+        algorithm_cls: Optional[Callable[[], type]] = None,
     ) -> None:
         if name in self._entries:
             raise ValueError(f"Algorithm {name!r} already registered")
         if any(entry.args_cls is args_cls for entry in self._entries.values()):
             raise ValueError(f"Args type {args_cls.__name__!r} already registered")
-        self._entries[name] = AlgorithmEntry(args_cls, run_fn)
+        self._entries[name] = AlgorithmEntry(args_cls, run_fn, algorithm_cls)
 
     def entries(self) -> dict[str, AlgorithmEntry]:
         return dict(self._entries)
@@ -301,12 +313,14 @@ class BaseAlgorithmRegistry:
                     )
             # Resolved (not just syntactic) actor/critic key-set mismatch
             # requires two independent encoders (encoder_sharing="separate").
-            # Only checked against an *explicit* --encoder-sharing override:
-            # the algorithm's own class-default encoder_sharing isn't
-            # statically known here without importing/instantiating the
-            # algorithm, so a mismatch left at the default is instead caught
-            # at agent-construction time by
-            # ``resolve_observation_encoders`` (rl_garden/algorithms/
+            # Checked against an *explicit* --encoder-sharing override when
+            # given; otherwise against the algorithm class's own class-level
+            # `encoder_sharing` default (registered, per algorithm, via
+            # register()'s `algorithm_cls=` factory -- see AlgorithmEntry --
+            # so this stays a static, zero-instantiation lookup). Algorithms
+            # that didn't register a factory aren't statically checkable
+            # here; their mismatch is instead caught at agent-construction
+            # time by ``resolve_observation_encoders`` (rl_garden/algorithms/
             # _observation.py), just not this early.
             actor_keys = (
                 set(obs_groups.actor) if obs_groups.actor is not None else expected_keys
@@ -315,17 +329,29 @@ class BaseAlgorithmRegistry:
                 set(obs_groups.critic) if obs_groups.critic is not None else expected_keys
             )
             encoder_sharing = getattr(args, "encoder_sharing", None)
-            if (
-                actor_keys != critic_keys
-                and encoder_sharing is not None
-                and encoder_sharing != "separate"
-            ):
-                raise ConfigError(
-                    "--obs-groups resolves to different actor "
-                    f"({sorted(actor_keys)}) and critic ({sorted(critic_keys)}) "
-                    "observation keys, which requires two independent encoders; "
-                    f"pass --encoder-sharing separate (got {encoder_sharing!r})."
-                )
+            if actor_keys != critic_keys:
+                if encoder_sharing is not None:
+                    effective_sharing: object | None = encoder_sharing
+                    sharing_origin = "--encoder-sharing"
+                else:
+                    entry = self._entries.get(command.algorithm)
+                    algorithm_cls = (
+                        entry.algorithm_cls() if entry is not None and entry.algorithm_cls else None
+                    )
+                    effective_sharing = (
+                        getattr(algorithm_cls, "encoder_sharing", "shared_critic_grad")
+                        if algorithm_cls is not None
+                        else None
+                    )
+                    sharing_origin = f"{command.algorithm}'s default encoder_sharing"
+                if effective_sharing is not None and effective_sharing != "separate":
+                    raise ConfigError(
+                        "--obs-groups resolves to different actor "
+                        f"({sorted(actor_keys)}) and critic ({sorted(critic_keys)}) "
+                        "observation keys, which requires two independent encoders; "
+                        f"pass --encoder-sharing separate ({sharing_origin} is "
+                        f"{effective_sharing!r})."
+                    )
         if self.phase_name == "offline":
             if command.algorithm == "tdmpc2_multitask":
                 if not getattr(args, "dataset_dir", None):

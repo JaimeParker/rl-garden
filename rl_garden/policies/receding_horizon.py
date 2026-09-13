@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Optional, Protocol
 
 import torch
+import torch.nn as nn
 
 from rl_garden.common.types import Obs
 from rl_garden.policies.base import BasePolicy
@@ -28,7 +29,16 @@ class _ChunkedPolicy(Protocol):
 
 class RecedingHorizonPolicy(BasePolicy):
     def __init__(self, policy: _ChunkedPolicy, *, n_action_steps: int) -> None:
-        super().__init__()
+        # Deliberately bypasses BasePolicy.__init__ (which now requires
+        # observation_space/action_space/actor_extractor -- the actor/critic
+        # extractor contract, see rl_garden/policies/base.py): this wrapper
+        # owns no extractor of its own and delegates obs handling entirely to
+        # the wrapped chunked policy's own predict(), which may not even be a
+        # BasePolicy (see _StubChunkedPolicy in
+        # tests/test_receding_horizon_policy.py). nn.Module.__init__(self)
+        # still runs so ``self.policy = policy`` below registers correctly as
+        # a submodule when ``policy`` is itself an nn.Module.
+        nn.Module.__init__(self)
         # Execution window is chunk[start : start + n_action_steps], where
         # start = cond_steps - 1 (matches real-stanford/diffusion_policy's
         # predict_action) -- so n_action_steps is bounded by the room left

@@ -525,11 +525,104 @@ def test_cql_dict_obs_train_step_and_checkpoint(tmp_path):
     result = agent.learn_offline(2, save_filename="offline_cql_dict.pt")
 
     assert isinstance(agent.replay_buffer, ReplayBuffer)
-    assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert isinstance(agent.policy.actor_extractor, CombinedExtractor)
     assert "cql_loss" in info
     assert torch.isfinite(torch.tensor(info["critic_loss"]))
     assert result.final_checkpoint == tmp_path / "offline_cql_dict.pt"
     assert (tmp_path / "offline_cql_dict.pt").exists()
+
+
+def _asymmetric_offline_env(num_envs: int = 2) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(0, 255, shape=(64, 64, 3), dtype=np.uint8),
+                "state": spaces.Box(-np.inf, np.inf, shape=(4,), dtype=np.float32),
+                "state_object_pose": spaces.Box(-np.inf, np.inf, shape=(3,), dtype=np.float32),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _fill_asymmetric(agent, steps: int = 4) -> None:
+    env = agent.env
+    for _ in range(steps):
+        obs = {
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, 4),
+            "state_object_pose": torch.randn(env.num_envs, 3),
+        }
+        next_obs = {
+            "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(env.num_envs, 4),
+            "state_object_pose": torch.randn(env.num_envs, 3),
+        }
+        actions = torch.randn(env.num_envs, *env.single_action_space.shape).clamp(-1, 1)
+        rewards = torch.randn(env.num_envs)
+        dones = torch.zeros(env.num_envs)
+        agent.replay_buffer.add(obs, next_obs, actions, rewards, dones)
+
+
+def test_cql_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
+    """End-to-end asymmetric actor/critic encoders via state_<name>: critic
+    sees state_object_pose, actor does not, encoder_sharing="separate".
+    Asserts the actor extractor's schema lacks the key and, over one real
+    train() step, gradients reach only the right extractor."""
+    from rl_garden.observations import ObsGroups
+
+    kwargs = _offline_kwargs()
+    agent = CQL(
+        env=_asymmetric_offline_env(),
+        encoder_config=EncoderConfig(proprio_latent_dim=4),
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+        ),
+        encoder_sharing="separate",
+        **kwargs,
+    )
+
+    actor_extractor = agent.policy.actor_extractor
+    critic_extractor = agent.policy.critic_extractor
+    assert critic_extractor is not None and critic_extractor is not actor_extractor
+    assert "state_object_pose" not in actor_extractor.state_keys
+    assert "state_object_pose" in critic_extractor.state_keys
+
+    _fill_asymmetric(agent)
+    data = agent.replay_buffer.sample(4)
+
+    actor_loss, _ = agent._actor_loss(data.obs)
+    actor_grad_on_actor = torch.autograd.grad(
+        actor_loss, list(actor_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in actor_grad_on_actor)
+    # The actor loss's Q(s, pi(s)) term re-extracts critic-role features with
+    # stop_gradient=True (SACPolicy.critic_features_for); CombinedExtractor's
+    # own stop_gradient convention detaches only the image branch, so this
+    # checks image-branch isolation specifically, not the whole
+    # critic_extractor (its proprio branch legitimately still requires_grad
+    # here -- unrelated to obs_groups).
+    actor_grad_on_critic_image = torch.autograd.grad(
+        actor_loss, list(critic_extractor.image_encoder.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in actor_grad_on_critic_image)
+
+    critic_loss, _ = agent._critic_loss(data)
+    critic_grad_on_critic = torch.autograd.grad(
+        critic_loss, list(critic_extractor.parameters()), allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in critic_grad_on_critic)
+    # Unlike SAC, CQL's critic loss is not actor-independent: the CQL
+    # regularizer samples OOD actions from the current policy
+    # (_sample_n_actions_with_log_probs -> policy.extract_features, an
+    # undetached actor_extractor forward), so critic_loss legitimately has a
+    # live gradient path into actor_extractor too -- this is not a leak to
+    # guard against, just CQL's own regularizer design.
+
+    # A real end-to-end update step also runs cleanly.
+    info = agent.train(gradient_steps=1, compute_info=True)
+    assert torch.isfinite(torch.tensor(info["critic_loss"]))
 
 
 def test_calql_dict_obs_uses_mc_dict_replay_buffer():

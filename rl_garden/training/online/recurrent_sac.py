@@ -15,7 +15,7 @@ def build_recurrent_sac(args, env, eval_env, logger, checkpoint_dir):
     # asymmetric critic obs_groups were never wired for this entrypoint
     # either (encoder_sharing stays the SAC default "shared_critic_grad",
     # which SequenceSAC._build_policy's RecurrentSACPolicy requires -- it
-    # rejects a non-None critic_features_extractor).
+    # rejects a non-None critic_extractor).
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "image_augmentation_seed": args.seed + 1_000_003,
@@ -71,8 +71,15 @@ class RecurrentSACArgs(VisionRecurrentSACTrainingArgs, EnvBackendArgs):
     """
 
 
+
+
+def _recurrent_sac_algorithm_cls() -> type:
+    from rl_garden.algorithms import RecurrentSAC
+
+    return RecurrentSAC
+
 registry.register(
     "recurrent_sac",
     RecurrentSACArgs,
     run_recurrent_sac,
-)
+    algorithm_cls=_recurrent_sac_algorithm_cls)

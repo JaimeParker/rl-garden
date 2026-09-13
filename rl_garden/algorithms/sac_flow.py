@@ -48,8 +48,12 @@ class SACFlow(SAC):
         self.flow_use_layer_norm = flow_use_layer_norm
         super().__init__(env, eval_env, **sac_kwargs)
 
-    def _build_policy(self, features_extractor) -> SACFlowPolicy:
-        if features_extractor.structured_feature_config() is not None:
+    def _build_policy(self) -> SACFlowPolicy:
+        extractor_kwargs = self._policy_extractor_kwargs(
+            self.env.single_observation_space,
+            augmentation_seed=self._image_augmentation_seed,
+        )
+        if extractor_kwargs["actor_extractor"].structured_feature_config() is not None:
             raise NotImplementedError(
                 f"{type(self).__name__} only supports flat-latent feature "
                 "extractors (Box, or Dict/RGBD via CombinedExtractor); a "
@@ -59,7 +63,6 @@ class SACFlow(SAC):
         return SACFlowPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
@@ -69,6 +72,7 @@ class SACFlow(SAC):
             denoising_steps=self.denoising_steps,
             noise_std=self.noise_std,
             flow_use_layer_norm=self.flow_use_layer_norm,
+            **extractor_kwargs,
         )
 
     def _checkpoint_metadata(self) -> dict[str, Any]:

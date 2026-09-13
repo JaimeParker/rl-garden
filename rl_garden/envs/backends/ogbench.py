@@ -65,6 +65,8 @@ class OGBenchBackend(EnvBackend):
                 f"ogbench backend cannot set image_size={obs.image_size!r}; "
                 "pixel resolution is fixed by env_id"
             )
+        if obs.extra_state:
+            raise ObservationContractError("ogbench has no extra state sources")
         return OGBenchEnvConfig(
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,

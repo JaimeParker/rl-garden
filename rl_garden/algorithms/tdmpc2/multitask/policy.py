@@ -19,7 +19,11 @@ from rl_garden.policies.base import BasePolicy
 
 class MultitaskTDMPC2Policy(BasePolicy):
     def __init__(self, world_model: MultitaskWorldModel) -> None:
-        super().__init__()
+        # Bypasses BasePolicy.__init__ (which now requires an
+        # actor_extractor/action_space/observation_space): the world model
+        # owns its own encoder end-to-end, so there is no separate
+        # actor_extractor for this wrapper to hold.
+        torch.nn.Module.__init__(self)
         self.world_model = world_model
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:

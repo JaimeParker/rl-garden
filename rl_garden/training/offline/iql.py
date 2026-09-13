@@ -35,7 +35,7 @@ class IQLArgs(
 def _iql_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
@@ -89,11 +89,12 @@ def _iql_kwargs(
         "checkpoint_freq": 0,
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
-        # IQL doesn't support a distinct critic encoder (see off2on/iql.py's
-        # identical comment) -- no critic_encoder_config/encoder_sharing.
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        kwargs["encoder_sharing"] = args.encoder_sharing
     return kwargs
 
 
@@ -110,4 +111,10 @@ def run_iql(args: IQLArgs) -> None:
     run_offline(args, build_agent=build_iql)
 
 
-registry.register("iql", IQLArgs, run_iql)
+def _iql_algorithm_cls() -> type:
+    from rl_garden.algorithms import IQL
+
+    return IQL
+
+
+registry.register("iql", IQLArgs, run_iql, algorithm_cls=_iql_algorithm_cls)

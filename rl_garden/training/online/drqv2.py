@@ -7,7 +7,7 @@ from typing import Literal
 
 
 def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.algorithms.ddpg import DDPG
     from rl_garden.training.inspection import construct_agent
 
@@ -19,9 +19,18 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
             stacklevel=2,
         )
     # DDPG requires image observations (see DDPG.__init__'s validated
-    # default and _setup_model's "at least one image key" check); no
-    # critic_encoder_config/encoder_sharing kwarg (encoder_sharing is a
-    # fixed "shared_critic_grad" class attribute here).
+    # default and _setup_model's "at least one image key" check) -- that
+    # restriction is independent of critic_encoder_config/encoder_sharing,
+    # which DDPG does support (a distinct/differently-backboned critic
+    # encoder over the same image+state keys).
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
+
     agent = construct_agent(
         DDPG,
         env=env,
@@ -50,8 +59,6 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
         weight_decay=args.weight_decay,
         use_adamw=args.use_adamw,
         grad_clip_norm=args.grad_clip_norm,
-        encoder_config=args.encoder if args.obs.is_visual else None,
-        obs_groups=resolve_obs_groups_config(args),
         image_augmentation_seed=args.seed + 1_000_003,
         seed=args.seed,
         logger=logger,
@@ -63,6 +70,7 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)

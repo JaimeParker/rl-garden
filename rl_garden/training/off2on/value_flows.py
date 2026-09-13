@@ -157,4 +157,11 @@ class ValueFlowsOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     policy_extraction: Literal["rs", "rpg"] = "rs"
 
 
-registry.register("value_flows", ValueFlowsOff2OnArgs, run_value_flows)
+
+
+def _off2_on_value_flows_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnValueFlows
+
+    return Off2OnValueFlows
+
+registry.register("value_flows", ValueFlowsOff2OnArgs, run_value_flows, algorithm_cls=_off2_on_value_flows_algorithm_cls)

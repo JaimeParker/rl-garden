@@ -30,7 +30,7 @@ class FloQPolicy(FQLPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         n_critics: int = 2,
@@ -44,8 +44,8 @@ class FloQPolicy(FQLPolicy):
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
-        actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         flow_num_ensembles: int = 2,
         embed_time: bool = True,
         time_embed_dim: int = 64,
@@ -59,7 +59,7 @@ class FloQPolicy(FQLPolicy):
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor,
             net_arch,
             n_critics=n_critics,
             actor_use_layer_norm=actor_use_layer_norm,
@@ -72,12 +72,12 @@ class FloQPolicy(FQLPolicy):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
+            critic_extractor=critic_extractor,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
         )
         del self.critic_target
 
-        fd = features_extractor.features_dim
+        fd = self.critic_features_dim
         action_dim = int(np.prod(action_space.shape))
         critic_flow_hidden_dims = (
             list(critic_flow_net_arch) if critic_flow_net_arch is not None else list(net_arch)

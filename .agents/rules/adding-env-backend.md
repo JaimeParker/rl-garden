@@ -325,27 +325,35 @@ Other reusable wrappers under `rl_garden/envs/wrappers/`, by name only:
 | `state` | `bool` | Whether to include the flat `"state"` key |
 | `rgb` | `tuple[str, ...]` | Camera names; each renders `rgb_<cam>` |
 | `depth` | `tuple[str, ...]` | Camera names; each renders `depth_<cam>` |
+| `extra_state` | `tuple[str, ...]` | Auxiliary low-dim key names; each renders `state_<name>` |
 | `image_size` | `Optional[tuple[int, int]]` | `(H, W)`; `None` = backend's own default |
 | `frame_stack` | `int` | 1 = no stacking; stacks images into a leading time dimension |
 
 A backend must produce **exactly** `req.observation.expected_keys` (image
-keys first, then `"state"` if requested) or raise `ObservationContractError`
-explaining what it cannot do — never silently drop, rename, or add a key.
+keys first, then `"state"` if requested, then `"state_<name>"` keys from
+`extra_state`) or raise `ObservationContractError` explaining what it cannot
+do — never silently drop, rename, or add a key. **No backend implements
+`extra_state` in this pass:** every backend raises `ObservationContractError`
+listing that it has no sources for the requested `extra_state` names (honor-or-raise).
+Per-backend follow-ups will add `extra_state` support where it exists (e.g.
+object pose from scene state in ManiSkill/IsaacLab, SLAM-estimated poses in
+real-world backends).
+
 State-only backends (mujoco benchmark tasks, minari, d4rl_legacy, custom,
 robomimic) call `require_state_only_observation(req.observation, backend=...)`
-(`rl_garden.envs.wrappers`) to reject any `rgb`/`depth`/`frame_stack` request
-up front, then wrap their single `Box`-observation `gym.Env` in
-`DictStateObservationWrapper` to emit `Dict({"state": Box})` — every
-state-only backend uses this wrapper instead of hand-rolling the same
-one-key dict. A backend with cameras names them by its own sensor
-vocabulary (e.g. ManiSkill `base_camera`/`hand_camera`, RoboTwin
-`head`/`left_wrist`/`right_wrist`) and validates unknown names against that
-vocabulary before touching the simulator.
+(`rl_garden.envs.wrappers`) to reject any `rgb`/`depth`/`extra_state`/
+`frame_stack` request up front, then wrap their single `Box`-observation
+`gym.Env` in `DictStateObservationWrapper` to emit `Dict({"state": Box})` —
+every state-only backend uses this wrapper instead of hand-rolling the same
+one-key dict. A backend with cameras names them by its own sensor vocabulary
+(e.g. ManiSkill `base_camera`/`hand_camera`, RoboTwin `head`/`left_wrist`/
+`right_wrist`) and validates unknown names against that vocabulary before
+touching the simulator.
 
 **Key vocabulary is strict and enforced centrally** — only `state`,
-`rgb_<cam>`, `depth_<cam>` are valid observation-space keys anywhere in
-rl-garden (`rl_garden.observations.schema.validate_observation_space`).
-Bare `rgb`/`depth` keys, `proprio`, or any other name are rejected.
+`state_<name>`, `rgb_<cam>`, `depth_<cam>` are valid observation-space keys
+anywhere in rl-garden (`rl_garden.observations.schema.validate_observation_space`).
+Bare `rgb`/`depth`/`state_` keys, `proprio`, or any other name are rejected.
 
 **Registry-level validation**: `make_training_envs`/`make_evaluation_env`
 (`rl_garden/envs/backend_registry.py::_validate_env_observation_contract`)

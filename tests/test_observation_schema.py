@@ -44,6 +44,26 @@ def test_config_no_state_visual_only():
     assert cfg.expected_keys == ("rgb_base_camera",)
 
 
+def test_config_extra_state_keys():
+    cfg = ObservationConfig(extra_state=("object_pose",))
+    assert cfg.extra_state == ("object_pose",)
+    assert cfg.expected_keys == ("state", "state_object_pose")
+
+
+def test_config_extra_state_coerces_list_and_alone_satisfies_modality():
+    cfg = ObservationConfig(state=False, extra_state=["object_pose"])
+    assert cfg.extra_state == ("object_pose",)
+    assert isinstance(cfg.extra_state, tuple)
+    assert cfg.expected_keys == ("state_object_pose",)
+
+
+def test_config_rejects_bad_extra_state_name():
+    with pytest.raises(ValueError):
+        ObservationConfig(extra_state=("bad/name",))
+    with pytest.raises(ValueError):
+        ObservationConfig(extra_state=("",))
+
+
 def test_config_coerces_lists_to_tuples():
     cfg = ObservationConfig(rgb=["base_camera", "wrist"], image_size=[64, 64])
     assert cfg.rgb == ("base_camera", "wrist")
@@ -90,6 +110,7 @@ def test_config_tyro_round_trip():
 
 def test_key_modality():
     assert key_modality("state") == Modality.STATE
+    assert key_modality("state_object_pose") == Modality.STATE
     assert key_modality("rgb_base_camera") == Modality.RGB
     assert key_modality("depth_wrist") == Modality.DEPTH
 
@@ -99,6 +120,13 @@ def test_key_modality_rejects_unknown():
         key_modality("proprio")
     with pytest.raises(ObservationContractError):
         key_modality("camera")
+
+
+def test_key_modality_rejects_bad_state_name():
+    with pytest.raises(ObservationContractError):
+        key_modality("state_")
+    with pytest.raises(ObservationContractError):
+        key_modality("state_a/b")
 
 
 def test_key_modality_rejects_bare_rgb_depth():
@@ -130,12 +158,34 @@ def _depth_box(h=64, w=64, stacked=False):
 def test_from_space_box_gives_single_state_entry():
     schema = ObservationSchema.from_space(_state_box(10))
     assert schema.keys == ("state",)
-    assert schema.state_key == "state"
+    assert schema.state_keys == ("state",)
     assert not schema.has_images
     assert schema.has_state
     assert schema.entries["state"].modality == Modality.STATE
     assert schema.entries["state"].shape == (10,)
     assert schema.entries["state"].stacked is False
+
+
+def test_from_space_state_keys_state_first_then_others_in_space_order():
+    space = spaces.Dict(
+        {
+            "state_object_pose": _state_box(7),
+            "state": _state_box(10),
+            "state_gripper": _state_box(3),
+        }
+    )
+    schema = ObservationSchema.from_space(space)
+    # gymnasium's spaces.Dict sorts keys alphabetically; "state" is a prefix
+    # of every "state_<name>" key so it always sorts first.
+    assert schema.state_keys == ("state", "state_gripper", "state_object_pose")
+    assert schema.has_state
+
+
+def test_from_space_extra_state_only_no_bare_state():
+    space = spaces.Dict({"state_object_pose": _state_box(7)})
+    schema = ObservationSchema.from_space(space)
+    assert schema.state_keys == ("state_object_pose",)
+    assert schema.has_state
 
 
 def test_from_space_dict_one_entry_per_key():
@@ -318,6 +368,18 @@ def test_validate_rejects_nested_dict():
 
 def test_validate_accepts_state_only_box():
     validate_observation_space(_state_box())
+
+
+def test_validate_accepts_extra_state_key():
+    validate_observation_space(
+        spaces.Dict({"state": _state_box(), "state_object_pose": _state_box(7)})
+    )
+
+
+def test_validate_rejects_extra_state_not_1d():
+    bad = spaces.Box(low=-1.0, high=1.0, shape=(2, 3), dtype=np.float32)
+    with pytest.raises(ObservationContractError):
+        validate_observation_space(spaces.Dict({"state_object_pose": bad}))
 
 
 # ---------------------------------------------------------------------------

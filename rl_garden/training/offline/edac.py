@@ -23,7 +23,10 @@ class EDACArgs(
     OfflineDeviceArgs,
     OfflineEDACArgs,
 ):
-    """EDAC offline pretraining. Box observations only."""
+    """EDAC offline pretraining. Box or Dict (vision) observations -- EDAC
+    is an ``OfflineSAC`` subclass, which supports vision through
+    ``SACCore`` (``OfflineCommonArgs`` already composes ``ObservationArgs``,
+    so no extra base is needed)."""
 
     gamma: float = 0.99
 
@@ -31,7 +34,9 @@ class EDACArgs(
 def _edac_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    return {
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+
+    kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
@@ -64,7 +69,13 @@ def _edac_kwargs(
         "checkpoint_freq": 0,
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        kwargs["encoder_sharing"] = args.encoder_sharing
+    return kwargs
 
 
 def build_edac(args, env_spec, logger, eval_env=None):
@@ -80,4 +91,10 @@ def run_edac(args: EDACArgs) -> None:
     run_offline(args, build_agent=build_edac)
 
 
-registry.register("edac", EDACArgs, run_edac)
+def _edac_algorithm_cls() -> type:
+    from rl_garden.algorithms import EDAC
+
+    return EDAC
+
+
+registry.register("edac", EDACArgs, run_edac, algorithm_cls=_edac_algorithm_cls)

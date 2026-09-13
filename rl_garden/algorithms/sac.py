@@ -28,7 +28,6 @@ from rl_garden.common.checkpoint import load_checkpoint_file, validate_checkpoin
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.sac_policy import SACPolicy
@@ -38,10 +37,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
     _compatible_checkpoint_algorithms = ("SAC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {
-            "features_extractor_class",
-            "features_extractor_kwargs",
-            "critic_features_extractor_class",
-            "critic_features_extractor_kwargs",
+            "actor_extractor_class",
+            "actor_extractor_kwargs",
+            "critic_extractor_class",
+            "critic_extractor_kwargs",
         }
     )
 
@@ -362,7 +361,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         )
         source = checkpoint["state"]["policy"]
         target = self.policy.state_dict()
-        prefixes = ("features_extractor.", "actor.", "_actor_adapter.")
+        prefixes = ("actor_extractor.", "actor.", "_actor_adapter.")
         selected = {
             key: value
             for key, value in source.items()
@@ -401,85 +400,17 @@ class SAC(SACCore, OffPolicyAlgorithm):
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs,
-            supported_keys=self._SUPPORTED_POLICY_KWARGS,
-            pairs=(
-                ("features_extractor_kwargs", "features_extractor_class"),
-                ("critic_features_extractor_kwargs", "critic_features_extractor_class"),
-            ),
-        )
-
-    def _ensure_observation_encoders(self):
-        """Resolve ``self.observation_encoders`` lazily, on first actual
-        need. Not called at all when ``policy_kwargs`` fully overrides both
-        the actor and critic extractors -- building the schema-driven
-        encoder(s) only to immediately discard them would waste real
-        compute and (since it initializes real nn.Module weights) shift RNG
-        consumption for every caller, override or not.
-        """
-        if not hasattr(self, "observation_encoders"):
-            self._resolve_observation_encoders(
-                self.env.single_observation_space,
-                augmentation_seed=self._image_augmentation_seed,
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
             )
-        return self.observation_encoders
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """The actor's features extractor: ``policy_kwargs`` explicit
-        override (raw escape hatch, unchanged), else the schema-driven
-        extractor resolved onto ``self.observation_encoders`` by
-        ``_resolve_observation_encoders`` (see ``_ensure_observation_encoders``)."""
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self._ensure_observation_encoders().actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
-            )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
-
-    def _build_critic_features_extractor(self) -> Optional[BaseFeaturesExtractor]:
-        """A second extractor for the critic: ``policy_kwargs`` explicit
-        override (raw escape hatch, unchanged) takes priority; otherwise
-        ``self.observation_encoders.critic`` -- ``None`` in shared modes
-        (SACPolicy then shares ``features_extractor``, today's exact
-        default behavior), or a real independent extractor when
-        ``encoder_sharing="separate"`` (the schema-driven replacement for
-        the old ``critic_features_extractor_class`` heterogeneous-encoder
-        path)."""
-        critic_class = self.policy_kwargs.get("critic_features_extractor_class")
-        if critic_class is None:
-            # observation_encoders.critic is unconditionally None outside
-            # encoder_sharing="separate" (see resolve_observation_encoders);
-            # skip resolving it at all in that (common) case rather than
-            # building a real actor-role encoder here just to read `.critic`
-            # off the same result -- only relevant when _build_features_
-            # extractor's own override made that build otherwise unnecessary.
-            if self.encoder_sharing != "separate":
-                return None
-            return self._ensure_observation_encoders().critic
-        if not isinstance(critic_class, type) or not issubclass(
-            critic_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['critic_features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
-            )
-        critic_kwargs = self.policy_kwargs.get("critic_features_extractor_kwargs") or {}
-        return critic_class(
-            observation_space=self.env.single_observation_space,
-            **critic_kwargs,
-        )
+        return normalized
 
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional;
@@ -526,11 +457,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
     def _policy_action_space(self) -> spaces.Box:
         return self.env.single_action_space
 
-    def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> SACPolicy:
+    def _build_policy(self) -> SACPolicy:
         return SACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
@@ -541,20 +471,12 @@ class SAC(SACCore, OffPolicyAlgorithm):
             log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            critic_features_extractor=self._build_critic_features_extractor(),
             critic_backbone_type=self.critic_backbone_type,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
         )
-
-    def _actor_stop_gradient(self) -> bool:
-        # Two distinct extractors (via a policy_kwargs override or
-        # encoder_sharing="separate"): features_extractor is actor-exclusive
-        # and needs the actor loss's gradient -- nothing else would ever
-        # train it. See SACPolicy.actor_parameters(). Otherwise, stop-gradient
-        # only under "shared_critic_grad" (its established Q-loss-only
-        # training convention); "shared" trains the encoder from both losses.
-        if self.policy.critic_features_extractor is not self.policy.features_extractor:
-            return False
-        return self.encoder_sharing == "shared_critic_grad"
 
     @staticmethod
     def _resolve_net_arch(
@@ -593,8 +515,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
         return [256, 256, 256]
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
-        self.policy = self._build_policy(features_extractor).to(self.device)
+        self.policy = self._build_policy().to(self.device)
 
         self.q_optimizer = make_optimizer(
             list(self.policy.critic_and_encoder_parameters()),

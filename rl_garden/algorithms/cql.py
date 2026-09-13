@@ -19,7 +19,6 @@ from rl_garden.common.alpha_tuning import softplus_inverse
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.sac_policy import SACPolicy, TemperatureLagrange
@@ -66,10 +65,10 @@ class CQLCore(SACCore):
 
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {
-            "features_extractor_class",
-            "features_extractor_kwargs",
-            "critic_features_extractor_class",
-            "critic_features_extractor_kwargs",
+            "actor_extractor_class",
+            "actor_extractor_kwargs",
+            "critic_extractor_class",
+            "critic_extractor_kwargs",
         }
     )
 
@@ -333,57 +332,17 @@ class CQLCore(SACCore):
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs,
-            supported_keys=self._SUPPORTED_POLICY_KWARGS,
-            pairs=(
-                ("features_extractor_kwargs", "features_extractor_class"),
-                ("critic_features_extractor_kwargs", "critic_features_extractor_class"),
-            ),
-        )
-
-    def _ensure_observation_encoders(self):
-        if not hasattr(self, "observation_encoders"):
-            self._resolve_observation_encoders(self.env.single_observation_space)
-        return self.observation_encoders
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self._ensure_observation_encoders().actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
             )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
-
-    def _build_critic_features_extractor(self) -> Optional[BaseFeaturesExtractor]:
-        critic_class = self.policy_kwargs.get("critic_features_extractor_class")
-        if critic_class is None:
-            if self.encoder_sharing != "separate":
-                return None
-            return self._ensure_observation_encoders().critic
-        if not isinstance(critic_class, type) or not issubclass(
-            critic_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['critic_features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
-            )
-        critic_kwargs = self.policy_kwargs.get("critic_features_extractor_kwargs") or {}
-        return critic_class(
-            observation_space=self.env.single_observation_space,
-            **critic_kwargs,
-        )
+        return normalized
 
     @staticmethod
     def _resolve_net_arch(
@@ -430,11 +389,9 @@ class CQLCore(SACCore):
         )
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
         self.policy = SACPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
@@ -454,7 +411,7 @@ class CQLCore(SACCore):
             log_std_min=-20.0,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            critic_features_extractor=self._build_critic_features_extractor(),
+            **self._policy_extractor_kwargs(self.env.single_observation_space),
         ).to(self.device)
 
         self.q_optimizer = make_optimizer(
@@ -610,7 +567,7 @@ class CQLCore(SACCore):
             [cql_random_actions, cql_current_actions, cql_next_actions], dim=1
         )
 
-        features = self.policy.extract_features(data.obs)
+        features = self.policy.extract_critic_features(data.obs)
         feat_dim = features.shape[-1]
         n_samples = 3 * self.cql_n_actions
         features_repeated = (
@@ -683,7 +640,7 @@ class CQLCore(SACCore):
                     data.next_obs, self.cql_n_actions
                 )
                 batch_size = next_actions.shape[0]
-                next_features = self.policy.extract_features(data.next_obs)
+                next_features = self.policy.extract_critic_features(data.next_obs)
                 feat_dim = next_features.shape[-1]
                 action_dim = next_actions.shape[-1]
                 features_repeated = (
@@ -705,8 +662,11 @@ class CQLCore(SACCore):
                 min_q_next = q_next_min.gather(1, max_idx)
                 next_log_prob = next_log_probs.gather(1, max_idx)
             else:
-                next_action, next_log_prob, next_features = self.policy.actor_action_log_prob(
-                    data.next_obs, stop_gradient=False
+                next_action, next_log_prob, next_actor_features = self.policy.actor_action_log_prob(
+                    data.next_obs
+                )
+                next_features = self.policy.critic_features_for(
+                    data.next_obs, next_actor_features, stop_gradient=True
                 )
                 min_q_next = self.policy.min_q_value(
                     next_features,
@@ -759,11 +719,12 @@ class CQLCore(SACCore):
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
-        action, log_prob, features = self.policy.actor_action_log_prob(
-            obs, stop_gradient=self._actor_stop_gradient()
+        action, log_prob, actor_features = self.policy.actor_action_log_prob(obs)
+        critic_features = self.policy.critic_features_for(
+            obs, actor_features, stop_gradient=True
         )
         min_q = self.policy.min_q_value(
-            features, action, subsample_size=None, target=False
+            critic_features, action, subsample_size=None, target=False
         )
         return (alpha * log_prob - min_q).mean(), log_prob.detach()
 
@@ -792,11 +753,6 @@ class CQLCore(SACCore):
         if self.cql_autotune_alpha or self.use_cql_loss:
             info["cql_alpha"] = self._current_cql_alpha().detach()
         return info
-
-    def _actor_stop_gradient(self) -> bool:
-        if self.policy.critic_features_extractor is not self.policy.features_extractor:
-            return False
-        return self.encoder_sharing == "shared_critic_grad"
 
 
 class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):

@@ -121,4 +121,11 @@ def run_bppo(args: BPPOArgs) -> None:
     run_offline(args, build_agent=build_bppo)
 
 
-registry.register("bppo", BPPOArgs, run_bppo)
+
+
+def _bppo_algorithm_cls() -> type:
+    from rl_garden.algorithms import BPPO
+
+    return BPPO
+
+registry.register("bppo", BPPOArgs, run_bppo, algorithm_cls=_bppo_algorithm_cls)

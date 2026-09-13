@@ -46,6 +46,8 @@ def require_state_only_observation(observation: ObservationConfig, *, backend: s
             f"{backend} backend is state-only; observation.state=False leaves "
             "nothing to observe"
         )
+    if observation.extra_state:
+        raise ObservationContractError(f"{backend} has no extra state sources")
 
 
 class DictStateObservationWrapper(gym.ObservationWrapper):

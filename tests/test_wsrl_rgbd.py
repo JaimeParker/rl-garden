@@ -63,9 +63,9 @@ class TestWSRLDictCreation:
         assert "rgb_cam" in obs_space.spaces
         assert "state" in obs_space.spaces
 
-    def test_features_extractor_is_combined(self, wsrlrgbd_agent):
+    def test_actor_extractor_is_combined(self, wsrlrgbd_agent):
         from rl_garden.encoders.combined import CombinedExtractor
-        assert isinstance(wsrlrgbd_agent.policy.features_extractor, CombinedExtractor)
+        assert isinstance(wsrlrgbd_agent.policy.actor_extractor, CombinedExtractor)
 
     def test_replay_buffer_is_mc_buffer(self, wsrlrgbd_agent):
         from rl_garden.buffers.mc_buffer import MCReplayBuffer
@@ -73,7 +73,9 @@ class TestWSRLDictCreation:
 
     def test_actor_image_stop_gradient_optional(self, rgbd_env):
         # encoder_sharing="shared" is now a first-class supported mode (not
-        # an error): both losses train the encoder, no actor-path detach.
+        # an error): both losses train the encoder, no actor-path detach --
+        # BasePolicy.extract_actor_features only detaches under
+        # encoder_sharing="shared_critic_grad" (see rl_garden/policies/base.py).
         agent = WSRL(
             env=rgbd_env,
             buffer_size=100,
@@ -82,7 +84,16 @@ class TestWSRLDictCreation:
             encoder_sharing="shared",
             device="cpu",
         )
-        assert agent._actor_stop_gradient() is False
+        obs = {
+            "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),
+            "state": torch.randn(4, 4),
+        }
+        features = agent.policy.extract_actor_features(obs)
+        image_features = agent.policy.actor_extractor._encode_images(
+            obs, stop_gradient=False
+        )[0]
+        assert image_features.requires_grad
+        assert features.requires_grad
 
     def test_without_proprio(self, rgbd_env):
         """``ObsGroups`` excluding ``state`` from both actor and critic drops
@@ -136,7 +147,7 @@ class TestWSRLDictObservations:
         assert action.shape == (4, 2)
         assert log_prob.shape == (4, 1)
 
-    def test_actor_stop_gradient(self, wsrlrgbd_agent):
+    def test_actor_rgbd_image_stop_gradient(self, wsrlrgbd_agent):
         obs = {
             "rgb_cam": torch.randint(0, 255, (4, 128, 128, 3), dtype=torch.uint8),  # HWC
             "state": torch.randn(4, 4),
@@ -148,7 +159,7 @@ class TestWSRLDictObservations:
         assert features_stopped.shape[0] == 4
         # RGBD stop-gradient follows hil-serl: image encodings are detached, while
         # proprio features may still require grad before optimizer filtering.
-        image_features = wsrlrgbd_agent.policy.features_extractor._encode_images(
+        image_features = wsrlrgbd_agent.policy.actor_extractor._encode_images(
             obs, stop_gradient=True
         )[0]
         assert not image_features.requires_grad
@@ -275,7 +286,7 @@ class TestWSRLDictConfiguration:
             device="cpu",
         )
 
-        assert agent.policy.features_extractor.features_dim > 0
+        assert agent.policy.actor_extractor.features_dim > 0
         from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
         assert isinstance(agent.replay_buffer, MCReplayBuffer)

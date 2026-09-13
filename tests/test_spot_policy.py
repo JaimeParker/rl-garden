@@ -15,7 +15,7 @@ def _make_policy(**kwargs) -> SPOTPolicy:
     fe = FlattenExtractor(observation_space=OBS_SPACE)
     defaults = dict(net_arch=[16, 16], vae_hidden_dim=16)
     defaults.update(kwargs)
-    return SPOTPolicy(OBS_SPACE, ACT_SPACE, fe, **defaults)
+    return SPOTPolicy(OBS_SPACE, ACT_SPACE, actor_extractor=fe, **defaults)
 
 
 def test_vae_is_a_real_submodule_in_state_dict():

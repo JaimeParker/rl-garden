@@ -16,10 +16,9 @@ from rl_garden.buffers.rollout_buffer import RolloutBuffer, RolloutBufferSample
 from rl_garden.common.ddp import allreduce_grads, allreduce_mean, is_ddp_active
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.actor_critic import gaussian_kl_divergence
-from rl_garden.observations import ObsGroups, normalize_observation_space
+from rl_garden.observations import ObsGroups
 from rl_garden.policies.ppo_policy import PPOPolicy
 
 
@@ -46,10 +45,10 @@ class PPO(OnPolicyAlgorithm):
     _compatible_checkpoint_algorithms = ("PPO",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {
-            "features_extractor_class",
-            "features_extractor_kwargs",
-            "critic_features_extractor_class",
-            "critic_features_extractor_kwargs",
+            "actor_extractor_class",
+            "actor_extractor_kwargs",
+            "critic_extractor_class",
+            "critic_extractor_kwargs",
         }
     )
 
@@ -221,30 +220,21 @@ class PPO(OnPolicyAlgorithm):
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()
 
-    def _actor_stop_gradient(self) -> bool:
-        # Two distinct extractors (via a policy_kwargs override or
-        # encoder_sharing="separate"): features_extractor is actor-exclusive
-        # and needs the actor loss's gradient -- nothing else would ever
-        # train it. See PPOPolicy.critic_features_extractor. Otherwise,
-        # stop-gradient only under "shared_critic_grad" (only the value loss
-        # trains the encoder, PPO's established default); "shared" trains
-        # the encoder from both losses.
-        if self.policy.critic_features_extractor is not self.policy.features_extractor:
-            return False
-        return self.encoder_sharing == "shared_critic_grad"
-
     def _rollout_policy(
         self, obs
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         policy_obs = self._obs_to_policy_device(obs)
-        self.policy.update_obs_normalizer(policy_obs)
+        self.policy.update_normalizer(policy_obs)
+        # No explicit stop_gradient_actor: PPOPolicy applies
+        # BasePolicy.extract_actor_features's encoder_sharing rule by
+        # default (see rl_garden/policies/base.py); both call sites are
+        # under torch.no_grad() anyway (rollout, no training gradients).
         if self.lr_schedule == "adaptive_kl":
             with torch.no_grad():
                 actions, values, log_prob, entropy, mean, log_std = (
                     self.policy.act_with_value_logprob_and_dist_params(
                         policy_obs,
                         deterministic=False,
-                        stop_gradient_actor=self._actor_stop_gradient(),
                     )
                 )
             self._rollout_mean, self._rollout_log_std = mean, log_std
@@ -253,7 +243,6 @@ class PPO(OnPolicyAlgorithm):
             return self.policy(
                 policy_obs,
                 deterministic=False,
-                stop_gradient_actor=self._actor_stop_gradient(),
             )
 
     def _extra_rollout_buffer_kwargs(self) -> dict:
@@ -357,81 +346,22 @@ class PPO(OnPolicyAlgorithm):
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs,
-            supported_keys=self._SUPPORTED_POLICY_KWARGS,
-            pairs=(
-                ("features_extractor_kwargs", "features_extractor_class"),
-                ("critic_features_extractor_kwargs", "critic_features_extractor_class"),
-            ),
-        )
-
-    def _ensure_observation_encoders(self):
-        """Resolve ``self.observation_encoders`` lazily, on first actual
-        need. Not called at all when ``policy_kwargs`` fully overrides both
-        the actor and critic extractors -- building the schema-driven
-        encoder(s) only to immediately discard them would waste real
-        compute and (since it initializes real nn.Module weights) shift RNG
-        consumption for every caller, override or not. See SAC's identical
-        pattern."""
-        if not hasattr(self, "observation_encoders"):
-            self._resolve_observation_encoders(self.env.single_observation_space)
-        return self.observation_encoders
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """The actor's features extractor: ``policy_kwargs`` explicit
-        override (raw escape hatch, unchanged), else the schema-driven
-        extractor resolved onto ``self.observation_encoders``."""
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self._ensure_observation_encoders().actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
             )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
-
-    def _build_critic_features_extractor(self) -> Optional[BaseFeaturesExtractor]:
-        """A second extractor for PPO's value head: ``policy_kwargs``
-        explicit override (raw escape hatch, unchanged) takes priority;
-        otherwise ``self.observation_encoders.critic`` -- ``None`` in
-        shared modes (PPOPolicy then shares ``features_extractor``, today's
-        exact default behavior), or a real independent extractor when
-        ``encoder_sharing="separate"``."""
-        critic_class = self.policy_kwargs.get("critic_features_extractor_class")
-        if critic_class is None:
-            if self.encoder_sharing != "separate":
-                return None
-            return self._ensure_observation_encoders().critic
-        if not isinstance(critic_class, type) or not issubclass(
-            critic_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['critic_features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
-            )
-        critic_kwargs = self.policy_kwargs.get("critic_features_extractor_kwargs") or {}
-        return critic_class(
-            observation_space=self.env.single_observation_space,
-            **critic_kwargs,
-        )
+        return normalized
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
-        critic_features_extractor = self._build_critic_features_extractor()
         self.policy = PPOPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             log_std_init=self.log_std_init,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -443,8 +373,8 @@ class PPO(OnPolicyAlgorithm):
             value_dropout_rate=self.value_dropout_rate,
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
-            critic_features_extractor=critic_features_extractor,
             critic_backbone_type=self.critic_backbone_type,
+            **self._policy_extractor_kwargs(self.env.single_observation_space),
         ).to(self.device)
         self.policy_optimizer = make_optimizer(
             self.policy.parameters(),
@@ -593,17 +523,15 @@ class PPO(OnPolicyAlgorithm):
         """Returns 1-D (values, log_prob, entropy, old_values, old_log_prob,
         advantages, returns, old_mean, old_log_std, new_mean, new_log_std).
         The last four are ``None`` unless ``lr_schedule == "adaptive_kl"``."""
+        # No explicit stop_gradient_actor: PPOPolicy applies
+        # BasePolicy.extract_actor_features's encoder_sharing rule by default.
         if self.lr_schedule == "adaptive_kl":
             values, log_prob, entropy, new_mean, new_log_std = (
-                self.policy.evaluate_actions_with_dist_params(
-                    data.obs, data.actions, stop_gradient_actor=self._actor_stop_gradient()
-                )
+                self.policy.evaluate_actions_with_dist_params(data.obs, data.actions)
             )
             old_mean, old_log_std = data.old_mean, data.old_log_std
         else:
-            values, log_prob, entropy = self.policy.evaluate_actions(
-                data.obs, data.actions, stop_gradient_actor=self._actor_stop_gradient()
-            )
+            values, log_prob, entropy = self.policy.evaluate_actions(data.obs, data.actions)
             new_mean = new_log_std = old_mean = old_log_std = None
         return (
             values.flatten(), log_prob.flatten(), entropy.flatten(),

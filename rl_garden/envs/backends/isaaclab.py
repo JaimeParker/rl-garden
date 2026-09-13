@@ -33,6 +33,8 @@ class IsaacLabBackend(EnvBackend):
                 "resolution is fixed by the task registration (see "
                 "RLGardenDirectRLEnv-scaffold task docstrings)"
             )
+        if obs.extra_state:
+            raise ObservationContractError("isaaclab has no extra state sources")
         il = req.backend_config  # IsaacLabConfig or None
         return IsaacLabEnvConfig(
             env_id=req.env_id,

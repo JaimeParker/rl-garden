@@ -14,6 +14,7 @@ from typing import Any, Literal, Optional
 import torch
 import torch.nn.functional as F
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.buffers.nstep_buffer import (
     LazyNextNStepReplayBuffer,
@@ -23,7 +24,6 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.schedules import schedule
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.observations.schema import ObservationContractError
@@ -95,6 +95,8 @@ class DDPG(OffPolicyAlgorithm):
         # --- Vision ---
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         # --- Misc ---
         policy_kwargs: Optional[dict[str, Any]] = None,
@@ -185,6 +187,13 @@ class DDPG(OffPolicyAlgorithm):
             else EncoderConfig(backbone="drqv2_conv", image_augmentation="random_shift")
         )
         self.obs_groups = obs_groups
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
+        self.critic_encoder_config = critic_encoder_config
         self._image_augmentation_seed = image_augmentation_seed
 
         self.policy_kwargs = dict(policy_kwargs or {})
@@ -196,38 +205,35 @@ class DDPG(OffPolicyAlgorithm):
     # Construction
     # ------------------------------------------------------------------
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """``policy_kwargs`` explicit override (raw escape hatch, unchanged),
-        else the schema-driven extractor resolved onto
-        ``self.observation_encoders`` by ``_resolve_observation_encoders``
-        (see ``_setup_model``, which resolves it eagerly so the "at least
-        one image key" check below can run regardless of any override)."""
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self.observation_encoders.actor
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
-
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             self.env.single_observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
+        # _resolve_observation_encoders (called lazily by
+        # _policy_extractor_kwargs above whenever the schema-driven encoder
+        # is needed) always sets self.observation_encoders when it runs; a
+        # full policy_kwargs override of both actor_extractor_class and
+        # critic_extractor_class (when encoder_sharing == "separate") would
+        # skip that -- but the "at least one image key" check only matters
+        # for the schema-driven default, so resolve it explicitly here too
+        # when not already resolved by the kwargs helper.
+        if not hasattr(self, "observation_encoders"):
+            self._resolve_observation_encoders(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            )
         if not self.observation_encoders.schema.has_images:
             raise ObservationContractError(
                 "DDPG requires at least one image observation key; observation "
                 f"space has keys {self.observation_encoders.schema.keys!r}."
             )
-        features_extractor = self._build_features_extractor()
         self.policy = DDPGPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             feature_dim=self.feature_dim,
             hidden_dim=self.hidden_dim,
+            **extractor_kwargs,
         ).to(self.device)
 
         self.q_optimizer = make_optimizer(
@@ -311,7 +317,7 @@ class DDPG(OffPolicyAlgorithm):
             if self._global_step < self.num_expl_steps:
                 actions = self._explore_action(obs)
             else:
-                features = self.policy.extract_features(obs_device)
+                features = self.policy.extract_actor_features(obs_device)
                 dist = self.policy.actor(features, stddev)
                 actions = dist.sample(clip=None)
         return actions, actions, None
@@ -358,12 +364,12 @@ class DDPG(OffPolicyAlgorithm):
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self.replay_buffer.sample(self.batch_size)
-            self.policy.features_extractor.prepare_batch(data.obs, data.next_obs)
+            self.policy.prepare_batch_all(data.obs, data.next_obs)
 
             # --- Critic update ---
-            obs_features = self.policy.extract_features(data.obs)
+            obs_critic_features = self.policy.extract_critic_features(data.obs)
             with torch.no_grad():
-                next_features = self.policy.extract_features(data.next_obs)
+                next_features = self.policy.extract_critic_features(data.next_obs)
                 target_std, target_clip = self._target_action_noise()
                 dist = self.policy.actor(next_features, target_std)
                 next_action = dist.sample(clip=target_clip)
@@ -375,7 +381,7 @@ class DDPG(OffPolicyAlgorithm):
                     + data.discounts.reshape(-1, 1) * target_q_all.min(dim=0).values
                 )
 
-            q_all = self.policy.q_values_all(obs_features, data.actions, target=False)
+            q_all = self.policy.q_values_all(obs_critic_features, data.actions, target=False)
             critic_loss = self._critic_loss(q_all, target_q)
 
             self.q_optimizer.zero_grad(set_to_none=True)
@@ -397,14 +403,30 @@ class DDPG(OffPolicyAlgorithm):
             if self._should_update_actor_and_target():
                 # --- Actor update ---
                 stddev = self._current_stddev()
-                features_detached = obs_features.detach()
+                # Reuse the critic's own (already-computed) obs features
+                # when the encoder_sharing rule lets us (DrQ-v2's single
+                # augmented view -- see BasePolicy.actor_features_from_critic);
+                # only re-run the encoder (extract_actor_features) when the
+                # actor genuinely has its own, separate extractor.
+                actor_features = self.policy.actor_features_from_critic(
+                    obs_critic_features
+                )
+                if actor_features is None:
+                    actor_features = self.policy.extract_actor_features(data.obs)
                 action = self.policy.actor_action_from_features(
-                    features_detached,
+                    actor_features,
                     stddev,
                     noise_clip=self.stddev_clip,
                 )
+                # obs_critic_features (computed once, above, for the critic
+                # loss) is already critic-role features for this same
+                # data.obs regardless of encoder_sharing -- reuse it
+                # (detached) instead of critic_features_for's own
+                # re-extraction, which would otherwise re-run the critic's
+                # encoder a second time under "separate".
+                q_actor_features = obs_critic_features.detach()
                 q_actor_all = self.policy.q_values_all(
-                    features_detached, action, target=False
+                    q_actor_features, action, target=False
                 )
                 actor_loss = -self._actor_q_value(q_actor_all).mean()
 
@@ -486,6 +508,11 @@ class DDPG(OffPolicyAlgorithm):
             ),
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
+            ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
             ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }

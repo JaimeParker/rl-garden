@@ -101,4 +101,11 @@ def run_fino(args: FINOArgs) -> None:
     run_offline(args, build_agent=build_fino)
 
 
-registry.register("fino", FINOArgs, run_fino)
+
+
+def _fino_algorithm_cls() -> type:
+    from rl_garden.algorithms import FINO
+
+    return FINO
+
+registry.register("fino", FINOArgs, run_fino, algorithm_cls=_fino_algorithm_cls)

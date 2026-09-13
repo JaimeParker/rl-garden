@@ -28,7 +28,7 @@ class RLPDHybridPolicy(RLPDPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         discrete_hidden_dims: Sequence[int] = (256,),
         discrete_use_layer_norm: bool = True,
         n_discrete_actions: int = 3,
@@ -45,19 +45,19 @@ class RLPDHybridPolicy(RLPDPolicy):
             dtype=action_space.dtype,
         )
         super().__init__(
-            observation_space, continuous_action_space, features_extractor, **rlpd_kwargs
+            observation_space, continuous_action_space, actor_extractor, **rlpd_kwargs
         )
         # discrete_critic is architecturally a third critic head -- follows
-        # the critic role's extractor (== features_extractor in the default
-        # shared case).
+        # the critic role's extractor (falls back to actor_extractor in the
+        # default shared case).
         self.discrete_critic = DiscreteCritic(
-            self.critic_features_extractor.features_dim,
+            self.critic_features_dim,
             discrete_hidden_dims,
             n_actions=n_discrete_actions,
             use_layer_norm=discrete_use_layer_norm,
         )
         self.discrete_target_critic = DiscreteCritic(
-            self.critic_features_extractor.features_dim,
+            self.critic_features_dim,
             discrete_hidden_dims,
             n_actions=n_discrete_actions,
             use_layer_norm=discrete_use_layer_norm,

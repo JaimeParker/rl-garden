@@ -151,4 +151,11 @@ def run_wsrl(args: WSRLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_wsrl, algorithm="wsrl")
 
 
-registry.register("wsrl", WSRLOff2OnArgs, run_wsrl)
+
+
+def _wsrl_algorithm_cls() -> type:
+    from rl_garden.algorithms import WSRL
+
+    return WSRL
+
+registry.register("wsrl", WSRLOff2OnArgs, run_wsrl, algorithm_cls=_wsrl_algorithm_cls)

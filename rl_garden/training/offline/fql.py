@@ -98,4 +98,11 @@ def run_fql(args: FQLArgs) -> None:
     run_offline(args, build_agent=build_fql)
 
 
-registry.register("fql", FQLArgs, run_fql)
+
+
+def _fql_algorithm_cls() -> type:
+    from rl_garden.algorithms import FQL
+
+    return FQL
+
+registry.register("fql", FQLArgs, run_fql, algorithm_cls=_fql_algorithm_cls)

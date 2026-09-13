@@ -39,6 +39,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
 from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
@@ -101,11 +102,28 @@ class BPPOCriticMixin:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 
     def _build_critic(self) -> None:
-        obs_dim = self.observation_encoders.actor.features_dim
+        # value_net/q_net read through the critic-role extractor (the
+        # mixin's own resolved encoder -- shared with the actor under
+        # "shared"/"shared_critic_grad", or its own separate encoder under
+        # "separate"), sized from its features_dim rather than the actor
+        # extractor's, so it stays correct regardless of which of the two
+        # is wider (e.g. under "separate" with a distinct
+        # critic_encoder_config). Using the mixin's own extractor -- not
+        # self.policy.extract_critic_features -- keeps this uniform across
+        # both BPPO's single BCPolicy actor and UniO4's BC-ensemble actor,
+        # neither of which is a single canonical "self.policy" to route
+        # through for the critic role.
+        critic_extractor = self.observation_encoders.critic_or_actor
+        obs_dim = critic_extractor.features_dim
         action_dim = self.env.single_action_space.shape[0]
         self.value_net = ValueNetwork(obs_dim, list(self.value_hidden_dims)).to(
             self.device
@@ -116,14 +134,23 @@ class BPPOCriticMixin:
         self.q_target = copy.deepcopy(self.q_net).to(self.device)
         for param in self.q_target.parameters():
             param.requires_grad_(False)
+        # critic_extractor's own parameters (shared with the actor under
+        # "shared"/"shared_critic_grad", or a genuinely separate encoder
+        # under "separate") are trained by BOTH losses below. Each loss
+        # does its own extract() call right before its own forward pass
+        # (see _phase_a_step) rather than reusing one shared activation
+        # tensor, so the two sequential optimizer.step() calls below never
+        # corrupt each other's autograd graph despite training the same
+        # (possibly shared) extractor parameters.
+        critic_extractor_params = list(critic_extractor.parameters())
         self.value_optimizer = make_optimizer(
-            list(self.value_net.parameters()),
+            list(self.value_net.parameters()) + critic_extractor_params,
             lr=self.value_lr,
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
         )
         self.q_optimizer = make_optimizer(
-            list(self.q_net.parameters()),
+            list(self.q_net.parameters()) + critic_extractor_params,
             lr=self.q_lr,
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
@@ -131,32 +158,37 @@ class BPPOCriticMixin:
         self._critic_step = 0
 
     def _phase_a_step(self, data) -> dict[str, float]:
-        # value_net/q_net are raw flat-tensor MLPs, not schema/encoder-driven
-        # (state-only by construction -- see _setup_observation_encoders's
-        # has_images guard), so they read data.obs["state"] directly rather
-        # than going through the actor's features extractor.
-        obs = data.obs["state"]
-        next_obs = data.next_obs["state"]
-        value_pred = self.value_net(obs).squeeze(-1)
+        critic_extractor = self.observation_encoders.critic_or_actor
+        value_features = critic_extractor.extract(data.obs)
+        value_pred = self.value_net(value_features).squeeze(-1)
         value_loss = F.mse_loss(value_pred, data.mc_returns)
 
         with torch.no_grad():
-            target_next_q = self.q_target(next_obs, data.next_actions).squeeze(-1)
+            next_features = critic_extractor.extract(data.next_obs)
+            target_next_q = self.q_target(next_features, data.next_actions).squeeze(-1)
             td_target = data.rewards + self.gamma * target_next_q
         # Two independent masks: true termination (`dones`, TD bootstrap
         # stop) and the artificial `timeouts` boundary the SARSA next-action
         # shift must not cross (`next_action_valid`) -- see
         # rl_garden/buffers/sarsa_buffer.py's module docstring.
         valid = (~data.dones.bool()) & data.next_action_valid
-        q_pred = self.q_net(obs, data.actions).squeeze(-1)
-        if valid.any():
-            q_loss = F.mse_loss(q_pred[valid], td_target[valid])
-        else:
-            q_loss = q_pred.sum() * 0.0
 
         self.value_optimizer.zero_grad(set_to_none=True)
         value_loss.backward()
         self.value_optimizer.step()
+
+        # Fresh forward pass (not value_features reused): computed AFTER
+        # value_optimizer.step() so this graph's saved tensors reflect the
+        # just-updated (possibly shared) critic_extractor weights, never the
+        # pre-step ones value_loss's backward already consumed -- reusing
+        # value_features here would corrupt q_loss's backward once
+        # value_optimizer.step() has modified those parameters in place.
+        q_features = critic_extractor.extract(data.obs)
+        q_pred = self.q_net(q_features, data.actions).squeeze(-1)
+        if valid.any():
+            q_loss = F.mse_loss(q_pred[valid], td_target[valid])
+        else:
+            q_loss = q_pred.sum() * 0.0
 
         self.q_optimizer.zero_grad(set_to_none=True)
         q_loss.backward()
@@ -182,6 +214,12 @@ class BPPOCriticMixin:
             "value_net": self.value_net.state_dict(),
             "q_net": self.q_net.state_dict(),
             "q_target": self.q_target.state_dict(),
+            # Saved unconditionally: under "shared"/"shared_critic_grad"
+            # this duplicates self.policy's own actor_extractor state
+            # (harmless, self.policy is checkpointed separately), but under
+            # "separate" it is the ONLY place this critic-only encoder's
+            # trained weights get persisted at all.
+            "critic_extractor": self.observation_encoders.critic_or_actor.state_dict(),
             "critic_step": self._critic_step,
         }
 
@@ -192,6 +230,10 @@ class BPPOCriticMixin:
             self.q_net.load_state_dict(state["q_net"])
         if "q_target" in state:
             self.q_target.load_state_dict(state["q_target"])
+        if "critic_extractor" in state:
+            self.observation_encoders.critic_or_actor.load_state_dict(
+                state["critic_extractor"]
+            )
         self._critic_step = int(state.get("critic_step", 0))
 
     def _critic_checkpoint_metadata(self) -> dict[str, Any]:
@@ -210,6 +252,16 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
     """Behavior Proximal Policy Optimization. Box observations only."""
 
     _compatible_checkpoint_algorithms = ("BPPO",)
+    # No class-level override: value_net/q_net now read through the
+    # critic-role extractor too (BPPOCriticMixin._build_critic/_phase_a_step),
+    # so ObservationEncoderMixin's "shared_critic_grad" default is
+    # meaningful here like every other critic-bearing algorithm -- the
+    # actor's (BCPolicy) update (_phase_b_step_update) reads features via
+    # extract_actor_features, so BasePolicy's stop-gradient rule
+    # (actor_features_detached) applies uniformly: under
+    # "shared_critic_grad" the actor loss does not train the shared
+    # encoder; under "separate" the actor extractor is trained only by
+    # actor losses.
 
     def __init__(
         self,
@@ -247,6 +299,8 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -284,6 +338,13 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
         if critic_warmup_steps < 0:
             raise ValueError(
@@ -339,7 +400,7 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         return BCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=self.observation_encoders.actor,
+            actor_extractor=self.observation_encoders.actor,
             net_arch=list(self.actor_hidden_dims),
             use_layer_norm=self.use_layer_norm,
             use_group_norm=self.use_group_norm,
@@ -349,6 +410,7 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
             tanh_squash=False,
+            encoder_sharing=self.encoder_sharing,
         ).to(self.device)
 
     def _build_replay_buffer(self) -> SarsaMCReplayBuffer:
@@ -416,14 +478,18 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         with torch.no_grad():
             old_features = self.old_policy.extract_features(obs)
             action, old_log_prob = self.old_policy.actor.action_log_prob(old_features)
-            # value_net/q_net are raw flat-tensor MLPs (see _phase_a_step).
+            # value_net/q_net read through the critic-role extractor (see
+            # BPPOCriticMixin._build_critic/_phase_a_step), not a raw
+            # obs["state"] read -- this also concatenates any extra
+            # state_<name> keys the same way those nets were sized for.
+            critic_features = self.observation_encoders.critic_or_actor.extract(obs)
             advantage = (
-                self.q_net(obs["state"], action) - self.value_net(obs["state"])
+                self.q_net(critic_features, action) - self.value_net(critic_features)
             ).squeeze(-1)
             advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
             advantage = self._weighted_advantage(advantage)
 
-        new_features = self.policy.extract_features(obs, stop_gradient=False)
+        new_features = self.policy.extract_actor_features(obs)
         new_log_prob = self.policy.actor.evaluate_action_log_prob(new_features, action)
         ratio = (new_log_prob.squeeze(-1) - old_log_prob.squeeze(-1)).exp()
 

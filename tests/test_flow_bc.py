@@ -172,7 +172,7 @@ def test_checkpoint_round_trips_with_vision_encoder_config():
     ):
         assert torch.equal(p1, p2)
     for p1, p2 in zip(
-        agent.policy.features_extractor.parameters(),
-        reloaded.policy.features_extractor.parameters(),
+        agent.policy.actor_extractor.parameters(),
+        reloaded.policy.actor_extractor.parameters(),
     ):
         assert torch.equal(p1, p2)

@@ -31,7 +31,7 @@ from rl_garden.buffers.dataset_backend_registry import (
     register_dataset_backend,
 )
 from rl_garden.common.types import Obs
-from rl_garden.observations.schema import ObservationContractError
+from rl_garden.observations.schema import ObservationContractError, key_modality
 
 
 def _box_from_dataset(dataset: Any) -> spaces.Box:
@@ -51,12 +51,13 @@ def _space_from_obs_node(node: Any, h5py: Any) -> spaces.Box | spaces.Dict:
     A ``Dataset`` node is a state-only source (wrapped into
     ``Dict({"state": Box})`` by ``_finalize_dataset_obs_space`` below). A
     ``Group`` node's child keys must already be exactly ``"state"``,
-    ``"rgb_<cam>"``, or ``"depth_<cam>"`` -- this generic loader does no
-    renaming of its own (see module docstring); a producer with different
-    native names (RLBench, robomimic) maps them in its own loader before the
-    data ever reaches an H5 file this function reads. Every offending key is
-    collected and raised together, and a nested Group one level down is
-    rejected the same way (the contract has no nested Dict spaces).
+    ``"state_<name>"``, ``"rgb_<cam>"``, or ``"depth_<cam>"`` -- this generic
+    loader does no renaming of its own (see module docstring); a producer
+    with different native names (RLBench, robomimic) maps them in its own
+    loader before the data ever reaches an H5 file this function reads.
+    Every offending key is collected and raised together, and a nested Group
+    one level down is rejected the same way (the contract has no nested Dict
+    spaces).
     """
     if isinstance(node, h5py.Dataset):
         return _box_from_dataset(node)
@@ -68,16 +69,18 @@ def _space_from_obs_node(node: Any, h5py: Any) -> spaces.Box | spaces.Dict:
             if not isinstance(child, h5py.Dataset):
                 bad_keys.append(key)
                 continue
-            if key != "state" and not key.startswith("rgb_") and not key.startswith("depth_"):
+            try:
+                key_modality(key)
+            except ObservationContractError:
                 bad_keys.append(key)
                 continue
             entries[key] = _box_from_dataset(child)
         if bad_keys:
             raise ObservationContractError(
                 f"H5 obs group has key(s) {sorted(bad_keys)!r} that don't match "
-                "the rl-garden observation contract ('state', 'rgb_<cam>', "
-                "'depth_<cam>'); rename them in the dataset, or use a "
-                "producer-specific loader (e.g. rlbench_dataset.py, "
+                "the rl-garden observation contract ('state', 'state_<name>', "
+                "'rgb_<cam>', 'depth_<cam>'); rename them in the dataset, or use "
+                "a producer-specific loader (e.g. rlbench_dataset.py, "
                 "robomimic_dataset.py) that maps known field names onto the "
                 "contract."
             )

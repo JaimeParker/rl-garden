@@ -9,7 +9,12 @@ for the ported algorithm and its time-convention derivation.
 
 Observation encoding is schema-driven via ``ObservationEncoderMixin``
 (``encoder_config``/``obs_groups``, resolved in ``_setup_model``), matching
-``SAC``'s convention -- no critic, so ``encoder_sharing`` is irrelevant here.
+``SAC``'s convention -- no critic, so ``encoder_sharing`` is fixed to
+``"shared"`` (never exposed as a constructor kwarg): the encoder is trained
+end-to-end by the actor loss, the only loss that ever touches it, and
+``"shared_critic_grad"`` would otherwise stop-gradient it (see
+``BasePolicy.extract_actor_features``'s formula, which detaches whenever
+``critic_extractor is None`` under that sharing mode).
 """
 
 from __future__ import annotations
@@ -23,7 +28,6 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.mean_flow_field import MeanFlowMode
@@ -37,8 +41,11 @@ class MeanFlowBC(OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("MeanFlowBC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
-        {"features_extractor_class", "features_extractor_kwargs"}
+        {"actor_extractor_class", "actor_extractor_kwargs"}
     )
+    # See module docstring: no critic, so extract_actor_features must never
+    # stop-gradient.
+    encoder_sharing = "shared"
 
     def __init__(
         self,
@@ -188,15 +195,14 @@ class MeanFlowBC(OfflineRLAlgorithm):
     # --- model setup ---
 
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
+        extractor_kwargs = self._policy_extractor_kwargs(
             self.env.single_observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
-        features_extractor = self._build_features_extractor()
         self.policy = MeanFlowBCPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            actor_extractor=extractor_kwargs["actor_extractor"],
             net_arch=self.net_arch,
             use_layer_norm=self.actor_use_layer_norm,
             kernel_init=self.kernel_init,
@@ -207,6 +213,7 @@ class MeanFlowBC(OfflineRLAlgorithm):
             time_dist_sigma=self.time_dist_sigma,
             adaptive_l2_gamma=self.adaptive_l2_gamma,
             adaptive_l2_c=self.adaptive_l2_c,
+            encoder_sharing=extractor_kwargs["encoder_sharing"],
         ).to(self.device)
 
         self.actor_optimizer = make_optimizer(
@@ -290,32 +297,17 @@ class MeanFlowBC(OfflineRLAlgorithm):
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs, supported_keys=self._SUPPORTED_POLICY_KWARGS
-        )
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        """``policy_kwargs`` explicit override (raw escape hatch, unchanged),
-        else the schema-driven extractor resolved onto
-        ``self.observation_encoders`` by ``_resolve_observation_encoders``
-        (called first thing in ``_setup_model``)."""
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self.observation_encoders.actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
             )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
+        return normalized
 
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).

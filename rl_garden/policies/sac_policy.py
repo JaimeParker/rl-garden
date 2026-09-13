@@ -1,17 +1,21 @@
-"""SAC actor/critic policy with a shared features extractor.
+"""SAC actor/critic policy: the actor/critic extractor contract's reference
+implementation (see ``rl_garden.policies.base.BasePolicy``).
 
 Mirrors the architecture used by ManiSkill's sac.py (state) and sac_rgbd.py
 (RGBD), reorganized SB3-style: the ``SACPolicy`` owns:
-  - ``features_extractor`` (shared encoder; can be ``FlattenExtractor`` for
-    state obs, ``CombinedExtractor`` for RGBD)
+  - ``actor_extractor``/``critic_extractor`` (``BasePolicy``; shared encoder
+    by default -- can be ``FlattenExtractor`` for state obs, or
+    ``CombinedExtractor`` for RGBD)
   - ``actor`` (MLP -> mean/log_std heads, tanh-squashed Normal)
   - ``critic`` (ensemble of Q-nets that *reuse* the same extractor)
   - ``critic_target`` (same, no grad)
 
 Key RGBD detail, preserved from hil-serl/ManiSkill visual SAC:
   - Critic optimizer owns the encoder params (encoder learns via Q-loss).
-  - Actor update extracts visual features with ``stop_gradient=True`` so the
-    image encoder sees no gradients from the policy loss.
+  - Actor update extracts visual features with ``stop_gradient=True`` (via
+    ``extract_actor_features``, applied only when ``encoder_sharing ==
+    "shared_critic_grad"``) so the image encoder sees no gradients from the
+    policy loss.
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ from rl_garden.networks import (
     SquashedGaussianActor,
     get_actor_critic_arch,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 LOG_STD_MAX = 2.0
 LOG_STD_MIN = -5.0
@@ -127,7 +131,7 @@ class SACPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256, 256),
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
@@ -154,11 +158,18 @@ class SACPolicy(BasePolicy):
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         features_dim: Optional[int] = None,
-        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         critic_backbone_type: Optional[BackboneType] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
         del use_cql_alpha_lagrange, cql_alpha_lagrange_init
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "SAC requires a Box action space."
         assert n_critics >= 2, f"n_critics must be >= 2, got {n_critics}"
         if critic_subsample_size is not None:
@@ -166,14 +177,6 @@ class SACPolicy(BasePolicy):
                 f"critic_subsample_size ({critic_subsample_size}) must be <= "
                 f"n_critics ({n_critics})"
             )
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
-        # Unset -> literally the same object as features_extractor (not just
-        # equal config): this identity is the single source of truth for
-        # "shared encoder" used by critic_features_for/prepare_batch_all/
-        # critic_and_encoder_parameters below.
-        self.critic_features_extractor = critic_features_extractor or features_extractor
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
 
@@ -184,19 +187,19 @@ class SACPolicy(BasePolicy):
         else:
             actor_arch, critic_arch = get_actor_critic_arch(net_arch)
 
-        fd = features_dim if features_dim is not None else features_extractor.features_dim
-        sc = features_extractor.structured_feature_config()
+        fd = features_dim if features_dim is not None else actor_extractor.features_dim
+        sc = actor_extractor.structured_feature_config()
 
         # Critic's own fd/sc/backbone, computed independently so a critic
         # with a genuinely different (possibly structured) extractor is
         # dispatched correctly below. Identical to fd/sc/backbone_type when
-        # critic_features_extractor wasn't overridden.
-        if self.critic_features_extractor is features_extractor:
+        # critic_extractor is None (shared).
+        if self.critic_extractor is None:
             critic_fd = fd
             critic_sc = sc
         else:
-            critic_fd = self.critic_features_extractor.features_dim
-            critic_sc = self.critic_features_extractor.structured_feature_config()
+            critic_fd = self.critic_extractor.features_dim
+            critic_sc = self.critic_extractor.structured_feature_config()
         critic_backbone_type = critic_backbone_type or backbone_type
 
         # --- Actor adapter (token compression) ---
@@ -308,14 +311,13 @@ class SACPolicy(BasePolicy):
         obs: Obs,
         stop_gradient: bool = False,
     ) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
-
-    def extract_critic_features(
-        self,
-        obs: Obs,
-        stop_gradient: bool = False,
-    ) -> torch.Tensor:
-        return self.critic_features_extractor.extract(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for diagnostics/back-compat callers that need to
+        pick the flag themselves. The actor-loss path
+        (``SACCore._actor_loss``) does not use this; it calls
+        ``extract_actor_features`` (``BasePolicy``), which applies the
+        ``encoder_sharing`` stop-gradient rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
 
     def critic_features_for(
         self,
@@ -331,7 +333,7 @@ class SACPolicy(BasePolicy):
         genuinely separate. ``stop_gradient`` applies only on that
         separate-encoder path; the shared path's gradient behavior is
         whatever ``actor_features`` already has."""
-        if self.critic_features_extractor is self.features_extractor:
+        if self.critic_extractor is None:
             return actor_features
         return self.extract_critic_features(obs, stop_gradient=stop_gradient)
 
@@ -339,8 +341,9 @@ class SACPolicy(BasePolicy):
         """Call ``prepare_batch`` on every distinct extractor instance this
         policy owns (deduped by identity, so the shared default case still
         calls it exactly once)."""
-        extractors = {id(self.features_extractor): self.features_extractor}
-        extractors[id(self.critic_features_extractor)] = self.critic_features_extractor
+        extractors = {id(self.actor_extractor): self.actor_extractor}
+        if self.critic_extractor is not None:
+            extractors[id(self.critic_extractor)] = self.critic_extractor
         for extractor in extractors.values():
             extractor.prepare_batch(obs, next_obs)
 
@@ -356,7 +359,7 @@ class SACPolicy(BasePolicy):
         return self.predict(obs, deterministic=deterministic)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         actor_input = self._transform_features_for_actor(features)
         if deterministic:
             return self.actor.deterministic_action(actor_input)
@@ -365,15 +368,25 @@ class SACPolicy(BasePolicy):
 
     # --- helpers for SAC.train() ---
 
+    def _actor_role_features(self, obs: Obs, stop_gradient: Optional[bool]) -> torch.Tensor:
+        """``stop_gradient=None`` (the default for every in-repo caller)
+        applies ``extract_actor_features``'s ``encoder_sharing`` rule; an
+        explicit ``True``/``False`` is a raw override via ``extract_features``
+        (e.g. for a caller with its own, sharing-independent reason to
+        detach)."""
+        if stop_gradient is None:
+            return self.extract_actor_features(obs)
+        return self.extract_features(obs, stop_gradient=stop_gradient)
+
     def actor_action_log_prob(
         self,
         obs: Obs,
-        stop_gradient: bool = False,
+        stop_gradient: Optional[bool] = None,
         detach_encoder: Optional[bool] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if detach_encoder is not None:
             stop_gradient = detach_encoder
-        features = self.extract_features(obs, stop_gradient=stop_gradient)
+        features = self._actor_role_features(obs, stop_gradient)
         actor_input = self._transform_features_for_actor(features)
         action, log_prob = self.actor.action_log_prob(actor_input)
         return action, log_prob, features
@@ -382,14 +395,14 @@ class SACPolicy(BasePolicy):
         self,
         obs: Obs,
         actions: torch.Tensor,
-        stop_gradient: bool = False,
+        stop_gradient: Optional[bool] = None,
     ) -> torch.Tensor:
         """Log-probability of an externally supplied action (e.g. an offline
         dataset action), for BC-style actor regularizers. Complements
         ``actor_action_log_prob`` the same way
         ``SquashedGaussianActor.evaluate_action_log_prob`` complements
         ``action_log_prob``."""
-        features = self.extract_features(obs, stop_gradient=stop_gradient)
+        features = self._actor_role_features(obs, stop_gradient)
         actor_input = self._transform_features_for_actor(features)
         return self.actor.evaluate_action_log_prob(actor_input, actions)
 
@@ -552,22 +565,22 @@ class SACPolicy(BasePolicy):
 
     def critic_and_encoder_parameters(self):
         # Encoder trained via Q-loss (matches sac_rgbd.py L581-L585).
-        # critic_features_extractor is features_extractor in the (default)
-        # shared case, so this is unchanged there.
+        # critic_extractor is None (falls back to actor_extractor) in the
+        # (default) shared case, so this is unchanged there.
         yield from self.critic.parameters()
-        yield from self.critic_features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def actor_parameters(self):
         # Actor-only; RGBD actor path uses stop_gradient on image encodings
-        # in the shared-encoder case, so features_extractor is deliberately
+        # in the shared-encoder case, so actor_extractor is deliberately
         # excluded there (it trains via critic_and_encoder_parameters'
-        # Q-loss instead). When critic_features_extractor is genuinely
-        # separate, features_extractor is actor-exclusive -- nothing else
-        # would ever train it -- so it belongs on this optimizer instead.
+        # Q-loss instead). When critic_extractor is genuinely separate,
+        # actor_extractor is actor-exclusive -- nothing else would ever
+        # train it -- so it belongs on this optimizer instead.
         if self._actor_adapter is not None:
             yield from self._actor_adapter.parameters()
-        if self.critic_features_extractor is not self.features_extractor:
-            yield from self.features_extractor.parameters()
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
         yield from self.actor.parameters()
 
     def cql_alpha_lagrange_parameters(self):

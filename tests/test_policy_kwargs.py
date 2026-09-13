@@ -102,7 +102,7 @@ def _agent_kwargs() -> dict[str, object]:
 
 def test_sac_uses_flatten_extractor_by_default():
     agent = SAC(env=_state_env(), **_agent_kwargs())
-    assert isinstance(agent.policy.features_extractor, FlattenExtractor)
+    assert isinstance(agent.policy.actor_extractor, FlattenExtractor)
     assert isinstance(agent.replay_buffer, ReplayBuffer)
 
 
@@ -138,41 +138,43 @@ def test_rollout_cpu_obs_moves_to_cuda_policy_device_when_needed():
     assert obs.device.type == "cpu"
 
 
-def test_sac_features_extractor_kwargs_without_class_raises():
-    with pytest.raises(ValueError, match="features_extractor_class"):
+def test_sac_actor_extractor_kwargs_without_class_raises():
+    with pytest.raises(ValueError, match="actor_extractor_class"):
         SAC(
             env=_state_env(),
             **_agent_kwargs(),
-            policy_kwargs={"features_extractor_kwargs": {"features_dim": 23}},
+            policy_kwargs={"actor_extractor_kwargs": {"features_dim": 23}},
         )
 
 
-def test_sac_critic_features_extractor_kwargs_without_class_raises():
-    with pytest.raises(ValueError, match="critic_features_extractor_class"):
+def test_sac_critic_extractor_kwargs_without_class_raises():
+    with pytest.raises(ValueError, match="critic_extractor_class"):
         SAC(
             env=_rgbd_env(),
             **_agent_kwargs(),
-            policy_kwargs={"critic_features_extractor_kwargs": {"features_dim": 23}},
+            policy_kwargs={"critic_extractor_kwargs": {"features_dim": 23}},
         )
 
 
-def test_bc_features_extractor_kwargs_without_class_raises():
-    """Non-SAC-family regression: the guard hoisted into
-    rl_garden.algorithms._policy_kwargs.normalize_policy_kwargs applies to
-    every algorithm that delegates to it, not just SAC."""
+def test_bc_actor_extractor_kwargs_without_class_raises():
+    """BC (BC-only, actor_extractor/critic_extractor contract, no critic):
+    passing policy_kwargs['actor_extractor_kwargs'] without
+    policy_kwargs['actor_extractor_class'] must raise -- it would otherwise
+    be silently ignored (see
+    ObservationEncoderMixin._policy_extractor_kwargs)."""
     env = OfflineEnvSpec(
         spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32),
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=1,
     )
-    with pytest.raises(ValueError, match="features_extractor_class"):
+    with pytest.raises(ValueError, match="actor_extractor_class"):
         BC(
             env=env,
             buffer_size=8,
             buffer_device="cpu",
             batch_size=2,
             device="cpu",
-            policy_kwargs={"features_extractor_kwargs": {"features_dim": 23}},
+            policy_kwargs={"actor_extractor_kwargs": {"features_dim": 23}},
         )
 
 
@@ -181,11 +183,11 @@ def test_sac_policy_kwargs_can_build_custom_extractor():
         env=_state_env(),
         **_agent_kwargs(),
         policy_kwargs={
-            "features_extractor_class": RecordingExtractor,
-            "features_extractor_kwargs": {"features_dim": 23, "marker": "state-custom"},
+            "actor_extractor_class": RecordingExtractor,
+            "actor_extractor_kwargs": {"features_dim": 23, "marker": "state-custom"},
         },
     )
-    extractor = agent.policy.features_extractor
+    extractor = agent.policy.actor_extractor
     assert isinstance(extractor, RecordingExtractor)
     assert extractor.features_dim == 23
     assert extractor.marker == "state-custom"
@@ -196,7 +198,7 @@ def test_sac_dict_obs_uses_combined_extractor_by_default():
         env=_rgbd_env(),
         **_agent_kwargs(),
     )
-    assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert isinstance(agent.policy.actor_extractor, CombinedExtractor)
     assert isinstance(agent.replay_buffer, ReplayBuffer)
 
 
@@ -205,7 +207,7 @@ def test_sac_image_only_dict_obs_uses_combined_extractor():
         env=_image_only_env(),
         **_agent_kwargs(),
     )
-    extractor = agent.policy.features_extractor
+    extractor = agent.policy.actor_extractor
     assert isinstance(extractor, CombinedExtractor)
     assert extractor.image_keys == ("rgb_cam",)
     assert extractor.has_state is False
@@ -221,11 +223,11 @@ def test_sac_dict_policy_kwargs_can_override_with_custom_extractor():
         env=_rgbd_env(),
         **_agent_kwargs(),
         policy_kwargs={
-            "features_extractor_class": RecordingExtractor,
-            "features_extractor_kwargs": {"features_dim": 29, "marker": "rgbd-custom"},
+            "actor_extractor_class": RecordingExtractor,
+            "actor_extractor_kwargs": {"features_dim": 29, "marker": "rgbd-custom"},
         },
     )
-    extractor = agent.policy.features_extractor
+    extractor = agent.policy.actor_extractor
     assert isinstance(extractor, RecordingExtractor)
     assert extractor.features_dim == 29
     assert extractor.marker == "rgbd-custom"
@@ -234,7 +236,7 @@ def test_sac_dict_policy_kwargs_can_override_with_custom_extractor():
 def test_sac_encoder_config_controls_default_extractor():
     # Schema-driven default: encoder_config (backbone/fusion knobs) plus the
     # observation space (which keys exist) fully determine the extractor --
-    # no more (features_extractor_class, features_extractor_kwargs) tuple to
+    # no more (actor_extractor_class, actor_extractor_kwargs) tuple to
     # override piecemeal without a class override (see
     # test_sac_dict_policy_kwargs_can_override_with_custom_extractor for the
     # full-override escape hatch, which still works unchanged).
@@ -243,7 +245,7 @@ def test_sac_encoder_config_controls_default_extractor():
         **_agent_kwargs(),
         encoder_config=EncoderConfig(image_fusion_mode="per_key"),
     )
-    extractor = agent.policy.features_extractor
+    extractor = agent.policy.actor_extractor
     assert isinstance(extractor, CombinedExtractor)
     assert set(extractor.image_keys) == {"rgb_cam", "depth_cam"}
     assert extractor.fusion_mode == "per_key"
@@ -294,19 +296,30 @@ def test_sac_net_arch_missing_keys_raises():
         )
 
 
-def test_sac_encoder_sharing_shared_disables_actor_stop_gradient():
+def _policy_detaches_actor_encoder(agent) -> bool:
+    """Mirrors BasePolicy.extract_actor_features's stop-gradient rule (see
+    rl_garden/policies/base.py) -- the old per-algorithm actor-stop-gradient
+    hook was deleted; this is now a policy-level decision made fresh on
+    every call, not a cached flag."""
+    policy = agent.policy
+    return policy.encoder_sharing == "shared_critic_grad" and (
+        policy.critic_extractor is None or policy.critic_extractor is policy.actor_extractor
+    )
+
+
+def test_sac_encoder_sharing_shared_disables_actor_encoder_detach():
     # "shared" (unlike the "shared_critic_grad" default) trains the encoder
     # from both actor and critic losses -- replaces the old hardcoded
     # detach_encoder_on_actor=False rejection: the redesign makes this a
     # first-class supported encoder_sharing value, not an error.
     agent = SAC(env=_rgbd_env(), **_agent_kwargs(), encoder_sharing="shared")
-    assert agent.policy.critic_features_extractor is agent.policy.features_extractor
-    assert agent._actor_stop_gradient() is False
+    assert agent.policy.critic_extractor is None
+    assert _policy_detaches_actor_encoder(agent) is False
 
 
 def test_sac_encoder_sharing_shared_critic_grad_stop_gradients_actor():
     agent = SAC(env=_rgbd_env(), **_agent_kwargs())  # default: shared_critic_grad
-    assert agent._actor_stop_gradient() is True
+    assert _policy_detaches_actor_encoder(agent) is True
 
 
 def test_sac_box_obs_rejects_unknown_obs_group_key():
@@ -342,7 +355,7 @@ def test_sac_passes_image_augmentation_to_combined_extractor():
         encoder_config=EncoderConfig(image_augmentation="random_shift", image_random_shift_pad=2),
         image_augmentation_seed=123,
     )
-    ext = agent.policy.features_extractor
+    ext = agent.policy.actor_extractor
 
     assert isinstance(ext, CombinedExtractor)
     assert ext.image_augmentation == "random_shift"
@@ -352,7 +365,7 @@ def test_sac_passes_image_augmentation_to_combined_extractor():
 
 def test_wsrl_uses_flatten_extractor_by_default():
     agent = WSRL(env=_state_env(), **_agent_kwargs())
-    assert isinstance(agent.policy.features_extractor, FlattenExtractor)
+    assert isinstance(agent.policy.actor_extractor, FlattenExtractor)
     assert isinstance(agent.replay_buffer, MCReplayBuffer)
 
 
@@ -362,17 +375,17 @@ def test_wsrl_dict_obs_uses_combined_extractor_by_default():
         **_agent_kwargs(),
         obs_groups=ObsGroups(actor=("rgb_cam", "state"), critic=("rgb_cam", "state")),
     )
-    assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert isinstance(agent.policy.actor_extractor, CombinedExtractor)
     assert isinstance(agent.replay_buffer, MCReplayBuffer)
-    assert agent._actor_stop_gradient() is True
+    assert _policy_detaches_actor_encoder(agent) is True
 
 
-def test_wsrl_dict_obs_encoder_sharing_shared_disables_actor_stop_gradient():
+def test_wsrl_dict_obs_encoder_sharing_shared_disables_actor_encoder_detach():
     # encoder_sharing="shared" is a first-class supported mode now (not an
     # error), replacing the old hardcoded detach_encoder_on_actor=False
     # rejection ("trained only by critic loss").
     agent = WSRL(env=_rgbd_env(), **_agent_kwargs(), encoder_sharing="shared")
-    assert agent._actor_stop_gradient() is False
+    assert _policy_detaches_actor_encoder(agent) is False
 
 
 def test_wsrl_box_obs_rejects_unknown_obs_group_key():
@@ -414,7 +427,7 @@ def test_sac_per_camera_keys_build_separate_encoders():
         **_agent_kwargs(),
         encoder_config=EncoderConfig(image_fusion_mode="per_key"),
     )
-    ext = agent.policy.features_extractor
+    ext = agent.policy.actor_extractor
     assert isinstance(ext, CombinedExtractor)
     assert set(ext.image_encoders.keys()) == {"rgb_base_camera", "rgb_hand_camera"}
     for enc in ext.image_encoders.values():

@@ -301,7 +301,7 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
         self.policy = DiffusionPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=self.observation_encoders.actor,
+            actor_extractor=self.observation_encoders.actor,
             horizon_steps=self.horizon_steps,
             cond_steps=self.cond_steps,
             denoising_steps=self.denoising_steps,

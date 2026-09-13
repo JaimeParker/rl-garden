@@ -21,8 +21,9 @@ building blocks unmodified:
 - The "fold cond_steps into batch, encode once, reshape back" trick for
   running a single-frame ``CombinedExtractor`` over a history window is
   ``DiffusionPolicy``'s Dict-obs ``_cond_from_obs_history`` trick, reused here for the
-  vision-only conditioning branch (``features_extractor`` built from an
-  image-only ``obs_groups``, no ``"state"`` key -- see ``A2ABC._setup_model``).
+  vision-only conditioning branch (``actor_extractor`` built from an
+  image-only ``obs_groups``, no ``"state"``/``state_<name>`` key -- see
+  ``A2ABC._setup_model``).
 
 New pieces: ``CNNSequenceEncoder`` (state-history and action-chunk encoding,
 two disjoint-parameter instances) and ``ActionChunkDecoder``
@@ -63,7 +64,8 @@ from rl_garden.networks import (
     CNNSequenceEncoder,
     KernelInit,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.observations import ObservationSchema
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 class A2APolicy(BasePolicy):
@@ -73,7 +75,7 @@ class A2APolicy(BasePolicy):
         self,
         observation_space: spaces.Dict,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         *,
         horizon_steps: int = 8,
         cond_steps: int = 8,
@@ -96,14 +98,18 @@ class A2APolicy(BasePolicy):
         enc_contrastive_weight: float = 0.0,
         flow_contrastive_weight: float = 0.0,
         contrastive_temperature: float = 0.1,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         # A2ABC._setup_model already requires schema.has_state before ever
         # constructing this policy (rl_garden/algorithms/a2a_bc.py) -- no
         # duplicate check here.
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.state_key = "state"
+        self.state_keys = ObservationSchema.from_space(observation_space).state_keys
         self.horizon_steps = horizon_steps
         self.cond_steps = cond_steps
         self.latent_dim = latent_dim
@@ -115,11 +121,12 @@ class A2APolicy(BasePolicy):
         self.flow_contrastive_weight = flow_contrastive_weight
         self.contrastive_temperature = contrastive_temperature
 
-        self.state_dim = int(np.prod(observation_space[self.state_key].shape))
+        self.state_dim = sum(
+            int(np.prod(observation_space[k].shape)) for k in self.state_keys
+        )
         self.action_dim = int(np.prod(action_space.shape))
 
-        self.features_extractor = features_extractor
-        self.obs_latent_proj = nn.Linear(features_extractor.features_dim * cond_steps, latent_dim)
+        self.obs_latent_proj = nn.Linear(self.actor_features_dim * cond_steps, latent_dim)
 
         self.history_encoder = CNNSequenceEncoder(
             input_dim=self.state_dim,
@@ -166,15 +173,40 @@ class A2APolicy(BasePolicy):
         self.register_buffer("action_low", low)
         self.register_buffer("action_high", high)
 
-    def _encode_obs_latents(self, obs_history: Obs, stop_gradient: bool) -> torch.Tensor:
+    def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for callers that need to pick the flag themselves
+        (e.g. an inference-time read). ``loss_with_metrics`` does not use
+        this; it calls ``extract_actor_features`` (``BasePolicy``), which
+        applies the ``encoder_sharing`` stop-gradient rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
+
+    def _concat_state(self, obs_history: Obs) -> torch.Tensor:
+        """Concatenate every ``state``/``state_<name>`` key of ``obs_history``
+        (each ``(B, cond_steps, *leaf_shape)``) in schema order, mirroring
+        ``CombinedExtractor._concat_state``."""
+        if len(self.state_keys) == 1:
+            return obs_history[self.state_keys[0]]
+        return torch.cat([obs_history[k] for k in self.state_keys], dim=-1)
+
+    def _encode_obs_latents(
+        self, obs_history: Obs, stop_gradient: Optional[bool] = None
+    ) -> torch.Tensor:
         """``obs_history``: Dict, each leaf ``(B, cond_steps, *leaf_shape)``.
-        Returns ``(B, latent_dim)``. ``features_extractor`` is built from a
-        vision-only schema (no ``"state"`` key), so ``"state"`` in
-        ``obs_history`` is dropped automatically -- no stripping needed
-        here."""
-        batch = obs_history[self.state_key].shape[0]
+        Returns ``(B, latent_dim)``. ``actor_extractor`` is built from a
+        vision-only schema (no ``"state"``/``state_<name>`` keys), so those
+        keys in ``obs_history`` are dropped automatically -- no stripping
+        needed here. ``stop_gradient=None`` (the default, used by the
+        training loss) applies ``extract_actor_features``'s
+        ``encoder_sharing`` rule; an explicit ``True``/``False`` is a raw
+        override via ``extract_features``."""
+        batch = obs_history[self.state_keys[0]].shape[0]
         flat_obs = flatten_leading_dims(obs_history)
-        flat_features = self.features_extractor.extract(flat_obs, stop_gradient=stop_gradient)
+        flat_features = (
+            self.extract_actor_features(flat_obs)
+            if stop_gradient is None
+            else self.extract_features(flat_obs, stop_gradient=stop_gradient)
+        )
         features = flat_features.reshape(batch, self.cond_steps, -1).flatten(1)
         return self.obs_latent_proj(features)
 
@@ -192,8 +224,8 @@ class A2APolicy(BasePolicy):
         self, obs_history: Obs, action_chunk: torch.Tensor
     ) -> tuple[torch.Tensor, dict[str, float]]:
         batch = action_chunk.shape[0]
-        obs_latents = self._encode_obs_latents(obs_history, stop_gradient=False)
-        history_latents = self.history_encoder(obs_history[self.state_key])
+        obs_latents = self._encode_obs_latents(obs_history)
+        history_latents = self.history_encoder(self._concat_state(obs_history))
         future_action_latents = self.action_chunk_encoder(action_chunk)
 
         # CondOT flow loss -- exact FlowBCPolicy.bc_flow_loss pattern
@@ -215,7 +247,7 @@ class A2APolicy(BasePolicy):
             # No stop-gradient (matches the reference exactly -- see module
             # docstring): gradient flows through all num_sampling_steps Euler
             # steps into flow_net, history_encoder, and (via obs_latents) the
-            # vision features_extractor.
+            # vision actor_extractor.
             action_latents_pred = self.flow_net.integrate(
                 obs_latents, history_latents, self.num_sampling_steps
             )
@@ -255,8 +287,8 @@ class A2APolicy(BasePolicy):
         caller's concern (see ``RecedingHorizonPolicy``)."""
         del deterministic  # Euler-sampling always the same, matches FlowBCPolicy.predict's stance
         assert isinstance(obs, dict)
-        leaf_ndim = len(self.observation_space[self.state_key].shape)
-        is_single_frame = obs[self.state_key].dim() == leaf_ndim + 1
+        leaf_ndim = len(self.observation_space[self.state_keys[0]].shape)
+        is_single_frame = obs[self.state_keys[0]].dim() == leaf_ndim + 1
         if is_single_frame:
             obs_history = {
                 key: value.unsqueeze(1).expand(-1, self.cond_steps, *([-1] * (value.dim() - 1)))
@@ -265,7 +297,7 @@ class A2APolicy(BasePolicy):
         else:
             obs_history = obs
         obs_latents = self._encode_obs_latents(obs_history, stop_gradient=True)
-        history_latents = self.history_encoder(obs_history[self.state_key])
+        history_latents = self.history_encoder(self._concat_state(obs_history))
         action_latents = self.flow_net.integrate(obs_latents, history_latents, self.num_sampling_steps)
         action_chunk = self.action_decoder(action_latents)
         return action_chunk.clamp(self.action_low, self.action_high)

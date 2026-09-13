@@ -125,7 +125,7 @@ def main() -> None:
         )
         agent.policy.eval()
 
-        extractor = agent.policy.features_extractor
+        extractor = agent.policy.actor_extractor
         unwrapped = env.unwrapped
 
         obs, _ = env.reset(seed=args.seed)

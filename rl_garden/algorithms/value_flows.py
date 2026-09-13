@@ -187,10 +187,8 @@ class ValueFlowsCore(FQLCore):
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
-        self._resolve_observation_encoders(observation_space)
+        extractor_kwargs = self._policy_extractor_kwargs(observation_space)
         if self.encoder_sharing == "separate":
-            features_extractor = self.observation_encoders.critic
-            actor_onestep_flow_encoder = self.observation_encoders.actor
             actor_keys = resolve_obs_groups(
                 self.observation_encoders.schema, self.obs_groups
             )["actor"].keys
@@ -198,13 +196,10 @@ class ValueFlowsCore(FQLCore):
                 observation_space, self.encoder_config, keys=actor_keys
             )
         else:
-            features_extractor = self.observation_encoders.actor
             actor_bc_flow_encoder = None
-            actor_onestep_flow_encoder = None
         self.policy = ValueFlowsPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             actor_use_layer_norm=self.actor_use_layer_norm,
@@ -216,14 +211,13 @@ class ValueFlowsCore(FQLCore):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             activation_fn=self.activation_fn,
-            encoder_sharing=self.encoder_sharing,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
             num_samples=self.num_samples,
             policy_extraction=self.policy_extraction,
             num_flow_steps=self.flow_steps,
             q_agg=self.q_agg,
             return_clip_range=self.return_clip_range,
+            **extractor_kwargs,
         ).to(self.device)
 
         self.critic_optimizer = make_optimizer(
@@ -255,7 +249,7 @@ class ValueFlowsCore(FQLCore):
         device, dtype = obs_features.device, obs_features.dtype
 
         with torch.no_grad():
-            next_features_critic = self.policy.extract_features(data.next_obs)
+            next_features_critic = self.policy.extract_critic_features(data.next_obs)
             if self.encoder_sharing == "separate":
                 next_features_actor = self.policy.extract_actor_onestep_features(
                     data.next_obs

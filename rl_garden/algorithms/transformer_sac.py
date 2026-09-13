@@ -51,7 +51,7 @@ class TransformerSAC(SequenceSAC):
         self.gru_bias = gru_bias
         super().__init__(env, **sequence_sac_kwargs)
 
-    def _build_sequence_encoder(self, features_extractor) -> GTrXLLatentEncoder:
+    def _build_sequence_encoder(self, actor_extractor) -> GTrXLLatentEncoder:
         if self.burn_in_len < self.memory_len:
             raise ValueError(
                 f"TransformerSAC requires burn_in_len ({self.burn_in_len}) >= "
@@ -67,7 +67,7 @@ class TransformerSAC(SequenceSAC):
                 "approximation."
             )
         return GTrXLLatentEncoder(
-            input_dim=features_extractor.features_dim,
+            input_dim=actor_extractor.features_dim,
             embed_dim=self.embed_dim,
             head_dim=self.head_dim,
             num_heads=self.num_heads,

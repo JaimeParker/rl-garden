@@ -43,6 +43,8 @@ class MujocoWarpBackend(EnvBackend):
                 f"mujoco_warp: unknown camera(s) {sorted(unknown)!r}; available "
                 "cameras: ['main']"
             )
+        if obs.extra_state:
+            raise ObservationContractError("mujoco_warp has no extra state sources")
         render_rgb = "main" in obs.rgb
         render_depth = "main" in obs.depth
         if obs.image_size is not None:

@@ -84,4 +84,11 @@ def run_flow_bc(args: FlowBCArgs) -> None:
     run_offline(args, build_agent=build_flow_bc)
 
 
-registry.register("flow_bc", FlowBCArgs, run_flow_bc)
+
+
+def _flow_bc_algorithm_cls() -> type:
+    from rl_garden.algorithms import FlowBC
+
+    return FlowBC
+
+registry.register("flow_bc", FlowBCArgs, run_flow_bc, algorithm_cls=_flow_bc_algorithm_cls)

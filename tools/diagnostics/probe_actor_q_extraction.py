@@ -249,10 +249,10 @@ def _mean_sample_norm(value: torch.Tensor) -> torch.Tensor:
 class PlainConvActivationProbe:
     """Capture PlainConv bottleneck activations without modifying model code."""
 
-    def __init__(self, features_extractor: nn.Module) -> None:
+    def __init__(self, actor_extractor: nn.Module) -> None:
         self.modules = {
             name: module
-            for name, module in features_extractor.named_modules()
+            for name, module in actor_extractor.named_modules()
             if isinstance(module, PlainConv)
         }
         self.activations: dict[str, dict[str, torch.Tensor]] = {}
@@ -501,7 +501,7 @@ def _probe_checkpoint_impl(
         n = float(demo_actions.shape[0])
 
         with torch.enable_grad():
-            with PlainConvActivationProbe(policy.features_extractor) as conv_probe:
+            with PlainConvActivationProbe(policy.actor_extractor) as conv_probe:
                 features_live = policy.extract_features(
                     obs_chunk,
                     stop_gradient=False,

@@ -45,7 +45,7 @@ from rl_garden.networks import (
     SquashedGaussianActor,
     ValueNetwork,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 CriticLossType = Literal["ddpg", "iql"]
 
@@ -55,9 +55,11 @@ class QAMPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         n_critics: int = 2,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = True,
@@ -80,7 +82,13 @@ class QAMPolicy(BasePolicy):
         edit_target_entropy: Optional[float] = None,
         edit_target_entropy_multiplier: float = 0.5,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "QAM requires a Box action space."
         if critic_loss_type not in ("ddpg", "iql"):
             raise ValueError(
@@ -92,17 +100,14 @@ class QAMPolicy(BasePolicy):
                 f"(got fql_alpha={fql_alpha}, edit_scale={edit_scale})."
             )
 
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
-
-        fd = features_extractor.features_dim
+        actor_fd = self.actor_features_dim
+        critic_fd = self.critic_features_dim
         self.full_action_dim = int(np.prod(action_space.shape))
         net_arch = list(net_arch)
 
         def _flow(use_time: bool) -> ActorVectorField:
             return ActorVectorField(
-                fd,
+                actor_fd,
                 self.full_action_dim,
                 hidden_dims=net_arch,
                 use_time_conditioning=use_time,
@@ -119,7 +124,7 @@ class QAMPolicy(BasePolicy):
             p.requires_grad_(False)
 
         self.critic = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=net_arch,
             n_critics=n_critics,
@@ -129,7 +134,7 @@ class QAMPolicy(BasePolicy):
             activation_fn=activation_fn,
         )
         self.target_critic = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=net_arch,
             n_critics=n_critics,
@@ -146,7 +151,7 @@ class QAMPolicy(BasePolicy):
         self.value: Optional[ValueNetwork] = None
         if critic_loss_type == "iql":
             self.value = ValueNetwork(
-                fd,
+                critic_fd,
                 net_arch,
                 use_layer_norm=value_use_layer_norm,
                 kernel_init=kernel_init,
@@ -164,7 +169,7 @@ class QAMPolicy(BasePolicy):
                 low=-1.0, high=1.0, shape=(self.full_action_dim,), dtype=np.float32
             )
             self.edit_actor = SquashedGaussianActor(
-                fd + self.full_action_dim,
+                actor_fd + self.full_action_dim,
                 edit_space,
                 hidden_dims=net_arch,
                 use_layer_norm=actor_use_layer_norm,
@@ -203,7 +208,28 @@ class QAMPolicy(BasePolicy):
         self.register_buffer("action_high", high)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for diagnostics/back-compat callers that need to pick
+        the flag themselves. ``QAMCore``'s own training loop does not use
+        this; it calls ``extract_actor_features``/``extract_critic_features``
+        (``BasePolicy``), which apply the ``encoder_sharing`` rule
+        automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
+
+    def critic_features_for(
+        self,
+        obs: Obs,
+        actor_features: torch.Tensor,
+        stop_gradient: bool = True,
+    ) -> torch.Tensor:
+        """Critic-role features for ``obs``, for callers that already hold
+        actor-role features for the same ``obs`` (e.g. the actor loss's Q(s,
+        pi(s)) terms). Reuses ``actor_features`` -- zero extra compute --
+        when the encoder is shared; re-extracts through the critic's own
+        encoder only when it's genuinely separate."""
+        if self.critic_extractor is None:
+            return actor_features
+        return self.extract_critic_features(obs, stop_gradient=stop_gradient)
 
     def q_values_all(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False
@@ -215,7 +241,7 @@ class QAMPolicy(BasePolicy):
         yield from self.critic.parameters()
         if self.value is not None:
             yield from self.value.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def actor_parameters(self):
         yield from self.actor_slow.parameters()
@@ -224,6 +250,8 @@ class QAMPolicy(BasePolicy):
             yield from self.one_step_actor.parameters()
         if self.edit_actor is not None:
             yield from self.edit_actor.parameters()
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
 
     def _effective_actor_slow(self) -> ActorVectorField:
         return self.target_actor_slow if self.target_actor else self.actor_slow
@@ -262,13 +290,25 @@ class QAMPolicy(BasePolicy):
         return q_all.mean(dim=0)
 
     def adj_matching(
-        self, features: torch.Tensor, flow_steps: Optional[int] = None
+        self,
+        features: torch.Tensor,
+        critic_features: Optional[torch.Tensor] = None,
+        flow_steps: Optional[int] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
         """Returns ``(xs, adjs, ts, pre_adj_info)``, each of shape
         ``(flow_steps, batch, ...)`` except ``pre_adj_info`` (a metrics
         dict) -- matches ``qam.py:111-186`` exactly. Entirely
         target-construction for ``QAMCore.actor_loss``; never differentiated
-        a second time."""
+        a second time.
+
+        ``features`` (actor-role) drives the flow networks that build the
+        trajectory; ``critic_features`` (critic-role, defaults to
+        ``features`` when omitted -- the common shared-encoder case) is what
+        the critic net is evaluated on for the Q-gradient. Both roles are
+        read entirely under ``torch.no_grad()`` here, so which tensor is
+        passed only affects which extractor's weights the Q-gradient
+        reflects, never gradient isolation."""
+        critic_features = features if critic_features is None else critic_features
         flow_steps = self.flow_steps if flow_steps is None else flow_steps
         batch_size = features.shape[0]
         device, dtype = features.device, features.dtype
@@ -298,7 +338,7 @@ class QAMPolicy(BasePolicy):
 
             def q_fn(y: torch.Tensor) -> torch.Tensor:
                 y_in = y.clamp(-1.0, 1.0) if self.clip_adj else y
-                return self._aggregate_mean(critic_net.forward_all(features, y_in)).sum()
+                return self._aggregate_mean(critic_net.forward_all(critic_features, y_in)).sum()
 
             grad = torch.func.grad(q_fn)(xs[-1])
             adj = -grad * self.inv_temp
@@ -333,7 +373,7 @@ class QAMPolicy(BasePolicy):
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         del deterministic
         with torch.no_grad():
-            features = self.extract_features(obs)
+            features = self.extract_actor_features(obs)
             batch_size = features.shape[0]
             device, dtype = features.device, features.dtype
             n = self.best_of_n
@@ -369,7 +409,11 @@ class QAMPolicy(BasePolicy):
                     )
 
             if n > 1:
-                q = self._aggregate_mean(self.q_values_all(rep_features, actions, target=False))
+                critic_features = self.critic_features_for(obs, features, stop_gradient=True)
+                rep_critic_features = critic_features.repeat_interleave(n, dim=0)
+                q = self._aggregate_mean(
+                    self.q_values_all(rep_critic_features, actions, target=False)
+                )
                 q = q.reshape(batch_size, n)
                 best = q.argmax(dim=1)
                 actions = actions.reshape(batch_size, n, self.full_action_dim)

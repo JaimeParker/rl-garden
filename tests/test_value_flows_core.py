@@ -353,7 +353,7 @@ def test_sample_actions_rs_shapes_and_bounds():
     agent = _make_agent(num_samples=5)
     policy = agent.policy
     batch_size = 4
-    features = torch.randn(batch_size, agent.policy.features_extractor.features_dim)
+    features = torch.randn(batch_size, agent.policy.actor_extractor.features_dim)
 
     actions = policy.sample_actions_rs(
         features,
@@ -375,7 +375,7 @@ def test_sample_actions_rs_num_samples_one_matches_bc_flow_rollout():
     agent = _make_agent(num_samples=1)
     policy = agent.policy
     batch_size = 3
-    features = torch.randn(batch_size, agent.policy.features_extractor.features_dim)
+    features = torch.randn(batch_size, agent.policy.actor_extractor.features_dim)
 
     torch.manual_seed(0)
     actions = policy.sample_actions_rs(
@@ -403,7 +403,7 @@ def test_sample_actions_rs_returns_a_candidate_of_its_own_observation():
     agent = _make_agent(num_samples=4)
     policy = agent.policy
     batch_size, num_samples = 3, 4
-    features = torch.randn(batch_size, policy.features_extractor.features_dim)
+    features = torch.randn(batch_size, policy.actor_extractor.features_dim)
 
     torch.manual_seed(0)
     actions = policy.sample_actions_rs(

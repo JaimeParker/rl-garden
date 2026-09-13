@@ -79,9 +79,10 @@ stacking); it is a backend/dataset-side request, honored exactly or rejected:
 ```yaml
 obs:
   state: true
-  rgb: [base_camera]     # camera names -> keys "rgb_<cam>"
+  rgb: [base_camera]       # camera names -> keys "rgb_<cam>"
   depth: []
-  image_size: [64, 64]   # (H, W); omit to use the backend's own default
+  extra_state: [object_pose]  # auxiliary low-dim keys -> "state_<name>"
+  image_size: [64, 64]     # (H, W); omit to use the backend's own default
   frame_stack: 1
 encoder:
   backbone: plain_conv    # plain_conv | resnet10 | resnet18 | vit | drqv2_conv | cnn3d
@@ -98,6 +99,51 @@ RLBench (`left_shoulder`/`right_shoulder`/`overhead`/`wrist`/`front`), and
 Meta-World's six fixed cameras (`corner`/`corner2`/`corner3`/`corner4`/
 `behindGripper`/`gripperPOV`).
 
+### Low-dim observations and privileged state
+
+`obs.extra_state` declares auxiliary/privileged low-dim observations beyond
+the base `state` key, creating keys named `state_<name>` in the observation
+space. These follow the same strict validation as the base `state` key: each
+must be a 1-D float vector. The privileged-critic idiom uses `obs_groups` to
+give the critic access to extra state that the actor does not see:
+
+```yaml
+obs:
+  state: true
+  rgb: [base_camera]
+  extra_state: [object_pose, gripper_state]  # creates state_object_pose, state_gripper_state
+obs_groups:
+  actor: [rgb_base_camera, state]
+  critic: [rgb_base_camera, state, state_object_pose, state_gripper_state]
+encoder_sharing: separate
+```
+
+All state keys (base `state` plus each `state_<name>`) are concatenated
+together by the encoder's proprio branch into one dense vector; there is no
+per-key MLP, only one shared proprio branch that reads all state keys.
+`encoder_sharing` controls whether that dense vector is computed once (shared)
+or twice (actor and critic each compute independently).
+
+The privileged-critic idiom also works without cameras (state-only observations):
+
+```yaml
+obs: {state: true, extra_state: [object_pose]}
+obs_groups:
+  actor: [state]
+  critic: [state, state_object_pose]
+encoder_sharing: separate
+```
+
+CLI equivalent:
+
+```bash
+--obs.state true --obs.extra-state object_pose \
+  --obs-groups.actor state --obs-groups.critic state state_object_pose \
+  --encoder-sharing separate
+```
+
+### Actor/critic encoder asymmetry
+
 `obs_groups` optionally splits which observation keys the actor and critic
 each consume (asymmetric/privileged critic); `critic_encoder` optionally
 gives the critic its own encoder hyperparameters, meaningful only together
@@ -107,11 +153,28 @@ with `obs_groups`/`encoder_sharing: separate`:
 obs_groups:
   actor: [rgb_base_camera]
   critic: [rgb_base_camera, state]
+critic_encoder:
+  backbone: resnet18    # different from encoder.backbone
+  features_dim: 512
 encoder_sharing: separate   # shared_critic_grad | shared | separate
 ```
 
+Algorithms that support asymmetric `obs_groups` all have a critic/value head
+(every algorithm except BC-only families: BC, DiffusionBC, FlowBC, MeanFlowBC,
+A2ABC, ConsistencyDistillBC, DAgger). Algorithms with recurrent or transformer
+state abstractions (RecurrentSAC, RecurrentPPO, TransformerSAC, TransformerPPO)
+cannot use `encoder_sharing="separate"` because there is only one RNN/attention
+mechanism shared between the encoder and the heads; attempting to pass
+`obs_groups.actor != obs_groups.critic` or `encoder_sharing="separate"` to
+these families raises `ObservationContractError` at construction time.
+
 `encoder_sharing` overrides the algorithm's own actor/critic encoder-sharing
 default; leave it unset to use the algorithm's default.
+
+**Activation rule:** `obs_groups` and `encoder_sharing` are always active.
+`critic_encoder` and the image-specific fields of `encoder` (all except
+`normalize_obs`) apply only when `obs` includes at least one camera
+(`rgb` or `depth` key). `encoder.normalize_obs` always applies.
 
 ### H5 dataset observation layout
 

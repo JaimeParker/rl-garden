@@ -68,6 +68,13 @@ def test_resolve_config_rejects_frame_stack():
         MujocoBackend.resolve_config(req, is_eval=False)
 
 
+def test_resolve_config_rejects_extra_state():
+    req = _make_req(observation=ObservationConfig(extra_state=("object_pose",)))
+
+    with pytest.raises(ObservationContractError, match="no extra state sources"):
+        MujocoBackend.resolve_config(req, is_eval=False)
+
+
 def test_gymnasium_benchmark_task_observation_is_dict_with_state_key():
     cfg = MujocoEnvConfig(env_id="InvertedPendulum-v4", num_envs=2, seed=0, device="cpu")
     env = make_mujoco_env(cfg)

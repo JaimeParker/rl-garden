@@ -82,6 +82,46 @@ def test_load_dict_h5_to_dict_replay_buffer(tmp_path):
     assert sample.obs["rgb_front"].dtype == torch.uint8
 
 
+def test_load_dict_h5_with_extra_state_group_to_dict_replay_buffer(tmp_path):
+    """A state_<name> group key (Section A's extra_state family) is accepted
+    as-is by the generic H5 loader, alongside "state"."""
+    path = tmp_path / "demo_extra_state.h5"
+    with h5py.File(path, "w") as f:
+        group = f.create_group("traj_0")
+        obs = group.create_group("obs")
+        obs.create_dataset("state", data=np.ones((5, 3), dtype=np.float32))
+        obs.create_dataset("state_object_pose", data=np.ones((5, 2), dtype=np.float32))
+        group.create_dataset("actions", data=np.ones((4, 2), dtype=np.float32))
+        group.create_dataset("rewards", data=np.ones(4, dtype=np.float32))
+        group.create_dataset("dones", data=np.array([False, False, False, True]))
+
+    obs_space = spaces.Dict(
+        {
+            "state": spaces.Box(low=-10, high=10, shape=(3,), dtype=np.float32),
+            "state_object_pose": spaces.Box(low=-10, high=10, shape=(2,), dtype=np.float32),
+        }
+    )
+    inferred_obs_space, _ = infer_specs_from_h5(path)
+    assert set(inferred_obs_space.spaces.keys()) == {"state", "state_object_pose"}
+    validate_observation_space(inferred_obs_space)
+
+    buffer = MCReplayBuffer(
+        observation_space=obs_space,
+        action_space=spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32),
+        num_envs=2,
+        buffer_size=10,
+        gamma=0.9,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    loaded = load_h5_dataset_to_replay_buffer(buffer, path)
+    assert loaded == 4
+    sample = buffer.sample(4)
+    assert sample.obs["state"].shape == (4, 3)
+    assert sample.obs["state_object_pose"].shape == (4, 2)
+
+
 def test_load_state_only_h5_to_dict_replay_buffer_wraps_as_state_key(tmp_path):
     """A flat (non-Dict) H5 obs dataset loaded into a Dict-observation buffer
     (the registry-driven flow: infer_specs_from_h5 -> Dict({"state": ...}) ->

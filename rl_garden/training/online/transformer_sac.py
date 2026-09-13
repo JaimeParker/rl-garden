@@ -15,7 +15,7 @@ def build_transformer_sac(args, env, eval_env, logger, checkpoint_dir):
     # asymmetric critic obs_groups were never wired for this entrypoint
     # either (encoder_sharing stays the SAC default "shared_critic_grad",
     # which SequenceSAC._build_policy's RecurrentSACPolicy requires -- it
-    # rejects a non-None critic_features_extractor).
+    # rejects a non-None critic_extractor).
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "image_augmentation_seed": args.seed + 1_000_003,
@@ -78,8 +78,15 @@ class TransformerSACArgs(VisionTransformerSACTrainingArgs, EnvBackendArgs):
     """
 
 
+
+
+def _transformer_sac_algorithm_cls() -> type:
+    from rl_garden.algorithms import TransformerSAC
+
+    return TransformerSAC
+
 registry.register(
     "transformer_sac",
     TransformerSACArgs,
     run_transformer_sac,
-)
+    algorithm_cls=_transformer_sac_algorithm_cls)

@@ -97,7 +97,10 @@ class _ConstantTeacherPolicy(BasePolicy):
     so "loss decreases" is a robust, non-flaky assertion."""
 
     def __init__(self, action_dim: int, value: float = 0.5) -> None:
-        super().__init__()
+        # Bypasses BasePolicy.__init__ (which now requires an actor_extractor)
+        # -- this fake teacher ignores obs entirely and owns no extractor at
+        # all, so nn.Module.__init__ is all it actually needs.
+        nn.Module.__init__(self)
         self._dummy_param = nn.Parameter(torch.zeros(1))
         self.action_dim = action_dim
         self.value = value
@@ -119,11 +122,11 @@ def _make_bc_teacher() -> BCPolicy:
     obs_space = spaces.Dict(
         {"state": spaces.Box(-np.inf, np.inf, (PRIVILEGED_DIM,), np.float32)}
     )
-    features_extractor = build_observation_encoder(obs_space)
+    actor_extractor = build_observation_encoder(obs_space)
     return BCPolicy(
         observation_space=obs_space,
         action_space=spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32),
-        features_extractor=features_extractor,
+        actor_extractor=actor_extractor,
         net_arch=[16, 16],
     )
 

@@ -20,11 +20,11 @@ def action_space():
 
 @pytest.fixture
 def wsrl_policy(obs_space, action_space):
-    features_extractor = FlattenExtractor(obs_space)
+    actor_extractor = FlattenExtractor(obs_space)
     return WSRLPolicy(
         observation_space=obs_space,
         action_space=action_space,
-        features_extractor=features_extractor,
+        actor_extractor=actor_extractor,
         net_arch={"pi": [64, 64], "qf": [64, 64]},
         n_critics=10,
         critic_subsample_size=2,
@@ -34,11 +34,11 @@ def wsrl_policy(obs_space, action_space):
 
 @pytest.fixture
 def wsrl_policy_with_legacy_lagrange_args(obs_space, action_space):
-    features_extractor = FlattenExtractor(obs_space)
+    actor_extractor = FlattenExtractor(obs_space)
     return WSRLPolicy(
         observation_space=obs_space,
         action_space=action_space,
-        features_extractor=features_extractor,
+        actor_extractor=actor_extractor,
         net_arch={"pi": [64, 64], "qf": [64, 64]},
         n_critics=10,
         critic_subsample_size=2,
@@ -56,11 +56,11 @@ class TestWSRLPolicyBasics:
         assert not wsrl_policy.use_cql_alpha_lagrange
 
     def test_policy_uniform_std(self, obs_space, action_space):
-        features_extractor = FlattenExtractor(obs_space)
+        actor_extractor = FlattenExtractor(obs_space)
         policy = WSRLPolicy(
             observation_space=obs_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch={"pi": [32], "qf": [32]},
             std_parameterization="uniform",
         )
@@ -71,11 +71,11 @@ class TestWSRLPolicyBasics:
         assert policy.actor.log_stds is not None
 
     def test_policy_layer_norm_options(self, obs_space, action_space):
-        features_extractor = FlattenExtractor(obs_space)
+        actor_extractor = FlattenExtractor(obs_space)
         policy = WSRLPolicy(
             observation_space=obs_space,
             action_space=action_space,
-            features_extractor=features_extractor,
+            actor_extractor=actor_extractor,
             net_arch={"pi": [32], "qf": [32]},
             actor_use_layer_norm=True,
             critic_use_layer_norm=True,
@@ -89,7 +89,7 @@ class TestWSRLPolicyBasics:
         no_norm_policy = WSRLPolicy(
             observation_space=obs_space,
             action_space=action_space,
-            features_extractor=FlattenExtractor(obs_space),
+            actor_extractor=FlattenExtractor(obs_space),
             net_arch={"pi": [32], "qf": [32]},
             actor_use_layer_norm=False,
             critic_use_layer_norm=False,
@@ -207,7 +207,7 @@ class TestCriticSubsampling:
         policy = SACPolicy(
             observation_space=obs_space,
             action_space=action_space,
-            features_extractor=FlattenExtractor(obs_space),
+            actor_extractor=FlattenExtractor(obs_space),
             net_arch={"pi": [32], "qf": [32]},
             n_critics=10,
             critic_subsample_size=2,
@@ -257,7 +257,7 @@ class TestParameterGroups:
 
         # Should include critic parameters
         critic_params = set(wsrl_policy.critic.parameters())
-        encoder_params = set(wsrl_policy.features_extractor.parameters())
+        encoder_params = set(wsrl_policy.actor_extractor.parameters())
         param_set = set(params)
 
         assert critic_params.issubset(param_set)

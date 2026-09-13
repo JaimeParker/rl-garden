@@ -140,4 +140,11 @@ class FINOOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     num_samples: Optional[int] = None
 
 
-registry.register("fino", FINOOff2OnArgs, run_fino)
+
+
+def _off2_on_fino_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnFINO
+
+    return Off2OnFINO
+
+registry.register("fino", FINOOff2OnArgs, run_fino, algorithm_cls=_off2_on_fino_algorithm_cls)

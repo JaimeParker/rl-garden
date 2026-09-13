@@ -42,7 +42,7 @@ class ValueFlowsPolicy(FQLPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         n_critics: int = 2,
@@ -56,8 +56,8 @@ class ValueFlowsPolicy(FQLPolicy):
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
-        actor_onestep_flow_encoder: Optional[BaseFeaturesExtractor] = None,
         num_samples: int = 16,
         policy_extraction: Literal["rs", "rpg"] = "rs",
         num_flow_steps: int = 10,
@@ -67,7 +67,7 @@ class ValueFlowsPolicy(FQLPolicy):
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor,
             net_arch,
             n_critics=n_critics,
             actor_use_layer_norm=actor_use_layer_norm,
@@ -80,13 +80,13 @@ class ValueFlowsPolicy(FQLPolicy):
             backbone_type=backbone_type,
             activation_fn=activation_fn,
             encoder_sharing=encoder_sharing,
+            critic_extractor=critic_extractor,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
-            actor_onestep_flow_encoder=actor_onestep_flow_encoder,
         )
         del self.critic
         del self.critic_target
 
-        fd = features_extractor.features_dim
+        fd = self.critic_features_dim
         action_dim = int(np.prod(action_space.shape))
         net_arch = list(net_arch)
 
@@ -119,7 +119,7 @@ class ValueFlowsPolicy(FQLPolicy):
 
     def critic_and_encoder_parameters(self):
         yield from self.critic_flows.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def one_step_q(
         self,
@@ -208,9 +208,9 @@ class ValueFlowsPolicy(FQLPolicy):
         with torch.no_grad():
             if self.encoder_sharing == "separate":
                 actor_features = self.extract_actor_onestep_features(obs)
-                q_features = self.extract_features(obs)
+                q_features = self.extract_critic_features(obs)
             else:
-                features = self.extract_features(obs)
+                features = self.extract_critic_features(obs)
                 actor_features = features
                 q_features = features
 

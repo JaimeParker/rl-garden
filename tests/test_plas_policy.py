@@ -13,9 +13,9 @@ ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
 def _make_policy(**kwargs) -> PLASPolicy:
     fe = FlattenExtractor(observation_space=OBS_SPACE)
-    defaults = dict(net_arch=[16, 16], vae_hidden_dim=16)
+    defaults = dict(actor_extractor=fe, net_arch=[16, 16], vae_hidden_dim=16)
     defaults.update(kwargs)
-    return PLASPolicy(OBS_SPACE, ACT_SPACE, fe, **defaults)
+    return PLASPolicy(OBS_SPACE, ACT_SPACE, **defaults)
 
 
 def test_vae_is_a_real_submodule_in_state_dict():
@@ -26,14 +26,14 @@ def test_vae_is_a_real_submodule_in_state_dict():
 
 def test_latent_actor_output_dim_matches_vae_latent_dim():
     policy = _make_policy()
-    features = torch.randn(4, policy.features_extractor.features_dim)
+    features = torch.randn(4, policy.actor_features_dim)
     latent = policy.latent_actor(features)
     assert latent.shape == (4, policy.vae.latent_dim)
 
 
 def test_latent_actor_output_bounded_by_max_latent_action():
     policy = _make_policy(max_latent_action=0.3)
-    features = torch.randn(16, policy.features_extractor.features_dim)
+    features = torch.randn(16, policy.actor_features_dim)
     latent = policy.latent_actor(features)
     assert torch.all(latent.abs() <= 0.3 + 1e-6)
 
@@ -80,7 +80,7 @@ def test_predict_is_deterministic_no_sampling():
 def test_without_perturbation_action_is_plain_vae_decode():
     policy = _make_policy(use_perturbation=False)
     assert policy.perturbation is None
-    features = torch.randn(4, policy.features_extractor.features_dim)
+    features = torch.randn(4, policy.actor_features_dim)
     latent = policy.latent_actor(features)
     expected = policy.vae.decode(features, z=latent)
     actual = policy.action_from_latent(features, latent, target=False)
@@ -89,7 +89,7 @@ def test_without_perturbation_action_is_plain_vae_decode():
 
 def test_with_perturbation_action_differs_from_plain_decode():
     policy = _make_policy(use_perturbation=True, phi=0.5)
-    features = torch.randn(4, policy.features_extractor.features_dim)
+    features = torch.randn(4, policy.actor_features_dim)
     latent = policy.latent_actor(features)
     decoded = policy.vae.decode(features, z=latent)
     perturbed = policy.action_from_latent(features, latent, target=False)

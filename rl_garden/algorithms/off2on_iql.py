@@ -14,6 +14,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.iql import _IQLRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import InitialTrainingPhase
@@ -68,6 +69,8 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
         critic_subsample_size: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -136,6 +139,8 @@ class Off2OnIQL(_IQLRolloutTrainingShell):
             critic_subsample_size=critic_subsample_size,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             policy_kwargs=policy_kwargs,
             actor_use_layer_norm=actor_use_layer_norm,
             critic_use_layer_norm=critic_use_layer_norm,

@@ -111,4 +111,10 @@ def run_so2(args: SO2Off2OnArgs) -> None:
     run_off2on(args, build_agent=build_so2, algorithm="so2")
 
 
-registry.register("so2", SO2Off2OnArgs, run_so2)
+def _off2_on_so2_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnSO2
+
+    return Off2OnSO2
+
+
+registry.register("so2", SO2Off2OnArgs, run_so2, algorithm_cls=_off2_on_so2_algorithm_cls)

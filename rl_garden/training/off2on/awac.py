@@ -31,16 +31,25 @@ class AWACOff2OnArgs(AWACOff2OnTrainingArgs, ObservationArgs, EnvBackendArgs):
 
 
 def build_awac(args: AWACOff2OnArgs, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.algorithms import Off2OnAWAC
     from rl_garden.training.inspection import construct_agent
 
-    # AWAC only supports state observations (no distinct critic encoder
-    # either) -- see AWAC._setup_model's own TypeError guard.
+    # AWAC only supports state observations (no images) -- see
+    # AWACCore._setup_model's own ObservationContractError guard. It does
+    # support a distinct critic encoder/encoder_sharing (state_<name> keys
+    # are STATE modality, not images, so an asymmetric privileged-critic
+    # state key is still allowed).
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnAWAC,
@@ -100,4 +109,11 @@ def run_awac(args: AWACOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_awac, algorithm="awac")
 
 
-registry.register("awac", AWACOff2OnArgs, run_awac)
+
+
+def _off2_on_awac_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnAWAC
+
+    return Off2OnAWAC
+
+registry.register("awac", AWACOff2OnArgs, run_awac, algorithm_cls=_off2_on_awac_algorithm_cls)

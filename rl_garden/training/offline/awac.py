@@ -25,13 +25,19 @@ class AWACArgs(
     OfflineDiscountArgs,
     OfflineAWACArgs,
 ):
-    """AWAC offline pretraining. Box observations only."""
+    """AWAC offline pretraining. State observations only (a plain Box, or a
+    Dict made up entirely of ``state``/``state_<name>`` keys) -- ``AWACCore``
+    rejects any image key; ``obs_groups``/``critic_encoder_config`` still let
+    a ``state_<name>`` key be critic-only (``OfflineCommonArgs`` already
+    composes ``ObservationArgs``, so no extra base is needed)."""
 
 
 def _awac_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    return {
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+
+    kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
@@ -72,7 +78,13 @@ def _awac_kwargs(
         "checkpoint_freq": 0,
         "save_replay_buffer": args.save_replay_buffer,
         "save_final_checkpoint": False,
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        kwargs["encoder_sharing"] = args.encoder_sharing
+    return kwargs
 
 
 def build_awac(args, env_spec, logger, eval_env=None):
@@ -88,4 +100,11 @@ def run_awac(args: AWACArgs) -> None:
     run_offline(args, build_agent=build_awac)
 
 
-registry.register("awac", AWACArgs, run_awac)
+
+
+def _awac_algorithm_cls() -> type:
+    from rl_garden.algorithms import AWAC
+
+    return AWAC
+
+registry.register("awac", AWACArgs, run_awac, algorithm_cls=_awac_algorithm_cls)

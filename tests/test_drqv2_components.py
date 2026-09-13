@@ -54,6 +54,28 @@ class DummyPerCameraDictVecEnv:
         )
 
 
+class DummyStateExtraVecEnv:
+    """A ``rgb_cam`` + ``state`` + ``state_object_pose`` env: ``rgb_cam``/
+    ``state`` are shared by actor and critic (both get a real, trainable
+    extractor); ``state_object_pose`` (Section A's ``state_<name>`` family)
+    is critic-only."""
+
+    def __init__(self) -> None:
+        self.num_envs = 1
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(32, 40, 3), dtype=np.uint8),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+                "state_object_pose": spaces.Box(
+                    low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+                ),
+            }
+        )
+        self.single_action_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(2,), dtype=np.float32
+        )
+
+
 def test_drqv2_encoder_features_dim_matches_non_square_forward():
     obs_space = spaces.Box(low=0, high=255, shape=(3, 32, 40), dtype=np.uint8)
     encoder = DrQv2Encoder(obs_space)
@@ -121,11 +143,11 @@ def test_ddpg_uses_explicit_per_camera_image_keys():
         encoder_config=_no_aug_encoder_config(image_fusion_mode="per_key"),
     )
 
-    assert agent.policy.features_extractor.image_keys == (
+    assert agent.policy.actor_extractor.image_keys == (
         "rgb_base_camera",
         "rgb_hand_camera",
     )
-    assert set(agent.policy.features_extractor.image_encoders) == {
+    assert set(agent.policy.actor_extractor.image_encoders) == {
         "rgb_base_camera",
         "rgb_hand_camera",
     }
@@ -304,9 +326,18 @@ def test_ddpg_rollout_does_not_clip_exploration_noise(monkeypatch):
     assert observed["clip"] is None
 
 
-def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
+def test_ddpg_update_role_based_extraction_and_clips_training_noise(
     monkeypatch,
 ):
+    """Under the default shared encoder (encoder_sharing="shared_critic_grad",
+    no critic_extractor), DDPG.train() restores DrQ-v2's single augmented
+    view (see BasePolicy.actor_features_from_critic): the critic path
+    (``extract_critic_features``) extracts ``data.obs`` once and
+    ``data.next_obs`` once (under no_grad) -- two extractor calls total --
+    and the actor path REUSES the critic's own ``data.obs`` features
+    (detached) instead of a third, redundant ``extract_actor_features``
+    call. See the "separate" sibling test below for the case where the
+    actor genuinely has its own encoder and a third call is unavoidable."""
     agent = DDPG(
         env=DummyDictVecEnv(),
         device="cpu",
@@ -341,12 +372,18 @@ def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
         )
 
     extract_count = 0
-    original_extract = agent.policy.extract_features
+    original_extract_critic = agent.policy.extract_critic_features
+    original_extract_actor = agent.policy.extract_actor_features
 
-    def wrapped_extract(obs, stop_gradient=False):
+    def wrapped_extract_critic(obs, stop_gradient=False):
         nonlocal extract_count
         extract_count += 1
-        return original_extract(obs, stop_gradient=stop_gradient)
+        return original_extract_critic(obs, stop_gradient=stop_gradient)
+
+    def wrapped_extract_actor(obs):
+        nonlocal extract_count
+        extract_count += 1
+        return original_extract_actor(obs)
 
     clips: list[float | None] = []
     original_forward = agent.policy.actor.forward
@@ -362,13 +399,82 @@ def test_ddpg_update_encodes_each_observation_once_and_clips_training_noise(
         dist.sample = wrapped_sample
         return dist
 
-    monkeypatch.setattr(agent.policy, "extract_features", wrapped_extract)
+    monkeypatch.setattr(agent.policy, "extract_critic_features", wrapped_extract_critic)
+    monkeypatch.setattr(agent.policy, "extract_actor_features", wrapped_extract_actor)
     monkeypatch.setattr(agent.policy.actor, "forward", wrapped_forward)
 
     agent.train(1)
 
     assert extract_count == 2
     assert clips == [agent.stddev_clip, agent.stddev_clip]
+
+
+def test_ddpg_update_separate_encoders_extracts_three_times(monkeypatch):
+    """Sibling of the shared-encoder test above: under
+    encoder_sharing="separate" the actor has its own, genuinely different
+    extractor, so BasePolicy.actor_features_from_critic returns None and
+    DDPG.train() falls back to a real extract_actor_features(data.obs)
+    call -- three extractor calls total (critic obs, critic next_obs,
+    actor obs), not two."""
+    agent = DDPG(
+        env=DummyStateExtraVecEnv(),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=16,
+        batch_size=2,
+        learning_starts=0,
+        training_freq=1,
+        eval_freq=0,
+        nstep=3,
+        gamma=0.9,
+        hidden_dim=16,
+        feature_dim=8,
+        encoder_config=_no_aug_encoder_config(proprio_latent_dim=4),
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+        ),
+        encoder_sharing="separate",
+    )
+    for step in range(5):
+        obs = {
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "state": torch.randn(1, 4),
+            "state_object_pose": torch.randn(1, 3),
+        }
+        next_obs = {
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "state": torch.randn(1, 4),
+            "state_object_pose": torch.randn(1, 3),
+        }
+        agent.replay_buffer.add(
+            obs=obs,
+            next_obs=next_obs,
+            action=torch.randn(1, 2).clamp(-1, 1),
+            reward=torch.full((1,), float(step)),
+            done=torch.zeros(1, dtype=torch.bool),
+            episode_end=torch.zeros(1, dtype=torch.bool),
+        )
+
+    extract_count = 0
+    original_extract_critic = agent.policy.extract_critic_features
+    original_extract_actor = agent.policy.extract_actor_features
+
+    def wrapped_extract_critic(obs, stop_gradient=False):
+        nonlocal extract_count
+        extract_count += 1
+        return original_extract_critic(obs, stop_gradient=stop_gradient)
+
+    def wrapped_extract_actor(obs):
+        nonlocal extract_count
+        extract_count += 1
+        return original_extract_actor(obs)
+
+    monkeypatch.setattr(agent.policy, "extract_critic_features", wrapped_extract_critic)
+    monkeypatch.setattr(agent.policy, "extract_actor_features", wrapped_extract_actor)
+
+    agent.train(1)
+
+    assert extract_count == 3
 
 
 def test_ddpg_one_update_uses_nstep_discount_path():
@@ -413,6 +519,112 @@ def test_ddpg_one_update_uses_nstep_discount_path():
     assert all(np.isfinite(v) for v in metrics.values())
 
 
+def test_ddpg_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
+    """End-to-end asymmetric actor/critic encoders via state_<name>: critic
+    sees state_object_pose, actor does not, encoder_sharing="separate".
+    Asserts the actor extractor's schema lacks the key and, over one real
+    train() step, gradients reach only the right extractor."""
+    agent = DDPG(
+        env=DummyStateExtraVecEnv(),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=16,
+        batch_size=4,
+        learning_starts=0,
+        training_freq=1,
+        eval_freq=0,
+        nstep=1,
+        hidden_dim=16,
+        feature_dim=8,
+        encoder_config=_no_aug_encoder_config(proprio_latent_dim=4),
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+        ),
+        encoder_sharing="separate",
+    )
+
+    actor_extractor = agent.policy.actor_extractor
+    critic_extractor = agent.policy.critic_extractor
+    assert critic_extractor is not None and critic_extractor is not actor_extractor
+    assert "state_object_pose" not in actor_extractor.state_keys
+    assert "state_object_pose" in critic_extractor.state_keys
+
+    for step in range(8):
+        obs = {
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "state": torch.randn(1, 4),
+            "state_object_pose": torch.randn(1, 3),
+        }
+        next_obs = {
+            "rgb_cam": torch.randint(0, 256, (1, 32, 40, 3), dtype=torch.uint8),
+            "state": torch.randn(1, 4),
+            "state_object_pose": torch.randn(1, 3),
+        }
+        agent.replay_buffer.add(
+            obs=obs,
+            next_obs=next_obs,
+            action=torch.randn(1, 2).clamp(-1, 1),
+            reward=torch.full((1,), float(step)),
+            done=torch.zeros(1, dtype=torch.bool),
+            episode_end=torch.zeros(1, dtype=torch.bool),
+        )
+
+    data = agent.replay_buffer.sample(4)
+
+    # --- Critic loss: mirrors DDPG.train()'s own computation, without
+    # stepping the optimizer, so the loss tensor is available for isolation
+    # checks below. ---
+    critic_features = agent.policy.extract_critic_features(data.obs)
+    with torch.no_grad():
+        next_features = agent.policy.extract_critic_features(data.next_obs)
+        target_std, target_clip = agent._target_action_noise()
+        dist = agent.policy.actor(next_features, target_std)
+        next_action = dist.sample(clip=target_clip)
+        target_q_all = agent.policy.q_values_all(next_features, next_action, target=True)
+        target_q = (
+            data.rewards.reshape(-1, 1)
+            + data.discounts.reshape(-1, 1) * target_q_all.min(dim=0).values
+        )
+    q_all = agent.policy.q_values_all(critic_features, data.actions, target=False)
+    critic_loss = agent._critic_loss(q_all, target_q)
+
+    critic_grad_on_critic = torch.autograd.grad(
+        critic_loss, list(critic_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in critic_grad_on_critic)
+    critic_grad_on_actor = torch.autograd.grad(
+        critic_loss, list(actor_extractor.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in critic_grad_on_actor)
+
+    # --- Actor loss: mirrors DDPG.train()'s actor-update block. ---
+    actor_features = agent.policy.extract_actor_features(data.obs)
+    action = agent.policy.actor_action_from_features(
+        actor_features, agent._current_stddev(), noise_clip=agent.stddev_clip
+    )
+    q_actor_features = agent.policy.critic_features_for(data.obs, actor_features, stop_gradient=True)
+    q_actor_all = agent.policy.q_values_all(q_actor_features, action, target=False)
+    actor_loss = -agent._actor_q_value(q_actor_all).mean()
+
+    actor_grad_on_actor = torch.autograd.grad(
+        actor_loss, list(actor_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in actor_grad_on_actor)
+    # The actor loss's Q(s, pi(s)) term re-extracts critic-role features with
+    # stop_gradient=True (DDPGPolicy.critic_features_for); CombinedExtractor's
+    # own stop_gradient convention detaches only the image branch, so this
+    # checks image-branch isolation specifically (its proprio branch
+    # legitimately still requires_grad here -- unrelated to obs_groups).
+    actor_grad_on_critic_image = torch.autograd.grad(
+        actor_loss, list(critic_extractor.image_encoder.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in actor_grad_on_critic_image)
+
+    # A real end-to-end rollout+update step also runs cleanly.
+    info = agent.train(gradient_steps=1, compute_info=True)
+    assert all(np.isfinite(v) for v in info.values())
+
+
 def _drqv2_build_args(encoder: str):
     from types import SimpleNamespace
 
@@ -423,6 +635,8 @@ def _drqv2_build_args(encoder: str):
         obs=ObservationConfig(rgb=("base_camera",), depth=("base_camera",)),
         obs_groups=ObsGroups(),
         encoder=EncoderConfig(backbone=encoder),
+        critic_encoder=EncoderConfig(),
+        encoder_sharing=None,
         buffer_size=1000,
         buffer_device="cpu",
         mmap_dir=None,

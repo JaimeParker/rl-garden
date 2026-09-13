@@ -228,7 +228,7 @@ def test_vision_learn_and_train_runs_and_produces_finite_losses():
     """Confirms the inherited-from-DPPO vision path (DPPOPolicy._cond, fixed
     in Milestone 4) actually works end to end for this subclass too -- not
     just "should work by inheritance." cm_student's cond_dim now comes from
-    self.policy.features_extractor.features_dim (see _setup_model), so this
+    self.policy.actor_extractor.features_dim (see _setup_model), so this
     also exercises that fix."""
     torch.manual_seed(0)
     agent = _make_agent(

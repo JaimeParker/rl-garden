@@ -23,7 +23,7 @@ from gymnasium import spaces
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import Activation, ActorVectorField, KernelInit
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 class FlowBCPolicy(BasePolicy):
@@ -33,24 +33,27 @@ class FlowBCPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
         use_layer_norm: bool = False,
         kernel_init: Optional[KernelInit] = None,
         activation_fn: Optional[Activation] = None,
         flow_steps: int = 10,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "FlowBCPolicy requires a Box action space."
         if flow_steps < 1:
             raise ValueError(f"flow_steps must be >= 1, got {flow_steps}.")
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
         self.flow_steps = flow_steps
 
-        fd = features_extractor.features_dim
+        fd = self.actor_features_dim
         action_dim = int(np.prod(action_space.shape))
         self.actor_bc_flow = ActorVectorField(
             fd,
@@ -68,7 +71,12 @@ class FlowBCPolicy(BasePolicy):
         self.register_buffer("action_high", high)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for callers that need to pick the flag themselves.
+        ``bc_flow_loss`` does not use this; it calls
+        ``extract_actor_features`` (``BasePolicy``), which applies the
+        ``encoder_sharing`` stop-gradient rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         # Flow matching has no separate deterministic eval path: sampling
@@ -77,7 +85,7 @@ class FlowBCPolicy(BasePolicy):
         # BasePolicy contract compatibility but has no effect here --
         # matches FQLPolicy.predict()'s identical stance.
         del deterministic
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         noise = torch.randn(
             features.shape[0],
             self.actor_bc_flow.action_dim,
@@ -92,7 +100,7 @@ class FlowBCPolicy(BasePolicy):
         """Conditional flow-matching regression loss (CondOT path): straight
         line from noise to the expert action, MSE against the constant
         target velocity ``actions - x_0``."""
-        features = self.extract_features(obs, stop_gradient=False)
+        features = self.extract_actor_features(obs)
         batch_size = actions.shape[0]
         device, dtype = actions.device, actions.dtype
         x_0 = torch.randn_like(actions)

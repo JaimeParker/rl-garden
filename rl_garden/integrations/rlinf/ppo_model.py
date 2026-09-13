@@ -108,12 +108,12 @@ def build_policy_from_cfg(cfg: Any) -> PPOPolicy:
     action_space = spaces.Box(
         low=-1.0, high=1.0, shape=(action_dim,), dtype="float32"
     )
-    features_extractor = FlattenExtractor(observation_space=observation_space)
+    actor_extractor = FlattenExtractor(observation_space=observation_space)
     policy_kwargs = dict(model_cfg.get("rlgarden_policy_kwargs", {}))
     return policy_cls(
         observation_space=observation_space,
         action_space=action_space,
-        features_extractor=features_extractor,
+        actor_extractor=actor_extractor,
         **policy_kwargs,
     )
 

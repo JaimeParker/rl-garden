@@ -164,8 +164,15 @@ def run_calql(args: CalQLOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_calql, algorithm="calql")
 
 
+def _off2_on_calql_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnCalQL
+
+    return Off2OnCalQL
+
+
 registry.register(
     "calql",
     CalQLOff2OnArgs,
     run_calql,
+    algorithm_cls=_off2_on_calql_algorithm_cls,
 )

@@ -141,4 +141,11 @@ class ACFQLArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     kernel_init: Optional[KernelInit] = "xavier_uniform"
 
 
-registry.register("acfql", ACFQLArgs, run_acfql)
+
+
+def _acfql_algorithm_cls() -> type:
+    from rl_garden.algorithms import ACFQL
+
+    return ACFQL
+
+registry.register("acfql", ACFQLArgs, run_acfql, algorithm_cls=_acfql_algorithm_cls)

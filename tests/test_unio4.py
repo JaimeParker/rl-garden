@@ -139,6 +139,90 @@ def test_rejects_image_observation_space():
         UniO4(env=_dict_image_env(), buffer_device="cpu", device="cpu")
 
 
+def _multi_key_state_env(num_envs: int = 1) -> OfflineEnvSpec:
+    return OfflineEnvSpec(
+        spaces.Dict(
+            {
+                "state": spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
+                "state_object_pose": spaces.Box(-1.0, 1.0, shape=(3,), dtype=np.float32),
+            }
+        ),
+        spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+        num_envs=num_envs,
+    )
+
+
+def _fill_multi_key_state(agent: UniO4, steps: int = 40, episode_len: int = 20) -> None:
+    env = agent.env
+    state_shape = env.single_observation_space["state"].shape
+    pose_shape = env.single_observation_space["state_object_pose"].shape
+    for t in range(steps):
+        obs = {
+            "state": torch.rand(env.num_envs, *state_shape) * 2 - 1,
+            "state_object_pose": torch.rand(env.num_envs, *pose_shape) * 2 - 1,
+        }
+        next_obs = {
+            "state": torch.rand(env.num_envs, *state_shape) * 2 - 1,
+            "state_object_pose": torch.rand(env.num_envs, *pose_shape) * 2 - 1,
+        }
+        actions = torch.rand(env.num_envs, *env.single_action_space.shape) * 2 - 1
+        rewards = torch.rand(env.num_envs)
+        dones = torch.zeros(env.num_envs, dtype=torch.bool)
+        episode_end = torch.zeros(env.num_envs, dtype=torch.bool)
+        if (t + 1) % episode_len == 0:
+            episode_end[:] = True
+        agent.replay_buffer.add(
+            obs, next_obs, actions, rewards, dones, episode_end=episode_end
+        )
+
+
+def test_multi_key_state_observation_trains_one_step_per_phase():
+    # Regression test: value_net/q_net used to be sized from the actor
+    # extractor's width (which concatenates every state_<name> key) but read
+    # a raw data.obs["state"] tensor at forward time -- a shape mismatch
+    # crash whenever more than one state key was present. Both nets now read
+    # through the critic-role extractor (BPPOCriticMixin._build_critic/
+    # _phase_a_step, and UniO4._improve_step's own advantage computation),
+    # which performs the same concatenation.
+    agent = _make_agent(
+        env=_multi_key_state_env(),
+        critic_warmup_steps=2,
+        bc_ensemble_steps=2,
+        num_policies=2,
+    )
+    assert agent.observation_encoders.critic_or_actor.features_dim == 7
+    shared_extractor = agent.observation_encoders.critic_or_actor
+    assert all(actor.actor_extractor is shared_extractor for actor in agent.actors)
+    _fill_multi_key_state(agent)
+
+    agent.train(2)  # Phase CRITIC
+    agent.train(2)  # Phase BC_ENSEMBLE
+    agent.train(1)  # Phase IMPROVE
+
+    # UniO4 is state-only (Box obs only, per test_rejects_image_observation_
+    # space), so the shared extractor is always a FlattenExtractor with zero
+    # learnable parameters -- there is nothing for a before/after parameter-
+    # movement check to observe. Assert the underlying mechanism directly
+    # instead: under "shared_critic_grad" (the default here), each member's
+    # extract_actor_features (BCPolicy) detaches (BasePolicy.
+    # actor_features_detached), so gradient never reaches the shared
+    # extractor through either the BC_ENSEMBLE or IMPROVE actor paths, while
+    # extract_critic_features / the mixin's own critic-role read
+    # (BPPOCriticMixin._build_critic/_phase_a_step) never detaches.
+    env = agent.env
+    state_shape = env.single_observation_space["state"].shape
+    pose_shape = env.single_observation_space["state_object_pose"].shape
+    probe_obs = {
+        "state": (torch.rand(env.num_envs, *state_shape) * 2 - 1).requires_grad_(),
+        "state_object_pose": (
+            torch.rand(env.num_envs, *pose_shape) * 2 - 1
+        ).requires_grad_(),
+    }
+    for actor in agent.actors:
+        assert not actor.extract_actor_features(probe_obs).requires_grad
+    assert shared_extractor.extract(probe_obs).requires_grad
+
+
 def test_registry_discovers_unio4():
     from rl_garden.training.offline._registry import registry
 

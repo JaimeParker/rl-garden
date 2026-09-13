@@ -107,4 +107,11 @@ def run_value_flows(args: ValueFlowsArgs) -> None:
     run_offline(args, build_agent=build_value_flows)
 
 
-registry.register("value_flows", ValueFlowsArgs, run_value_flows)
+
+
+def _value_flows_algorithm_cls() -> type:
+    from rl_garden.algorithms import ValueFlows
+
+    return ValueFlows
+
+registry.register("value_flows", ValueFlowsArgs, run_value_flows, algorithm_cls=_value_flows_algorithm_cls)

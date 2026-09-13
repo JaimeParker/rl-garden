@@ -24,6 +24,7 @@ from rl_garden.encoders.combined import CombinedExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.observations import ObservationContractError, ObsGroups
+from rl_garden.policies.base import BasePolicy
 
 
 class DummyVecEnv:
@@ -130,52 +131,81 @@ def test_mixin_resolve_observation_encoders_reads_optional_attrs_with_none_defau
     assert isinstance(result.actor, FlattenExtractor)
 
 
-def test_mixin_actor_features_stop_gradients_under_shared_critic_grad():
-    algo = _FakeAlgo(encoder_sharing="shared_critic_grad")
-    algo._resolve_observation_encoders(RGBD_SPACE)
+# --- BasePolicy: where the encoder_sharing stop-gradient rule now lives ---
+#
+# The mixin's own _actor_features/_critic_features helpers (tested above,
+# pre-policy-extractor-contract) are gone -- the sharing-driven stop-gradient
+# rule is now owned entirely by BasePolicy.extract_actor_features/
+# extract_critic_features (rl_garden/policies/base.py), fed by
+# ObservationEncoderMixin._policy_extractor_kwargs (see
+# test_sac_core.py/test_ppo.py for the SAC/PPO reference-migration coverage).
+# These three tests exercise that same encoder_sharing x extractor-identity
+# behavior directly against BasePolicy, independent of any concrete algorithm.
+
+
+class _MinimalPolicy(BasePolicy):
+    """The smallest concrete BasePolicy: only `predict` (abstract) is stubbed."""
+
+    def predict(self, obs, deterministic: bool = False):
+        raise NotImplementedError
+
+
+def test_extract_actor_features_stop_gradients_under_shared_critic_grad():
+    result = resolve_observation_encoders(RGBD_SPACE, None, None, "shared_critic_grad")
+    policy = _MinimalPolicy(
+        RGBD_SPACE, ACT_SPACE, actor_extractor=result.actor, encoder_sharing="shared_critic_grad"
+    )
     obs = {
         "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8).float(),
         "depth_cam": torch.rand(2, 64, 64, 1),
         "state": torch.randn(2, 4, requires_grad=False),
     }
-    features = algo._actor_features(obs)
+    features = policy.extract_actor_features(obs)
     loss = features.sum()
     # stop_gradient only detaches the image branch (CombinedExtractor's
     # established Q-loss-only image-encoder convention); the proprio branch
     # still trains from the actor loss -- see CombinedExtractor.extract.
     image_grads = torch.autograd.grad(
-        loss, list(algo.observation_encoders.actor.image_encoder.parameters()), allow_unused=True
+        loss, list(policy.actor_extractor.image_encoder.parameters()), allow_unused=True
     )
     assert all(g is None for g in image_grads)
 
 
-def test_mixin_actor_features_do_not_stop_gradients_under_shared():
-    algo = _FakeAlgo(encoder_sharing="shared")
-    algo._resolve_observation_encoders(RGBD_SPACE)
+def test_extract_actor_features_do_not_stop_gradients_under_shared():
+    result = resolve_observation_encoders(RGBD_SPACE, None, None, "shared_critic_grad")
+    policy = _MinimalPolicy(
+        RGBD_SPACE, ACT_SPACE, actor_extractor=result.actor, encoder_sharing="shared"
+    )
     obs = {
         "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8).float(),
         "depth_cam": torch.rand(2, 64, 64, 1),
         "state": torch.randn(2, 4),
     }
-    features = algo._actor_features(obs)
+    features = policy.extract_actor_features(obs)
     loss = features.sum()
     grads = torch.autograd.grad(
-        loss, list(algo.observation_encoders.actor.parameters()), allow_unused=True
+        loss, list(policy.actor_extractor.parameters()), allow_unused=True
     )
     assert any(g is not None and torch.any(g != 0) for g in grads)
 
 
-def test_mixin_critic_features_uses_critic_or_actor_encoder():
-    algo = _FakeAlgo(encoder_sharing="separate")
-    algo._resolve_observation_encoders(RGBD_SPACE)
+def test_extract_critic_features_uses_critic_or_actor_encoder():
+    result = resolve_observation_encoders(RGBD_SPACE, None, None, "separate")
+    policy = _MinimalPolicy(
+        RGBD_SPACE,
+        ACT_SPACE,
+        actor_extractor=result.actor,
+        critic_extractor=result.critic,
+        encoder_sharing="separate",
+    )
     obs = {
         "rgb_cam": torch.randint(0, 256, (2, 64, 64, 3), dtype=torch.uint8).float(),
         "depth_cam": torch.rand(2, 64, 64, 1),
         "state": torch.randn(2, 4),
     }
-    critic_features = algo._critic_features(obs)
+    critic_features = policy.extract_critic_features(obs)
     assert critic_features.shape[0] == 2
-    assert algo.observation_encoders.critic is not algo.observation_encoders.actor
+    assert policy.critic_extractor is not policy.actor_extractor
 
 
 # --- SAC end-to-end: the reference migration, checkpoint round-trip ---
@@ -208,10 +238,10 @@ def test_sac_dict_encoder_config_round_trips_through_checkpoint_metadata():
     agent = SAC(env=DummyVecEnv(RGBD_SPACE, ACT_SPACE), encoder_config=cfg, **_sac_kwargs())
     meta = agent._checkpoint_metadata()
     assert meta["encoder_config"] == dataclasses.asdict(cfg)
-    assert isinstance(agent.policy.features_extractor, CombinedExtractor)
+    assert isinstance(agent.policy.actor_extractor, CombinedExtractor)
     # features_dim = image sub-encoder's 42 + the proprio branch's default 64.
-    assert agent.policy.features_extractor.features_dim == 42 + 64
-    assert agent.policy.features_extractor.image_encoder.features_dim == 42
+    assert agent.policy.actor_extractor.features_dim == 42 + 64
+    assert agent.policy.actor_extractor.image_encoder.features_dim == 42
 
 
 def test_sac_obs_groups_round_trips_through_checkpoint_metadata():
@@ -224,8 +254,8 @@ def test_sac_obs_groups_round_trips_through_checkpoint_metadata():
     )
     meta = agent._checkpoint_metadata()
     assert meta["obs_groups"] == dataclasses.asdict(groups)
-    assert set(agent.policy.features_extractor.image_keys) == {"rgb_cam"}
-    assert set(agent.policy.critic_features_extractor.image_keys) == {"rgb_cam", "depth_cam"}
+    assert set(agent.policy.actor_extractor.image_keys) == {"rgb_cam"}
+    assert set(agent.policy.critic_extractor.image_keys) == {"rgb_cam", "depth_cam"}
 
 
 def test_sac_asymmetric_obs_groups_without_separate_sharing_raises():

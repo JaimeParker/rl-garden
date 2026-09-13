@@ -394,20 +394,20 @@ def inactive_config_paths(args: Any) -> dict[str, str]:
         return inactive
 
     encoder = getattr(args, "encoder", None)
-    obs_groups = getattr(args, "obs_groups", None)
     critic_encoder = getattr(args, "critic_encoder", None)
     if not obs.is_visual:
+        # `obs_groups` and `encoder_sharing` are always active: they gate the
+        # state-only privileged-critic idiom (--obs.extra-state ... plus
+        # --obs-groups.critic ... --encoder-sharing separate), which has no
+        # image key at all. Only image-related knobs are meaningless here.
         if is_dataclass(encoder):
             for path in _dataclass_leaf_paths(encoder, "encoder"):
-                inactive[path] = "obs.is_visual is False"
-        if is_dataclass(obs_groups):
-            for path in _dataclass_leaf_paths(obs_groups, "obs_groups"):
+                if path == "encoder.normalize_obs":
+                    continue
                 inactive[path] = "obs.is_visual is False"
         if is_dataclass(critic_encoder):
             for path in _dataclass_leaf_paths(critic_encoder, "critic_encoder"):
                 inactive[path] = "obs.is_visual is False"
-        if getattr(args, "encoder_sharing", None) is not None:
-            inactive["encoder_sharing"] = "obs.is_visual is False"
         return inactive
 
     if is_dataclass(encoder):

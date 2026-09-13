@@ -63,9 +63,13 @@ class Off2OnReplayMixin:
         # no-op for subclasses that never configure ``initial_training_phase``.
         return False
 
-    # No _actor_stop_gradient override here: MRO falls through to
-    # CQLCore._actor_stop_gradient (or SAC's equivalent) for callers that
-    # define it; IQL/AWAC never call `self._actor_stop_gradient()`.
+    # No actor-stop-gradient hook override here: that per-algorithm hook was
+    # removed from CQLCore/SAC under the actor/critic extractor contract (the
+    # encoder_sharing stop-gradient rule now lives in
+    # BasePolicy.extract_actor_features); only the recurrent/sequence
+    # families (SequenceSAC, SequencePPO, DPPO) still keep a local version of
+    # that hook (see policy-extractor-contract-recipe.md step 8), and none of
+    # those subclass Off2OnReplayMixin.
 
     def _clear_replay_buffer(self) -> int:
         previous_len = len(self.replay_buffer)

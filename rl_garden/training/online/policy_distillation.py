@@ -27,11 +27,11 @@ def _build_teacher_policy(args, env: Any):
     # state-only (see _policy_distillation_env_request) and the teacher is
     # always rebuilt from teacher_obs_keys/teacher_net_arch, never from a
     # caller-supplied encoder configuration.
-    features_extractor = build_observation_encoder(teacher_obs_space)
+    actor_extractor = build_observation_encoder(teacher_obs_space)
     teacher_policy = PPOPolicy(
         observation_space=teacher_obs_space,
         action_space=env.single_action_space,
-        features_extractor=features_extractor,
+        actor_extractor=actor_extractor,
         net_arch=list(args.teacher_net_arch),
     )
     checkpoint = load_checkpoint_file(args.teacher_checkpoint, map_location="cpu")

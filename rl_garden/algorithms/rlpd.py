@@ -16,7 +16,6 @@ from typing import Any, Literal, Optional
 from rl_garden.algorithms.sac import SAC
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, KernelInit
 from rl_garden.policies.rlpd_policy import RLPDPolicy
 
@@ -73,11 +72,10 @@ class RLPD(PriorDataReplayMixin, SAC):
             **sac_kwargs,
         )
 
-    def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> RLPDPolicy:
+    def _build_policy(self) -> RLPDPolicy:
         return RLPDPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
@@ -94,8 +92,11 @@ class RLPD(PriorDataReplayMixin, SAC):
             log_std_mode=self.actor_log_std_mode,
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            critic_features_extractor=self._build_critic_features_extractor(),
             critic_backbone_type=self.critic_backbone_type,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
         )
 
     def _setup_model(self) -> None:

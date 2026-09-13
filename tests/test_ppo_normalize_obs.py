@@ -144,9 +144,9 @@ def test_ppo_normalize_obs_stats_move_during_rollout():
         env, num_steps=8, num_minibatches=2, update_epochs=1, device="cpu",
         encoder_config=EncoderConfig(normalize_obs=True), eval_freq=0, log_freq=0, net_arch=[16],
     )
-    assert agent.policy.features_extractor.normalizer.count.item() == 0
+    assert agent.policy.actor_extractor.normalizer.count.item() == 0
     agent.learn(total_timesteps=8 * env.num_envs * 2)
-    assert agent.policy.features_extractor.normalizer.count.item() > 0
+    assert agent.policy.actor_extractor.normalizer.count.item() > 0
 
 
 def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
@@ -156,8 +156,8 @@ def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
         encoder_config=EncoderConfig(normalize_obs=True), eval_freq=0, log_freq=0, net_arch=[16],
     )
     agent.learn(total_timesteps=8 * env.num_envs * 2)
-    mean_before = agent.policy.features_extractor.normalizer._mean.clone()
-    count_before = agent.policy.features_extractor.normalizer.count.item()
+    mean_before = agent.policy.actor_extractor.normalizer._mean.clone()
+    count_before = agent.policy.actor_extractor.normalizer.count.item()
 
     path = agent.save(tmp_path / "ckpt.pt", include_replay_buffer=False)
     resumed = PPO(
@@ -165,8 +165,8 @@ def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
         encoder_config=EncoderConfig(normalize_obs=True), eval_freq=0, log_freq=0, net_arch=[16],
     )
     resumed.load(path, load_replay_buffer=False)
-    assert torch.equal(resumed.policy.features_extractor.normalizer._mean, mean_before)
-    assert resumed.policy.features_extractor.normalizer.count.item() == count_before
+    assert torch.equal(resumed.policy.actor_extractor.normalizer._mean, mean_before)
+    assert resumed.policy.actor_extractor.normalizer.count.item() == count_before
 
 
 def test_normalize_obs_reaches_extractor_through_cli_args_entrypoint():
@@ -184,4 +184,4 @@ def test_normalize_obs_reaches_extractor_through_cli_args_entrypoint():
     )
     agent = build_ppo(args, env, None, None, None)
     assert agent.encoder_config.normalize_obs is True
-    assert agent.policy.features_extractor.normalizer is not None
+    assert agent.policy.actor_extractor.normalizer is not None

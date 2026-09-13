@@ -11,9 +11,16 @@ halves are each a direct, unmodified reuse of the *network classes*
 (``EnsembleQCritic``, ``ValueNetwork``, ``DiffusionMLP``) those policies
 already use, assembled fresh here. Box or Dict (CNN-based vision, via
 ``CombinedExtractor``) observations -- ``DiffusionMLP`` only ever sees
-``features_extractor.features_dim``-wide vectors through ``cond["state"]``,
-so it does not care whether those features came from raw state or an image
+``actor_extractor.features_dim``-wide vectors through ``cond["state"]``, so
+it does not care whether those features came from raw state or an image
 encoder.
+
+Actor/critic extractor contract (``rl_garden.policies.base.BasePolicy``):
+value/critic/TD-target heads read through ``extract_critic_features``, the
+diffusion actor (``net``/``target_net``) reads through
+``extract_actor_features`` -- under the default ``encoder_sharing="shared"``
+both resolve to the same one extractor with no stop-gradient (unchanged
+behavior), and under ``"separate"`` each role gets its own extractor.
 """
 from __future__ import annotations
 
@@ -34,7 +41,7 @@ from rl_garden.networks import (
     ValueNetwork,
 )
 from rl_garden.policies._diffusion_process import DiffusionProcess
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 class IDQLPolicy(DiffusionProcess, BasePolicy):
@@ -42,8 +49,10 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         self,
         observation_space: spaces.Box | spaces.Dict,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         *,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared",
         critic_hidden_dims: Sequence[int] = (256, 256),
         value_hidden_dims: Sequence[int] = (256, 256),
         n_critics: int = 2,
@@ -65,24 +74,28 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         n_action_samples: int = 64,
         expectile: float = 0.7,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "IDQLPolicy requires a Box action space."
         if n_critics < 2:
             raise ValueError(f"n_critics must be >= 2, got {n_critics}.")
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
         self.n_action_samples = n_action_samples
         self.expectile = expectile
         self.min_sampling_denoising_std = min_sampling_denoising_std
 
-        fd = features_extractor.features_dim
+        actor_fd = actor_extractor.features_dim
+        critic_fd = self.critic_features_dim
         action_dim = int(np.prod(action_space.shape))
 
         self.critic = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=critic_hidden_dims,
             n_critics=n_critics,
@@ -91,7 +104,7 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
             backbone_type=backbone_type,
         )
         self.critic_target = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=critic_hidden_dims,
             n_critics=n_critics,
@@ -104,7 +117,7 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
             p.requires_grad_(False)
 
         self.value = ValueNetwork(
-            fd,
+            critic_fd,
             value_hidden_dims,
             use_layer_norm=value_use_layer_norm,
             kernel_init=kernel_init,
@@ -114,7 +127,7 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         net_kwargs = dict(
             action_dim=action_dim,
             horizon_steps=1,
-            cond_dim=fd,
+            cond_dim=actor_fd,
             time_dim=time_dim,
             mlp_dims=diffusion_mlp_dims,
             activation_fn=diffusion_activation_fn,
@@ -141,7 +154,14 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         self.register_buffer("action_high", high)
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for diagnostics/back-compat callers that need to
+        pick the flag themselves. The training loss path
+        (``IDQL._compute_losses``/``diffusion_loss``/``predict``) does not
+        use this; it calls ``extract_critic_features``/``extract_actor_features``
+        (``BasePolicy``), which apply the ``encoder_sharing`` rule
+        automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
 
     def q_values_all(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False
@@ -168,7 +188,7 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         """Per-sample-weighted epsilon-MSE, ``sum`` over the action dim
         (matches ``ddpm_iql_learner.py``'s ``update_actor`` exactly -- not a
         mean). ``weight``: ``(B,)``, precomputed by the caller."""
-        features = self.extract_features(obs, stop_gradient=False)
+        features = self.extract_actor_features(obs)
         batch = actions.shape[0]
         t = torch.randint(0, self.denoising_steps, (batch,), device=actions.device)
         x_start = actions.unsqueeze(1)
@@ -179,11 +199,12 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         return (per_sample_loss * weight).mean()
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        features = self.extract_features(obs, stop_gradient=True)
-        batch = features.shape[0]
+        actor_features = self.extract_actor_features(obs)
+        critic_features = self.extract_critic_features(obs)
+        batch = actor_features.shape[0]
         n = self.n_action_samples
-        features_rep = features.repeat_interleave(n, dim=0)
-        cond = {"state": features_rep}
+        actor_features_rep = actor_features.repeat_interleave(n, dim=0)
+        cond = {"state": actor_features_rep}
         action_dim = int(self.action_low.shape[0])
         actions, _ = self.sample_chain(
             cond,
@@ -195,11 +216,14 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
             return_chain=False,
         )
         actions_flat = actions.squeeze(1)
-        q = self.min_q_value(features_rep, actions_flat, target=True).squeeze(-1).view(batch, n)
+        critic_features_rep = critic_features.repeat_interleave(n, dim=0)
+        q = self.min_q_value(critic_features_rep, actions_flat, target=True).squeeze(-1).view(
+            batch, n
+        )
         if deterministic:
             idx = q.argmax(dim=1)
         else:
-            v = self.value(features)  # (B, 1), broadcasts against (B, n)
+            v = self.value(critic_features)  # (B, 1), broadcasts against (B, n)
             adv = q - v
             weight = torch.where(adv > 0, self.expectile, 1.0 - self.expectile)
             probs = weight / weight.sum(dim=1, keepdim=True)
@@ -209,9 +233,17 @@ class IDQLPolicy(DiffusionProcess, BasePolicy):
         return selected.clamp(self.action_low, self.action_high)
 
     def net_parameters(self):
+        # Diffusion actor-only; under shared encoder_sharing the encoder
+        # trains via critic_value_and_encoder_parameters's critic/value loss
+        # instead (mirrors SACPolicy.actor_parameters -- actor_extractor is
+        # deliberately excluded there). When critic_extractor is genuinely
+        # separate, actor_extractor is actor-exclusive -- nothing else would
+        # ever train it -- so it belongs on this optimizer instead.
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
         yield from self.net.parameters()
 
     def critic_value_and_encoder_parameters(self):
         yield from self.critic.parameters()
         yield from self.value.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()

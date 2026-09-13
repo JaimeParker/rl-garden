@@ -34,6 +34,8 @@ class MetaWorldBackend(EnvBackend):
                 "one rgb/depth camera; a state-only observation cannot be "
                 "frame-stacked."
             )
+        if obs.extra_state:
+            raise ObservationContractError("metaworld has no extra state sources")
         return MetaWorldEnvConfig(
             env_id=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,

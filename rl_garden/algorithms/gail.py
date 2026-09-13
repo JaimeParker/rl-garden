@@ -17,13 +17,31 @@ Upstream's own default discriminator config is
 ``BasicRewardNet(use_state=True, use_action=True, use_next_state=False,
 use_done=False)`` -- the discriminator only needs ``(obs, action)``, both
 already stored by ``RolloutBuffer`` every step, so no buffer schema change
-is needed either. Box observations only (matches the D4RL MuJoCo locomotion
-target; Dict/image support would need a Dict-aware discriminator).
+is needed either. The discriminator is a critic-role consumer of the
+actor/critic extractor contract (see ``rl_garden.policies.base.BasePolicy``):
+its ``obs`` input is ``self.policy.extract_critic_features(obs)``, not a raw
+observation, so it is schema-agnostic (Box, Dict/image via
+``CombinedExtractor``, or a ``state_<name>``-augmented ``obs_groups.critic``
+all reduce to the same flat vector by the time they reach
+``GAILDiscriminator``) -- see ``GAILDiscriminator``'s own docstring.
+``build_gail`` (``rl_garden/training/online/gail.py``) does not currently
+forward ``--obs.rgb``/``--obs_groups.*``/``--encoder.*`` from the CLI, so
+GAIL stays state-only in practice when driven through the CLI; direct
+construction with ``obs_groups``/``critic_encoder_config`` (PPO's existing
+kwargs, inherited unchanged) works today.
 
 Expert demonstrations are loaded once at construction time into a plain
 ``ReplayBuffer`` via the existing
 ``rl_garden.buffers.d4rl_legacy_dataset.load_d4rl_legacy_dataset_to_replay_buffer``
--- no new dataset-loading code.
+-- no new dataset-loading code. That loader only ever fills the buffer's
+``"state"`` key (``rl_garden.buffers._dataset_common._match_obs_to_buffer``
+wraps every flat loader output as ``{"state": ...}``). ``_build_demo_buffer``
+checks the discriminator's critic-role schema (``obs_groups.critic``, or the
+full schema when unset) against that ``{"state"}`` limit and raises
+``ObservationContractError`` naming any other key (an image or
+``state_<name>`` key) instead of silently leaving it zero-filled on the
+expert side while the generator side has real data -- see
+``_build_demo_buffer`` below.
 """
 from __future__ import annotations
 
@@ -35,13 +53,9 @@ import torch.nn.functional as F
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.optim import make_optimizer
+from rl_garden.common.types import Obs
 from rl_garden.envs.wrappers.gail_reward import GAILRewardWrapper
 from rl_garden.networks.discriminator import GAILDiscriminator
-from rl_garden.observations import (
-    ObservationContractError,
-    ObservationSchema,
-    normalize_observation_space,
-)
 
 
 class GAIL(PPO):
@@ -81,21 +95,11 @@ class GAIL(PPO):
 
     def _setup_model(self) -> None:
         super()._setup_model()
-        # GAILDiscriminator is a bespoke state-action MLP (Box observations
-        # only, per the module docstring) -- not schema/encoder-driven like
-        # the rest of the codebase, so it explicitly rejects image keys
-        # rather than silently ignoring them, and reads the raw "state" Box
-        # out of the (always-Dict, since the boundary normalizes) env space.
-        schema = ObservationSchema.from_space(
-            normalize_observation_space(self.env.single_observation_space)
-        )
-        if schema.keys != ("state",):
-            raise ObservationContractError(
-                "GAIL's discriminator only supports state-only observations "
-                f"(no images); got keys {schema.keys}."
-            )
+        # GAILDiscriminator reads critic-role features (self.policy's
+        # critic_features_dim), not a raw observation space -- see this
+        # module's docstring and GAILDiscriminator's own.
         self.discriminator = GAILDiscriminator(
-            self.env.single_observation_space["state"],
+            self.policy.critic_features_dim,
             self.env.single_action_space,
             net_arch=self.disc_net_arch,
         ).to(self.device)
@@ -118,6 +122,11 @@ class GAIL(PPO):
         from rl_garden.buffers.d4rl_legacy_dataset import (
             load_d4rl_legacy_dataset_to_replay_buffer,
         )
+        from rl_garden.observations import (
+            ObservationContractError,
+            ObservationSchema,
+            resolve_obs_groups,
+        )
 
         if not self.demo_env_id:
             raise ValueError("demo_env_id must be set to a D4RL dataset id.")
@@ -125,6 +134,21 @@ class GAIL(PPO):
             raise NotImplementedError(
                 "GAIL currently only supports demo_dataset_backend="
                 f"'d4rl_legacy', got {self.demo_dataset_backend!r}."
+            )
+        # d4rl_legacy only ever supplies a flat "state" observation (see
+        # rl_garden.buffers._dataset_common._match_obs_to_buffer); honor the
+        # discriminator's critic-role schema or raise, rather than silently
+        # zero-filling any other key it asks for on the expert side while
+        # the generator side has real data (this module's docstring's
+        # formerly open question -- now resolved: no zero-fill).
+        schema = ObservationSchema.from_space(self.env.single_observation_space)
+        critic_keys = set(resolve_obs_groups(schema, self.obs_groups)["critic"].keys)
+        unsupported = sorted(critic_keys - {"state"})
+        if unsupported:
+            raise ObservationContractError(
+                "GAIL's demo_dataset_backend='d4rl_legacy' only provides a "
+                f"'state' key; the discriminator's critic schema also needs "
+                f"{unsupported}, which the demo dataset does not provide."
             )
         buffer = ReplayBuffer(
             observation_space=self.env.single_observation_space,
@@ -138,7 +162,7 @@ class GAIL(PPO):
         return buffer
 
     def _discriminator_reward(
-        self, obs: torch.Tensor, action: torch.Tensor
+        self, obs: Obs, action: torch.Tensor
     ) -> torch.Tensor:
         # CPU-backed env backends (e.g. d4rl_legacy's mujoco_py) hand obs/action
         # to the wrapper on CPU while the discriminator lives on self.device --
@@ -146,10 +170,11 @@ class GAIL(PPO):
         # rollout_buffer.add() itself moves rewards to self.device, so
         # returning the reward on self.device (not the original obs device)
         # is fine.
-        obs = self._obs_to_policy_device(obs)["state"]
+        obs = self._obs_to_policy_device(obs)
         action = action if action.device == self.device else action.to(self.device)
         with torch.no_grad():
-            logits = self.discriminator(obs, action)
+            features = self.policy.extract_critic_features(obs)
+            logits = self.discriminator(features, action)
         # RewardNetFromDiscriminatorLogit (imitation gail.py): R = -log(sigmoid(-logit)).
         return -F.logsigmoid(-logits)
 
@@ -161,9 +186,9 @@ class GAIL(PPO):
             gen_sample = next(self.rollout_buffer.get(self.demo_batch_size))
             expert_sample = self._demo_buffer.sample(self.demo_batch_size)
             stats = self._train_discriminator_step(
-                gen_sample.obs["state"],
+                gen_sample.obs,
                 gen_sample.actions,
-                expert_sample.obs["state"],
+                expert_sample.obs,
                 expert_sample.actions,
             )
             disc_losses.append(stats["disc_loss"])
@@ -174,22 +199,32 @@ class GAIL(PPO):
 
     def _train_discriminator_step(
         self,
-        gen_obs: torch.Tensor,
+        gen_obs: Obs,
         gen_actions: torch.Tensor,
-        expert_obs: torch.Tensor,
+        expert_obs: Obs,
         expert_actions: torch.Tensor,
     ) -> dict[str, float]:
         # Expert=1, generator=0 -- matches imitation's compute_train_stats/train_disc.
-        obs = torch.cat([expert_obs, gen_obs], dim=0)
+        # extract_critic_features never detaches by default (BasePolicy):
+        # under encoder_sharing="separate" this is exactly the discriminator's
+        # own critic-role encoder; under the shared default it's the same
+        # encoder the PPO value loss trains. disc_optimizer only holds
+        # self.discriminator.parameters(), so the discriminator loss must not
+        # backprop into critic_extractor at all -- extract under no_grad(),
+        # matching _discriminator_reward's identical no-grad extraction.
+        with torch.no_grad():
+            gen_features = self.policy.extract_critic_features(gen_obs)
+            expert_features = self.policy.extract_critic_features(expert_obs)
+        features = torch.cat([expert_features, gen_features], dim=0)
         actions = torch.cat([expert_actions, gen_actions], dim=0)
         labels = torch.cat(
             [
-                torch.ones(expert_obs.shape[0], device=self.device),
-                torch.zeros(gen_obs.shape[0], device=self.device),
+                torch.ones(expert_features.shape[0], device=self.device),
+                torch.zeros(gen_features.shape[0], device=self.device),
             ]
         )
         self.disc_optimizer.zero_grad()
-        logits = self.discriminator(obs, actions)
+        logits = self.discriminator(features, actions)
         loss = F.binary_cross_entropy_with_logits(logits, labels)
         loss.backward()
         self.disc_optimizer.step()

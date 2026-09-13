@@ -17,6 +17,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
@@ -24,7 +25,6 @@ from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.iql_policy import IQLPolicy
@@ -34,7 +34,12 @@ class IQLCore:
     """Shared IQL loss/network logic: expectile V-regression + AWR actor."""
 
     _SUPPORTED_POLICY_KWARGS = frozenset(
-        {"features_extractor_class", "features_extractor_kwargs"}
+        {
+            "actor_extractor_class",
+            "actor_extractor_kwargs",
+            "critic_extractor_class",
+            "critic_extractor_kwargs",
+        }
     )
 
     def _init_iql_params(
@@ -182,13 +187,11 @@ class IQLCore:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
-            # IQLPolicy has a single shared features_extractor (no separate
-            # critic-role encoder slot), so encoder_sharing is always the
-            # mixin's "shared_critic_grad" default and critic_encoder_config
-            # is never meaningfully settable -- present unconditionally at
-            # None for checkpoint-metadata-shape consistency with every
-            # other migrated algorithm.
-            "critic_encoder_config": None,
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
         }
         return meta
 
@@ -270,33 +273,17 @@ class IQLCore:
     def _normalize_policy_kwargs(
         self, policy_kwargs: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        from rl_garden.algorithms._policy_kwargs import normalize_policy_kwargs
-
-        return normalize_policy_kwargs(
-            policy_kwargs, supported_keys=self._SUPPORTED_POLICY_KWARGS
-        )
-
-    def _ensure_observation_encoders(self):
-        if not hasattr(self, "observation_encoders"):
-            self._resolve_observation_encoders(self.env.single_observation_space)
-        return self.observation_encoders
-
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        features_extractor_class = self.policy_kwargs.get("features_extractor_class")
-        if features_extractor_class is None:
-            return self._ensure_observation_encoders().actor
-        if not isinstance(features_extractor_class, type) or not issubclass(
-            features_extractor_class, BaseFeaturesExtractor
-        ):
-            raise TypeError(
-                "policy_kwargs['features_extractor_class'] must be a "
-                "BaseFeaturesExtractor subclass."
+        normalized = dict(policy_kwargs or {})
+        unsupported = sorted(set(normalized) - self._SUPPORTED_POLICY_KWARGS)
+        if unsupported:
+            raise ValueError(
+                "Unsupported policy_kwargs keys: "
+                + ", ".join(unsupported)
+                + ". Supported keys are: "
+                + ", ".join(sorted(self._SUPPORTED_POLICY_KWARGS))
+                + "."
             )
-        features_extractor_kwargs = self.policy_kwargs.get("features_extractor_kwargs") or {}
-        return features_extractor_class(
-            observation_space=self.env.single_observation_space,
-            **features_extractor_kwargs,
-        )
+        return normalized
 
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).
@@ -310,11 +297,9 @@ class IQLCore:
         )
 
     def _setup_model(self) -> None:
-        features_extractor = self._build_features_extractor()
         self.policy = IQLPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
@@ -332,6 +317,7 @@ class IQLCore:
             backbone_type=self.backbone_type,
             std_parameterization=self.std_parameterization,
             actor_distribution=self.actor_distribution,
+            **self._policy_extractor_kwargs(self.env.single_observation_space),
         ).to(self.device)
 
         self.critic_value_optimizer = make_optimizer(
@@ -408,7 +394,9 @@ class IQLCore:
         )
 
     def _compute_losses(self, data) -> tuple[torch.Tensor, dict[str, float]]:
-        features = self.policy.extract_features(data.obs, stop_gradient=False)
+        # V and Q are critic-role heads (both trained here): critic-role
+        # extraction, never detached.
+        features = self.policy.extract_critic_features(data.obs)
 
         with torch.no_grad():
             target_q_for_value = self._target_min_q(features.detach(), data.actions)
@@ -417,9 +405,7 @@ class IQLCore:
 
         q_pred = self.policy.q_values_all(features, data.actions, target=False)
         with torch.no_grad():
-            next_features = self.policy.extract_features(
-                data.next_obs, stop_gradient=False
-            )
+            next_features = self.policy.extract_critic_features(data.next_obs)
             next_v = self.policy.value(next_features)
             target_q = (
                 data.rewards.unsqueeze(-1)
@@ -430,8 +416,12 @@ class IQLCore:
         with torch.no_grad():
             adv = target_q_for_value - values
             exp_adv = torch.exp(adv * self.temperature).clamp(max=self.adv_clip_max)
+        # AWR actor loss: actor-role read, no explicit stop_gradient -- applies
+        # extract_actor_features's encoder_sharing rule (identical to the old
+        # hardcoded stop_gradient=True under the only previously-reachable
+        # "shared_critic_grad" sharing).
         log_prob, deterministic_action = self.policy.behavior_log_prob(
-            data.obs, data.actions, stop_gradient=True
+            data.obs, data.actions
         )
         actor_loss = -(exp_adv * log_prob).mean()
 
@@ -559,6 +549,8 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
         critic_subsample_size: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -613,9 +605,15 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
         )
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
-        self.critic_encoder_config = None
+        self.critic_encoder_config = critic_encoder_config
+        self.encoder_sharing = encoder_sharing
         self._init_iql_params(
             tau=tau,
             utd=utd,
@@ -702,6 +700,8 @@ class IQL(IQLCore, OfflineRLAlgorithm):
         critic_subsample_size: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -791,9 +791,15 @@ class IQL(IQLCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             std_parameterization=std_parameterization,
         )
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
-        self.critic_encoder_config = None
+        self.critic_encoder_config = critic_encoder_config
+        self.encoder_sharing = encoder_sharing
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()

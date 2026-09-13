@@ -5,10 +5,26 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
+from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.base import BasePolicy
+
+# _DummyEnv's bare Box observation space is boundary-normalized to
+# Dict({"state": Box}) by BaseAlgorithm.__init__ (see
+# rl_garden.envs.wrappers.VectorizedDictStateWrapper); _DummyPolicy's own
+# actor_extractor must be built over that normalized shape to match what
+# ``obs`` actually looks like at predict() time.
+_DUMMY_OBS_SPACE = spaces.Dict({"state": spaces.Box(low=-1.0, high=1.0, shape=(4,))})
+_DUMMY_ACTION_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(1,))
 
 
 class _DummyPolicy(BasePolicy):
+    def __init__(self) -> None:
+        super().__init__(
+            _DUMMY_OBS_SPACE,
+            _DUMMY_ACTION_SPACE,
+            actor_extractor=FlattenExtractor(_DUMMY_OBS_SPACE),
+        )
+
     def predict(self, obs, deterministic: bool = False) -> torch.Tensor:
         del deterministic
         return torch.zeros(obs["state"].shape[0], 1)

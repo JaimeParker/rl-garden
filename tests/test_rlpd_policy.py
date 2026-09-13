@@ -37,7 +37,7 @@ def test_rlpd_policy_default_matches_plain_sac_policy_shapes():
     policy = RLPDPolicy(
         observation_space=obs_space,
         action_space=_action_space(),
-        features_extractor=fe,
+        actor_extractor=fe,
         net_arch=[16],
         n_critics=3,
         critic_subsample_size=2,
@@ -56,7 +56,7 @@ def test_rlpd_policy_forwards_std_parameterization_to_actor():
     policy = RLPDPolicy(
         observation_space=obs_space,
         action_space=_action_space(),
-        features_extractor=fe,
+        actor_extractor=fe,
         net_arch=[16],
         n_critics=3,
         critic_subsample_size=2,
@@ -71,7 +71,7 @@ def test_rlpd_policy_use_pnorm_forwards_std_parameterization_to_rebuilt_actor():
     policy = RLPDPolicy(
         observation_space=obs_space,
         action_space=_action_space(),
-        features_extractor=fe,
+        actor_extractor=fe,
         net_arch=[16],
         n_critics=3,
         critic_subsample_size=2,
@@ -87,7 +87,7 @@ def test_rlpd_policy_use_pnorm_normalizes_actor_and_critic_trunks():
     policy = RLPDPolicy(
         observation_space=obs_space,
         action_space=_action_space(),
-        features_extractor=fe,
+        actor_extractor=fe,
         net_arch=[16],
         n_critics=3,
         critic_subsample_size=2,
@@ -116,7 +116,7 @@ def test_rlpd_policy_rejects_use_pnorm_with_token_and_prop_features():
         RLPDPolicy(
             observation_space=obs_space,
             action_space=_action_space(),
-            features_extractor=fe,
+            actor_extractor=fe,
             net_arch=[16],
             n_critics=3,
             critic_subsample_size=2,

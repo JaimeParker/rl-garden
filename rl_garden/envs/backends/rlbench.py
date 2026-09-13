@@ -23,6 +23,8 @@ class RLBenchBackend(EnvBackend):
                 "one rgb/depth camera; a state-only observation cannot be "
                 "frame-stacked."
             )
+        if obs.extra_state:
+            raise ObservationContractError("rlbench has no extra state sources")
         return RLBenchEnvConfig(
             task_name=req.env_id,
             num_envs=req.num_eval_envs if is_eval else req.num_envs,

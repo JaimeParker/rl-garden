@@ -193,8 +193,15 @@ class RLPDHybridArgs(VisionSACTrainingArgs, EnvBackendArgs):
     discrete_lr: float = 3e-4
 
 
+
+
+def _rlpd_hybrid_algorithm_cls() -> type:
+    from rl_garden.algorithms import RLPDHybrid
+
+    return RLPDHybrid
+
 registry.register(
     "rlpd_hybrid",
     RLPDHybridArgs,
     run_rlpd_hybrid,
-)
+    algorithm_cls=_rlpd_hybrid_algorithm_cls)

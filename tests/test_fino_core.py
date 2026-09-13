@@ -264,7 +264,7 @@ def test_sample_candidates_rows_own_their_candidates():
     policy = agent.policy
     batch_size, num_samples, action_dim = 3, 4, 3
     obs = {"state": torch.randn(batch_size, *agent.env.single_observation_space["state"].shape)}
-    features = policy.extract_features(obs)
+    features = policy.extract_critic_features(obs)
 
     torch.manual_seed(0)
     candidates, q = policy._sample_candidates(features, features)
@@ -320,7 +320,7 @@ def test_num_samples_one_degenerates_to_plain_onestep_draw():
         action = policy.predict(obs, deterministic=deterministic)
 
         torch.manual_seed(0)
-        features = policy.extract_features(obs)
+        features = policy.extract_critic_features(obs)
         noise = torch.randn(batch_size, 3)
         expected = policy.actor_onestep_flow(features, noise).clamp(
             policy.action_low, policy.action_high
@@ -373,7 +373,7 @@ def test_noise_injection_schedule():
 
     def run_actor_update():
         data = agent.replay_buffer.sample(agent.batch_size)
-        obs_features = agent.policy.extract_features(data.obs)
+        obs_features = agent.policy.extract_critic_features(data.obs)
         agent._actor_update(data, obs_features)
         return data
 

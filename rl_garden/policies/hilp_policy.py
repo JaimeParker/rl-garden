@@ -1,11 +1,11 @@
 """Thin ``nn.Module`` container for HILP's five sub-networks (``phi``-value,
 its target, skill-value, skill-critic ensemble + target, skill-actor).
 
-Not a ``BasePolicy`` -- that ABC's contract (a single ``features_extractor``
-+ a `predict(obs, deterministic)` that maps *obs alone* to an action) doesn't
-fit HILP's shape: there is no unified "policy" here, only networks jointly
-consumed by ``HILP``'s own loss methods, and any action prediction needs an
-extra ``skill`` argument ``BasePolicy.predict`` has no slot for. This class
+Not a ``BasePolicy`` -- that ABC's contract (actor/critic feature encoders
+plus a `predict(obs, deterministic)` that maps *obs alone* to an action)
+doesn't fit HILP's shape: there is no unified "policy" here, only networks
+jointly consumed by ``HILP``'s own loss methods, and any action prediction
+needs an extra ``skill`` argument ``BasePolicy.predict`` has no slot for. This class
 exists only so ``BaseAlgorithm``'s existing ``self.policy.state_dict()``/
 ``.train()``/``.eval()`` machinery keeps working unmodified -- assigning each
 network as a plain attribute already registers it as an ``nn.Module``

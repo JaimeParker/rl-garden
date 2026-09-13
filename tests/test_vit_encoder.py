@@ -234,8 +234,8 @@ def test_vit_sac_kwargs_from_args_defaults_to_per_key():
     )
     kwargs = EncoderConfig(backbone="vit").sac_kwargs(schema)
     policy_kwargs = kwargs["policy_kwargs"]
-    assert policy_kwargs["features_extractor_class"] is ViTTokenAndPropExtractor
-    ext_kwargs = policy_kwargs["features_extractor_kwargs"]
+    assert policy_kwargs["actor_extractor_class"] is ViTTokenAndPropExtractor
+    ext_kwargs = policy_kwargs["actor_extractor_kwargs"]
     assert ext_kwargs["fusion_mode"] == "per_key"
     assert ext_kwargs["schema"] is schema
     # head hyperparams live at the top level, not in the extractor kwargs

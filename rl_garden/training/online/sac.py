@@ -156,4 +156,10 @@ class SACArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("sac", SACArgs, run_sac)
+def _sac_algorithm_cls() -> type:
+    from rl_garden.algorithms import SAC
+
+    return SAC
+
+
+registry.register("sac", SACArgs, run_sac, algorithm_cls=_sac_algorithm_cls)

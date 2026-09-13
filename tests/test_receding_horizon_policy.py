@@ -95,7 +95,7 @@ def test_wraps_real_diffusion_policy_end_to_end():
     policy = DiffusionPolicy(
         observation_space=observation_space,
         action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32),
-        features_extractor=FlattenExtractor(observation_space=observation_space),
+        actor_extractor=FlattenExtractor(observation_space=observation_space),
         horizon_steps=4,
         cond_steps=1,
         denoising_steps=5,

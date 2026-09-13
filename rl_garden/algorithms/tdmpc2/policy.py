@@ -26,7 +26,11 @@ class TDMPC2Policy(BasePolicy):
         discount: float,
         use_planner: bool = True,
     ) -> None:
-        super().__init__()
+        # Bypasses BasePolicy.__init__ (which now requires an
+        # actor_extractor/action_space/observation_space): the world model
+        # owns its own encoder end-to-end (see world_model_encoder below),
+        # so there is no separate actor_extractor for this wrapper to hold.
+        torch.nn.Module.__init__(self)
         self.world_model = world_model
         self.planner_cfg = planner_cfg
         self.discount = discount
@@ -35,7 +39,7 @@ class TDMPC2Policy(BasePolicy):
         self._t0 = True
 
     @property
-    def features_extractor(self) -> BaseFeaturesExtractor:
+    def world_model_encoder(self) -> BaseFeaturesExtractor:
         return self.world_model.encoder
 
     def reset_episode(self) -> None:

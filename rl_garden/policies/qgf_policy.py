@@ -74,7 +74,7 @@ from rl_garden.networks import (
     ValueNetwork,
 )
 from rl_garden.networks.diffusion_mlp import _SinusoidalPosEmb
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 SamplingMode = Literal["guided", "grad_step", "best_of_n", "bptt", "robust_q"]
 DenoisedActionApprox = Literal["one_euler_step_approx", "noisy"]
@@ -85,9 +85,11 @@ class QGFPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] = (512, 512, 512, 512),
         *,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared",
         n_critics: int = 2,
         actor_use_layer_norm: bool = True,
         critic_use_layer_norm: bool = True,
@@ -107,7 +109,13 @@ class QGFPolicy(BasePolicy):
         robust_critic_lr: float = 3e-4,
         robust_critic_t_emb_size: int = 16,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         assert isinstance(action_space, spaces.Box), "QGF requires a Box action space."
         if q_agg not in ("mean", "min"):
             raise ValueError(f"q_agg must be 'mean' or 'min', got {q_agg!r}.")
@@ -118,16 +126,13 @@ class QGFPolicy(BasePolicy):
                 f"Unknown denoised_action_approx: {denoised_action_approx!r}."
             )
 
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
-
-        fd = features_extractor.features_dim
+        actor_fd = self.actor_features_dim
+        critic_fd = self.critic_features_dim
         action_dim = int(np.prod(action_space.shape))
         net_arch = list(net_arch)
 
         self.actor = ActorVectorField(
-            fd,
+            actor_fd,
             action_dim,
             hidden_dims=net_arch,
             use_time_conditioning=True,
@@ -136,7 +141,7 @@ class QGFPolicy(BasePolicy):
             activation_fn=activation_fn,
         )
         self.critic = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=net_arch,
             n_critics=n_critics,
@@ -146,7 +151,7 @@ class QGFPolicy(BasePolicy):
             activation_fn=activation_fn,
         )
         self.critic_target = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=net_arch,
             n_critics=n_critics,
@@ -160,7 +165,7 @@ class QGFPolicy(BasePolicy):
             p.requires_grad_(False)
 
         self.value = ValueNetwork(
-            fd,
+            critic_fd,
             net_arch,
             use_layer_norm=value_use_layer_norm,
             kernel_init=kernel_init,
@@ -184,7 +189,7 @@ class QGFPolicy(BasePolicy):
                 dtype=np.float32,
             )
             self.robust_critic = EnsembleQCritic(
-                fd,
+                critic_fd,
                 robust_action_space,
                 hidden_dims=net_arch,
                 n_critics=1,
@@ -214,7 +219,29 @@ class QGFPolicy(BasePolicy):
         self.robust_critic_t_emb_size = robust_critic_t_emb_size
 
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor access with an explicit ``stop_gradient`` --
+        an escape hatch for diagnostics/back-compat callers that need to pick
+        the flag themselves. ``QGFCore``'s own training loop does not use
+        this; it calls ``extract_actor_features``/``critic_features_for``
+        (see below), which apply the ``encoder_sharing`` rule automatically."""
+        return self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
+
+    def critic_features_for(
+        self,
+        obs: Obs,
+        actor_features: torch.Tensor,
+        stop_gradient: bool = False,
+    ) -> torch.Tensor:
+        """Critic-role features for ``obs``, for callers that already hold
+        actor-role features for the same ``obs``. Reuses ``actor_features``
+        (same graph, zero extra compute) when the encoder is shared --
+        QGF's default ``encoder_sharing="shared"`` trains the one shared
+        encoder from the combined critic+value+bc-actor loss, which this
+        reuse preserves exactly; re-extracts through the critic's own
+        encoder only when it's genuinely separate."""
+        if self.critic_extractor is None:
+            return actor_features
+        return self.extract_critic_features(obs, stop_gradient=stop_gradient)
 
     def _aggregate_q(self, q_all: torch.Tensor) -> torch.Tensor:
         if self.q_agg == "min":
@@ -230,10 +257,12 @@ class QGFPolicy(BasePolicy):
     def critic_and_value_parameters(self):
         yield from self.critic.parameters()
         yield from self.value.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def actor_parameters(self):
         yield from self.actor.parameters()
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
 
     def robust_critic_parameters(self):
         assert self.robust_critic is not None
@@ -249,18 +278,29 @@ class QGFPolicy(BasePolicy):
         # accepted for interface compatibility but has no effect.
         del deterministic
         with torch.no_grad():
-            features = self.extract_features(obs)
+            features = self.extract_actor_features(obs)
+            critic_features = self.critic_features_for(obs, features)
             batch_size = features.shape[0]
             device, dtype = features.device, features.dtype
             if self.sampling_mode == "guided":
-                return self._guided_denoise(features, batch_size, device, dtype)
+                return self._guided_denoise(
+                    features, batch_size, device, dtype, critic_features=critic_features
+                )
             if self.sampling_mode == "grad_step":
-                return self._grad_step_denoise(features, batch_size, device, dtype)
+                return self._grad_step_denoise(
+                    features, batch_size, device, dtype, critic_features=critic_features
+                )
             if self.sampling_mode == "bptt":
-                return self._bptt_denoise(features, batch_size, device, dtype)
+                return self._bptt_denoise(
+                    features, batch_size, device, dtype, critic_features=critic_features
+                )
             if self.sampling_mode == "robust_q":
-                return self._robust_q_denoise(features, batch_size, device, dtype)
-            return self._best_of_n_denoise(features, batch_size, device, dtype)
+                return self._robust_q_denoise(
+                    features, batch_size, device, dtype, critic_features=critic_features
+                )
+            return self._best_of_n_denoise(
+                features, batch_size, device, dtype, critic_features=critic_features
+            )
 
     def _bc_denoise(self, features: torch.Tensor, x_0: torch.Tensor) -> torch.Tensor:
         """Plain Euler-integrated BC denoise, no guidance. Shared by
@@ -281,28 +321,43 @@ class QGFPolicy(BasePolicy):
         return grad
 
     def _best_of_n_denoise(
-        self, features: torch.Tensor, batch_size: int, device, dtype
+        self,
+        features: torch.Tensor,
+        batch_size: int,
+        device,
+        dtype,
+        *,
+        critic_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        critic_features = features if critic_features is None else critic_features
         n = self.actor_num_samples
         action_dim = self.actor.action_dim
         rep_features = features.repeat_interleave(n, dim=0)
+        rep_critic_features = critic_features.repeat_interleave(n, dim=0)
         x_0 = torch.randn(batch_size * n, action_dim, device=device, dtype=dtype)
         actions = self._bc_denoise(rep_features, x_0)
         q = self._aggregate_q(
-            self.q_values_all(rep_features, actions, target=True)
+            self.q_values_all(rep_critic_features, actions, target=True)
         ).reshape(batch_size, n)
         actions = actions.reshape(batch_size, n, action_dim)
         best = q.argmax(dim=1)
         return actions[torch.arange(batch_size, device=device), best]
 
     def _grad_step_denoise(
-        self, features: torch.Tensor, batch_size: int, device, dtype
+        self,
+        features: torch.Tensor,
+        batch_size: int,
+        device,
+        dtype,
+        *,
+        critic_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        critic_features = features if critic_features is None else critic_features
         action_dim = self.actor.action_dim
         x_0 = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
         actions = self._bc_denoise(features, x_0)
         for _ in range(self.qgrad_steps):
-            grad = self._q_grad(features, actions)
+            grad = self._q_grad(critic_features, actions)
             if self.use_sign_gradient:
                 grad = grad.sign()
             actions = (actions + self.qgrad_step_size * grad).clamp(
@@ -311,8 +366,15 @@ class QGFPolicy(BasePolicy):
         return actions
 
     def _guided_denoise(
-        self, features: torch.Tensor, batch_size: int, device, dtype
+        self,
+        features: torch.Tensor,
+        batch_size: int,
+        device,
+        dtype,
+        *,
+        critic_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        critic_features = features if critic_features is None else critic_features
         action_dim = self.actor.action_dim
         a = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
         dt = 1.0 / self.denoise_steps
@@ -327,7 +389,7 @@ class QGFPolicy(BasePolicy):
                 )
             else:  # "noisy"
                 a_approx = a
-            qgrad = self._q_grad(features, a_approx)
+            qgrad = self._q_grad(critic_features, a_approx)
             a = a + (v_bc + self.guidance_weight * qgrad) * dt
         return a.clamp(self.action_low, self.action_high)
 
@@ -356,7 +418,12 @@ class QGFPolicy(BasePolicy):
         return x.clamp(self.action_low, self.action_high)
 
     def _bptt_grad(
-        self, features: torch.Tensor, a_t: torch.Tensor, start_step: int
+        self,
+        features: torch.Tensor,
+        a_t: torch.Tensor,
+        start_step: int,
+        *,
+        critic_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """True backprop-through-time: differentiates through the *entire*
         remaining-steps rollout (``_bc_denoise_from``), unlike ``_q_grad``'s
@@ -364,16 +431,26 @@ class QGFPolicy(BasePolicy):
         only ``torch.autograd.grad``, so nothing leaks into any network
         parameter's ``.grad`` even though the forward pass inside
         ``enable_grad()`` is now a multi-step rollout instead of one call."""
+        critic_features = features if critic_features is None else critic_features
         with torch.enable_grad():
             a_leaf = a_t.detach().requires_grad_(True)
             a_clean = self._bc_denoise_from(features, a_leaf, start_step)
-            q = self._aggregate_q(self.q_values_all(features, a_clean, target=True)).sum()
+            q = self._aggregate_q(
+                self.q_values_all(critic_features, a_clean, target=True)
+            ).sum()
             (grad,) = torch.autograd.grad(q, a_leaf)
         return grad
 
     def _bptt_denoise(
-        self, features: torch.Tensor, batch_size: int, device, dtype
+        self,
+        features: torch.Tensor,
+        batch_size: int,
+        device,
+        dtype,
+        *,
+        critic_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        critic_features = features if critic_features is None else critic_features
         action_dim = self.actor.action_dim
         a = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
         dt = 1.0 / self.denoise_steps
@@ -382,7 +459,7 @@ class QGFPolicy(BasePolicy):
                 (batch_size, 1), step / self.denoise_steps, device=device, dtype=dtype
             )
             v_bc = self.actor(features, a, t)
-            qgrad = self._bptt_grad(features, a, step)
+            qgrad = self._bptt_grad(features, a, step, critic_features=critic_features)
             a = a + (v_bc + self.guidance_weight * qgrad) * dt
         return a.clamp(self.action_low, self.action_high)
 
@@ -413,8 +490,15 @@ class QGFPolicy(BasePolicy):
         return grad
 
     def _robust_q_denoise(
-        self, features: torch.Tensor, batch_size: int, device, dtype
+        self,
+        features: torch.Tensor,
+        batch_size: int,
+        device,
+        dtype,
+        *,
+        critic_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        critic_features = features if critic_features is None else critic_features
         action_dim = self.actor.action_dim
         a = torch.randn(batch_size, action_dim, device=device, dtype=dtype)
         dt = 1.0 / self.denoise_steps
@@ -423,6 +507,6 @@ class QGFPolicy(BasePolicy):
                 (batch_size, 1), step / self.denoise_steps, device=device, dtype=dtype
             )
             v_bc = self.actor(features, a, t)
-            qgrad = self._robust_q_grad(features, a, t)
+            qgrad = self._robust_q_grad(critic_features, a, t)
             a = a + (v_bc + self.guidance_weight * qgrad) * dt
         return a.clamp(self.action_low, self.action_high)

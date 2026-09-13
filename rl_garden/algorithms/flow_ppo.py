@@ -78,6 +78,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 from gymnasium import spaces
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
 from rl_garden.buffers.diffusion_chain_buffer import DiffusionChainBuffer
@@ -85,7 +86,6 @@ from rl_garden.buffers.rollout_buffer import RolloutBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups
@@ -191,7 +191,11 @@ class FlowPPOCore:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
-            "critic_encoder_config": None,
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -212,14 +216,14 @@ class FlowPPOCore:
 
 class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
     _compatible_checkpoint_algorithms = ("FlowPPO",)
-    # A single shared features_extractor: the critic loss trains it
-    # (critic_optimizer includes its parameters, see _setup_model), the
-    # actor's log-prob path detaches (`features_actor = features_b.detach()`
-    # in _flow_ppo_loss) -- this is "shared_critic_grad" semantics, not
-    # "shared", despite FlowPPO being on-policy. There is no independent
-    # critic features_extractor slot in FlowPPOPolicy, so "separate" is not
-    # supported here.
-    encoder_sharing = "shared_critic_grad"
+    # No class-level override: FlowPPOPolicy now has the full actor/critic
+    # extractor contract (see FlowPPOPolicy/_setup_model below), so
+    # ObservationEncoderMixin's "shared_critic_grad" default applies like
+    # every other critic-bearing algorithm -- despite FlowPPO being
+    # on-policy, "shared_critic_grad" (not "shared") matches its original,
+    # still-correct semantics: the critic loss trains the shared encoder,
+    # the actor's log-prob path does not (BasePolicy.extract_actor_features's
+    # stop-gradient rule, not an algorithm-level ad hoc detach).
 
     def __init__(
         self,
@@ -260,6 +264,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         target_kl: Optional[float] = 1.0,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -274,6 +280,13 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
     ) -> None:
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
+        self.encoder_sharing = encoder_sharing
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -335,9 +348,6 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
 
         self._setup_model()
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        return self._resolve_observation_encoders(self.env.single_observation_space).actor
-
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
         raw_action_space = spaces.Box(
@@ -346,10 +356,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
             shape=self.env.single_action_space.shape[1:],
             dtype=self.env.single_action_space.dtype,
         )
-        features_extractor = self._build_features_extractor()
         self.policy = FlowPPOPolicy(
             observation_space=obs_space,
-            features_extractor=features_extractor,
             action_space=raw_action_space,
             flow_steps=self.flow_steps,
             horizon_length=self.horizon_length,
@@ -363,17 +371,32 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
             clip_std_min=self.clip_std_min,
             sigma_safe_max=self.sigma_safe_max,
             logprob_mode=self.logprob_mode,
+            **self._policy_extractor_kwargs(obs_space),
         ).to(self.device)
 
+        # Actor-role extractor trains from the actor optimizer only when it
+        # is genuinely its own (encoder_sharing="separate"): under
+        # "shared"/"shared_critic_grad" it is the same object the critic
+        # optimizer below already covers, and extract_actor_features's
+        # stop-gradient rule (not optimizer membership) is what isolates the
+        # actor loss from it under "shared_critic_grad".
+        actor_params = list(self.policy.actor.parameters())
+        if self.policy.critic_extractor is not None:
+            actor_params += list(self.policy.actor_extractor.parameters())
         self.actor_optimizer = make_optimizer(
-            list(self.policy.actor.parameters()),
+            actor_params,
             lr=self.actor_lr,
             weight_decay=self.weight_decay,
             use_adamw=True,
         )
+        critic_role_extractor = (
+            self.policy.critic_extractor
+            if self.policy.critic_extractor is not None
+            else self.policy.actor_extractor
+        )
         self.critic_optimizer = make_optimizer(
             list(self.policy.critic.parameters())
-            + list(self.policy.features_extractor.parameters()),
+            + list(critic_role_extractor.parameters()),
             lr=self.critic_lr,
             weight_decay=self.weight_decay,
             use_adamw=True,
@@ -478,7 +501,6 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
                 batch_inds, flow_step_inds = torch.unravel_index(idx, (total, k))
 
                 obs_b = index_obs(obs_flat, batch_inds)
-                features_b = self.policy._features(obs_b)
                 chains_prev_b = chains_flat[batch_inds, flow_step_inds]
                 chains_next_b = chains_flat[batch_inds, flow_step_inds + 1]
                 returns_b = returns_flat[batch_inds]
@@ -487,7 +509,7 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
                 logprobs_b = old_logprobs_flat[batch_inds, flow_step_inds]
 
                 loss, info = self._flow_ppo_loss(
-                    features_b,
+                    obs_b,
                     chains_prev_b,
                     chains_next_b,
                     flow_step_inds,
@@ -533,7 +555,7 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
 
     def _flow_ppo_loss(
         self,
-        features_b: torch.Tensor,
+        obs_b: Any,
         chains_prev_b: torch.Tensor,
         chains_next_b: torch.Tensor,
         flow_step_inds_b: torch.Tensor,
@@ -542,13 +564,14 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
         advantages_b: torch.Tensor,
         logprobs_b: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        # Gradient isolation: features_b is grad-enabled (the critic loss
-        # below, `self.policy.critic(features_b)`, trains the shared
-        # features_extractor -- SACPolicy's own convention, mirrors
-        # DPPO._dppo_loss's identical comment). The actor's log-prob path
-        # must not also backprop into it -- detach the copy fed to the actor
-        # rather than re-running the (possibly image) encoder a second time.
-        features_actor = features_b.detach()
+        # Each role extracts its own features via BasePolicy's contract --
+        # extract_actor_features detaches under "shared_critic_grad" (the
+        # single stop-gradient rule; SACPolicy's own convention, mirrors
+        # DPPO._dppo_loss's identical comment), extract_critic_features never
+        # detaches. Under "separate" these are two different extractors
+        # entirely; under "shared"/"shared_critic_grad" it is the same one,
+        # called twice (once per role) rather than reusing one tensor.
+        features_actor = self.policy.extract_actor_features(obs_b)
         newlogprobs = self.policy.get_logprobs_subsample(
             features_actor, chains_prev_b, chains_next_b, flow_step_inds_b
         ).mean(dim=-1)
@@ -565,7 +588,8 @@ class FlowPPO(FlowPPOCore, OnPolicyAlgorithm):
 
         pg_loss = ppo_clip_policy_loss(advantages_b, ratio, self.clip_coef)
 
-        newvalues = self.policy.critic(features_b).view(-1)
+        features_critic = self.policy.extract_critic_features(obs_b)
+        newvalues = self.policy.critic(features_critic).view(-1)
         if self.clip_vloss_coef is not None:
             v_loss_unclipped = (newvalues - returns_b) ** 2
             v_clipped = values_b + torch.clamp(

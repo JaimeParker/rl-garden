@@ -83,8 +83,8 @@ def _vit_sac_kwargs(config: Any, schema: Any) -> dict[str, Any]:
 
     return {
         "policy_kwargs": {
-            "features_extractor_class": ViTTokenAndPropExtractor,
-            "features_extractor_kwargs": {
+            "actor_extractor_class": ViTTokenAndPropExtractor,
+            "actor_extractor_kwargs": {
                 "schema": schema,
                 "fusion_mode": config.vit_fusion_mode,
                 "embed_dim": config.vit_embed_dim,

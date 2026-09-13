@@ -47,6 +47,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.td3_bc import TD3BCCore
 from rl_garden.buffers.rebrac_replay_buffer import ReBRACReplayBuffer
@@ -93,6 +94,8 @@ class ReBRACCore(TD3BCCore):
         backbone_type: BackboneType = "mlp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
         # TD3BCCore._init_td3bc_params owns tau/lrs/net_arch/n_critics/layer
@@ -126,6 +129,8 @@ class ReBRACCore(TD3BCCore):
             backbone_type=backbone_type,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
         if actor_bc_coef < 0:
@@ -167,9 +172,9 @@ class ReBRACCore(TD3BCCore):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
 
-            obs_features = self.policy.extract_features(data.obs)
+            critic_features = self.policy.extract_critic_features(data.obs)
             with torch.no_grad():
-                next_features = self.policy.extract_features(data.next_obs)
+                next_features = self.policy.extract_critic_features(data.next_obs)
                 noise = (torch.randn_like(data.actions) * self.policy_noise).clamp(
                     -self.noise_clip, self.noise_clip
                 )
@@ -189,7 +194,7 @@ class ReBRACCore(TD3BCCore):
                     1.0 - data.dones.unsqueeze(-1)
                 ) * next_q
 
-            q_all = self.policy.q_values_all(obs_features, data.actions, target=False)
+            q_all = self.policy.q_values_all(critic_features, data.actions, target=False)
             critic_loss = self._critic_loss(q_all, target_q)
 
             self.critic_optimizer.zero_grad(set_to_none=True)
@@ -207,15 +212,18 @@ class ReBRACCore(TD3BCCore):
                 counts[key] = counts.get(key, 0) + 1
 
             if self._global_update % self.policy_freq == 0:
-                features_detached = obs_features.detach()
-                pi_action = self.policy.actor(features_detached)
+                actor_features = self.policy.extract_actor_features(data.obs)
+                pi_action = self.policy.actor(actor_features)
                 actor_bc_penalty = (pi_action - data.actions).pow(2).sum(-1, keepdim=True)
+                q_features = self.policy.critic_features_for(
+                    data.obs, actor_features, stop_gradient=True
+                )
                 # min over the FULL critic ensemble (rebrac.py:441) -- unlike
                 # TD3BCCore's own actor loss, which uses q_values_all(...)[0]
                 # (first critic only). Uses the freshly-updated critic, same
                 # ordering TD3BCCore.train() already relies on.
                 q_values = self.policy.q_values_all(
-                    features_detached, pi_action, target=False
+                    q_features, pi_action, target=False
                 ).min(dim=0).values
                 if self.normalize_q:
                     lmbda = (1.0 / q_values.abs().mean()).detach()
@@ -300,6 +308,8 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
         backbone_type: BackboneType = "mlp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -364,6 +374,8 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
             backbone_type=backbone_type,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
 

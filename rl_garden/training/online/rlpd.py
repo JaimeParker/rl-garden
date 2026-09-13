@@ -193,4 +193,10 @@ class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
     success_key: str | None = None
 
 
-registry.register("rlpd", RLPDArgs, run_rlpd)
+def _rlpd_algorithm_cls() -> type:
+    from rl_garden.algorithms import RLPD
+
+    return RLPD
+
+
+registry.register("rlpd", RLPDArgs, run_rlpd, algorithm_cls=_rlpd_algorithm_cls)

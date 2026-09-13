@@ -13,6 +13,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.awac import _AWACRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.encoders.config import EncoderConfig
@@ -66,6 +67,8 @@ class Off2OnAWAC(_AWACRolloutTrainingShell):
         std_parameterization: Literal["exp", "uniform"] = "exp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -117,6 +120,8 @@ class Off2OnAWAC(_AWACRolloutTrainingShell):
             std_parameterization=std_parameterization,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
             seed=seed,
             device=device,

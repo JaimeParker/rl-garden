@@ -217,7 +217,7 @@ class TDMPC2(BaseAlgorithm):
     # Construction
     # ------------------------------------------------------------------
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
+    def _build_world_model_encoder(self) -> BaseFeaturesExtractor:
         return self.observation_encoders.actor
 
     def _setup_model(self) -> None:
@@ -225,10 +225,10 @@ class TDMPC2(BaseAlgorithm):
             self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
         )
         action_dim = int(np.prod(self.env.single_action_space.shape))
-        features_extractor = self._build_features_extractor()
+        world_model_encoder = self._build_world_model_encoder()
 
         world_model = WorldModel(
-            encoder=features_extractor,
+            encoder=world_model_encoder,
             action_dim=action_dim,
             latent_dim=self.latent_dim,
             mlp_dim=self.mlp_dim,

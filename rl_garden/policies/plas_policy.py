@@ -1,8 +1,12 @@
 """PLAS policy: normalized obs + a frozen-after-pretraining VAE + latent-space actor + twin-Q critic.
 
 Verified against a full clone of ``Wenxuan-Zhou/PLAS`` (``algos.py``,
-``main.py`` read in full), not just fetched raw files. Box observations
-only. ``self.vae`` is pretrained once (``PLASCore.pretrain_vae()``,
+``main.py`` read in full), not just fetched raw files. Box or Dict (vision)
+observations via ``actor_extractor``/``critic_extractor`` (schema-driven,
+like every other policy in this codebase); either way at least one
+``state``/``state_<name>`` key is required (PLAS's D4RL MuJoCo scope has
+none of the Dict/vision cases upstream, so this generalization is
+rl-garden's own). ``self.vae`` is pretrained once (``PLASCore.pretrain_vae()``,
 mirroring ``SPOTPolicy``'s pattern) then frozen -- unlike ``BCQPolicy``'s
 jointly trained VAE.
 
@@ -46,7 +50,7 @@ from rl_garden.networks import (
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.observations import ObservationSchema
 from rl_garden.observations.schema import ObservationContractError
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 _N_CRITICS = 2
 
@@ -58,7 +62,10 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
         self,
         observation_space: spaces.Dict,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        *,
+        actor_extractor: BaseFeaturesExtractor,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         net_arch: Sequence[int] = (400, 300),
         actor_use_layer_norm: bool = False,
         critic_use_layer_norm: bool = False,
@@ -75,26 +82,32 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
         vae_hidden_dim: int = 750,
         vae_latent_dim: Optional[int] = None,
     ) -> None:
-        super().__init__()
         assert isinstance(action_space, spaces.Box), "PLAS requires a Box action space."
-        if not ObservationSchema.from_space(observation_space).has_state:
+        schema = ObservationSchema.from_space(observation_space)
+        if not schema.has_state:
             raise ObservationContractError(
                 "PLASPolicy requires a 'state' key in the observation space "
                 "-- CORL's normalize_states semantics normalize the raw "
                 "state entry, not the post-encoder features."
             )
-
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
-        self._register_obs_normalizer(int(observation_space.spaces["state"].shape[0]))
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
+        self._state_keys = schema.state_keys
+        state_dim = sum(int(observation_space.spaces[k].shape[0]) for k in self._state_keys)
+        self._register_obs_normalizer(state_dim)
         self.use_perturbation = use_perturbation
 
-        fd = features_extractor.features_dim
+        actor_fd = self.actor_features_dim
+        critic_fd = self.critic_features_dim
         net_arch = list(net_arch)
 
         self.vae = ConditionalVAE(
-            fd, action_space, hidden_dim=vae_hidden_dim, latent_dim=vae_latent_dim
+            actor_fd, action_space, hidden_dim=vae_hidden_dim, latent_dim=vae_latent_dim
         )
 
         latent_kwargs = dict(
@@ -107,8 +120,8 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
         )
-        self.latent_actor = LatentActor(fd, self.vae.latent_dim, **latent_kwargs)
-        self.latent_actor_target = LatentActor(fd, self.vae.latent_dim, **latent_kwargs)
+        self.latent_actor = LatentActor(actor_fd, self.vae.latent_dim, **latent_kwargs)
+        self.latent_actor_target = LatentActor(actor_fd, self.vae.latent_dim, **latent_kwargs)
         self.latent_actor_target.load_state_dict(self.latent_actor.state_dict())
         for p in self.latent_actor_target.parameters():
             p.requires_grad_(False)
@@ -126,8 +139,10 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
                 kernel_init=kernel_init,
                 backbone_type=backbone_type,
             )
-            self.perturbation = PerturbationActor(fd, action_space, **perturbation_kwargs)
-            self.perturbation_target = PerturbationActor(fd, action_space, **perturbation_kwargs)
+            self.perturbation = PerturbationActor(actor_fd, action_space, **perturbation_kwargs)
+            self.perturbation_target = PerturbationActor(
+                actor_fd, action_space, **perturbation_kwargs
+            )
             self.perturbation_target.load_state_dict(self.perturbation.state_dict())
             for p in self.perturbation_target.parameters():
                 p.requires_grad_(False)
@@ -142,16 +157,39 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
         )
-        self.critic = EnsembleQCritic(fd, action_space, **critic_kwargs)
-        self.critic_target = EnsembleQCritic(fd, action_space, **critic_kwargs)
+        self.critic = EnsembleQCritic(critic_fd, action_space, **critic_kwargs)
+        self.critic_target = EnsembleQCritic(critic_fd, action_space, **critic_kwargs)
         self.critic_target.load_state_dict(self.critic.state_dict())
         for p in self.critic_target.parameters():
             p.requires_grad_(False)
 
+    def _normalize_state_obs(self, obs: Obs) -> Obs:
+        # See BCQPolicy._normalize_state_obs -- identical pattern.
+        normalized = dict(obs)
+        raw = torch.cat([obs[k] for k in self._state_keys], dim=-1)
+        normalized_concat = self._normalize_obs(raw)
+        offset = 0
+        for k in self._state_keys:
+            dim = obs[k].shape[-1]
+            normalized[k] = normalized_concat[..., offset : offset + dim]
+            offset += dim
+        return normalized
+
+    def extract_actor_features(self, obs: Obs) -> torch.Tensor:
+        return super().extract_actor_features(self._normalize_state_obs(obs))
+
+    def extract_critic_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
+        return super().extract_critic_features(
+            self._normalize_state_obs(obs), stop_gradient=stop_gradient
+        )
+
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        normalized_obs = dict(obs)
-        normalized_obs["state"] = self._normalize_obs(obs["state"])
-        return self._extract_features(normalized_obs, stop_gradient=stop_gradient)
+        """Raw actor-extractor escape hatch (caller picks ``stop_gradient``),
+        used by ``predict``/diagnostics/tests -- not the actor-role training
+        path, which goes through ``extract_actor_features``."""
+        return self.actor_extractor.extract(
+            self._normalize_state_obs(obs), stop_gradient=stop_gradient
+        )
 
     def action_from_latent(
         self, features: torch.Tensor, latent: torch.Tensor, target: bool = False
@@ -171,7 +209,7 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         del deterministic  # PLAS inference is always this same deterministic pass.
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         latent = self.latent_actor.deterministic_action(features)
         return self.action_from_latent(features, latent, target=False)
 
@@ -179,13 +217,18 @@ class PLASPolicy(ObsNormalizingMixin, BasePolicy):
         yield from self.vae.parameters()
 
     def actor_parameters(self):
+        # actor_extractor trains via this optimizer only when it is genuinely
+        # separate from critic_extractor (otherwise it trains via
+        # critic_and_encoder_parameters' critic loss under "shared_critic_grad").
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
         yield from self.latent_actor.parameters()
         if self.use_perturbation:
             yield from self.perturbation.parameters()
 
     def critic_and_encoder_parameters(self):
         yield from self.critic.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def train(self, mode: bool = True):
         super().train(mode)

@@ -22,7 +22,7 @@ class DummyVecEnv:
 
 
 class TrainableBoxExtractor(BaseFeaturesExtractor):
-    """A custom features_extractor_class for a state-only env. Despite the
+    """A custom actor_extractor_class for a state-only env. Despite the
     name, ``observation_space`` here is Dict({"state": Box}) -- _box_env's
     bare Box is boundary-normalized by BaseAlgorithm.__init__ (see
     rl_garden.envs.wrappers.VectorizedDictStateWrapper) before SAC's
@@ -96,8 +96,8 @@ def _make_agent(
         n_critics=2,
         critic_impl=critic_impl,
         policy_kwargs={
-            "features_extractor_class": extractor_cls,
-            "features_extractor_kwargs": {"features_dim": 7},
+            "actor_extractor_class": extractor_cls,
+            "actor_extractor_kwargs": {"features_dim": 7},
         },
         eval_freq=0,
         save_final_checkpoint=False,
@@ -124,8 +124,8 @@ def _assert_module_params_close(
 
 def _assert_agents_close(vmap: SAC, legacy: SAC, *, atol: float = 1e-6, rtol: float = 1e-6) -> None:
     _assert_module_params_close(
-        vmap.policy.features_extractor,
-        legacy.policy.features_extractor,
+        vmap.policy.actor_extractor,
+        legacy.policy.actor_extractor,
         atol=atol,
         rtol=rtol,
     )

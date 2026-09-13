@@ -30,17 +30,18 @@ class SPOTOff2OnArgs(SPOTOff2OnTrainingArgs, ObservationArgs, EnvBackendArgs):
 
 
 def build_spot(args: SPOTOff2OnArgs, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.algorithms import Off2OnSPOT
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.off2on._args import initial_training_phase_from_args
 
-    # SPOT doesn't support a distinct critic encoder (no critic_encoder_config/
-    # encoder_sharing kwarg), matching Off2OnIQL's own comment.
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         Off2OnSPOT,
@@ -119,4 +120,11 @@ def run_spot(args: SPOTOff2OnArgs) -> None:
     run_off2on(args, build_agent=build_spot, algorithm="spot")
 
 
-registry.register("spot", SPOTOff2OnArgs, run_spot)
+
+
+def _off2_on_spot_algorithm_cls() -> type:
+    from rl_garden.algorithms import Off2OnSPOT
+
+    return Off2OnSPOT
+
+registry.register("spot", SPOTOff2OnArgs, run_spot, algorithm_cls=_off2_on_spot_algorithm_cls)

@@ -68,9 +68,10 @@ def build_observation_encoder(
     ``Dict({"state": Box})``) or a ``Dict`` following the strict
     ``rl_garden.observations`` vocabulary. ``schema`` defaults to
     ``ObservationSchema.from_space(normalized_space)``; ``keys`` (if given)
-    subsets it. A state-only schema builds a ``FlattenExtractor`` over
-    ``"state"``; otherwise a ``CombinedExtractor`` using ``encoder_config``
-    (defaults to ``EncoderConfig()``).
+    subsets it. A state-only schema builds a ``FlattenExtractor`` over all of
+    ``schema.state_keys`` (``"state"`` plus any ``state_<name>`` keys);
+    otherwise a ``CombinedExtractor`` using ``encoder_config`` (defaults to
+    ``EncoderConfig()``).
 
     Raises ``ObservationContractError`` if ``encoder_config`` sets any
     image-related field (everything except ``normalize_obs``) while
@@ -95,11 +96,14 @@ def build_observation_encoder(
         flatten_space = (
             observation_space
             if isinstance(observation_space, spaces.Box)
-            else spaces.Dict({"state": normalized_space.spaces["state"]})
+            else spaces.Dict({k: normalized_space.spaces[k] for k in schema.state_keys})
         )
         return FlattenExtractor(
             flatten_space,
             normalize_obs=(encoder_config.normalize_obs if encoder_config is not None else False),
+            state_keys=(
+                schema.state_keys if isinstance(flatten_space, spaces.Dict) else None
+            ),
         )
 
     return CombinedExtractor(

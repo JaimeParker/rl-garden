@@ -22,7 +22,7 @@ Box or Dict (CNN-based vision, via ``CombinedExtractor``) observations.
 ``_cond(obs)`` is the single seam where obs becomes conditioning -- rollout
 collection (``DPPO._rollout_step``) and training (``DPPO._dppo_loss``) both
 call it once per env-step/minibatch and reuse the resulting tensor across
-the whole K-step denoising chain, so introducing a features_extractor here
+the whole K-step denoising chain, so introducing an actor_extractor call here
 does not risk re-running an (possibly expensive, image-encoding) extractor
 per denoising step. Gradient isolation (critic trains the encoder, actor
 path detaches) is implemented at the ``DPPO._dppo_loss`` call site, not
@@ -44,7 +44,7 @@ from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import Activation, DiffusionMLP, KernelInit, build_diffusion_mlp_head
 from rl_garden.networks.mlp import _apply_kernel_init, resolve_activation
 from rl_garden.policies._diffusion_process import DiffusionProcess
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 class _CriticObs(nn.Module):
@@ -80,8 +80,9 @@ class DPPOPolicy(DiffusionProcess, BasePolicy):
         observation_space: spaces.Box | spaces.Dict,
         action_space: spaces.Box,
         *,
-        features_extractor: BaseFeaturesExtractor,
-        critic_features_extractor: Optional[BaseFeaturesExtractor] = None,
+        actor_extractor: BaseFeaturesExtractor,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: "EncoderSharing" = "shared_critic_grad",
         horizon_steps: int,
         act_steps: int,
         denoising_steps: int,
@@ -100,7 +101,6 @@ class DPPOPolicy(DiffusionProcess, BasePolicy):
         min_sampling_denoising_std: float = 0.1,
         min_logprob_denoising_std: float = 0.1,
     ) -> None:
-        super().__init__()
         assert type(action_space) is spaces.Box, "DPPOPolicy requires a Box action space."
         if not (1 <= act_steps <= horizon_steps):
             raise ValueError(f"act_steps must be in [1, horizon_steps], got {act_steps}.")
@@ -108,14 +108,13 @@ class DPPOPolicy(DiffusionProcess, BasePolicy):
             raise ValueError(
                 f"ft_denoising_steps must be in [1, denoising_steps], got {ft_denoising_steps}."
             )
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
-        # Unset -> literally the same object as features_extractor (not just
-        # equal config): this identity is the single source of truth for
-        # "shared encoder" used by actor_parameters/critic_and_encoder_parameters
-        # and DPPO._actor_stop_gradient (mirrors SACPolicy's own convention).
-        self.critic_features_extractor = critic_features_extractor or features_extractor
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         self.horizon_steps = horizon_steps
         self.act_steps = act_steps
         self.ft_denoising_steps = ft_denoising_steps
@@ -123,8 +122,8 @@ class DPPOPolicy(DiffusionProcess, BasePolicy):
         self.min_logprob_denoising_std = min_logprob_denoising_std
 
         self.action_dim = int(np.prod(action_space.shape))
-        cond_dim = features_extractor.features_dim  # cond_steps == 1 only, see module docstring
-        critic_cond_dim = self.critic_features_extractor.features_dim
+        cond_dim = actor_extractor.features_dim  # cond_steps == 1 only, see module docstring
+        critic_cond_dim = self.critic_features_dim
 
         actor = DiffusionMLP(
             action_dim=self.action_dim,
@@ -168,31 +167,32 @@ class DPPOPolicy(DiffusionProcess, BasePolicy):
         self.actor_ft.load_state_dict(net_state_dict)
 
     def _cond(self, obs: Obs, stop_gradient: bool = False) -> dict:
-        features = self._extract_features(obs, stop_gradient=stop_gradient)
+        features = self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
         return {"state": features.unsqueeze(1)}
 
     def _critic_cond(self, obs: Obs, stop_gradient: bool = False) -> dict:
         """The critic-role counterpart of ``_cond``: uses
-        ``critic_features_extractor`` (the same object as ``features_extractor``
-        in the default shared-encoder case)."""
-        features = self.critic_features_extractor.extract(obs, stop_gradient=stop_gradient)
+        ``critic_extractor`` when set (falls back to ``actor_extractor`` in
+        the default shared-encoder case)."""
+        features = self.extract_critic_features(obs, stop_gradient=stop_gradient)
         return {"state": features.unsqueeze(1)}
 
     # --- parameter groups for optimizers (mirrors SACPolicy) ---
 
     def actor_parameters(self):
         # Actor-only by default; the shared-encoder case trains
-        # features_extractor via critic_and_encoder_parameters' value loss
-        # instead (see DPPO._actor_stop_gradient). When critic_features_extractor
-        # is genuinely separate, features_extractor is actor-exclusive --
-        # nothing else would ever train it -- so it belongs on this optimizer.
-        if self.critic_features_extractor is not self.features_extractor:
-            yield from self.features_extractor.parameters()
+        # actor_extractor via critic_and_encoder_parameters' value loss
+        # instead (see BasePolicy.extract_actor_features's stop-gradient
+        # rule). When critic_extractor is genuinely separate, actor_extractor
+        # is actor-exclusive -- nothing else would ever train it -- so it
+        # belongs on this optimizer.
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
         yield from self.actor_ft.parameters()
 
     def critic_and_encoder_parameters(self):
         yield from self.critic.parameters()
-        yield from self.critic_features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def _predict_noise_mixed(
         self, x: torch.Tensor, t: torch.Tensor, cond: dict

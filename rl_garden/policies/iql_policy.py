@@ -1,8 +1,12 @@
-"""IQL policy with a shared feature extractor.
+"""IQL policy: actor/critic/value heads over the actor/critic extractor contract.
 
-The extractor is shared by actor, critic, and value networks. Critic/value
-updates own the encoder; actor updates use detached features, matching the
-existing RGBD SAC convention in rl-garden.
+``actor_extractor``/``critic_extractor`` follow ``BasePolicy``'s contract: V
+and Q are critic-role heads (``critic_extractor``, or ``actor_extractor``
+when shared) trained by the critic/value losses; the actor (AWR-weighted
+behavior cloning) is an actor-role head (``actor_extractor``) that always
+reads through ``extract_actor_features``, so it detaches under the default
+``"shared_critic_grad"`` sharing (matching the existing RGBD SAC convention)
+and trains its own encoder under ``"separate"``.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from rl_garden.networks import (
     UnsquashedGaussianActor,
     ValueNetwork,
 )
-from rl_garden.policies.base import BasePolicy
+from rl_garden.policies.base import BasePolicy, EncoderSharing
 from rl_garden.policies.sac_policy import LOG_STD_MAX, WSRL_LOG_STD_MIN
 
 
@@ -46,7 +50,7 @@ class IQLPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        actor_extractor: BaseFeaturesExtractor,
         net_arch: Sequence[int] | dict[str, Sequence[int]] = (256, 256),
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
@@ -67,8 +71,9 @@ class IQLPolicy(BasePolicy):
         log_std_min: float = WSRL_LOG_STD_MIN,
         log_std_max: float = LOG_STD_MAX,
         actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
-        super().__init__()
         assert isinstance(action_space, spaces.Box), "IQL requires a Box action space."
         if actor_distribution not in ("squashed", "unsquashed"):
             raise ValueError(
@@ -82,14 +87,19 @@ class IQLPolicy(BasePolicy):
                 f"critic_subsample_size ({critic_subsample_size}) must be <= "
                 f"n_critics ({n_critics})."
             )
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_extractor = features_extractor
+        super().__init__(
+            observation_space,
+            action_space,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
+        )
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
 
         actor_arch, critic_arch, value_arch = get_iql_arch(net_arch)
-        fd = features_extractor.features_dim
+        fd = self.actor_features_dim
+        critic_fd = self.critic_features_dim
         if actor_distribution == "squashed":
             self.actor = SquashedGaussianActor(
                 fd,
@@ -126,7 +136,7 @@ class IQLPolicy(BasePolicy):
                 tanh_mean=True,
             )
         self.critic = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=critic_arch,
             n_critics=n_critics,
@@ -138,7 +148,7 @@ class IQLPolicy(BasePolicy):
             backbone_type=backbone_type,
         )
         self.critic_target = EnsembleQCritic(
-            fd,
+            critic_fd,
             action_space,
             hidden_dims=critic_arch,
             n_critics=n_critics,
@@ -154,7 +164,7 @@ class IQLPolicy(BasePolicy):
             p.requires_grad_(False)
 
         self.value = ValueNetwork(
-            fd,
+            critic_fd,
             value_arch,
             use_layer_norm=value_use_layer_norm,
             use_group_norm=value_use_group_norm,
@@ -164,23 +174,28 @@ class IQLPolicy(BasePolicy):
             backbone_type=backbone_type,
         )
 
-    def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
-        return self._extract_features(obs, stop_gradient=stop_gradient)
-
     def forward(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         return self.predict(obs, deterministic=deterministic)
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
-        features = self.extract_features(obs)
+        features = self.extract_actor_features(obs)
         if deterministic:
             return self.actor.deterministic_action(features)
         action, _ = self.actor.action_log_prob(features)
         return action
 
     def behavior_log_prob(
-        self, obs: Obs, actions: torch.Tensor, stop_gradient: bool = True
+        self, obs: Obs, actions: torch.Tensor, stop_gradient: Optional[bool] = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self.extract_features(obs, stop_gradient=stop_gradient)
+        """AWR actor loss's log-prob of the dataset action. ``stop_gradient=None``
+        (every in-repo caller) applies ``extract_actor_features``'s
+        ``encoder_sharing`` rule; an explicit ``True``/``False`` is a raw
+        override via the actor extractor directly."""
+        features = (
+            self.extract_actor_features(obs)
+            if stop_gradient is None
+            else self.actor_extractor.extract(obs, stop_gradient=stop_gradient)
+        )
         return self.actor.evaluate_action_log_prob(
             features, actions
         ), self.actor.deterministic_action(features)
@@ -224,7 +239,13 @@ class IQLPolicy(BasePolicy):
     def critic_value_and_encoder_parameters(self):
         yield from self.critic.parameters()
         yield from self.value.parameters()
-        yield from self.features_extractor.parameters()
+        yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def actor_parameters(self):
+        # actor_extractor is actor-exclusive (no other loss ever trains it)
+        # only when it's genuinely separate from the critic/value encoder;
+        # under shared sharing it trains via critic_value_and_encoder_parameters
+        # instead (matches SACPolicy.actor_parameters).
+        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+            yield from self.actor_extractor.parameters()
         yield from self.actor.parameters()

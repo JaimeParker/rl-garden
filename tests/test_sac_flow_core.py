@@ -135,7 +135,7 @@ def test_sac_flow_rejects_token_and_prop_features():
     with pytest.raises(NotImplementedError):
         SACFlow(
             env=env,
-            policy_kwargs={"features_extractor_class": StructuredFeaturesExtractor},
+            policy_kwargs={"actor_extractor_class": StructuredFeaturesExtractor},
             **_sac_flow_kwargs(),
         )
 

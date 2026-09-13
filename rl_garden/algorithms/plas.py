@@ -2,9 +2,12 @@
 
 Ported from ``Wenxuan-Zhou/PLAS/algos.py`` (the official reference -- CORL
 has no PLAS implementation to cross-check against). Pure offline, no online
-fine-tuning variant in the reference. Box observations only. Verified
-against a full clone of the upstream repo (``algos.py``, ``main.py``,
-``README.md`` read in full), not just fetched raw files.
+fine-tuning variant in the reference. Box or Dict (vision) observations via
+``encoder_config``/``obs_groups`` (schema-driven, like every other
+algorithm); either way at least one ``state``/``state_<name>`` key is
+required (see ``PLASPolicy``). Verified against a full clone of the
+upstream repo (``algos.py``, ``main.py``, ``README.md`` read in full), not
+just fetched raw files.
 
 Deliberately NOT built on ``BCQCore``: despite the shared VAE and soft
 double-Q target formula (PLAS's own code reuses BCQ's target-mixture
@@ -77,12 +80,12 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
+from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.mlp import KernelInit
@@ -92,10 +95,6 @@ from rl_garden.policies.plas_policy import PLASPolicy
 
 class PLASCore:
     """Shared PLAS loss/network logic. See module docstring."""
-
-    #: PLAS is state-only (no critic_features_extractor on PLASPolicy): one
-    #: encoder trained by the critic loss, actor path detached.
-    encoder_sharing = "shared_critic_grad"
 
     def _init_plas_params(
         self,
@@ -131,6 +130,8 @@ class PLASCore:
         soft_q_lambda: float = 0.75,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
         if not (0.0 < tau <= 1.0):
@@ -143,6 +144,11 @@ class PLASCore:
             )
         if vae_iterations < 0:
             raise ValueError(f"vae_iterations must be >= 0, got {vae_iterations}.")
+        if encoder_sharing not in ("shared_critic_grad", "shared", "separate"):
+            raise ValueError(
+                "encoder_sharing must be 'shared_critic_grad', 'shared', or "
+                f"'separate', got {encoder_sharing!r}."
+            )
 
         self.tau = tau
         self.actor_lr = actor_lr
@@ -176,6 +182,8 @@ class PLASCore:
         self._vae_pretrained = False
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
+        self.critic_encoder_config = critic_encoder_config
+        self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
 
     def _optimizer_names(self) -> tuple[str, ...]:
@@ -211,6 +219,11 @@ class PLASCore:
             "obs_groups": (
                 dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
             ),
+            "critic_encoder_config": (
+                dataclasses.asdict(self.critic_encoder_config)
+                if self.critic_encoder_config is not None
+                else None
+            ),
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 
@@ -236,9 +249,6 @@ class PLASCore:
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
 
-    def _build_features_extractor(self) -> BaseFeaturesExtractor:
-        return self.observation_encoders.actor
-
     def _build_replay_buffer(self) -> ReplayBuffer:
         obs_space = self.env.single_observation_space
         return ReplayBuffer(
@@ -251,14 +261,13 @@ class PLASCore:
         )
 
     def _setup_model(self) -> None:
-        self._resolve_observation_encoders(
-            self.env.single_observation_space, augmentation_seed=self._image_augmentation_seed
-        )
-        features_extractor = self._build_features_extractor()
         self.policy = PLASPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
-            features_extractor=features_extractor,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
             net_arch=self.net_arch,
             actor_use_layer_norm=self.actor_use_layer_norm,
             critic_use_layer_norm=self.critic_use_layer_norm,
@@ -305,10 +314,14 @@ class PLASCore:
 
     def fit_obs_normalizer(self) -> None:
         # buf.obs is always a DictArray now (boundary normalization always on);
-        # same pattern as AWAC.fit_obs_normalizer.
+        # same pattern as AWAC.fit_obs_normalizer. Concatenate every schema
+        # state key (PLASPolicy._state_keys, in schema.state_keys order) to
+        # match PLASPolicy._normalize_state_obs's own concatenation.
         buf = self.replay_buffer
-        raw_obs = buf.obs["state"]
-        obs = raw_obs[: buf.size].reshape(-1, raw_obs.shape[-1]).to(self.device)
+        raw = torch.cat(
+            [buf.obs[k][: buf.size] for k in self.policy._state_keys], dim=-1
+        )
+        obs = raw.reshape(-1, raw.shape[-1]).to(self.device)
         self.policy.fit_obs_normalizer(obs)
 
     def _sample_train_batch(self, batch_size: int):
@@ -342,7 +355,7 @@ class PLASCore:
         last_loss: dict[str, float] = {}
         for _ in range(self.vae_iterations):
             data = self.replay_buffer.sample(self.batch_size)
-            features = self.policy.extract_features(data.obs)
+            features = self.policy.extract_actor_features(data.obs)
             losses = vae.loss(features, data.actions, self.beta)
 
             self.vae_optimizer.zero_grad(set_to_none=True)
@@ -372,15 +385,19 @@ class PLASCore:
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
-            obs_features = self.policy.extract_features(data.obs)
+            critic_features = self.policy.extract_critic_features(data.obs)
 
             with torch.no_grad():
-                next_features = self.policy.extract_features(data.next_obs)
-                next_latent = self.policy.latent_actor_target(next_features)
+                # latent_actor_target/action_from_latent are the actor-role
+                # nets; q_values is the critic-role net -- each target net
+                # must be fed the same-role features it was trained on.
+                next_actor_features = self.policy.extract_actor_features(data.next_obs)
+                next_critic_features = self.policy.extract_critic_features(data.next_obs)
+                next_latent = self.policy.latent_actor_target(next_actor_features)
                 next_action = self.policy.action_from_latent(
-                    next_features, next_latent, target=True
+                    next_actor_features, next_latent, target=True
                 )
-                q1_t, q2_t = self.policy.q_values(next_features, next_action, target=True)
+                q1_t, q2_t = self.policy.q_values(next_critic_features, next_action, target=True)
                 mixed_q = self.soft_q_lambda * torch.min(q1_t, q2_t) + (
                     1.0 - self.soft_q_lambda
                 ) * torch.max(q1_t, q2_t)
@@ -388,7 +405,7 @@ class PLASCore:
                     1.0 - data.dones.unsqueeze(-1)
                 ) * mixed_q
 
-            q1, q2 = self.policy.q_values(obs_features, data.actions, target=False)
+            q1, q2 = self.policy.q_values(critic_features, data.actions, target=False)
             critic_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
 
             self.critic_optimizer.zero_grad(set_to_none=True)
@@ -398,10 +415,15 @@ class PLASCore:
             if self._lr_schedulers[0] is not None:
                 self._lr_schedulers[0].step()
 
-            features_detached = obs_features.detach()
-            latent = self.policy.latent_actor(features_detached)
-            action = self.policy.action_from_latent(features_detached, latent, target=False)
-            q1_pi, _ = self.policy.q_values(features_detached, action, target=False)
+            actor_features = self.policy.extract_actor_features(data.obs)
+            latent = self.policy.latent_actor(actor_features)
+            action = self.policy.action_from_latent(actor_features, latent, target=False)
+            # Actor loss's Q(s, action) term re-extracts critic-role features
+            # with stop_gradient=True (matches BCQ/SAC's actor-loss pattern):
+            # scored by the live critic, but must not push gradient into the
+            # critic's own encoder.
+            q_features = self.policy.extract_critic_features(data.obs, stop_gradient=True)
+            q1_pi, _ = self.policy.q_values(q_features, action, target=False)
             actor_loss = -q1_pi.mean()
 
             self.actor_optimizer.zero_grad(set_to_none=True)
@@ -483,6 +505,8 @@ class PLAS(PLASCore, OfflineRLAlgorithm):
         soft_q_lambda: float = 0.75,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
+        critic_encoder_config: Optional[EncoderConfig] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         image_augmentation_seed: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -549,6 +573,8 @@ class PLAS(PLASCore, OfflineRLAlgorithm):
             soft_q_lambda=soft_q_lambda,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
+            critic_encoder_config=critic_encoder_config,
+            encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
 

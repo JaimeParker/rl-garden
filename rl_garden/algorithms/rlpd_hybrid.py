@@ -21,7 +21,6 @@ from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.policies.rlpd_hybrid_policy import _DISCRETE_ACTION_VALUES, RLPDHybridPolicy
 
 
@@ -59,11 +58,10 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
         if self.use_grasp_penalty:
             self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "grasp_penalty")
 
-    def _build_policy(self, features_extractor: BaseFeaturesExtractor) -> RLPDHybridPolicy:
+    def _build_policy(self) -> RLPDHybridPolicy:
         return RLPDHybridPolicy(
             observation_space=self.env.single_observation_space,
             action_space=self._policy_action_space(),
-            features_extractor=features_extractor,
             net_arch=self.net_arch,
             n_critics=self.n_critics,
             critic_subsample_size=self.critic_subsample_size,
@@ -80,8 +78,11 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             actor_feature_dim=self.actor_feature_dim,
             critic_spatial_emb_dim=self.critic_spatial_emb_dim,
             discrete_hidden_dims=(self.discrete_hidden_dim,),
-            critic_features_extractor=self._build_critic_features_extractor(),
             critic_backbone_type=self.critic_backbone_type,
+            **self._policy_extractor_kwargs(
+                self.env.single_observation_space,
+                augmentation_seed=self._image_augmentation_seed,
+            ),
         )
 
     def _build_replay_buffer(self):

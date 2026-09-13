@@ -16,12 +16,21 @@ from rl_garden.algorithms import (
     infer_specs_from_h5,
     run_offline_pretraining,
 )
+from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.base import BasePolicy
 
 
 class DummyPolicy(BasePolicy):
     def __init__(self, obs_dim: int, action_dim: int) -> None:
-        super().__init__()
+        obs_space = spaces.Dict(
+            {"state": spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float32)}
+        )
+        action_space = spaces.Box(-np.inf, np.inf, shape=(action_dim,), dtype=np.float32)
+        super().__init__(
+            obs_space,
+            action_space,
+            actor_extractor=FlattenExtractor(obs_space),
+        )
         self.net = nn.Linear(obs_dim, action_dim)
 
     def predict(self, obs, deterministic: bool = False) -> torch.Tensor:

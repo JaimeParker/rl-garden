@@ -31,7 +31,7 @@ class QGFArgs(
 def _qgf_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     kwargs = {
         "env": env_spec,
         "buffer_size": args.buffer_size,
@@ -84,7 +84,10 @@ def _qgf_kwargs(
         "save_final_checkpoint": False,
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
     }
+    if args.encoder_sharing is not None:
+        kwargs["encoder_sharing"] = args.encoder_sharing
     return kwargs
 
 
@@ -101,4 +104,11 @@ def run_qgf(args: QGFArgs) -> None:
     run_offline(args, build_agent=build_qgf)
 
 
-registry.register("qgf", QGFArgs, run_qgf)
+
+
+def _qgf_algorithm_cls() -> type:
+    from rl_garden.algorithms import QGF
+
+    return QGF
+
+registry.register("qgf", QGFArgs, run_qgf, algorithm_cls=_qgf_algorithm_cls)

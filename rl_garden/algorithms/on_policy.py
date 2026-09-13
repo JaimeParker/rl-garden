@@ -83,12 +83,15 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self, obs
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         policy_obs = self._obs_to_policy_device(obs)
-        self.policy.update_obs_normalizer(policy_obs)
+        self.policy.update_normalizer(policy_obs)
+        # No explicit stop_gradient_actor: the policy applies
+        # BasePolicy.extract_actor_features's encoder_sharing rule by
+        # default (see rl_garden/policies/base.py); both call sites are
+        # under torch.no_grad() anyway (rollout, no training gradients).
         with torch.no_grad():
             return self.policy(
                 policy_obs,
                 deterministic=False,
-                stop_gradient_actor=self._actor_stop_gradient(),
             )
 
     def _extra_rollout_buffer_kwargs(self) -> dict:
@@ -100,9 +103,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         rollout-time distribution params it stashed during this step.
         """
         return {}
-
-    def _actor_stop_gradient(self) -> bool:
-        return False
 
     def _eval_action(self, obs) -> torch.Tensor:
         with torch.no_grad():

@@ -14,6 +14,7 @@ from gymnasium import spaces
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BehaviorVAE, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.policies.base import EncoderSharing
 from rl_garden.policies.td3_bc_policy import TD3BCPolicy
 
 
@@ -24,7 +25,10 @@ class SPOTPolicy(TD3BCPolicy):
         self,
         observation_space: spaces.Dict,
         action_space: spaces.Box,
-        features_extractor: BaseFeaturesExtractor,
+        *,
+        actor_extractor: BaseFeaturesExtractor,
+        critic_extractor: Optional[BaseFeaturesExtractor] = None,
+        encoder_sharing: EncoderSharing = "shared_critic_grad",
         net_arch: Sequence[int] = (256, 256),
         n_critics: int = 2,
         actor_use_layer_norm: bool = False,
@@ -42,7 +46,9 @@ class SPOTPolicy(TD3BCPolicy):
         super().__init__(
             observation_space,
             action_space,
-            features_extractor,
+            actor_extractor=actor_extractor,
+            critic_extractor=critic_extractor,
+            encoder_sharing=encoder_sharing,
             net_arch=net_arch,
             n_critics=n_critics,
             actor_use_layer_norm=actor_use_layer_norm,
@@ -55,8 +61,12 @@ class SPOTPolicy(TD3BCPolicy):
             kernel_init=kernel_init,
             backbone_type=backbone_type,
         )
+        # The VAE is a behavior-density model over the ACTOR's own features
+        # (pretrained from extract_features -- the actor-extractor escape
+        # hatch -- and consumed by the actor loss), so it sizes off
+        # actor_features_dim, not critic_features_dim.
         self.vae = BehaviorVAE(
-            self.features_extractor.features_dim,
+            self.actor_features_dim,
             action_space,
             hidden_dim=vae_hidden_dim,
             latent_dim=vae_latent_dim,

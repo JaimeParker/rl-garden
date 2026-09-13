@@ -6,6 +6,7 @@ from __future__ import annotations
 
 def build_explore(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import ExPLORe
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online._args import sac_initial_training_phase_from_args
 
@@ -13,6 +14,15 @@ def build_explore(args, env, eval_env, logger, checkpoint_dir):
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+        "image_augmentation_seed": args.seed + 1_000_003,
+        "critic_backbone_type": args.critic_backbone_type,
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         ExPLORe,
@@ -81,6 +91,7 @@ def build_explore(args, env, eval_env, logger, checkpoint_dir):
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -162,4 +173,10 @@ class ExPLOREArgs(RLPDArgs):
     rnd_lr: float = 3e-4
 
 
-registry.register("explore", ExPLOREArgs, run_explore)
+def _explore_algorithm_cls() -> type:
+    from rl_garden.algorithms import ExPLORe
+
+    return ExPLORe
+
+
+registry.register("explore", ExPLOREArgs, run_explore, algorithm_cls=_explore_algorithm_cls)

@@ -159,13 +159,13 @@ def test_recurrent_sac_handles_episode_termination_across_windows():
 
 def test_recurrent_sac_actor_loss_does_not_train_encoder_or_rnn_when_stop_gradient_actor():
     """Regression test: actor-loss gradient must be cut BEFORE the RNN (not
-    just before the encoder) when _actor_stop_gradient() is True, matching
+    just before the encoder) when policy.actor_features_detached is True, matching
     RecurrentPPOPolicy's identical "detach latent, not raw features" pattern.
     Detaching only the pre-RNN raw features (an earlier, buggy version of this
     code) does not block gradient to the RNN's own parameters."""
     env = DummyVecEnv(_dict_space(), _action_space())
     agent = RecurrentSAC(env=env, **_recurrent_sac_kwargs())
-    assert agent._actor_stop_gradient() is True
+    assert agent.policy.actor_features_detached is True
 
     obs, _ = agent.env.reset(seed=agent.seed)
     agent._on_env_reset(obs)
@@ -188,7 +188,7 @@ def test_recurrent_sac_actor_loss_does_not_train_encoder_or_rnn_when_stop_gradie
     agent.policy.zero_grad()
     actor_loss.backward()
 
-    for name, param in agent.policy.features_extractor.named_parameters():
+    for name, param in agent.policy.actor_extractor.named_parameters():
         assert param.grad is None or torch.all(param.grad == 0), f"encoder param {name} got actor grad"
     for name, param in agent.policy.recurrent_encoder.named_parameters():
         assert param.grad is None or torch.all(param.grad == 0), f"RNN param {name} got actor grad"
@@ -275,7 +275,26 @@ def test_recurrent_sac_rejects_token_and_prop_features():
     with pytest.raises(NotImplementedError):
         RecurrentSAC(
             env=env,
-            policy_kwargs={"features_extractor_class": StructuredFeaturesExtractor},
+            policy_kwargs={"actor_extractor_class": StructuredFeaturesExtractor},
+            **_recurrent_sac_kwargs(),
+        )
+
+
+def test_recurrent_sac_rejects_separate_encoder_sharing():
+    """RecurrentSACPolicy's single recurrent_encoder is one RNN shared between
+    the encoder and both actor/critic heads -- there is no way to route a
+    second, independently-trained critic_extractor's output through it. See
+    RecurrentSACPolicy.__init__'s guard (rl_garden/policies/recurrent_sac_policy.py):
+    RecurrentSAC itself has no separate "reject asymmetric obs_groups" check
+    (per the policy-extractor-contract recipe's "Single-RNN policies" section)
+    -- encoder_sharing="separate" alone is enough to make
+    _policy_extractor_kwargs resolve a real, non-None critic_extractor, which
+    the policy constructor then rejects."""
+    env = DummyVecEnv(_state_space(), _action_space())
+    with pytest.raises(ValueError, match="does not support a separate"):
+        RecurrentSAC(
+            env=env,
+            encoder_sharing="separate",
             **_recurrent_sac_kwargs(),
         )
 

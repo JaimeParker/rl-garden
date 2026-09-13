@@ -15,6 +15,7 @@ import numpy as np
 def build_supe(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import SUPE
     from rl_garden.algorithms.supe import load_opal_vae
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.common.utils import get_device
     from rl_garden.envs.wrappers import SkillActionWrapper
     from rl_garden.training.inspection import construct_agent
@@ -47,6 +48,15 @@ def build_supe(args, env, eval_env, logger, checkpoint_dir):
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
+    image_kwargs: dict = {
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "critic_encoder_config": resolve_critic_encoder_config(args),
+        "image_augmentation_seed": args.seed + 1_000_003,
+        "critic_backbone_type": args.critic_backbone_type,
+    }
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         SUPE,
@@ -116,6 +126,7 @@ def build_supe(args, env, eval_env, logger, checkpoint_dir):
         checkpoint_freq=args.checkpoint_freq,
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
+        **image_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -191,4 +202,10 @@ class SUPEArgs(ExPLOREArgs):
     horizon: int = 4
 
 
-registry.register("supe", SUPEArgs, run_supe)
+def _supe_algorithm_cls() -> type:
+    from rl_garden.algorithms import SUPE
+
+    return SUPE
+
+
+registry.register("supe", SUPEArgs, run_supe, algorithm_cls=_supe_algorithm_cls)

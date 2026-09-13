@@ -1,14 +1,16 @@
 """Tests for shared training example CLI argument defaults."""
 from __future__ import annotations
 
+import json
 import warnings
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
+import tyro
 
 from rl_garden.common.cli_args import resolve_num_eval_steps, warn_if_eval_budget_undersized
-from rl_garden.common.effective_config import inactive_config_paths
+from rl_garden.common.effective_config import apply_strict_mapping, inactive_config_paths
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationConfig
 from rl_garden.training.offline._args import TDMPC2MultitaskTrainingArgs
@@ -61,6 +63,51 @@ def test_vision_tdmpc2_defaults_are_state_only() -> None:
     assert args.num_envs == 1
     assert args.buffer_size == 200_000
     assert args.obs == ObservationConfig()
+
+
+def test_obs_extra_state_cli_round_trip() -> None:
+    """--obs.extra-state (Section A's state_<name> family) reaches
+    args.obs.extra_state through tyro's nested-dataclass CLI parsing, the
+    same as every other ObservationArgs field (see ObservationArgs in
+    rl_garden/common/cli_args.py)."""
+    import tyro
+
+    args = tyro.cli(
+        VisionTDMPC2TrainingArgs, args=["--obs.extra-state", "object_pose"]
+    )
+    assert args.obs.extra_state == ("object_pose",)
+
+
+def test_obs_extra_state_yaml_preset_round_trip() -> None:
+    """A YAML preset's obs: {extra_state: [...]} block reaches
+    args.obs.extra_state through apply_strict_mapping, the same path
+    load_preset()'s result is applied through for every training entrypoint."""
+    from rl_garden.common.effective_config import apply_strict_mapping
+
+    args = VisionTDMPC2TrainingArgs()
+    apply_strict_mapping(args, {"obs": {"extra_state": ["object_pose"]}})
+    assert args.obs.extra_state == ("object_pose",)
+
+
+def test_obs_extra_state_cli_flag_round_trips() -> None:
+    """--obs.extra-state (ObservationArgs' obs: ObservationConfig field) round
+    trips through tyro's nested-dataclass CLI flag convention, the same
+    hyphenation as --obs.rgb/--obs.image-size."""
+    args = tyro.cli(
+        VisionTDMPC2TrainingArgs, args=["--obs.extra-state", "object_pose"]
+    )
+    assert args.obs.extra_state == ("object_pose",)
+    assert args.obs == ObservationConfig(extra_state=("object_pose",))
+
+
+def test_obs_extra_state_yaml_round_trips() -> None:
+    """obs: {extra_state: [...]} applies onto ObservationConfig (a frozen
+    dataclass) via apply_strict_mapping's dataclasses.replace path, the same
+    mechanism configs/*.yaml presets use for obs:/encoder: blocks."""
+    args = VisionTDMPC2TrainingArgs()
+    apply_strict_mapping(args, {"obs": {"extra_state": ["object_pose"]}})
+    assert args.obs.extra_state == ("object_pose",)
+    assert args.obs == ObservationConfig(extra_state=("object_pose",))
 
 
 def test_td3_bc_defaults_match_corl_trainconfig() -> None:
@@ -1089,3 +1136,185 @@ def test_resolve_num_eval_steps_is_idempotent() -> None:
         )
 
     assert again == resolved == 100_000
+
+
+# --- policy-extractor-contract: static preflight for asymmetric obs_groups
+# without an explicit --encoder-sharing (algorithm_registry.py's
+# _validate_config, resolved via AlgorithmEntry.algorithm_cls) ---
+
+
+def test_static_preflight_rejects_asymmetric_obs_groups_via_algorithm_class_default():
+    """--obs-groups resolving asymmetric with no explicit --encoder-sharing
+    must still fail at --print-config time when the algorithm's own class
+    default isn't "separate". SAC registers an ``algorithm_cls`` factory
+    (see rl_garden/training/online/sac.py's ``_sac_algorithm_cls``), whose
+    class default is "shared_critic_grad"."""
+    from rl_garden.common.effective_config import ConfigError
+    from rl_garden.observations import ObsGroups
+    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.sac import SACArgs
+
+    registry.discover()
+    args = SACArgs(
+        obs=ObservationConfig(extra_state=("object_pose",)),
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
+    )
+    command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
+
+    with pytest.raises(ConfigError, match="requires two independent encoders"):
+        registry._validate_config(command)
+
+
+def test_static_preflight_allows_asymmetric_obs_groups_with_explicit_separate_sharing():
+    """The state-only privileged-critic idiom (--obs.extra-state plus
+    asymmetric --obs-groups.actor/--obs-groups.critic and an explicit
+    --encoder-sharing separate) must survive the REAL CLI path end to end:
+    tyro parsing (so ``command.sources`` is populated exactly as a real CLI
+    invocation would), ``_validate_config``, and ``_preflight_config`` ->
+    ``resolve_effective_config``. A hand-built ``ParsedCommand`` with an empty
+    ``sources`` dict would never exercise ``resolve_effective_config``'s
+    "explicit override of an inactive field" check, which is exactly where
+    the CLI gate bug (obs.is_visual is False wrongly marking obs_groups/
+    encoder_sharing inactive) actually manifested."""
+    from rl_garden.training.online import registry
+
+    registry.discover()
+    command = registry.parse_command(
+        [
+            "sac",
+            "--log-type",
+            "none",
+            "--obs.extra-state",
+            "object_pose",
+            "--obs-groups.actor",
+            "state",
+            "--obs-groups.critic",
+            "state",
+            "state_object_pose",
+            "--encoder-sharing",
+            "separate",
+        ]
+    )
+
+    registry._validate_config(command)  # must not raise
+    config = registry._preflight_config(command)  # must not raise
+
+    # EffectiveConfig._freeze converts JSON-list-shaped values back to tuples
+    # for immutability (see rl_garden/common/effective_config.py's _freeze);
+    # only the JSON-serialized (effective_config_json) payload uses lists.
+    assert config.inputs["obs_groups"]["actor"] == ("state",)
+    assert config.inputs["obs_groups"]["critic"] == ("state", "state_object_pose")
+    assert config.inputs["encoder_sharing"] == "separate"
+
+
+def test_static_preflight_skips_algorithms_without_a_registered_class_factory():
+    """PPO hasn't opted into ``AlgorithmEntry.algorithm_cls`` (register()'s
+    ``algorithm_cls=`` factory, rl_garden/training/algorithm_registry.py);
+    a defaulted mismatch for it is instead caught later, at
+    agent-construction time, by ``resolve_observation_encoders`` -- a
+    documented gap in the static preflight's coverage, not a bug."""
+    from rl_garden.observations import ObsGroups
+    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.ppo import PPOArgs
+
+    registry.discover()
+    args = PPOArgs(
+        obs=ObservationConfig(extra_state=("object_pose",)),
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
+    )
+    command = ParsedCommand(args, "ppo", "print_config", None, {}, (), {})
+
+    registry._validate_config(command)  # must not raise
+
+
+def test_state_only_privileged_critic_print_config_sac(capsys) -> None:
+    """--print-config end-to-end (run_cli's real stdout entrypoint) for the
+    state-only privileged-critic idiom on an online algorithm (sac)."""
+    from rl_garden.training.online import registry
+
+    registry.run_cli(
+        [
+            "sac",
+            "--log-type",
+            "none",
+            "--obs.extra-state",
+            "object_pose",
+            "--obs-groups.actor",
+            "state",
+            "--obs-groups.critic",
+            "state",
+            "state_object_pose",
+            "--encoder-sharing",
+            "separate",
+            "--print-config",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["inputs"]["obs_groups"]["actor"] == ["state"]
+    assert payload["inputs"]["obs_groups"]["critic"] == ["state", "state_object_pose"]
+    assert payload["inputs"]["encoder_sharing"] == "separate"
+
+
+def test_state_only_privileged_critic_print_config_iql(capsys) -> None:
+    """--print-config end-to-end for the state-only privileged-critic idiom
+    on an offline algorithm (iql), which requires --offline-dataset."""
+    from rl_garden.training.offline import registry
+
+    registry.run_cli(
+        [
+            "iql",
+            "--log-type",
+            "none",
+            "--offline-dataset",
+            "dummy",
+            "--obs.extra-state",
+            "object_pose",
+            "--obs-groups.actor",
+            "state",
+            "--obs-groups.critic",
+            "state",
+            "state_object_pose",
+            "--encoder-sharing",
+            "separate",
+            "--print-config",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["inputs"]["obs_groups"]["actor"] == ["state"]
+    assert payload["inputs"]["obs_groups"]["critic"] == ["state", "state_object_pose"]
+    assert payload["inputs"]["encoder_sharing"] == "separate"
+
+
+def test_state_only_privileged_critic_print_config_yaml_preset(tmp_path) -> None:
+    """The same idiom via a YAML --config preset (apply_strict_mapping path)
+    instead of CLI flags, matching docs/guides/configuration.md's example."""
+    from rl_garden.training.online import registry
+
+    preset = tmp_path / "privileged_critic.yaml"
+    preset.write_text(
+        "obs: {state: true, extra_state: [object_pose]}\n"
+        "obs_groups:\n"
+        "  actor: [state]\n"
+        "  critic: [state, state_object_pose]\n"
+        "encoder_sharing: separate\n",
+        encoding="utf-8",
+    )
+    command = registry.parse_command(
+        ["sac", "--log-type", "none", "--config", str(preset)]
+    )
+
+    registry._validate_config(command)  # must not raise
+    config = registry._preflight_config(command)  # must not raise
+
+    # EffectiveConfig._freeze converts JSON-list-shaped values back to tuples
+    # for immutability (see rl_garden/common/effective_config.py's _freeze);
+    # only the JSON-serialized (effective_config_json) payload uses lists.
+    assert config.inputs["obs_groups"]["actor"] == ("state",)
+    assert config.inputs["obs_groups"]["critic"] == ("state", "state_object_pose")
+    assert config.inputs["encoder_sharing"] == "separate"
+
+    registry._validate_config(command)  # must not raise

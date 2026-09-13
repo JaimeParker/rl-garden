@@ -32,9 +32,6 @@ class SACCore:
     def _sample_train_batch(self, batch_size: int):
         return self.replay_buffer.sample(batch_size)
 
-    def _actor_stop_gradient(self) -> bool:
-        return False
-
     def _backup_entropy_enabled(self) -> bool:
         return self.backup_entropy
 
@@ -232,17 +229,17 @@ class SACCore:
         )
 
     def _actor_action_log_prob(
-        self,
-        obs,
-        *,
-        stop_gradient: bool = False,
+        self, obs
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.policy.actor_action_log_prob(obs, stop_gradient=stop_gradient)
+        # No explicit stop_gradient: SACPolicy.actor_action_log_prob applies
+        # BasePolicy.extract_actor_features's encoder_sharing rule by default
+        # (see rl_garden/policies/base.py).
+        return self.policy.actor_action_log_prob(obs)
 
     def _target_action_log_prob(
         self, data
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self._actor_action_log_prob(data.next_obs, stop_gradient=False)
+        return self._actor_action_log_prob(data.next_obs)
 
     def _actor_loss_from_batch(self, data) -> tuple[torch.Tensor, torch.Tensor]:
         return self._actor_loss(data.obs)
@@ -301,9 +298,7 @@ class SACCore:
 
     def _actor_loss(self, obs) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = self._current_alpha().detach()
-        action, log_prob, actor_features = self._actor_action_log_prob(
-            obs, stop_gradient=self._actor_stop_gradient()
-        )
+        action, log_prob, actor_features = self._actor_action_log_prob(obs)
         critic_features = self.policy.critic_features_for(obs, actor_features, stop_gradient=True)
         min_q = self.policy.min_q_value(critic_features, action, subsample_size=None, target=False)
         return (alpha * log_prob - min_q).mean(), log_prob.detach()

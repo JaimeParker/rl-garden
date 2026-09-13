@@ -1,10 +1,13 @@
-"""Combined extractor for Dict observations ({state, rgb_<cam>, depth_<cam>}).
+"""Combined extractor for Dict observations
+({state, state_<name>, rgb_<cam>, depth_<cam>}).
 
 Design
 ------
 For each observation key we plug in one of:
   - image encoder (``PlainConv`` or a ResNet) when the key is an image,
-  - proprio branch (Dense -> LayerNorm -> tanh) when the key is ``state``,
+  - proprio branch (Dense -> LayerNorm -> tanh) when the key is a state key
+    (``"state"`` and/or any ``state_<name>`` keys, concatenated into one
+    vector -- in ``schema.state_keys`` order -- before the branch),
 
 By default, image keys are combined by channel-concatenation BEFORE the
 encoder (matches ``EncoderObsWrapper`` in ManiSkill's sac_rgbd.py), so a
@@ -123,7 +126,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
                 f"got {image_augmentation!r}"
             )
 
-        state_key = "state"
+        state_keys = schema.state_keys
         image_keys = schema.image_keys
         has_state = schema.has_state
         enable_stacking = any(schema.entries[k].stacked for k in image_keys)
@@ -195,15 +198,22 @@ class CombinedExtractor(BaseFeaturesExtractor):
                     features_dim += encoder.features_dim
 
         proprio: Optional[ProprioEncoder] = None
+        state_dim = 0
         if has_state:
+            state_dim = sum(
+                int(np.prod(observation_space.spaces[k].shape)) for k in state_keys
+            )
+            proprio_space = spaces.Box(
+                low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32
+            )
             proprio = ProprioEncoder(
-                observation_space.spaces[state_key], features_dim=encoder_config.proprio_latent_dim
+                proprio_space, features_dim=encoder_config.proprio_latent_dim
             )
             features_dim += proprio.features_dim
 
         assert features_dim > 0, (
             "CombinedExtractor produced 0-dim output: schema has no image "
-            f"keys and no state key ({schema.keys!r})."
+            f"keys and no state keys ({schema.keys!r})."
         )
         super().__init__(observation_space, features_dim)
 
@@ -212,7 +222,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
             k for k in self.image_keys
             if image_needs_normalization(observation_space.spaces[k])
         )
-        self.state_key = state_key
+        self.state_keys: tuple[str, ...] = state_keys
         self.has_state = has_state
         self.fusion_mode = fusion_mode
         self.enable_stacking = enable_stacking
@@ -227,8 +237,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.vector_extractors: nn.ModuleDict = nn.ModuleDict()
         self._obs_normalizers: nn.ModuleDict = nn.ModuleDict()
         if encoder_config.normalize_obs and has_state:
-            state_dim = int(np.prod(observation_space.spaces[state_key].shape))
-            self._obs_normalizers[state_key] = RunningObsNormalizer(state_dim)
+            self._obs_normalizers["state"] = RunningObsNormalizer(state_dim)
         self.image_augmentation = image_augmentation
         self.random_shift_pad = encoder_config.image_random_shift_pad
         self.random_shift = (
@@ -360,11 +369,19 @@ class CombinedExtractor(BaseFeaturesExtractor):
             encoded.append(y.detach() if stop_gradient else y)
         return encoded
 
-    def _encode_proprio(self, state: torch.Tensor) -> torch.Tensor:
-        if self.enable_stacking and state.ndim > 2:
-            state = state.flatten(1)
-        if self.state_key in self._obs_normalizers:
-            state = self._obs_normalizers[self.state_key](state)
+    def _concat_state(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        parts = []
+        for key in self.state_keys:
+            part = obs[key]
+            if self.enable_stacking and part.ndim > 2:
+                part = part.flatten(1)
+            parts.append(part)
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=-1)
+
+    def _encode_proprio(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        state = self._concat_state(obs)
+        if "state" in self._obs_normalizers:
+            state = self._obs_normalizers["state"](state)
         assert self.proprio is not None
         return self.proprio(state)
 
@@ -375,7 +392,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         out = []
         out.extend(self._encode_images(obs, stop_gradient=stop_gradient))
         if self.has_state:
-            out.append(self._encode_proprio(obs[self.state_key]))
+            out.append(self._encode_proprio(obs))
         for key, extractor in self.vector_extractors.items():
             flat = extractor(obs[key])
             if key in self._obs_normalizers:
@@ -389,11 +406,8 @@ class CombinedExtractor(BaseFeaturesExtractor):
     def update_normalizer(self, obs: dict[str, torch.Tensor]) -> None:
         if not self._obs_normalizers:
             return
-        if self.has_state and self.state_key in self._obs_normalizers:
-            state = obs[self.state_key]
-            if self.enable_stacking and state.ndim > 2:
-                state = state.flatten(1)
-            self._obs_normalizers[self.state_key].update(state)
+        if self.has_state and "state" in self._obs_normalizers:
+            self._obs_normalizers["state"].update(self._concat_state(obs))
         for key, extractor in self.vector_extractors.items():
             if key in self._obs_normalizers:
                 self._obs_normalizers[key].update(extractor(obs[key]))

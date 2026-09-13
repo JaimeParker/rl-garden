@@ -88,4 +88,11 @@ def run_mean_flow_bc(args: MeanFlowBCArgs) -> None:
     run_offline(args, build_agent=build_mean_flow_bc)
 
 
-registry.register("mean_flow_bc", MeanFlowBCArgs, run_mean_flow_bc)
+
+
+def _mean_flow_bc_algorithm_cls() -> type:
+    from rl_garden.algorithms import MeanFlowBC
+
+    return MeanFlowBC
+
+registry.register("mean_flow_bc", MeanFlowBCArgs, run_mean_flow_bc, algorithm_cls=_mean_flow_bc_algorithm_cls)

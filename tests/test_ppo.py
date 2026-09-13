@@ -205,7 +205,12 @@ def test_ppo_dict_obs_constructs_and_trains_one_update():
 
     agent.learn(total_timesteps=4)
 
-    assert agent._actor_stop_gradient() is True
+    # Default encoder_sharing="shared_critic_grad" with no separate
+    # critic_extractor: BasePolicy.extract_actor_features's stop-gradient
+    # rule applies (the old algorithm-level _actor_stop_gradient hook is
+    # gone -- see rl_garden/policies/base.py).
+    assert agent.policy.encoder_sharing == "shared_critic_grad"
+    assert agent.policy.critic_extractor is None
     assert agent._global_step == 4
 
 
@@ -243,3 +248,107 @@ def test_ppo_dict_obs_checkpoint_roundtrip_with_encoder_config(tmp_path):
     assert loaded._global_step == agent._global_step
     for key, value in agent.policy.state_dict().items():
         assert torch.equal(value, loaded.policy.state_dict()[key]), key
+
+
+# --- policy-extractor-contract: asymmetric obs_groups end-to-end (state_<name>) ---
+
+
+class _StateExtraVecEnv:
+    """A ``rgb_cam`` + ``state`` + ``state_object_pose`` env: ``rgb_cam``/
+    ``state`` are shared by actor and critic (both get a real, trainable
+    ``CombinedExtractor``); ``state_object_pose`` (Section A's ``state_<name>``
+    family) is critic-only."""
+
+    def __init__(self) -> None:
+        self.num_envs = 2
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+                "state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),
+                "state_object_pose": spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),
+            }
+        )
+        act_space = _action_space()
+        self.single_action_space = act_space
+        self.action_space = spaces.Box(
+            low=np.broadcast_to(act_space.low, (self.num_envs,) + act_space.shape),
+            high=np.broadcast_to(act_space.high, (self.num_envs,) + act_space.shape),
+            dtype=act_space.dtype,
+        )
+
+    def reset(self, seed: int | None = None):
+        del seed
+        return self._obs(), {}
+
+    def step(self, actions):
+        assert torch.all(actions <= 1.0)
+        assert torch.all(actions >= -1.0)
+        obs = self._obs()
+        rewards = torch.ones(self.num_envs)
+        terminations = torch.zeros(self.num_envs, dtype=torch.bool)
+        truncations = torch.zeros(self.num_envs, dtype=torch.bool)
+        return obs, rewards, terminations, truncations, {}
+
+    def close(self) -> None:
+        return None
+
+    def _obs(self):
+        return {
+            "rgb_cam": torch.randint(0, 256, (self.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(self.num_envs, 4),
+            "state_object_pose": torch.randn(self.num_envs, 3),
+        }
+
+
+def test_ppo_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
+    """End-to-end asymmetric actor/critic encoders via state_<name>: critic
+    sees state_object_pose, actor does not, encoder_sharing="separate".
+    Asserts the actor extractor's schema lacks the key and, over one real
+    rollout+update step, gradients reach only the right extractor."""
+    from rl_garden.observations import ObsGroups
+
+    agent = PPO(
+        env=_StateExtraVecEnv(),
+        device="cpu",
+        num_steps=4,
+        num_minibatches=1,
+        update_epochs=1,
+        eval_freq=0,
+        log_freq=0,
+        target_kl=None,
+        net_arch=[16],
+        encoder_config=EncoderConfig(proprio_latent_dim=4),
+        obs_groups=ObsGroups(
+            actor=("rgb_cam", "state"), critic=("rgb_cam", "state", "state_object_pose")
+        ),
+        encoder_sharing="separate",
+    )
+
+    actor_extractor = agent.policy.actor_extractor
+    critic_extractor = agent.policy.critic_extractor
+    assert critic_extractor is not None and critic_extractor is not actor_extractor
+    assert "state_object_pose" not in actor_extractor.state_keys
+    assert "state_object_pose" in critic_extractor.state_keys
+
+    agent.learn(total_timesteps=4)
+
+    data = next(agent._iter_minibatches())
+    values, log_prob, _entropy = agent.policy.evaluate_actions(data.obs, data.actions)
+
+    actor_grad_on_actor = torch.autograd.grad(
+        log_prob.sum(), list(actor_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in actor_grad_on_actor)
+    actor_grad_on_critic = torch.autograd.grad(
+        log_prob.sum(), list(critic_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert all(g is None for g in actor_grad_on_critic)
+
+    critic_grad_on_critic = torch.autograd.grad(
+        values.sum(), list(critic_extractor.parameters()), retain_graph=True, allow_unused=True
+    )
+    assert any(g is not None and torch.any(g != 0) for g in critic_grad_on_critic)
+    critic_grad_on_actor = torch.autograd.grad(
+        values.sum(), list(actor_extractor.parameters()), allow_unused=True
+    )
+    assert all(g is None for g in critic_grad_on_actor)
