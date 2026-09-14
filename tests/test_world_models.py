@@ -1,7 +1,11 @@
 """Tests for ``rl_garden.world_models``: the abstract ``WorldModel``/``State``
-contract (``base.py``), the shared ``imagine()`` rollout primitive
-(``imagine.py``), and TD-MPC2's ``LatentConsistencyModel``
+contract (``base.py``) and TD-MPC2's ``LatentConsistencyModel``
 (``latent_consistency.py``). No simulator/hardware -- fake CPU tensors only.
+
+``imagine()``'s own tests live in ``tests/test_imagine.py`` (split out
+2026-09-14 when that helper's contract was simplified to
+``states``/``actions`` only -- see its own module docstring); ``_FakeWorldModel``
+here stays only for the ``base.py``-contract tests below.
 """
 from __future__ import annotations
 
@@ -11,14 +15,13 @@ from gymnasium import spaces
 
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.world_models.base import State, WorldModel
-from rl_garden.world_models.imagine import imagine
 from rl_garden.world_models.latent_consistency import LatentConsistencyModel
 
 
 class _FakeWorldModel(WorldModel):
     """Minimal concrete ``WorldModel``: state = {"h": Tensor}, a linear
-    scalar-sum dynamics, used only to exercise ``imagine()``/the base
-    interface without any real network."""
+    scalar-sum dynamics, used only to exercise the base interface without
+    any real network."""
 
     def __init__(self, dim: int = 3) -> None:
         super().__init__()
@@ -58,10 +61,6 @@ class _FakeWorldModel(WorldModel):
         raise NotImplementedError("not exercised by these tests")
 
 
-def _policy_fn(state: State) -> torch.Tensor:
-    return torch.ones_like(state["h"])
-
-
 # ---------------------------------------------------------------------------
 # base.py: WorldModel / State contract
 # ---------------------------------------------------------------------------
@@ -85,57 +84,6 @@ def test_world_model_duck_types_actor_extractor_surface():
 
     # Delegates to self.encoder; a no-op default should not raise.
     model.update_normalizer(obs)
-
-
-# ---------------------------------------------------------------------------
-# imagine.py
-# ---------------------------------------------------------------------------
-
-
-def test_imagine_produces_expected_shapes_and_no_grad_by_default():
-    model = _FakeWorldModel(dim=3)
-    start = model.initial_state(batch_size=5, device=torch.device("cpu"))
-
-    traj = imagine(model, _policy_fn, start, horizon=4, grad=False)
-
-    assert traj.states["h"].shape == (5, 5, 3)  # horizon + 1, B, dim
-    assert traj.actions.shape == (4, 5, 3)
-    assert traj.rewards.shape == (4, 5, 1)
-    assert traj.continues.shape == (4, 5, 1)
-    assert traj.done_mask.shape == (4, 5, 1)
-    assert not traj.rewards.requires_grad
-
-
-def test_imagine_grad_true_keeps_autograd_enabled():
-    model = _FakeWorldModel(dim=2)
-    model.linear.weight.requires_grad_(True)
-    start = model.initial_state(batch_size=2, device=torch.device("cpu"))
-
-    traj = imagine(model, _policy_fn, start, horizon=3, grad=True)
-    loss = traj.rewards.sum()
-    loss.backward()
-
-    assert model.linear.weight.grad is not None
-
-
-def test_imagine_never_terminating_model_has_all_zero_done_mask():
-    model = _FakeWorldModel(dim=2)
-    start = model.initial_state(batch_size=2, device=torch.device("cpu"))
-    # continue_ always returns 0.9 (>= 0.5) -> never terminates.
-    traj = imagine(model, _policy_fn, start, horizon=3, grad=False)
-    assert torch.all(traj.done_mask == 0.0)
-
-
-def test_imagine_defaults_to_never_terminating_when_no_continue_head():
-    class _NoContinueModel(_FakeWorldModel):
-        def continue_(self, state):
-            return None
-
-    model = _NoContinueModel(dim=2)
-    start = model.initial_state(batch_size=2, device=torch.device("cpu"))
-    traj = imagine(model, _policy_fn, start, horizon=3, grad=False)
-    assert torch.all(traj.continues == 1.0)
-    assert torch.all(traj.done_mask == 0.0)
 
 
 # ---------------------------------------------------------------------------

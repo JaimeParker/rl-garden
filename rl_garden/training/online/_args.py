@@ -204,6 +204,55 @@ class VisionTDMPC2TrainingArgs(TDMPC2TrainingArgs, ObservationArgs):
 
 
 @dataclass
+class DreamerV3TrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
+    """DreamerV3 hyperparameters -- values match the plan's decisions and
+    r2dreamer/official-JAX defaults (see ``rl_garden.algorithms.dreamer_v3``
+    module docstring); ``size12M`` preset default (plan decision 6)."""
+
+    total_timesteps: int = 1_000_000
+    size: Literal["12M", "25M", "50M", "100M", "200M", "400M"] = "12M"
+    stoch: int = 32
+    unimix: float = 0.01
+    blocks: int = 8
+    obs_layers: int = 1
+    img_layers: int = 2
+    dyn_layers: int = 1
+    decoder_layers: int = 3
+    reward_bins: int = 255
+    kl_free: float = 1.0
+    # contdisc: official JAX default is True (continue-head target
+    # multiplied by 1 - 1/horizon, imagination disc=1); r2dreamer has no
+    # such switch (target 1 - is_terminal, disc=1-1/horizon applied
+    # outside). This port's default (False) matches r2dreamer -- see
+    # RSSM's own docstring.
+    contdisc: bool = False
+    horizon: float = 333.0
+    batch_size: int = 16
+    batch_length: int = 64
+    train_ratio: float = 512.0
+    imag_horizon: int = 15
+    lam: float = 0.95
+    act_entropy: float = 3e-4
+    dyn_scale: float = 1.0
+    rep_scale: float = 0.1
+    recon_scale: float = 1.0
+    rew_scale: float = 1.0
+    con_scale: float = 1.0
+    policy_scale: float = 1.0
+    value_scale: float = 1.0
+    repval_scale: float = 0.3
+    lr: float = 4e-5
+    warmup: int = 1_000
+    slow_target_fraction: float = 0.02
+    buffer_size: int = 1_000_000
+    buffer_device: str = "cuda"
+    learning_starts: int = 1_024
+    # None (default) resolves to "bfloat16" on CUDA, "float32" on CPU --
+    # see DreamerV3's own docstring (plan decision 5).
+    compute_dtype: Optional[Literal["float32", "bfloat16"]] = None
+
+
+@dataclass
 class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     total_timesteps: int = 10_000_000
     num_steps: int = 50

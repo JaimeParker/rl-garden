@@ -94,6 +94,7 @@ class RecurrentReplayBuffer(SequenceReplayBuffer):
             num_envs,
             buffer_size,
             cross_episode=True,
+            priority=True,
             burn_in_len=burn_in_len,
             learning_len=learning_len,
             forward_len=forward_len,

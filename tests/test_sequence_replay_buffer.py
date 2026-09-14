@@ -92,23 +92,37 @@ def test_strict_rejects_tolerant_only_kwargs():
         )
 
 
-def test_priority_is_derived_from_cross_episode():
-    # priority is not a constructor kwarg -- it is fully determined by
-    # cross_episode (model-based-base plan 1.6 review fix).
+def test_priority_is_an_independent_constructor_argument():
+    # priority (2026-09-14, DreamerV3 plan section D): no longer derived
+    # from cross_episode -- cross_episode=True now supports both
+    # priority=True (tolerant, unchanged) and priority=False (uniform, new).
     tolerant = SequenceReplayBuffer(
         _obs_space(), _action_space(), 1, 8,
-        cross_episode=True,
+        cross_episode=True, priority=True,
         burn_in_len=1, learning_len=1, forward_len=1, stride=1,
     )
     assert tolerant.priority is True
+    uniform = SequenceReplayBuffer(
+        _obs_space(), _action_space(), 1, 8,
+        cross_episode=True, priority=False, horizon=2,
+    )
+    assert uniform.priority is False
     strict = _make_strict_buffer()
     assert strict.priority is False
 
 
-def test_direct_instance_add_and_sample_unimplemented_for_cross_episode_true():
+def test_cross_episode_false_priority_true_is_rejected():
+    with pytest.raises(ValueError):
+        SequenceReplayBuffer(
+            _obs_space(), _action_space(), 1, 8,
+            cross_episode=False, priority=True, horizon=2,
+        )
+
+
+def test_direct_instance_add_and_sample_unimplemented_for_tolerant_priority():
     buf = SequenceReplayBuffer(
         _obs_space(), _action_space(), 1, 8,
-        cross_episode=True,
+        cross_episode=True, priority=True,
         burn_in_len=1, learning_len=1, forward_len=1, stride=1,
         storage_device="cpu", sample_device="cpu",
     )
@@ -318,3 +332,148 @@ def test_tolerant_mode_checkpoint_hooks_round_trip_hidden_state():
     torch.manual_seed(0)
     sample = buf.sample(batch_size=4)
     assert sample.initial_hidden_h.shape == (4, 1, 3)
+
+
+# ---------------------------------------------------------------------------
+# Uniform mode (cross_episode=True, priority=False) -- DreamerV3, plan
+# section D. No priority tree, no checkpoint grid: windows are drawn
+# uniformly over ring-buffer-contiguous spans and may cross an episode
+# boundary (masked downstream via the stored per-step is_first, not
+# episode_starts). Every step's model carry is stored densely and can be
+# written back after training.
+# ---------------------------------------------------------------------------
+
+
+def _make_uniform_buffer(
+    obs_space=None, num_envs=1, per_env_buffer_size=16, horizon=3, carry_spec=None
+) -> SequenceReplayBuffer:
+    return SequenceReplayBuffer(
+        obs_space if obs_space is not None else _obs_space(),
+        _action_space(),
+        num_envs,
+        per_env_buffer_size * num_envs,
+        cross_episode=True,
+        priority=False,
+        horizon=horizon,
+        carry_spec=carry_spec,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+
+def _add_uniform_step(buf, t: int, *, is_first=None, done=None, episode_end=None, carry=None):
+    num_envs = buf.num_envs
+    obs = {"state": torch.full((num_envs, 4), float(t))}
+    action = torch.zeros(num_envs, 2)
+    reward = torch.zeros(num_envs)
+    done = torch.zeros(num_envs) if done is None else done
+    episode_end = torch.zeros(num_envs) if episode_end is None else episode_end
+    is_first = torch.zeros(num_envs) if is_first is None else is_first
+    buf.add(obs, obs, action, reward, done, episode_end, is_first=is_first, carry=carry)
+
+
+def test_uniform_requires_is_first_on_add():
+    buf = _make_uniform_buffer(per_env_buffer_size=8, horizon=1)
+    with pytest.raises(ValueError):
+        buf.add(
+            {"state": torch.zeros(1, 4)}, {"state": torch.zeros(1, 4)},
+            torch.zeros(1, 2), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+        )
+
+
+def test_carry_spec_rejected_outside_uniform_mode():
+    with pytest.raises(ValueError):
+        SequenceReplayBuffer(
+            _obs_space(), _action_space(), 1, 8,
+            cross_episode=False, horizon=2, carry_spec={"deter": (2,)},
+        )
+
+
+def test_uniform_window_crossing_episode_boundary_carries_is_first_inside():
+    buf = _make_uniform_buffer(per_env_buffer_size=32, horizon=3)
+    # Episode 1: t=0,1,2 (truncated at t=2). Episode 2 starts at t=3.
+    _add_uniform_step(buf, 0, is_first=torch.tensor([1.0]))
+    _add_uniform_step(buf, 1)
+    _add_uniform_step(buf, 2, episode_end=torch.tensor([1.0]))
+    _add_uniform_step(buf, 3, is_first=torch.tensor([1.0]))
+    for t in range(4, 8):
+        _add_uniform_step(buf, t)
+
+    torch.manual_seed(0)
+    found = False
+    for _ in range(100):
+        batch = buf.sample(batch_size=8)
+        row0 = batch.obs["state"][0, :, 0]
+        cols = (row0 == 1.0).nonzero(as_tuple=False).flatten()  # t0=1 window: rows 1,2,3,4
+        if cols.numel() == 0:
+            continue
+        found = True
+        for c in cols.tolist():
+            # loss rows are buffer positions 2,3,4 -- is_first is True only at
+            # position 3 (the new episode's first observation), unshifted.
+            assert batch.is_first[:, c].tolist() == [False, True, False]
+    assert found, "a window starting at t0=1 (crossing the boundary) was never sampled"
+
+
+def test_uniform_carry_round_trip():
+    buf = _make_uniform_buffer(per_env_buffer_size=8, horizon=3, carry_spec={"deter": (2,)})
+    for t in range(4):  # exactly horizon+1 steps written -> t0=0 is the only valid start
+        _add_uniform_step(buf, t, carry={"deter": torch.full((1, 2), float(t))})
+
+    batch = buf.sample(batch_size=6)
+    assert batch.carry["deter"].shape == (6, 2)
+    assert torch.allclose(batch.carry["deter"], torch.zeros(6, 2))  # t=0's stored carry
+
+
+def test_uniform_write_back_carry_visible_on_next_sample():
+    buf = _make_uniform_buffer(per_env_buffer_size=32, horizon=3, carry_spec={"deter": (2,)})
+    for t in range(5):  # t0 in {0, 1} are valid
+        _add_uniform_step(buf, t, carry={"deter": torch.full((1, 2), float(t))})
+
+    torch.manual_seed(0)
+    col = None
+    for _ in range(50):
+        batch = buf.sample(batch_size=16)
+        row0 = batch.obs["state"][0, :, 0]
+        cols = (row0 == 0.0).nonzero(as_tuple=False).flatten()
+        if cols.numel() > 0:
+            col = cols[0].item()
+            idx_grid, env_grid = batch.indices
+            marker = torch.full((idx_grid.shape[0], 1, 2), 555.0)
+            buf.write_back_carry((idx_grid[:, col : col + 1], env_grid[:, col : col + 1]), {"deter": marker})
+            break
+    assert col is not None, "a t0=0 window was never sampled"
+
+    torch.manual_seed(1)
+    found = False
+    for _ in range(50):
+        batch2 = buf.sample(batch_size=16)
+        row0 = batch2.obs["state"][0, :, 0]
+        cols2 = (row0 == 1.0).nonzero(as_tuple=False).flatten()  # t0=1's row-0 carry is buffer position 1
+        if cols2.numel() == 0:
+            continue
+        found = True
+        assert torch.allclose(batch2.carry["deter"][cols2], torch.full((cols2.numel(), 2), 555.0))
+        break
+    assert found, "a t0=1 window was never sampled after the write-back"
+
+
+def test_uniform_is_last_and_is_terminal_are_separate_for_truncation():
+    buf = _make_uniform_buffer(per_env_buffer_size=8, horizon=1)
+    _add_uniform_step(buf, 0, episode_end=torch.tensor([1.0]))  # truncation only: done stays False
+    _add_uniform_step(buf, 1, is_first=torch.tensor([1.0]))
+
+    batch = buf.sample(batch_size=4)  # only t0=0 is valid -> deterministic
+    assert bool(batch.is_last[0, 0].item()) is True
+    assert bool(batch.is_terminal[0, 0].item()) is False
+    assert bool(batch.is_first[0, 0].item()) is True
+
+
+def test_uniform_is_last_and_is_terminal_both_set_for_true_termination():
+    buf = _make_uniform_buffer(per_env_buffer_size=8, horizon=1)
+    _add_uniform_step(buf, 0, done=torch.tensor([1.0]), episode_end=torch.tensor([1.0]))
+    _add_uniform_step(buf, 1, is_first=torch.tensor([1.0]))
+
+    batch = buf.sample(batch_size=4)
+    assert bool(batch.is_last[0, 0].item()) is True
+    assert bool(batch.is_terminal[0, 0].item()) is True

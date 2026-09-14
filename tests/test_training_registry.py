@@ -104,6 +104,7 @@ def test_phase_registries_discover_expected_algorithms():
         "jsrl",
         "acrlpd",
         "tdmpc2",
+        "dreamer_v3",
         "dagger",
         "policy_distillation",
         "gail",

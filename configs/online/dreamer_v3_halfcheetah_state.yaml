@@ -1,0 +1,14 @@
+# DreamerV3 on MuJoCo HalfCheetah-v4 (state-only), size12M preset defaults
+# (rl_garden.algorithms.dreamer_v3 / rl_garden.training.online._args
+# .DreamerV3TrainingArgs). num_envs=8 keeps learning_starts // num_envs
+# (128) > batch_length (64) -- see DreamerV3.__init__'s constructor check;
+# num_envs=16 (this repo's usual online default) would fail it by exactly
+# one row.
+env_backend: mujoco
+env_id: HalfCheetah-v4
+num_envs: 8
+num_eval_envs: 4
+capture_video: false
+eval_freq: 10000
+total_timesteps: 1000000
+log_type: wandb

@@ -60,6 +60,21 @@ def _drqv2_conv_factory(config: Any):
     return drq_v2_encoder_factory()
 
 
+def _dreamer_conv_factory(config: Any):
+    # DreamerV3's world model constructs the whole-Dict DreamerConvEncoder
+    # directly (RSSM owns representation learning end to end, plan
+    # model-based-base Part 2 section C) -- never through this factory.
+    # This registry entry is the CombinedExtractor-compatible per-image
+    # adapter (_DreamerConvImageOnly) so any algorithm can still pick this
+    # CNN for its image branch through the ordinary --encoder.backbone path.
+    from rl_garden.encoders.dreamer_conv import _DreamerConvImageOnly
+
+    def _factory(img_space):
+        return _DreamerConvImageOnly(img_space, depth=config.dreamer_depth)
+
+    return _factory
+
+
 def _cnn3d_factory(config: Any):
     # num_frames is a schema (Layer A) concern, not an EncoderConfig one:
     # CombinedExtractor derives it from the schema's stacked entries and
@@ -148,4 +163,5 @@ ENCODER_REGISTRY: dict[str, EncoderSpec] = {
     "vit": EncoderSpec(_vit_factory, _vit_sac_kwargs, allows_resnet_weights=False),
     "drqv2_conv": EncoderSpec(_drqv2_conv_factory, _no_sac_kwargs, allows_resnet_weights=False),
     "cnn3d": EncoderSpec(_cnn3d_factory, _no_sac_kwargs, allows_resnet_weights=False),
+    "dreamer_conv": EncoderSpec(_dreamer_conv_factory, _no_sac_kwargs, allows_resnet_weights=False),
 }

@@ -25,16 +25,20 @@ scratchpad ``dreamer-code-survey.md`` section 10, "interface fit"):
   carry to reset (each ``observe`` call re-encodes from scratch, ignoring
   incoming state entirely), so it accepts and ignores this argument rather
   than dropping it from the shared signature.
-- **termination_fn injection when ``continue_`` is ``None``.** A model that
-  hasn't learned its own continuation/termination head (``continue_``
-  returns ``None``) is not usable standalone inside ``imagine()``'s rollout
-  without termination information from elsewhere -- the caller (a
-  ``ModelBasedAlgorithm`` subclass, Part 1.5+) must supply a
-  ``termination_fn(state) -> Tensor`` computed from a known ground truth
-  (e.g. a task's known episode length, or a hand-written termination
-  predicate) instead. This base does not implement that injection itself;
-  it only documents the contract ``continue_``'s ``None`` return leaves for
-  the caller to fill.
+- **``continue_`` returning ``None``.** A model with no learned continuation/
+  termination head (``continue_`` returns ``None``) has no continuation
+  signal at all coming out of ``rl_garden.world_models.imagine.imagine()``'s
+  rollout -- that helper returns only ``states``/``actions`` (revised
+  2026-09-14, see its own docstring) and has no termination-source parameter
+  to inject one through. A caller that needs a continuation signal for such
+  a model computes it itself from the returned ``states`` (e.g. a
+  hand-written termination predicate, or a known fixed episode length); this
+  base does not implement that itself, it only documents the contract
+  ``continue_``'s ``None`` return leaves for the caller to fill. No concrete
+  model in this repo currently exercises this path: TD-MPC2's non-episodic
+  mode (the only ``continue_() -> None`` case here) never calls
+  ``continue_`` at all (``TDMPC2.episodic``/``rl_garden.planners.mppi``),
+  and DreamerV3's ``RSSM`` always has a continuation head.
 """
 from __future__ import annotations
 
@@ -151,8 +155,8 @@ class WorldModel(nn.Module, ABC):
         """Probability of the episode continuing past ``state`` (Dreamer's
         Bernoulli continue head; TD-MPC2's ``1 - termination_prob`` when
         ``episodic=True``). ``None`` means this model has no learned
-        continuation head -- the caller must inject a ground-truth
-        ``termination_fn(state)`` instead (see module docstring)."""
+        continuation head -- see the module docstring's "``continue_``
+        returning ``None``" note for what a caller does about it."""
         return None
 
     def decode(self, state: State) -> Optional[dict[str, "torch.distributions.Distribution"]]:

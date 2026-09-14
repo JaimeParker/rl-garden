@@ -12,21 +12,30 @@ selected at construction time by ``cross_episode``:
   ``[t0, t0 + horizon]`` span isn't fully contiguous within one episode is
   rejected outright (rejection sampling, see ``StrictWindowSamplingMixin``).
   No checkpoint grid, no priority tree.
-- ``cross_episode=True`` (**tolerant**, ``RecurrentReplayBuffer``/
-  ``TransformerReplayBuffer``, later Dreamer): an episode boundary *inside*
-  the window is fine (masked downstream via ``episode_starts``/n-step reward
-  zeroing, ``RecurrentSamplingMixin``); only a genuine ring-buffer-wraparound
-  read is rejected. Windows are proposed by a priority sum-tree over a sparse
+- ``cross_episode=True, priority=True`` (**tolerant**, ``RecurrentReplayBuffer``/
+  ``TransformerReplayBuffer``): an episode boundary *inside* the window is
+  fine (masked downstream via ``episode_starts``/n-step reward zeroing,
+  ``RecurrentSamplingMixin``); only a genuine ring-buffer-wraparound read is
+  rejected. Windows are proposed by a priority sum-tree over a sparse
   ``stride``-periodic checkpoint grid.
+- ``cross_episode=True, priority=False`` (**uniform**, DreamerV3, model-based-
+  base Part 2 / plan section D): windows are drawn uniformly (no priority
+  tree, no checkpoint grid) over every ring-buffer-contiguous
+  ``[t0, t0 + horizon]`` span; an episode boundary inside the window is fine
+  (masked downstream via the per-step ``is_first`` this mode stores, not
+  ``episode_starts``). Every step's model recurrent carry (e.g. an RSSM's
+  ``deter``/``stoch``) is stored densely (one slot per position, via
+  ``carry_spec``) and written back after training (``write_back_carry()``) so
+  the next sample of the same slots warm-starts from an up-to-date posterior
+  instead of ``initial_state()`` -- see ``DreamerSequenceBatch``.
 
-``priority`` is not a constructor choice: it is fully determined by
-``cross_episode`` (``self.priority = cross_episode``) -- every tolerant-mode
-consumer today (``RecurrentReplayBuffer``/``TransformerReplayBuffer``) is
-priority-tree-driven, and strict mode has no priority tree at all. A
-non-priority *tolerant* mode (uniform sampling over cross-episode windows)
-is unimplemented -- deferred to Part 2 (DreamerV3), which does not use PER
-and will need to add that combination back (this class does not currently
-expose a way to construct it).
+``priority`` (2026-09-14, revised from "derived from ``cross_episode``" --
+see git history for the prior text) is now an independent constructor
+argument: ``cross_episode=False`` always implies ``priority=False`` (strict
+mode has no priority tree), but ``cross_episode=True`` supports either
+``priority=True`` (the tolerant mode above, unchanged) or ``priority=False``
+(the new uniform mode above). ``cross_episode=False, priority=True`` is not
+implemented (raises ``ValueError``).
 
 ``RecurrentReplayBuffer``/``TransformerReplayBuffer`` stay thin subclasses of
 this class for the tolerant path (their public constructor args and
@@ -160,13 +169,53 @@ class SequenceReplayBufferSample:
     terminated: torch.Tensor    # (horizon, B), bool
 
 
+@dataclass
+class DreamerSequenceBatch:
+    """``cross_episode=True, priority=False`` (uniform) sample -- DreamerV3's
+    windowed batch, plan section D.
+
+    The window covers ``horizon + 1`` consecutive ring-buffer rows per
+    selected ``(env, t0)`` pair; row 0 supplies only the warm-start
+    ``carry`` (this buffer's stored ``carry_spec`` tensors at that row), an
+    ``RSSM.observe()`` call seeds itself with instead of
+    ``initial_state()``. Rows ``1..horizon`` ("loss rows", ``horizon`` of
+    them -- every other field below) are what the world model actually
+    trains on.
+
+    Storage-convention re-alignment (this class stores, rl-garden-wide, see
+    ``_add_common``: ``rewards[pos]``/``dones[pos]``/``actions[pos]``
+    describe the transition LEAVING buffer row ``pos`` -- the reward earned
+    and terminal/episode-end flag resulting from ``actions[pos]``, taken
+    from ``obs[pos]`` -- the opposite parity from Dreamer's reference
+    (r2dreamer/JAX) storage, where a stored step's ``reward``/``is_terminal``
+    describe arriving AT that step). This dataclass re-aligns on read: for
+    loss row ``t`` (``t = 1..horizon``), ``action``/``reward``/``is_terminal``/
+    ``is_last`` come from buffer row ``t - 1`` (what caused row ``t``), while
+    ``is_first`` -- a fact about row ``t`` itself, set by the caller when
+    *adding* row ``t`` (see ``rl_garden.algorithms.model_based``'s
+    ``_post_rollout_step`` docstring) -- comes from row ``t`` directly,
+    unshifted. ``is_terminal`` is exactly this buffer's ``dones`` and
+    ``is_last`` exactly its ``episode_ends`` at those (shifted) rows -- no
+    separate storage for either, only ``is_first`` is new per-step state.
+    """
+
+    obs: Obs                          # (horizon + 1, B, *obs_shape) -- row 0 is carry-only
+    action: torch.Tensor              # (horizon, B, act_dim)
+    reward: torch.Tensor              # (horizon, B)
+    is_first: torch.Tensor            # (horizon, B) bool -- row t's own reset flag
+    is_terminal: torch.Tensor         # (horizon, B) bool -- transition into row t was terminal
+    is_last: torch.Tensor             # (horizon, B) bool -- transition into row t ended the episode
+    carry: dict[str, torch.Tensor]    # {key: (B, *carry_shape)} -- row-0 warm start, per carry_spec
+    indices: tuple[torch.Tensor, torch.Tensor]  # (idx_grid, env_grid), each (horizon, B), storage_device -- pass to write_back_carry()
+
+
 class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseReplayBuffer):
-    """See module docstring. ``cross_episode`` selects the storage/sampling
-    mode (``priority`` is derived from it, not a constructor argument);
-    every other constructor argument is either strict-mode-only
-    (``horizon``) or tolerant-mode-only (``burn_in_len``, ``learning_len``,
-    ``forward_len``, ``stride``, ``gamma``, ``prio_exponent``,
-    ``importance_sampling_exponent``, ``priority_eps``).
+    """See module docstring. ``cross_episode``/``priority`` together select
+    the storage/sampling mode; every other constructor argument is either
+    strict/uniform-mode (``horizon``, ``carry_spec``) or tolerant-priority-
+    mode (``burn_in_len``, ``learning_len``, ``forward_len``, ``stride``,
+    ``gamma``, ``prio_exponent``, ``importance_sampling_exponent``,
+    ``priority_eps``).
     """
 
     def __init__(
@@ -177,9 +226,13 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         buffer_size: int,
         *,
         cross_episode: bool = False,
-        # cross_episode=False (strict) only:
+        priority: bool = False,
+        # cross_episode=False (strict) or cross_episode=True, priority=False
+        # (uniform) -- horizon is the same window-length parameter in both:
         horizon: Optional[int] = None,
-        # cross_episode=True (tolerant) only:
+        # cross_episode=True, priority=False (uniform) only:
+        carry_spec: Optional[dict[str, tuple[int, ...]]] = None,
+        # cross_episode=True, priority=True (tolerant) only:
         burn_in_len: Optional[int] = None,
         learning_len: Optional[int] = None,
         forward_len: Optional[int] = None,
@@ -196,8 +249,17 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
                 f"{type(self).__name__} requires a Dict observation space (the "
                 f"rl-garden observation contract), got {type(observation_space)}."
             )
+        if not cross_episode and priority:
+            raise ValueError(
+                "cross_episode=False, priority=True is not implemented -- strict "
+                "mode has no priority tree."
+            )
+        if carry_spec is not None and not (cross_episode and not priority):
+            raise ValueError(
+                "carry_spec is only supported for cross_episode=True, priority=False."
+            )
         self.cross_episode = cross_episode
-        self.priority = cross_episode
+        self.priority = priority
 
         self.observation_space = observation_space
         self.action_space = action_space
@@ -238,16 +300,16 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         # docstring).
         self._init_final_obs_table(shape)
 
-        if cross_episode:
+        if cross_episode and priority:
             if horizon is not None:
                 raise ValueError(
-                    "horizon is a cross_episode=False (strict) parameter; "
-                    "cross_episode=True uses burn_in_len/learning_len/forward_len."
+                    "horizon is a strict/uniform-mode parameter; "
+                    "cross_episode=True, priority=True uses burn_in_len/learning_len/forward_len."
                 )
             if None in (burn_in_len, learning_len, forward_len, stride):
                 raise ValueError(
-                    "cross_episode=True requires burn_in_len/learning_len/"
-                    "forward_len/stride."
+                    "cross_episode=True, priority=True requires burn_in_len/"
+                    "learning_len/forward_len/stride."
                 )
             if burn_in_len < 1:
                 raise ValueError(f"burn_in_len must be >= 1, got {burn_in_len}")
@@ -293,10 +355,13 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
             if any(p is not None for p in (burn_in_len, learning_len, forward_len, stride)):
                 raise ValueError(
                     "burn_in_len/learning_len/forward_len/stride are "
-                    "cross_episode=True parameters; cross_episode=False uses horizon."
+                    "cross_episode=True, priority=True parameters; this mode uses horizon."
                 )
             if horizon is None:
-                raise ValueError("cross_episode=False (strict) requires horizon.")
+                raise ValueError(
+                    f"{'cross_episode=True, priority=False (uniform)' if cross_episode else 'cross_episode=False (strict)'}"
+                    " requires horizon."
+                )
             if horizon < 1:
                 raise ValueError(f"horizon must be >= 1, got {horizon}")
             if self.per_env_buffer_size <= horizon:
@@ -306,6 +371,21 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
                 )
             self.horizon = horizon
             self.window_len = horizon + 1
+
+            if cross_episode:
+                # Uniform mode (DreamerV3, plan section D): per-step is_first
+                # flag (rl-garden's dones/episode_ends already give
+                # is_terminal/is_last, see DreamerSequenceBatch's docstring)
+                # and a dense per-step model-carry table, one slot per
+                # (position, env) -- no checkpoint grid, no priority tree.
+                self._is_first = torch.zeros(shape, dtype=torch.bool, device=self.storage_device)
+                self._carry_spec = dict(carry_spec) if carry_spec else {}
+                self._carry = {
+                    key: torch.zeros(
+                        shape + tuple(carry_shape), dtype=torch.float32, device=self.storage_device
+                    )
+                    for key, carry_shape in self._carry_spec.items()
+                }
 
     def _init_checkpoint_extra_storage(self) -> None:
         """No-op default. ``RecurrentReplayBuffer`` overrides to allocate RNN
@@ -452,25 +532,159 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         reward: torch.Tensor,
         done: torch.Tensor,
         episode_end: torch.Tensor,
+        *,
+        is_first: Optional[torch.Tensor] = None,
+        carry: Optional[dict[str, torch.Tensor]] = None,
     ) -> None:
-        """Strict-mode (``cross_episode=False``) storage -- the only mode
-        this class implements ``add()`` for directly; tolerant-mode
+        """Strict-mode (``cross_episode=False``) and uniform-mode
+        (``cross_episode=True, priority=False``) storage -- the only two
+        modes this class implements ``add()`` for directly; tolerant-priority
         subclasses (``RecurrentReplayBuffer``/``TransformerReplayBuffer``)
         override ``add()`` themselves (their checkpoint payload, e.g. RNN
         hidden state, differs per subclass) using ``_add_common``/
-        ``_write_checkpoint_slots`` above."""
-        if self.cross_episode:
+        ``_write_checkpoint_slots`` above. ``is_first``/``carry`` are
+        uniform-mode-only (see ``DreamerSequenceBatch``'s docstring for
+        ``is_first``'s semantics; ``carry`` is one ``(N, *shape)`` tensor per
+        ``carry_spec`` key, written verbatim into this position's carry
+        table)."""
+        if self.cross_episode and self.priority:
             raise NotImplementedError(
-                f"{type(self).__name__}(cross_episode=True) has no direct add() -- "
-                "subclass it and override add() (see RecurrentReplayBuffer/"
-                "TransformerReplayBuffer)."
+                f"{type(self).__name__}(cross_episode=True, priority=True) has no "
+                "direct add() -- subclass it and override add() (see "
+                "RecurrentReplayBuffer/TransformerReplayBuffer)."
             )
+        if not self.cross_episode and (is_first is not None or carry is not None):
+            raise ValueError(
+                "is_first/carry are cross_episode=True, priority=False (uniform) "
+                "only kwargs; strict mode does not accept them."
+            )
+        if self.cross_episode and is_first is None:
+            raise ValueError("cross_episode=True, priority=False (uniform) requires is_first.")
+
         episode_end_bool = self._add_common(obs, next_obs, action, reward, done, episode_end)
+
+        if self.cross_episode:
+            self._is_first[self.pos] = is_first.to(self.storage_device).bool().reshape(self.num_envs)
+            if self._carry_spec:
+                if carry is None:
+                    raise ValueError(
+                        "carry_spec was set at construction; add() requires carry=..."
+                    )
+                for key in self._carry_spec:
+                    self._carry[key][self.pos] = carry[key].to(self.storage_device)
 
         self._current_ep_id = self._current_ep_id + episode_end_bool.long()
         self._current_step_id = self._current_step_id + 1
 
         self._advance()
+
+    # ------------------------------------------------------------------
+    # Uniform-mode (cross_episode=True, priority=False) sampling.
+    # ------------------------------------------------------------------
+
+    def _valid_uniform_window_batch(
+        self, t0: torch.Tensor, env_inds: torch.Tensor
+    ) -> torch.Tensor:
+        """Ring-buffer contiguity only -- NOT episode-strict (unlike
+        ``StrictWindowSamplingMixin``, no ``_ep_id`` equality check): an
+        episode boundary inside the window is fine (a window may cross
+        episodes). ``_step_id`` is a per-env counter that increments by
+        exactly 1 on every ``add()`` and never resets, so pinning every
+        offset's ``_step_id`` to ``base_step + i`` is exactly "these
+        per_env_buffer_size-modulo positions were all written in the same
+        contiguous run, no stale wraparound data" -- the same reasoning
+        ``SequenceReplayBuffer._valid_window_batch``'s tail-fix comment
+        already spells out for the strict-mode case."""
+        base_step = self._step_id[t0, env_inds]
+        valid = base_step >= 0
+        for i in range(1, self.window_len):
+            idx = (t0 + i) % self.per_env_buffer_size
+            valid = valid & (self._step_id[idx, env_inds] == base_step + i)
+        return valid
+
+    def _sample_uniform_window_starts(
+        self, batch_size: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        accepted_t0: list[torch.Tensor] = []
+        accepted_env: list[torch.Tensor] = []
+        remaining = batch_size
+        attempted = 0
+        max_attempts = max(1_000, batch_size * 100) * batch_size
+        upper = self.size
+
+        while remaining > 0:
+            candidate_count = max(32, remaining * 2)
+            env_inds = torch.randint(
+                0, self.num_envs, (candidate_count,), device=self.storage_device
+            )
+            t0 = torch.randint(0, upper, (candidate_count,), device=self.storage_device)
+            valid = self._valid_uniform_window_batch(t0, env_inds)
+            if valid.any():
+                sel_t0 = t0[valid][:remaining]
+                sel_env = env_inds[valid][:remaining]
+                accepted_t0.append(sel_t0)
+                accepted_env.append(sel_env)
+                remaining -= sel_t0.numel()
+
+            attempted += candidate_count
+            if attempted >= max_attempts and remaining > 0:
+                raise RuntimeError(
+                    "Could not sample enough valid uniform window starts. The "
+                    "buffer may not yet contain enough contiguous data at least "
+                    f"horizon+1={self.horizon + 1} steps long."
+                )
+
+        return torch.cat(accepted_t0), torch.cat(accepted_env)
+
+    def _sample_uniform(self, batch_size: int) -> DreamerSequenceBatch:
+        """``cross_episode=True, priority=False`` sampling body, called from
+        ``sample()``. See ``DreamerSequenceBatch``'s docstring for the
+        returned field semantics and the storage-convention re-alignment it
+        performs."""
+        t0, env_inds = self._sample_uniform_window_starts(batch_size)
+        idx_grid, env_grid = StrictWindowSamplingMixin._gather_window(self, t0, env_inds)
+
+        window_obs = index_obs(self.obs, (idx_grid, env_grid))
+        obs = _tree_to_device(window_obs, self.sample_device)
+
+        loss_idx, loss_env = idx_grid[1:], env_grid[1:]
+        shift_idx, shift_env = idx_grid[:-1], env_grid[:-1]
+
+        action = self.actions[shift_idx, shift_env].to(self.sample_device)
+        reward = self.rewards[shift_idx, shift_env].to(self.sample_device)
+        is_terminal = self.dones[shift_idx, shift_env].to(self.sample_device)
+        is_last = self.episode_ends[shift_idx, shift_env].to(self.sample_device)
+        is_first = self._is_first[loss_idx, loss_env].to(self.sample_device)
+
+        carry = {
+            key: self._carry[key][idx_grid[0], env_grid[0]].to(self.sample_device)
+            for key in self._carry_spec
+        }
+        indices = (loss_idx.clone(), loss_env.clone())
+
+        return DreamerSequenceBatch(
+            obs=obs,
+            action=action,
+            reward=reward,
+            is_first=is_first,
+            is_terminal=is_terminal,
+            is_last=is_last,
+            carry=carry,
+            indices=indices,
+        )
+
+    def write_back_carry(
+        self, indices: tuple[torch.Tensor, torch.Tensor], carry: dict[str, torch.Tensor]
+    ) -> None:
+        """Writes freshly-computed posterior ``carry`` (e.g. an RSSM's
+        ``deter``/``stoch``) back into this buffer's per-step carry table at
+        ``indices`` (a ``DreamerSequenceBatch.indices``, storage-device
+        ``(idx_grid, env_grid)``) so the next ``sample()`` of those slots
+        warm-starts from it instead of the value stored when they were
+        first written (r2dreamer ``buffer.update`` / JAX ``Replay.update``)."""
+        idx_grid, env_grid = indices
+        for key in self._carry_spec:
+            self._carry[key][idx_grid, env_grid] = carry[key].to(self.storage_device).detach()
 
     # ------------------------------------------------------------------
     # Sampling
@@ -508,15 +722,21 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
             discounts,
         )
 
-    def sample(self, batch_size: int) -> SequenceReplayBufferSample:
-        """Strict-mode (``cross_episode=False``) sampling -- the only mode
-        this class implements ``sample()`` for directly."""
+    def sample(self, batch_size: int) -> SequenceReplayBufferSample | DreamerSequenceBatch:
+        """Strict-mode (``cross_episode=False``) and uniform-mode
+        (``cross_episode=True, priority=False``) sampling -- the only two
+        modes this class implements ``sample()`` for directly. Tolerant-
+        priority-mode subclasses (``RecurrentReplayBuffer``/
+        ``TransformerReplayBuffer``) override ``sample()`` themselves."""
         if self.cross_episode:
-            raise NotImplementedError(
-                f"{type(self).__name__}(cross_episode=True) has no direct sample() "
-                "-- subclass it and override sample() (see RecurrentReplayBuffer/"
-                "TransformerReplayBuffer, which call self._sample_common())."
-            )
+            if self.priority:
+                raise NotImplementedError(
+                    f"{type(self).__name__}(cross_episode=True, priority=True) has no "
+                    "direct sample() -- subclass it and override sample() (see "
+                    "RecurrentReplayBuffer/TransformerReplayBuffer, which call "
+                    "self._sample_common())."
+                )
+            return self._sample_uniform(batch_size)
         t0, env_inds = self._sample_valid_window_starts(batch_size)
         idx_grid, env_grid = self._gather_window(t0, env_inds)
 

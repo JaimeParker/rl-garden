@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 @dataclass
 class EncoderConfig:
     backbone: Literal[
-        "plain_conv", "resnet10", "resnet18", "vit", "drqv2_conv", "cnn3d"
+        "plain_conv", "resnet10", "resnet18", "vit", "drqv2_conv", "cnn3d", "dreamer_conv"
     ] = "plain_conv"
     features_dim: int = 256
     image_augmentation: Literal["none", "random_shift"] = "none"
@@ -42,6 +42,11 @@ class EncoderConfig:
     # Matches rl_garden.encoders.resnet.PoolingMethod's values -- not imported
     # directly to keep this module's top-level imports light.
     pooling_method: Literal["spatial_learned_embeddings", "spatial_softmax", "avg"] = "spatial_softmax"
+    # dreamer_conv only -- base CNN channel depth (r2dreamer/JAX size12M
+    # preset's cnn depth, decision 6's default RSSMSize); no existing field
+    # maps to this (unlike the state-branch width, which reuses
+    # proprio_latent_dim below).
+    dreamer_depth: int = 16
 
     def _resolve_spec(self):
         try:

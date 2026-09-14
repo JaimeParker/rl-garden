@@ -38,7 +38,8 @@ platforms can be integrated without creating platform-specific training entrypoi
 - **Replay:** dict, Monte-Carlo return, PPO rollout, and sequence buffers with
   explicit storage and sample devices.
 - **Model-based RL:** world model base class, imagine rollout, MPPI planner, and
-  `ModelBasedAlgorithm` base for learning + planning models (TD-MPC2 today, DreamerV3 planned).
+  `ModelBasedAlgorithm` base for learning + planning models (TD-MPC2, DreamerV3
+  for state and pixels; see [`docs/guides/dreamer-v3.md`](docs/guides/dreamer-v3.md)).
 - **Environment backends:** a registry-based interface with ManiSkill, RoboTwin,
   IsaacLab, MuJoCo, MuJoCo Warp (GPU), Minari, legacy D4RL/Adroit/Kitchen, a
   real-robot Franka backend, and a template for adding further platforms.
@@ -102,7 +103,7 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dreamer_v3`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
 | Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `acfql` |
 

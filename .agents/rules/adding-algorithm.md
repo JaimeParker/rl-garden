@@ -246,11 +246,13 @@ is an in-contract exception: under `encoder_sharing="separate"`, it keeps an
 extra actor-side `actor_bc_flow` encoder built separately by the algorithm
 through `FQLCore`; the critic uses `critic_extractor` as normal.
 
-**Model-based algorithms** (TD-MPC2; DreamerV3 planned): the algorithm's
+**Model-based algorithms** (TD-MPC2, DreamerV3): the algorithm's
 learned dynamics model IS the `actor_extractor` — `TDMPC2Policy`
 (`rl_garden/policies/tdmpc2_policy.py`) passes its
 `rl_garden.world_models.latent_consistency.LatentConsistencyModel` as
 `actor_extractor`, `critic_extractor=None`, `encoder_sharing="shared"`.
+`DreamerPolicy` (`rl_garden/policies/dreamer_policy.py`) does the same with
+its `rl_garden.world_models.rssm.RSSM`. Both are `WorldModel` subclasses.
 `WorldModel` (`rl_garden/world_models/base.py`) does not subclass
 `BaseFeaturesExtractor` — its method surface (`encode`/`observe`/`step`/
 `reward`/`continue_`/`model_loss`, all operating on a `State =
@@ -262,10 +264,9 @@ docstring). A world-model-based policy's actor (policy prior / amortized
 policy head) and critic (value function) are separate modules owned by the
 policy, never by the world model — `rl_garden/networks/q_ensemble.py`,
 `rl_garden/networks/running_scale.py`, and TD-MPC2's own actor helpers
-(`rl_garden/policies/_tdmpc2_math.py`) are the reusable pieces; decision-time
-planning (TD-MPC2's CEM/MPPI) lives in `rl_garden/planners/`, separate from
-the model and the policy, and is injected the policy's `pi`/`Q` as
-`policy_prior`/`value_fn` callbacks rather than reaching into them directly.
+(`rl_garden/policies/_tdmpc2_math.py`) are the reusable pieces. TD-MPC2 uses
+decision-time planning (CEM/MPPI) injected into the policy; DreamerV3 uses
+an amortized actor-critic trained within imagination and needs no planner.
 
 **`ModelBasedAlgorithm`** (`rl_garden/algorithms/model_based.py`,
 `OffPolicyAlgorithm` subclass) is the base for this family. Override exactly
@@ -299,6 +300,14 @@ A `learning_starts`-sized pretrain burst (TD-MPC2's upstream `seed_steps`
 semantics) is `_on_learning_starts()` (`OffPolicyAlgorithm` hook, default
 no-op) — see that hook's docstring for exactly when it's called and why it
 replaces, not adds to, that iteration's regular `train()` call.
+
+**DreamerV3-specific wiring**: uses `SequenceReplayBuffer(cross_episode=True,
+priority=False, carry_spec={"deter": ..., "stoch": ...})` to store and restore
+the RSSM's recurrent state across training windows. The carry flows through
+`OffPolicyAlgorithm`'s `_replay_buffer_add_kwargs` (on rollout) and is written
+back via `_replay_buffer_step_kwargs` hooks after gradient steps. The policy
+maintains eval-only state through `DreamerPolicy.predict()`, separate from the
+buffer's training-time carry.
 
 See `SAC` and `PPO` (`rl_garden/algorithms/sac.py`, `ppo.py`) for the
 reference implementations. There is no separate vision-specific wiring path

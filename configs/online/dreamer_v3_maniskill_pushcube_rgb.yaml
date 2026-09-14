@@ -1,0 +1,27 @@
+# DreamerV3 on ManiSkill PushCube-v1 (rgb 64x64), size12M preset defaults
+# (rl_garden.algorithms.dreamer_v3 / rl_garden.training.online._args
+# .DreamerV3TrainingArgs). num_envs=8 keeps learning_starts // num_envs
+# (128) > batch_length (64) -- see DreamerV3.__init__'s constructor check;
+# num_envs=16 (this repo's usual online default) would fail it by exactly
+# one row.
+#
+# buffer_size: 100000 -- the algorithm default (1_000_000) keeps the whole
+# replay buffer GPU-resident as uint8 image tensors: one 64x64x3 rgb key is
+# 12288 bytes/step, so 1M steps is ~12.3 GB for that key alone, too much to
+# share a 24 GB GPU with the model, optimizer and imagination activations.
+# 100k steps is ~1.2 GB, so the buffer stays on the GPU (buffer_device: cuda,
+# the project convention). Switch to buffer_device: cpu (or a memmap buffer)
+# only when a multi-hundred-thousand-frame window is required.
+env_id: PushCube-v1
+num_envs: 8
+num_eval_envs: 4
+obs:
+  rgb: [base_camera]
+  image_size: [64, 64]
+capture_video: false
+render_mode: rgb_array
+eval_freq: 10000
+total_timesteps: 500000
+log_type: wandb
+buffer_device: cuda
+buffer_size: 100000
