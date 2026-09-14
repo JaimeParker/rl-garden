@@ -11,7 +11,7 @@ way to read the raw bytes without it. Everything downstream of that single
 ``torch.load`` call operates on plain tensors (via ``td.get(key)``), and the
 converted output this script writes is a plain ``dict`` of ``torch.Tensor``
 (via ``torch.save``) that the runtime loader
-(``rl_garden.algorithms.tdmpc2.multitask.dataset``) reads with zero
+(``rl_garden.buffers.tdmpc2_multitask_dataset``) reads with zero
 ``tensordict`` dependency.
 
 **KNOWN RISK -- not yet validated against a real official file.** The input
@@ -47,9 +47,11 @@ def reindex_episode_tensors(
     into rl-garden's "action/reward depart from position i" convention
     (matching every buffer in this package: ``action[i]`` is the action taken
     FROM ``obs[i]``). Drops the final observation (position ``L``), matching
-    ``EpisodeSliceBuffer``'s documented "never store the true final obs"
-    convention -- a window sampled from ``MmapMultitaskEpisodeBuffer`` can
-    never reach it either way.
+    ``MmapMultitaskEpisodeBuffer.load_episode``'s documented "never store the
+    true final obs" convention -- a window sampled from it can never reach
+    that observation either way (this buffer does not get
+    ``SequenceReplayBuffer``'s strict-mode tail-step fix, see that buffer
+    module's docstring for why).
 
     ``obs``: ``(num_episodes, L+1, obs_dim)``. ``action``/``reward``:
     ``(num_episodes, L+1, ...)``, row 0 ignored. Returns length-``L``

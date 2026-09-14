@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from rl_garden.algorithms.tdmpc2.multitask.buffer import MmapMultitaskEpisodeBuffer
+from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
 
 
 def _make_buffer(tmp_path, **kwargs):

@@ -87,7 +87,7 @@ class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
 
     Deliberately does NOT inherit ``EnvRunArgs``/``EnvBackendArgs``/
     ``OfflineDatasetArgs``: there is no single ``env_id``/live env (training
-    never touches one, see ``rl_garden.algorithms.tdmpc2.multitask.agent``)
+    never touches one, see ``rl_garden.algorithms.tdmpc2_multitask``)
     and no single homogeneous dataset (``dataset_dir`` points at the
     per-task, differently-shaped output of
     ``tools/conversion/convert_tdmpc2_multitask_dataset.py``, not one

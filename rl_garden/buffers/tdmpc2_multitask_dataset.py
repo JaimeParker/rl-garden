@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 
-from rl_garden.algorithms.tdmpc2.multitask.buffer import MmapMultitaskEpisodeBuffer
+from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
 
 
 def infer_multitask_dataset_specs(

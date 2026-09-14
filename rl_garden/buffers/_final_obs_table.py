@@ -10,8 +10,9 @@ can patch it back in wherever a boundary falls inside a sampled window. Mirrors
 generalized to Box observations too.
 
 The host buffer must expose: ``observation_space`` (a ``spaces.Dict``, the
-rl-garden observation contract -- both current users, ``_CheckpointedSequenceReplayBuffer``
-and ``LazyNextNStepReplayBuffer``, are Dict-only), ``storage_device``,
+rl-garden observation contract -- every current user, ``SequenceReplayBuffer``
+(both ``cross_episode`` modes, model-based-base plan 1.6) and
+``LazyNextNStepReplayBuffer``, is Dict-only), ``storage_device``,
 ``buffer_size``.
 """
 from __future__ import annotations

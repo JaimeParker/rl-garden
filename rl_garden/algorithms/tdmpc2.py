@@ -11,11 +11,11 @@ was brainstormed from):
   multiplying that by vectorized envs is an untested configuration upstream
   never validated. Vectorized rollout is a deliberate future extension, not
   attempted here.
-- **``episodic=False`` only.** ``EpisodeSliceBuffer`` rejects any sampled
-  window reaching a true terminal transition (see its module docstring), so
-  a termination classifier trained on those windows would never see a
-  positive example. Upstream's own default is ``episodic: false`` (episodes
-  end by truncation only), which this restriction doesn't affect at all.
+- **``episodic=False`` only.** Kept as a TDMPC2-level restriction (see
+  ``episodic`` docs below) even though ``SequenceReplayBuffer``'s
+  strict-mode tail-step fix (model-based-base plan 1.6) now lets a sampled
+  window's *last* position carry a true terminal transition -- re-enabling
+  ``episodic=True`` end to end is a separate, not-yet-done change.
 - **Joint world-model optimizer kept, as upstream does** (encoder + latent
   projection + dynamics + reward + termination + Q share one Adam; ``pi`` has
   its own): every other rl-garden algorithm keeps separate optimizers per
@@ -23,39 +23,49 @@ was brainstormed from):
   heads via one shared latent rollout in a single ``backward()`` call --
   splitting that into per-network optimizers would need multiple backward
   passes or manual gradient accumulation, diverging from upstream and adding
-  bug surface for no behavioral benefit.
+  bug surface for no behavioral benefit. ``_update_model`` folds the critic's
+  value loss into this same optimizer/backward call too -- a TD-MPC2-specific
+  choice (``ModelBasedAlgorithm``'s three-hook split doesn't require it, see
+  that class's docstring); "model update" here means "model + critic".
 
-This class inherits ``BaseAlgorithm`` directly (not ``OffPolicyAlgorithm``):
-its rollout is single-env, one-episode-at-a-time, with exactly one gradient
-step per env step past ``learning_starts`` (plus a "pretrain on seed data"
-burst exactly at the ``learning_starts`` boundary, matching upstream) --
-structurally nothing like ``OffPolicyAlgorithm``'s vectorized, multi-step
-rollout-then-batch-update loop.
+**Model-based-base plan 1.5/1.7**: this class is ``ModelBasedAlgorithm``
+(``OffPolicyAlgorithm``)'s first concrete consumer -- its rollout, replay
+buffer wiring, checkpointing, and eval loop are the same vectorized
+``training_freq``/``utd``-driven loop every other online algorithm uses,
+configured with ``training_freq=1, utd=1`` (exactly one gradient step per
+env step, matching upstream) and a ``num_envs == 1`` assertion below (the
+CEM planner's own per-step trajectory count makes vectorized rollout a
+separate, deliberately deferred extension, decision kept from the prior
+single-purpose loop this replaces). ``_rollout_action`` still can't just
+delegate to the inherited default (``self.policy.predict()``): TD-MPC2's own
+planner-state bookkeeping (``prev_mean``/``t0``) must stay separate from
+``TDMPC2Policy.predict()``'s (which ``_evaluate()`` also calls, interleaved
+with rollout within one ``learn()`` call) -- sharing one mutable state
+between the two would let an eval episode's planning corrupt an in-progress
+training episode's warm-started mean, and vice versa. See
+``_rollout_action``'s own docstring.
 """
 from __future__ import annotations
 
 import dataclasses
-from collections import defaultdict
-from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
-from rl_garden.algorithms.base_algorithm import BaseAlgorithm
-from rl_garden.algorithms.tdmpc2 import math_utils
-from rl_garden.algorithms.tdmpc2 import planner as planner_mod
-from rl_garden.algorithms.tdmpc2.planner import PlannerConfig
-from rl_garden.algorithms.tdmpc2.policy import TDMPC2Policy
-from rl_garden.algorithms.tdmpc2.world_model import WorldModel
-from rl_garden.buffers.episode_slice_buffer import EpisodeSliceBuffer
+from rl_garden.algorithms.model_based import ModelBasedAlgorithm
+from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.networks.twohot import soft_ce
 from rl_garden.observations import ObsGroups
+from rl_garden.planners.mppi import PlannerConfig
+from rl_garden.policies.tdmpc2_policy import TDMPC2Policy
+from rl_garden.world_models.base import State
+from rl_garden.world_models.latent_consistency import LatentConsistencyModel
 
 
 def _compute_discount(
@@ -65,7 +75,7 @@ def _compute_discount(
     return min(max((frac - 1) / frac, discount_min), discount_max)
 
 
-class TDMPC2(BaseAlgorithm):
+class TDMPC2(ModelBasedAlgorithm):
     _compatible_checkpoint_algorithms = ("TDMPC2",)
     # One shared encoder feeds both the policy head and the Q-heads through a
     # single joint world-model optimizer (see module docstring) -- there is
@@ -136,7 +146,39 @@ class TDMPC2(BaseAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
     ) -> None:
-        super().__init__(env=env, eval_env=eval_env, seed=seed, device=device, logger=logger)
+        # Computed before super().__init__() -- both feed OffPolicyAlgorithm
+        # constructor kwargs (gamma, learning_starts) below.
+        discount = _compute_discount(episode_length, discount_denom, discount_min, discount_max)
+        learning_starts = (
+            seed_steps if seed_steps is not None else max(1_000, 5 * episode_length)
+        )
+
+        super().__init__(
+            env=env,
+            eval_env=eval_env,
+            buffer_size=buffer_size,
+            buffer_device=buffer_device,
+            learning_starts=learning_starts,
+            batch_size=batch_size,
+            gamma=discount,
+            tau=tau,
+            # Exactly one gradient step per env step past learning_starts
+            # (upstream semantics) -- num_envs == 1 asserted below, so
+            # steps_per_env == grad_steps_per_iteration == 1.
+            training_freq=1,
+            utd=1,
+            seed=seed,
+            device=device,
+            logger=logger,
+            std_log=std_log,
+            log_freq=log_freq,
+            eval_freq=eval_freq,
+            num_eval_steps=num_eval_steps,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=checkpoint_freq,
+            save_replay_buffer=save_replay_buffer,
+            save_final_checkpoint=save_final_checkpoint,
+        )
 
         if self.env.num_envs != 1:
             raise ValueError(
@@ -149,17 +191,19 @@ class TDMPC2(BaseAlgorithm):
             )
         if episodic:
             raise NotImplementedError(
-                "episodic=True is not supported: EpisodeSliceBuffer rejects any "
-                "sampled window that reaches a true terminal transition (see its "
-                "module docstring), so the termination classifier would never "
-                "see a positive training example. Use the default episodic=False."
+                "episodic=True is not supported by this port yet: "
+                "SequenceReplayBuffer's strict mode now lets a sampled window's "
+                "last position carry a true terminal transition (model-based-"
+                "base plan 1.6's tail-step fix), but every non-tail position "
+                "inside a window is still rejected on any boundary, so the "
+                "termination classifier would still be starved of positive "
+                "examples relative to upstream's per-episode-block storage. "
+                "Use the default episodic=False."
             )
 
         self.episode_length = episode_length
-        self.buffer_size = buffer_size
-        self.buffer_device = buffer_device
-        self.batch_size = batch_size
         self.seed_steps = seed_steps
+        self.discount = discount
 
         self.use_planner = use_planner
         self.horizon = horizon
@@ -187,7 +231,6 @@ class TDMPC2(BaseAlgorithm):
         self.lr = lr
         self.enc_lr_scale = enc_lr_scale
         self.grad_clip_norm = grad_clip_norm
-        self.tau = tau
         self.rho = rho
         self.consistency_coef = consistency_coef
         self.reward_coef = reward_coef
@@ -200,16 +243,6 @@ class TDMPC2(BaseAlgorithm):
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self._image_augmentation_seed = image_augmentation_seed
-
-        self.std_log = std_log
-        self.log_freq = log_freq
-        self.eval_freq = eval_freq
-        self.num_eval_steps = num_eval_steps
-        self.checkpoint_dir = checkpoint_dir
-        self.checkpoint_freq = checkpoint_freq
-        self.save_replay_buffer = save_replay_buffer
-        self.save_final_checkpoint = save_final_checkpoint
-        self._last_checkpoint_step = -1
 
         self._setup_model()
 
@@ -227,25 +260,32 @@ class TDMPC2(BaseAlgorithm):
         action_dim = int(np.prod(self.env.single_action_space.shape))
         world_model_encoder = self._build_world_model_encoder()
 
-        world_model = WorldModel(
+        # NOTE: no `.to(self.device)` here -- deliberately deferred to the
+        # single `self.policy = TDMPC2Policy(...).to(self.device)` call
+        # below, after every module (this model's + the policy's
+        # actor/critic/critic_target) has been constructed AND initialized.
+        # See TDMPC2Policy.__init__'s docstring: initialization must happen
+        # on CPU-constructed (default-device) tensors, in the exact order
+        # upstream's single combined init pass used, before anything moves
+        # to `self.device` -- moving this model alone first would run its
+        # `apply_init()` (triggered from inside TDMPC2Policy.__init__) on a
+        # different device's RNG stream than upstream's CPU-then-move order.
+        world_model = LatentConsistencyModel(
             encoder=world_model_encoder,
             action_dim=action_dim,
             latent_dim=self.latent_dim,
             mlp_dim=self.mlp_dim,
             simnorm_dim=self.simnorm_dim,
-            num_q=self.num_q,
             num_bins=self.num_bins,
             vmin=self.vmin,
             vmax=self.vmax,
-            dropout=self.dropout,
             episodic=self.episodic,
-            log_std_min=self.log_std_min,
-            log_std_max=self.log_std_max,
-            tau=self.tau,
-        ).to(self.device)
+            rho=self.rho,
+        )
 
         self.planner_cfg = PlannerConfig(
             action_dim=action_dim,
+            discount=self.discount,
             horizon=self.horizon,
             num_samples=self.num_samples,
             num_elites=self.num_elites,
@@ -255,53 +295,97 @@ class TDMPC2(BaseAlgorithm):
             max_std=self.max_std,
             temperature=self.temperature,
         )
-        self.discount = _compute_discount(
-            self.episode_length, self.discount_denom, self.discount_min, self.discount_max
-        )
-        self.learning_starts = (
-            self.seed_steps if self.seed_steps is not None else max(1_000, 5 * self.episode_length)
-        )
 
         self.policy = TDMPC2Policy(
-            world_model, self.planner_cfg, self.discount, use_planner=self.use_planner
+            self.env.single_observation_space,
+            self.env.single_action_space,
+            world_model,
+            self.planner_cfg,
+            mlp_dim=self.mlp_dim,
+            num_q=self.num_q,
+            dropout=self.dropout,
+            log_std_min=self.log_std_min,
+            log_std_max=self.log_std_max,
+            tau=self.tau,
+            use_planner=self.use_planner,
         ).to(self.device)
+        world_model = self.policy.world_model  # now on self.device
 
-        enc_params = list(world_model.encoder.parameters()) + list(world_model._latent_proj.parameters())
-        other_params = (
-            list(world_model._dynamics.parameters())
-            + list(world_model._reward.parameters())
-            + list(world_model._Q.parameters())
-        )
-        if world_model._termination is not None:
-            other_params += list(world_model._termination.parameters())
+        param_groups = world_model.parameter_groups()
+        enc_params = list(param_groups["encoder"])
+        other_params = list(param_groups["model"]) + list(self.policy.critic.parameters())
         self.world_optimizer = torch.optim.Adam(
             [
                 {"params": enc_params, "lr": self.lr * self.enc_lr_scale},
                 {"params": other_params, "lr": self.lr},
             ]
         )
-        self.pi_optimizer = torch.optim.Adam(world_model._pi.parameters(), lr=self.lr, eps=1e-5)
+        self.pi_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.lr, eps=1e-5)
 
-        self.replay_buffer = EpisodeSliceBuffer(
+        self.replay_buffer = SequenceReplayBuffer(
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             num_envs=1,
             buffer_size=self.buffer_size,
+            cross_episode=False,
             horizon=self.horizon,
             storage_device=self.buffer_device,
             sample_device=self.device,
         )
 
     # ------------------------------------------------------------------
-    # Rollout helpers
+    # Rollout: own planner prev_mean/t0 bookkeeping (see class docstring on
+    # why this can't just delegate to the inherited _rollout_action, which
+    # would go through self.policy.predict() -- shared, wrong, state with
+    # _evaluate()).
     # ------------------------------------------------------------------
 
-    def _random_action(self) -> torch.Tensor:
-        shape = self.env.action_space.shape
-        return 2 * torch.rand(shape, dtype=torch.float32, device=self.device) - 1
+    def _on_env_reset(self, obs) -> None:
+        super()._on_env_reset(obs)
+        self._rollout_prev_mean: Optional[torch.Tensor] = None
+        self._rollout_t0 = True
+
+    def _post_rollout_step(self, action_context, terminations, truncations, infos) -> None:
+        super()._post_rollout_step(action_context, terminations, truncations, infos)
+        if bool((terminations | truncations).any().item()):
+            self._rollout_prev_mean = None
+            self._rollout_t0 = True
+
+    def _rollout_action(self, obs, learning_has_started: bool):
+        """Planner-driven (or, with ``use_planner=False``, ``pi``-sampled)
+        training-rollout action, threading this algorithm's OWN
+        ``self._rollout_prev_mean``/``self._rollout_t0`` through
+        ``MPPIPlanner.plan()`` directly instead of going through
+        ``self.policy.predict()`` -- see class docstring."""
+        if not learning_has_started:
+            action = self._explore_action(obs)
+        elif self.use_planner:
+            obs_device = self._obs_to_policy_device(obs)
+            embed = self.policy.world_model.encode(obs_device)
+            is_first = torch.full(
+                (embed.shape[0],), self._rollout_t0, dtype=torch.bool, device=embed.device
+            )
+            state = self.policy.world_model.observe(None, None, embed, is_first)
+            action, self._rollout_prev_mean = self.policy.planner.plan(
+                self.policy.world_model,
+                state,
+                policy_prior=self.policy.policy_prior,
+                value_fn=self.policy.value_fn,
+                prev_mean=self._rollout_prev_mean,
+                t0=self._rollout_t0,
+                eval_mode=False,
+            )
+            action = action.unsqueeze(0)
+        else:
+            with torch.no_grad():
+                obs_device = self._obs_to_policy_device(obs)
+                z = self.policy.world_model.encode(obs_device)
+                action, _ = self.policy.pi(z)
+        self._rollout_t0 = False
+        return action, action, None
 
     # ------------------------------------------------------------------
-    # Gradient step
+    # Gradient step: ModelBasedAlgorithm's three hooks.
     # ------------------------------------------------------------------
 
     def _encode_window(self, obs_window: Obs, window_len: int, batch_size: int) -> torch.Tensor:
@@ -312,39 +396,19 @@ class TDMPC2(BaseAlgorithm):
     def _td_target(
         self, next_z: torch.Tensor, reward: torch.Tensor, terminated: torch.Tensor
     ) -> torch.Tensor:
-        world_model = self.policy.world_model
-        action, _ = world_model.pi(next_z)
-        return reward + self.discount * (1 - terminated) * world_model.Q(
+        action, _ = self.policy.pi(next_z)
+        return reward + self.discount * (1 - terminated) * self.policy.Q(
             next_z, action, return_type="min", target=True
         )
 
-    def _update_pi(self, zs: torch.Tensor) -> dict[str, float]:
+    def _update_model(self, batch) -> tuple[dict[str, float], State]:
+        """Consistency + reward + termination + **value** losses in one
+        joint ``world_optimizer`` backward pass (TD-MPC2-specific: the
+        critic trains in the same backward as the model, see class
+        docstring). Returns the LIVE posterior ``{"z": zs}`` (plan item 0);
+        ``_update_actor_critic`` detaches it before the actor update."""
         world_model = self.policy.world_model
-        action, info = world_model.pi(zs)
-        qs = world_model.Q(zs, action, return_type="avg", detach=True)
-        world_model.scale.update(qs[0])
-        qs = world_model.scale(qs)
-
-        rho_pows = self.rho ** torch.arange(zs.shape[0], device=zs.device)
-        pi_loss = (
-            -(self.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1, 2)) * rho_pows
-        ).mean()
-
-        self.pi_optimizer.zero_grad(set_to_none=True)
-        pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(world_model._pi.parameters(), self.grad_clip_norm)
-        self.pi_optimizer.step()
-
-        return {
-            "pi_loss": float(pi_loss.detach()),
-            "pi_grad_norm": float(pi_grad_norm),
-            "pi_scale": float(world_model.scale.value.item()),
-        }
-
-    def _gradient_step(self) -> dict[str, float]:
-        world_model = self.policy.world_model
-        sample = self.replay_buffer.sample(self.batch_size)
-        obs, action, reward, terminated = sample.obs, sample.action, sample.reward, sample.terminated
+        obs, action, reward, terminated = batch.obs, batch.action, batch.reward, batch.terminated
         horizon, batch_size = action.shape[0], action.shape[1]
         reward = reward.unsqueeze(-1)
         terminated_f = terminated.float().unsqueeze(-1)
@@ -354,68 +418,78 @@ class TDMPC2(BaseAlgorithm):
             next_z = self._encode_window(next_obs, horizon, batch_size)
             td_targets = self._td_target(next_z, reward, terminated_f)
 
-        world_model.train()
-        zs = torch.empty(horizon + 1, batch_size, self.latent_dim, device=self.device)
-        obs0 = index_obs(obs, 0)
-        z = world_model.encode(obs0)
-        zs[0] = z
-        consistency_loss = torch.zeros((), device=self.device)
-        for t in range(horizon):
-            z = world_model.next(z, action[t])
-            consistency_loss = consistency_loss + F.mse_loss(z, next_z[t]) * self.rho**t
-            zs[t + 1] = z
+        model_batch = {"obs": obs, "action": action, "reward": reward, "next_z": next_z}
+        if self.episodic:
+            model_batch["terminated"] = terminated_f
+        losses, posterior = world_model.model_loss(model_batch)
 
-        _zs = zs[:-1]
-        qs = world_model.Q(_zs, action, return_type="all")
-        reward_preds = world_model.reward(_zs, action)
-        termination_pred = world_model.termination(zs[1:], unnormalized=True) if self.episodic else None
+        zs_live = posterior["z"]
+        _zs = zs_live[:-1]
+        qs = self.policy.Q(_zs, action, return_type="all")
 
-        reward_loss = torch.zeros((), device=self.device)
         value_loss = torch.zeros((), device=self.device)
         for t in range(horizon):
-            reward_loss = reward_loss + math_utils.soft_ce(
-                reward_preds[t], reward[t], self.num_bins, self.vmin, self.vmax, world_model.bin_size
-            ).mean() * self.rho**t
             for qi in range(self.num_q):
-                value_loss = value_loss + math_utils.soft_ce(
+                value_loss = value_loss + soft_ce(
                     qs[qi, t], td_targets[t], self.num_bins, self.vmin, self.vmax, world_model.bin_size
                 ).mean() * self.rho**t
-
-        consistency_loss = consistency_loss / horizon
-        reward_loss = reward_loss / horizon
         value_loss = value_loss / (horizon * self.num_q)
-        if self.episodic:
-            termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated_f)
-        else:
-            termination_loss = torch.zeros((), device=self.device)
 
         total_loss = (
-            self.consistency_coef * consistency_loss
-            + self.reward_coef * reward_loss
-            + self.termination_coef * termination_loss
+            self.consistency_coef * losses["consistency_loss"]
+            + self.reward_coef * losses["reward_loss"]
+            + self.termination_coef * losses["termination_loss"]
             + self.value_coef * value_loss
         )
 
         self.world_optimizer.zero_grad(set_to_none=True)
         total_loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(world_model.parameters(), self.grad_clip_norm)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            list(world_model.parameters()) + list(self.policy.critic.parameters()), self.grad_clip_norm
+        )
         self.world_optimizer.step()
 
-        pi_info = self._update_pi(zs.detach())
-        world_model.soft_update_target_Q()
-        world_model.eval()
-
-        self._global_update += 1
-        info = {
-            "consistency_loss": float(consistency_loss.detach()),
-            "reward_loss": float(reward_loss.detach()),
+        metrics = {
+            "consistency_loss": float(losses["consistency_loss"].detach()),
+            "reward_loss": float(losses["reward_loss"].detach()),
             "value_loss": float(value_loss.detach()),
-            "termination_loss": float(termination_loss.detach()) if self.episodic else 0.0,
+            "termination_loss": float(losses["termination_loss"].detach()) if self.episodic else 0.0,
             "total_loss": float(total_loss.detach()),
             "grad_norm": float(grad_norm),
         }
-        info.update(pi_info)
-        return info
+        return metrics, posterior
+
+    def _update_pi(self, zs: torch.Tensor) -> dict[str, float]:
+        action, info = self.policy.pi(zs)
+        qs = self.policy.Q(zs, action, return_type="avg", detach=True)
+        self.policy.scale.update(qs[0])
+        qs = self.policy.scale(qs)
+
+        rho_pows = self.rho ** torch.arange(zs.shape[0], device=zs.device)
+        pi_loss = (
+            -(self.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1, 2)) * rho_pows
+        ).mean()
+
+        self.pi_optimizer.zero_grad(set_to_none=True)
+        pi_loss.backward()
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.grad_clip_norm)
+        self.pi_optimizer.step()
+
+        return {
+            "pi_loss": float(pi_loss.detach()),
+            "pi_grad_norm": float(pi_grad_norm),
+            "pi_scale": float(self.policy.scale.value.item()),
+        }
+
+    def _update_actor_critic(self, batch, posterior: State) -> dict[str, float]:
+        # .detach(): posterior["z"] is live (plan item 0) and the world model
+        # has already been updated in _update_model() -- the actor update
+        # must not also backprop into (now-stale) world-model gradients,
+        # matching upstream's update_pi(zs.detach(), ...).
+        return self._update_pi(posterior["z"].detach())
+
+    def _update_targets(self) -> None:
+        self.policy.soft_update_target_Q()
 
     # ------------------------------------------------------------------
     # Eval hooks (see BaseAlgorithm._evaluate() -- reused unmodified)
@@ -448,9 +522,6 @@ class TDMPC2(BaseAlgorithm):
         return {
             **super()._checkpoint_metadata(),
             "episode_length": self.episode_length,
-            "buffer_size": self.buffer_size,
-            "buffer_device": self.buffer_device,
-            "batch_size": self.batch_size,
             "horizon": self.horizon,
             "num_samples": self.num_samples,
             "num_elites": self.num_elites,
@@ -466,7 +537,21 @@ class TDMPC2(BaseAlgorithm):
             "discount_denom": self.discount_denom,
             "discount_min": self.discount_min,
             "discount_max": self.discount_max,
-            "learning_starts": self.learning_starts,
+            "lr": self.lr,
+            "enc_lr_scale": self.enc_lr_scale,
+            "grad_clip_norm": self.grad_clip_norm,
+            "rho": self.rho,
+            "consistency_coef": self.consistency_coef,
+            "reward_coef": self.reward_coef,
+            "value_coef": self.value_coef,
+            "termination_coef": self.termination_coef,
+            "dropout": self.dropout,
+            "log_std_min": self.log_std_min,
+            "log_std_max": self.log_std_max,
+            "entropy_coef": self.entropy_coef,
+            "simnorm_dim": self.simnorm_dim,
+            "use_planner": self.use_planner,
+            "seed_steps": self.seed_steps,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -478,113 +563,10 @@ class TDMPC2(BaseAlgorithm):
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 
-    def _checkpoint_path(self, name: str) -> Path:
-        assert self.checkpoint_dir is not None
-        return Path(self.checkpoint_dir) / name
-
-    def _save_checkpoint(self, name: str) -> None:
-        if self.checkpoint_dir is None:
-            return
-        self.save(self._checkpoint_path(name), include_replay_buffer=self.save_replay_buffer)
-
-    def _maybe_save_periodic_checkpoint(self, previous_step: int) -> None:
-        if self.checkpoint_dir is None or self.checkpoint_freq <= 0:
-            return
-        if self._global_step // self.checkpoint_freq <= previous_step // self.checkpoint_freq:
-            return
-        if self._global_step == self._last_checkpoint_step:
-            return
-        self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
-        self._last_checkpoint_step = self._global_step
-
     # ------------------------------------------------------------------
-    # Main loop
+    # learning_starts pretrain burst (upstream seed_steps semantics) --
+    # see OffPolicyAlgorithm._on_learning_starts's docstring.
     # ------------------------------------------------------------------
 
-    def learn(self, total_timesteps: int) -> "TDMPC2":
-        self._on_training_start(total_timesteps)
-        obs, _ = self.env.reset(seed=self.seed)
-
-        train_prev_mean: Optional[torch.Tensor] = None
-        train_t0 = True
-        cumulative: dict[str, float] = defaultdict(float)
-
-        while self._global_step < total_timesteps:
-            previous_step = self._global_step
-
-            if self.eval_freq > 0 and self._global_step % self.eval_freq == 0:
-                eval_metrics = self._evaluate()
-                if self.logger is not None:
-                    for key, value in eval_metrics.items():
-                        self.logger.add_scalar(f"eval/{key}", value, self._global_step)
-                if self.std_log:
-                    print(
-                        "[eval] "
-                        f"step={self._global_step}/{total_timesteps} "
-                        f"{ {k: round(v, 4) for k, v in eval_metrics.items()} }",
-                        flush=True,
-                    )
-
-            obs_device = self._obs_to_policy_device(obs)
-            if self._global_step < self.learning_starts:
-                action = self._random_action()
-            elif self.use_planner:
-                action, train_prev_mean = planner_mod.plan(
-                    self.policy.world_model,
-                    obs_device,
-                    train_prev_mean,
-                    self.discount,
-                    self.planner_cfg,
-                    train_t0,
-                    eval_mode=False,
-                )
-                action = action.unsqueeze(0)
-            else:
-                with torch.no_grad():
-                    z = self.policy.world_model.encode(obs_device)
-                    action, _ = self.policy.world_model.pi(z)
-            train_t0 = False
-
-            next_obs, reward, terminated, truncated, infos = self.env.step(action)
-            if bool(terminated.any().item()) and not self.episodic:
-                raise ValueError(
-                    "Termination detected but episodic=False -- construct TDMPC2 with "
-                    "episodic=True to train on tasks with true terminal states (note: "
-                    "not currently supported by EpisodeSliceBuffer, see its docstring)."
-                )
-            episode_end = terminated | truncated
-            self.replay_buffer.add(obs, next_obs, action, reward, terminated, episode_end)
-
-            done = bool(episode_end.any().item())
-            if done:
-                train_prev_mean = None
-                train_t0 = True
-
-            self._global_step += 1
-            obs = next_obs
-
-            if self._global_step >= self.learning_starts:
-                num_updates = self.learning_starts if self._global_step == self.learning_starts else 1
-                info: dict[str, float] = {}
-                for _ in range(num_updates):
-                    info = self._gradient_step()
-                should_log = self.log_freq > 0 and self._global_step % self.log_freq == 0
-                if should_log:
-                    if self.logger is not None:
-                        self.logger.log_metrics({f"train/{k}": v for k, v in info.items()}, self._global_step)
-                    if self.std_log:
-                        progress = 100.0 * self._global_step / total_timesteps
-                        print(
-                            "[train] "
-                            f"step={self._global_step}/{total_timesteps} ({progress:.2f}%) "
-                            f"total_loss={info.get('total_loss', float('nan')):.4f} "
-                            f"pi_loss={info.get('pi_loss', float('nan')):.4f}",
-                            flush=True,
-                        )
-
-            self._maybe_save_periodic_checkpoint(previous_step)
-
-        if self.checkpoint_dir is not None and self.save_final_checkpoint:
-            self._save_checkpoint("final.pt")
-
-        return self
+    def _on_learning_starts(self) -> Optional[dict[str, float]]:
+        return self.train(self.learning_starts, compute_info=True)

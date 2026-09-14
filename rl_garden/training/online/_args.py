@@ -149,8 +149,8 @@ class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
 
     ``num_envs``/``num_eval_envs`` are fixed to 1: TDMPC2's CEM planner already
     rolls out ``num_samples`` trajectories per env step, and vectorized
-    rollout is not supported in this port (see ``rl_garden.algorithms.tdmpc2.
-    agent`` module docstring). ``episode_length`` has no single upstream
+    rollout is not supported in this port (see ``rl_garden.algorithms.tdmpc2``
+    module docstring). ``episode_length`` has no single upstream
     default (it's task-specific in the original Hydra configs); 100 matches
     the ManiSkill task horizon this port was originally tuned against.
     """

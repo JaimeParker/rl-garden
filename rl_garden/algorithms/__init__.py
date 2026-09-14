@@ -66,7 +66,7 @@ from rl_garden.algorithms.supe import SUPE
 from rl_garden.algorithms.td3 import TD3
 from rl_garden.algorithms.td3_bc import TD3BC
 from rl_garden.algorithms.tdmpc2 import TDMPC2
-from rl_garden.algorithms.tdmpc2.multitask import TDMPC2Multitask
+from rl_garden.algorithms.tdmpc2_multitask import TDMPC2Multitask
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
 from rl_garden.algorithms.unio4 import UniO4

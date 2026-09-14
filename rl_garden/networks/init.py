@@ -1,7 +1,9 @@
-"""Weight initialization ported from ``3rd_party/tdmpc2/tdmpc2/common/init.py``.
+"""Weight initialization, ported from
+``3rd_party/tdmpc2/tdmpc2/common/init.py``.
 
 The ``nn.Embedding``/``nn.ParameterList`` branches in the upstream version
-exist only for multitask task embeddings, which this single-task port drops.
+exist only for multitask task embeddings; not needed by this generic helper
+(multitask model construction applies these the same way, per-``nn.Linear``).
 """
 from __future__ import annotations
 

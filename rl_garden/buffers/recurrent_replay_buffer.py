@@ -26,8 +26,8 @@ from typing import Optional, Union
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._checkpointed_sequence_buffer import _CheckpointedSequenceReplayBuffer
 from rl_garden.buffers.replay_buffer import _tree_to_device
+from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.common.types import Obs
 
 # Local, intentionally-duplicated type alias mirroring
@@ -55,7 +55,7 @@ class RecurrentReplayBufferSample:
     is_weights: torch.Tensor                    # (B,)
 
 
-class RecurrentReplayBuffer(_CheckpointedSequenceReplayBuffer):
+class RecurrentReplayBuffer(SequenceReplayBuffer):
     """One class handling every observation schema (state-only or
     Dict+image) -- obs is always a Dict (a bare Box env is normalized once
     at the algorithm boundary), so there is no second observation-shape
@@ -93,6 +93,7 @@ class RecurrentReplayBuffer(_CheckpointedSequenceReplayBuffer):
             action_space,
             num_envs,
             buffer_size,
+            cross_episode=True,
             burn_in_len=burn_in_len,
             learning_len=learning_len,
             forward_len=forward_len,

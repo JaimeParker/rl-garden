@@ -1,6 +1,14 @@
-"""Tests for the TD-MPC2 world model / gradient step, against fake CPU envs
-(no simulator/hardware), following ``tests/test_sac_core.py``'s
-``DummyVecEnv``/hand-built-batch pattern."""
+"""Tests for TD-MPC2's ``TDMPC2`` agent / gradient step against fake CPU
+envs (no simulator/hardware), following ``tests/test_sac_core.py``'s
+``DummyVecEnv``/hand-built-batch pattern.
+
+Rewritten against the model/policy split (model-based-base plan 1.2/1.3):
+the world model (``rl_garden.world_models.latent_consistency
+.LatentConsistencyModel``, reached via ``agent.policy.world_model``) now
+holds only encoder/dynamics/reward/termination; the actor/critic/critic
+target (``rl_garden.policies.tdmpc2_policy.TDMPC2Policy``) are
+``agent.policy.actor``/``agent.policy.critic``/``agent.policy.critic_target``.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -8,8 +16,9 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms.tdmpc2 import TDMPC2
-from rl_garden.algorithms.tdmpc2 import math_utils
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.networks.symlog import symexp, symlog
+from rl_garden.networks.twohot import two_hot, two_hot_inv
 
 
 class DummyVecEnv:
@@ -127,20 +136,19 @@ def test_two_hot_round_trip_recovers_scalar_within_bin_resolution():
     num_bins, vmin, vmax = 101, -10.0, 10.0
     bin_size = (vmax - vmin) / (num_bins - 1)
     x = torch.tensor([[3.0], [-4.5], [0.0]])
-    soft = math_utils.two_hot(x, num_bins, vmin, vmax, bin_size)
-    recovered = math_utils.two_hot_inv(soft.log(), num_bins, vmin, vmax)
+    soft = two_hot(x, num_bins, vmin, vmax, bin_size)
+    recovered = two_hot_inv(soft.log(), num_bins, vmin, vmax)
     # soft.log() feeds back through a softmax in two_hot_inv, which is only
     # an approximate inverse (softmax of log-one-hot != identity everywhere
     # bin weights are split across two adjacent bins); check closeness instead.
-    torch.testing.assert_close(recovered, math_utils.symexp(math_utils.symlog(x)), atol=0.5, rtol=0.1)
+    torch.testing.assert_close(recovered, symexp(symlog(x)), atol=0.5, rtol=0.1)
 
 
-def test_gradient_step_runs_and_updates_world_model_not_pi():
+def test_gradient_step_runs_and_updates_world_model_not_via_pi_optimizer():
     agent = _agent()
     agent.learn(total_timesteps=8)  # fills buffer past learning_starts=6
     world_model = agent.policy.world_model
 
-    pi_params_before = [p.detach().clone() for p in world_model._pi.parameters()]
     dyn_params_before = [p.detach().clone() for p in world_model._dynamics.parameters()]
 
     info = agent._gradient_step()
@@ -151,20 +159,33 @@ def test_gradient_step_runs_and_updates_world_model_not_pi():
     )
     assert dyn_changed, "world_optimizer.step() should update dynamics parameters"
 
-    # pi is only touched by pi_optimizer, not world_optimizer -- verify by
-    # freezing pi_optimizer's effect out: re-run just the world-model half.
-    del pi_params_before  # pi WILL change too since _gradient_step also calls
-    # _update_pi; this test only asserts the world-model half actually moves.
+
+def test_target_q_starts_as_exact_clone_of_zero_initialized_online_critic():
+    """Regression test for the target-Q init-order bug: the target critic
+    must be cloned from the online critic *after* TD-MPC2's own
+    ``trunc_normal_`` init + last-layer zero_() have run on both (matching
+    upstream, ``3rd_party/tdmpc2/tdmpc2/common/world_model.py:31-36``), not
+    before -- see ``TDMPC2Policy.__init__``'s docstring."""
+    agent = _agent()
+    critic, critic_target = agent.policy.critic, agent.policy.critic_target
+
+    for p_live, p_target in zip(critic.parameters(), critic_target.parameters()):
+        torch.testing.assert_close(p_live, p_target)
+
+    for q in critic.qs:
+        assert torch.all(q[-1].weight == 0.0)
+    for q in critic_target.qs:
+        assert torch.all(q[-1].weight == 0.0)
 
 
 def test_target_q_polyak_update_moves_toward_live_q():
-    agent = _agent(tau=1.0)  # tau=1 -> target becomes exactly live Q after one update
-    world_model = agent.policy.world_model
+    agent = _agent(tau=1.0)  # tau=1 -> target becomes exactly live critic after one update
+    critic, critic_target = agent.policy.critic, agent.policy.critic_target
     with torch.no_grad():
-        for p in world_model._Q.parameters():
+        for p in critic.parameters():
             p.add_(1.0)
-    world_model.soft_update_target_Q()
-    for p_live, p_target in zip(world_model._Q.parameters(), world_model._target_Q.parameters()):
+    agent.policy.soft_update_target_Q()
+    for p_live, p_target in zip(critic.parameters(), critic_target.parameters()):
         torch.testing.assert_close(p_live, p_target)
 
 

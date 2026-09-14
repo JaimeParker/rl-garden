@@ -5,11 +5,18 @@ dense tensors, which is why upstream uses torchrl's ``LazyTensorStorage``).
 Backed by ``rl_garden.buffers.mmap_storage.MmapTensorStore`` instead (already
 an optional backend for ``NStepReplayBuffer`` -- reused, not new).
 
-Shares ``EpisodeSliceSamplingMixin`` with ``EpisodeSliceBuffer``: identical
-episode-boundary-strict windowed sampling, just over mmap-backed storage with
-an extra ``task`` field. Unlike the online single-task buffer, this one is
-populated exactly once via bulk ``load_episode()`` calls (no online rollout,
-no ring-buffer overwrite) -- ``add()`` is therefore unsupported.
+Shares ``StrictWindowSamplingMixin`` with ``SequenceReplayBuffer``'s
+``cross_episode=False`` mode: identical episode-boundary-strict windowed
+sampling, just over mmap-backed storage with an extra ``task`` field. Unlike
+the online single-task buffer, this one is populated exactly once via bulk
+``load_episode()`` calls (no online rollout, no ring-buffer overwrite) --
+``add()`` is therefore unsupported. It does NOT get ``SequenceReplayBuffer``'s
+strict-mode tail-step fix (model-based-base plan 1.6): that fix depends on a
+final-obs side table populated by ``add()``'s ``next_obs`` argument, but this
+buffer is populated by ``load_episode()`` from an already-converted offline
+dataset that was never given a true final observation to begin with (see
+``load_episode``'s docstring) -- ``StrictWindowSamplingMixin`` itself is
+therefore reused completely unmodified here, not extended.
 
 ``_step_id`` here is reset to 0 at the start of every episode (whereas the
 online buffer's is a monotonic counter running across the whole buffer
@@ -28,9 +35,9 @@ from typing import Optional
 
 import torch
 
-from rl_garden.buffers._episode_slice_sampling import EpisodeSliceSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.mmap_storage import MmapMode, MmapTensorStore
+from rl_garden.buffers.sequence_replay_buffer import StrictWindowSamplingMixin
 
 
 @dataclass
@@ -41,7 +48,7 @@ class MultitaskEpisodeBufferSample:
     task: torch.Tensor      # (B,) -- one task id per sampled window (constant within a window)
 
 
-class MmapMultitaskEpisodeBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
+class MmapMultitaskEpisodeBuffer(StrictWindowSamplingMixin, BaseReplayBuffer):
     def __init__(
         self,
         obs_dim: int,
@@ -123,8 +130,9 @@ class MmapMultitaskEpisodeBuffer(EpisodeSliceSamplingMixin, BaseReplayBuffer):
         ``obs``/``action``/``reward`` all have length ``L`` (the episode's
         transition count) -- matching every other buffer in this package,
         the true final observation (the ``L``-th, after the last action) is
-        not stored; see ``episode_slice_buffer.py``'s module docstring for
-        why a sampled window can never reach it anyway.
+        not stored; a sampled window can never reach it (this buffer does
+        NOT get ``SequenceReplayBuffer``'s strict-mode tail-step fix, see
+        this module's docstring for why).
         """
         length = obs.shape[0]
         if length < 1:

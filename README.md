@@ -35,8 +35,10 @@ platforms can be integrated without creating platform-specific training entrypoi
   with configurable image-key fusion, pooling, augmentation, and proprioception
   fusion. Actor and critic share one encoder by default; SAC-family and PPO-family
   policies can opt into independent actor/critic encoder architectures.
-- **Replay:** dict, Monte-Carlo return, and PPO rollout buffers with
+- **Replay:** dict, Monte-Carlo return, PPO rollout, and sequence buffers with
   explicit storage and sample devices.
+- **Model-based RL:** world model base class, imagine rollout, MPPI planner, and
+  `ModelBasedAlgorithm` base for learning + planning models (TD-MPC2 today, DreamerV3 planned).
 - **Environment backends:** a registry-based interface with ManiSkill, RoboTwin,
   IsaacLab, MuJoCo, MuJoCo Warp (GPU), Minari, legacy D4RL/Adroit/Kitchen, a
   real-robot Franka backend, and a template for adding further platforms.
@@ -58,8 +60,10 @@ rl_garden/
 ├── integrations/  # Optional RLinf/Ray adapters (offline, SAC/RLPD, FSDP PPO)
 ├── models/        # ACT and reward models
 ├── networks/      # Actor, critic, value, and backbone modules
+├── planners/      # Decision-time planners (MPPI)
 ├── policies/      # Algorithm policy composition
-└── training/      # Registered online, offline, and off2on training packages
+├── training/      # Registered online, offline, and off2on training packages
+└── world_models/  # World model base, imagination, latent consistency (TD-MPC2)
 robot_infra/       # Optional submodule (rlgarden-robot-infra): controllers, teleoperation
 real_world/        # Optional submodule (rlgarden-real-world): ActorLoop/LearnerLoop, franka_real backend
 examples/          # Thin dispatchers and specialized experiment entrypoints

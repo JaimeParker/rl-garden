@@ -74,11 +74,11 @@ def test_convert_task_file_round_trip(tmp_path):
     assert torch.equal(loaded["action"], action[:, 1:])
     assert torch.equal(loaded["reward"], reward[:, 1:])
 
-    from rl_garden.algorithms.tdmpc2.multitask.dataset import (
+    from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
+    from rl_garden.buffers.tdmpc2_multitask_dataset import (
         infer_multitask_dataset_specs,
         load_multitask_dataset,
     )
-    from rl_garden.algorithms.tdmpc2.multitask.buffer import MmapMultitaskEpisodeBuffer
 
     tasks, obs_dims, action_dims, episode_lengths = infer_multitask_dataset_specs(dst_dir)
     assert tasks == ["fake-task"]

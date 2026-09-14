@@ -57,13 +57,14 @@ from rl_garden.buffers.robomimic_dataset import (
     load_robomimic_dataset_to_replay_buffer,
 )
 from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
+from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
+from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
 
 __all__ = [
     "BaseReplayBuffer",
     "DatasetRequest",
     "DictArray",
-    "RolloutBuffer",
-    "ReplayBuffer",
+    "MmapMultitaskEpisodeBuffer",
     "MCReplayBuffer",
     "MCReplayBufferSample",
     "PriorDataReplayMixin",
@@ -72,9 +73,11 @@ __all__ = [
     "RecurrentReplayBufferSample",
     "RecurrentRolloutBuffer",
     "RecurrentRolloutBufferSample",
+    "ReplayBuffer",
     "RolloutBuffer",
     "RolloutBufferSample",
     "SarsaMCReplayBuffer",
+    "SequenceReplayBuffer",
     "TransformerReplayBuffer",
     "TransformerReplayBufferSample",
     "infer_box_specs_from_h5",

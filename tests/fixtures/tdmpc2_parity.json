@@ -1,0 +1,88 @@
+{
+  "torch_version": "2.6.0+cu124",
+  "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.35",
+  "provenance": "Generated on 6017 after fixing tdmpc2 bugs 1(a) (target_Q cloned after _apply_init) and 1(b) (planner _estimate_value bootstraps with the online Q, not target_Q) -- model-based-base plan 1.0.",
+  "config": {
+    "device": "cpu",
+    "buffer_device": "cpu",
+    "buffer_size": 200,
+    "batch_size": 8,
+    "episode_length": 200,
+    "seed_steps": 1,
+    "horizon": 3,
+    "num_samples": 8,
+    "num_elites": 4,
+    "num_pi_trajs": 2,
+    "iterations": 1,
+    "latent_dim": 16,
+    "mlp_dim": 16,
+    "simnorm_dim": 4,
+    "num_q": 2,
+    "num_bins": 11,
+    "vmin": -10.0,
+    "vmax": 10.0,
+    "dropout": 0.0,
+    "episodic": false,
+    "lr": 0.0003,
+    "enc_lr_scale": 0.3,
+    "grad_clip_norm": 20.0,
+    "tau": 0.01,
+    "rho": 0.5,
+    "consistency_coef": 20.0,
+    "reward_coef": 0.1,
+    "value_coef": 0.1,
+    "seed": 20260914
+  },
+  "metrics": [
+    {
+      "consistency_loss": 0.02077643945813179,
+      "reward_loss": 1.3987723588943481,
+      "value_loss": 1.3987723588943481,
+      "pi_loss": 0.0009372925851494074,
+      "total_loss": 0.6952832937240601,
+      "grad_norm": 13.988222122192383,
+      "pi_grad_norm": 0.007344559766352177,
+      "pi_scale": 1.0
+    },
+    {
+      "consistency_loss": 0.016779765486717224,
+      "reward_loss": 1.3970304727554321,
+      "value_loss": 1.3971600532531738,
+      "pi_loss": 0.0008788894047029316,
+      "total_loss": 0.615014374256134,
+      "grad_norm": 10.674047470092773,
+      "pi_grad_norm": 0.007387686055153608,
+      "pi_scale": 1.0
+    },
+    {
+      "consistency_loss": 0.014412060379981995,
+      "reward_loss": 1.3951278924942017,
+      "value_loss": 1.3950797319412231,
+      "pi_loss": 0.0006120579782873392,
+      "total_loss": 0.5672619342803955,
+      "grad_norm": 11.136228561401367,
+      "pi_grad_norm": 0.006452423520386219,
+      "pi_scale": 1.0
+    },
+    {
+      "consistency_loss": 0.011933649890124798,
+      "reward_loss": 1.3933964967727661,
+      "value_loss": 1.3932504653930664,
+      "pi_loss": 0.00042378774378448725,
+      "total_loss": 0.5173376798629761,
+      "grad_norm": 7.712510585784912,
+      "pi_grad_norm": 0.006026259157806635,
+      "pi_scale": 1.0
+    },
+    {
+      "consistency_loss": 0.012043938040733337,
+      "reward_loss": 1.391750454902649,
+      "value_loss": 1.3915725946426392,
+      "pi_loss": 0.00024153852427843958,
+      "total_loss": 0.5192110538482666,
+      "grad_norm": 9.659103393554688,
+      "pi_grad_norm": 0.005570864770561457,
+      "pi_scale": 1.0
+    }
+  ]
+}

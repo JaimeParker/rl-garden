@@ -114,7 +114,7 @@ from rl_garden.training.online._registry import registry
 @dataclass
 class TDMPC2Args(VisionTDMPC2TrainingArgs, EnvBackendArgs):
     """TD-MPC2 — implicit world model + CEM/MPPI planner (single-task,
-    single-env only; see ``rl_garden.algorithms.tdmpc2.agent`` docstring).
+    single-env only; see ``rl_garden.algorithms.tdmpc2`` module docstring).
 
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
     State-only observations by default; pass ``--obs.rgb <camera>`` for

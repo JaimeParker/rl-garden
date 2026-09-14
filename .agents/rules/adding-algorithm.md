@@ -28,14 +28,12 @@ Algorithm families, by base class:
 | Family | Base class(es) | Examples |
 |---|---|---|
 | Online RL (rollout + replay/buffer) | `OffPolicyAlgorithm` / `OnPolicyAlgorithm` | SAC, PPO, TD3 |
+| Model-based online RL (world model + planner/policy) | `ModelBasedAlgorithm(OffPolicyAlgorithm)` | TD-MPC2 |
 | Offline RL with a replay buffer | `OfflineRLAlgorithm` (+ `run_offline`) | IQL, CQL, AWAC |
 | Off2on (offline pretrain, then online) | `<Algo>Core` / `<Algo>(Core, OfflineRLAlgorithm)` / `_<Algo>RolloutTrainingShell(Off2OnReplayMixin, Core, OffPolicyAlgorithm)` / `Off2On<Algo>(Shell)` | IQL, AWAC (canonical) |
 | Chunked-dataset imitation (no replay buffer) | `OfflineRLAlgorithm`, own `train()` | BC, DiffusionBC, FlowBC, DAgger |
 
-`tdmpc2` is the one algorithm implemented as a sub-package
-(`rl_garden/algorithms/tdmpc2/`, plus `tdmpc2/multitask/`) rather than a flat
-module. There is no `rl_garden/algorithms/components/` package; do not invent
-one.
+There is no `rl_garden/algorithms/components/` package; do not invent one.
 
 ---
 
@@ -46,6 +44,7 @@ one.
 | Base class | Use for | Abstract methods | Constructor env arg |
 |---|---|---|---|
 | `OffPolicyAlgorithm` | SAC, TD3, and variants | `_setup_model()`, `train(gradient_steps, compute_info=False) -> dict[str, float]` | live vectorized env |
+| `ModelBasedAlgorithm(OffPolicyAlgorithm)` | TD-MPC2 and variants (world model + planner/amortized policy) | `_setup_model()`, `_update_model(batch) -> (metrics, posterior)`, `_update_actor_critic(batch, posterior) -> metrics`, `_update_targets()` | live vectorized env |
 | `OnPolicyAlgorithm` | PPO and variants | `_setup_model()`, `train() -> dict[str, float]` | live vectorized env |
 | `OfflineRLAlgorithm` | IQL, CQL, AWAC, and the chunked-dataset imitation family | `train(gradient_steps, compute_info=False) -> dict[str, float]` | `OfflineEnvSpec` (spaces + `num_envs`, no `reset`/`step`) |
 | `BaseAlgorithm` | custom loops fitting none of the above | `_setup_model()`, `learn(total_timesteps)` | `(env, eval_env=None, seed=1, device="auto", logger=None)` |
@@ -236,13 +235,70 @@ The following policy classes do not follow the contract above:
 - `UniO4MixturePolicy` — plain `nn.Module`, wraps sub-policies.
 - `RecedingHorizonPolicy` — inherits `BasePolicy` but does not accept
   `critic_extractor` (always `None`).
-- `TDMPC2Policy`, `MultitaskTDMPC2Policy` — world-model-owned encoders,
-  not policy-side.
+- `MultitaskTDMPC2Policy` — no observation/action space or rollout
+  `actor_extractor` role to declare (multitask training never touches a live
+  env; see `rl_garden/policies/tdmpc2_multitask_policy.py`'s docstring).
+  `TDMPC2Policy` (single-task) is now **in** contract (below) and no longer
+  belongs on this list.
 
 The FQL family (`FQLPolicy`, `FloQPolicy`, `ValueFlowsPolicy`, `FINOPolicy`)
 is an in-contract exception: under `encoder_sharing="separate"`, it keeps an
 extra actor-side `actor_bc_flow` encoder built separately by the algorithm
 through `FQLCore`; the critic uses `critic_extractor` as normal.
+
+**Model-based algorithms** (TD-MPC2; DreamerV3 planned): the algorithm's
+learned dynamics model IS the `actor_extractor` — `TDMPC2Policy`
+(`rl_garden/policies/tdmpc2_policy.py`) passes its
+`rl_garden.world_models.latent_consistency.LatentConsistencyModel` as
+`actor_extractor`, `critic_extractor=None`, `encoder_sharing="shared"`.
+`WorldModel` (`rl_garden/world_models/base.py`) does not subclass
+`BaseFeaturesExtractor` — its method surface (`encode`/`observe`/`step`/
+`reward`/`continue_`/`model_loss`, all operating on a `State =
+dict[str, Tensor]`) is much larger than a features extractor's single
+encode-and-return-features contract — instead it duck-types the specific
+attributes/methods `BasePolicy` actually touches on an extractor
+(`features_dim`, `extract()`, `update_normalizer()`; see `WorldModel`'s own
+docstring). A world-model-based policy's actor (policy prior / amortized
+policy head) and critic (value function) are separate modules owned by the
+policy, never by the world model — `rl_garden/networks/q_ensemble.py`,
+`rl_garden/networks/running_scale.py`, and TD-MPC2's own actor helpers
+(`rl_garden/policies/_tdmpc2_math.py`) are the reusable pieces; decision-time
+planning (TD-MPC2's CEM/MPPI) lives in `rl_garden/planners/`, separate from
+the model and the policy, and is injected the policy's `pi`/`Q` as
+`policy_prior`/`value_fn` callbacks rather than reaching into them directly.
+
+**`ModelBasedAlgorithm`** (`rl_garden/algorithms/model_based.py`,
+`OffPolicyAlgorithm` subclass) is the base for this family. Override exactly
+three hooks, never `train()`/`_gradient_step()` themselves (both are shared):
+
+- `_update_model(batch) -> (metrics, posterior)` — trains the world model
+  (and, for TD-MPC2, the critic in the same backward — a TD-MPC2-specific
+  choice, document it if your algorithm does the same). `posterior` is
+  whatever LIVE (graph-attached, see `WorldModel.model_loss`'s docstring)
+  `State` the world model's own `model_loss()` returned.
+  `_update_actor_critic` reads it directly (own gradient path) or detaches it
+  first (an already-stepped model, TD-MPC2's case) — that choice belongs to
+  `_update_actor_critic`, not here.
+- `_update_actor_critic(batch, posterior) -> metrics` — trains the actor (and
+  the critic, if not already folded into `_update_model`).
+  `TDMPC2._update_actor_critic` detaches `posterior["z"]` before calling
+  `_update_pi` for exactly this reason.
+- `_update_targets()` — Polyak/hard target-network update(s), run once per
+  gradient step after the two above.
+
+`_rollout_action` is decision-time action selection: TD-MPC2's planner
+(`self.policy.planner.plan(...)`, threading its OWN `prev_mean`/`t0` state,
+kept separate from `self.policy.predict()`'s eval-only state — see
+`TDMPC2._rollout_action`'s docstring for why the two must not share state)
+or, for an amortized-policy model-based algorithm with nothing decision-time
+to plan, the inherited `OffPolicyAlgorithm` default (`self.policy.predict()`)
+may be enough — don't override it unless your action selection genuinely
+needs algorithm-owned state the policy doesn't already carry.
+
+A `learning_starts`-sized pretrain burst (TD-MPC2's upstream `seed_steps`
+semantics) is `_on_learning_starts()` (`OffPolicyAlgorithm` hook, default
+no-op) — see that hook's docstring for exactly when it's called and why it
+replaces, not adds to, that iteration's regular `train()` call.
 
 See `SAC` and `PPO` (`rl_garden/algorithms/sac.py`, `ppo.py`) for the
 reference implementations. There is no separate vision-specific wiring path

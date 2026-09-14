@@ -7,6 +7,10 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `_observation.py` holds `ObservationEncoderMixin` (Layer C: turns an
   algorithm's `encoder_config`/`obs_groups`/`critic_encoder_config`/
   `encoder_sharing` into built feature extractors via `_policy_extractor_kwargs()`).
+  `model_based.py` holds `ModelBasedAlgorithm` (`OffPolicyAlgorithm` subclass;
+  TD-MPC2's base, see `.agents/rules/adding-algorithm.md`'s "model-based
+  algorithms" section) — flat modules `tdmpc2.py`/`tdmpc2_multitask.py`, no
+  sub-package.
 - `rl_garden/observations/` — the observation composition contract (Layer A):
   `ObservationConfig` ("what is observed" — state/rgb/depth cameras/extra_state
   auxiliary keys, image size, frame stacking), `ObservationSchema`/`Modality`/
@@ -20,6 +24,11 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   encoder_sharing=...)`, and use `extract_actor_features()`/`extract_critic_features()`
   and their dimension properties for head construction.
 - `rl_garden/buffers/` — tensor, dict, Monte-Carlo, and rollout buffers.
+  `sequence_replay_buffer.py` holds `SequenceReplayBuffer`, the unified
+  `(T, N)` windowed buffer strict single-episode windows (TD-MPC2,
+  `cross_episode=False`) and boundary-tolerant windows
+  (`RecurrentReplayBuffer`/`TransformerReplayBuffer`, `cross_episode=True`)
+  are both built from.
 - `rl_garden/encoders/` — state, CNN, RGBD/proprio, pooling, FiLM, and ResNet
   encoders (Layer B — "how observations are encoded"). `config.py` holds
   `EncoderConfig` (the `--encoder.*` CLI surface); `registry.py` holds
@@ -27,7 +36,24 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   holds `build_observation_encoder(observation_space, encoder_config, ...)`,
   the one entry point that builds a `FlattenExtractor` (state-only) or
   `CombinedExtractor` (Dict with images) feature extractor.
-- `rl_garden/networks/` — actor, critic, value, and MLP backbone builders.
+- `rl_garden/networks/` — actor, critic, value, and MLP backbone builders,
+  plus model-based-RL numeric primitives shared across world-model
+  implementations (`symlog.py`, `twohot.py`, `normed_mlp.py`,
+  `running_scale.py`, `q_ensemble.py`, `returns.py`'s `lambda_return`,
+  `init.py`).
+- `rl_garden/world_models/` — the abstract `WorldModel`/`State` contract
+  (`base.py`) every model-based algorithm's learned dynamics model
+  implements, the shared `imagine()` rollout primitive (`imagine.py`), and
+  TD-MPC2's `LatentConsistencyModel` (`latent_consistency.py`). A world
+  model owns encoder/dynamics/reward/(optional termination) only — actor
+  and critic live on the owning `BasePolicy` (see `rl_garden/policies/`
+  below and `.agents/rules/adding-algorithm.md`'s "model-based algorithms"
+  section).
+- `rl_garden/planners/` — decision-time planners (TD-MPC2's CEM/MPPI,
+  `mppi.py`) that search over a `WorldModel` rollout instead of the policy
+  producing an action directly. Not shared with imagination-based
+  algorithms (DreamerV3), which use `rl_garden.world_models.imagine`
+  instead.
 - `rl_garden/common/` — logging, shared CLI arguments, environment arguments,
   checkpoint I/O, optimization, types, and utilities.
 - `rl_garden/envs/` — backend registry and implementations, environment factories,

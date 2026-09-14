@@ -36,7 +36,7 @@ this repository.
 | RLPDHybrid | `algorithms/rlpd_hybrid.py` | RLPD (above) + HIL-SERL's hybrid discrete-gripper head, Luo et al. 2024, [arXiv:2410.21845](https://arxiv.org/abs/2410.21845) | Ported (hybrid head) from [hil-serl](https://github.com/rail-berkeley/hil-serl) |
 | ExPLORe | `algorithms/explore.py` | Li et al. 2023, [arXiv:2311.05067](https://arxiv.org/abs/2311.05067) | Built on rl-garden's own `RLPD`; reward/mask relabeling head and RND novelty bonus ported from [ExPLORe](https://github.com/facebookresearch/ExPLORe) |
 | SUPE | `algorithms/supe.py` | Wilcoxson et al. 2025, [arXiv:2410.18076](https://arxiv.org/abs/2410.18076) | Built on rl-garden's own `ExPLORe` (inherited verbatim: reward/mask relabeling, RND, offline/online mixing); skill-macro-action env wrapper and offline skill-relabeling ported from [SUPE](https://github.com/rail-berkeley/SUPE); consumes an `OPAL` (below) checkpoint for its frozen skill decoder |
-| TDMPC2 | `algorithms/tdmpc2/` | Hansen et al. 2023, [arXiv:2310.16828](https://arxiv.org/abs/2310.16828) | Ported from [tdmpc2](https://github.com/nicklashansen/tdmpc2) (not currently vendored) |
+| TDMPC2 | `algorithms/tdmpc2.py` | Hansen et al. 2023, [arXiv:2310.16828](https://arxiv.org/abs/2310.16828) | Ported from [tdmpc2](https://github.com/nicklashansen/tdmpc2) (not currently vendored) |
 | DPPO | `algorithms/dppo.py` | Ren et al. 2024, [arXiv:2409.00588](https://arxiv.org/abs/2409.00588) | Ported from [dppo](https://github.com/irom-princeton/dppo) |
 | SACFlow | `algorithms/sac_flow.py` | RLinf, [arXiv:2509.15965](https://arxiv.org/abs/2509.15965) | Ported from [RLinf](https://github.com/RLinf/RLinf) |
 | ACRLPD | `algorithms/acrlpd.py` | Q-chunking, Li et al. 2025, [arXiv:2507.07969](https://arxiv.org/abs/2507.07969) | Ported from [QC](https://github.com/ColinQiyangLi/qc) |
@@ -73,7 +73,7 @@ this repository.
 | FQL | `algorithms/fql.py` | Park et al. 2025, [arXiv:2502.02538](https://arxiv.org/abs/2502.02538) | Ported from [fql](https://github.com/seohongpark/fql) |
 | QGF | `algorithms/qgf.py` | [arXiv:2606.11087](https://arxiv.org/abs/2606.11087) | Ported from [qgf](https://github.com/zhouzypaul/qgf) |
 | QAM | `algorithms/qam.py` | [arXiv:2601.14234](https://arxiv.org/abs/2601.14234), building on Adjoint Matching (Domingo-Enrich et al. 2024, [arXiv:2409.08861](https://arxiv.org/abs/2409.08861)) | Ported from [qgf](https://github.com/zhouzypaul/qgf) and standalone [qam](https://github.com/ColinQiyangLi/qam) |
-| TDMPC2 (multitask) | `algorithms/tdmpc2/multitask/` | Same as online TDMPC2 | Same as online TDMPC2 |
+| TDMPC2 (multitask) | `algorithms/tdmpc2_multitask.py` | Same as online TDMPC2 | Same as online TDMPC2 |
 | BPPO | `algorithms/bppo.py` | Zhuang et al. 2023, ICLR, [arXiv:2302.11312](https://arxiv.org/abs/2302.11312) | Ported from [BPPO](https://github.com/Dragon-Zhuang/BPPO); critic phase shared with rl-garden's own `UniO4` via `BPPOCriticMixin` |
 | UniO4 | `algorithms/unio4.py` | Lei et al. 2024, ICLR, [arXiv:2311.03351](https://arxiv.org/abs/2311.03351) | Ported from [Uni-O4](https://github.com/Lei-Kun/Uni-O4); builds on rl-garden's own `BPPO` |
 | UniO4OPE | `algorithms/unio4_ope.py` | Same as UniO4 (dynamics-model OPE gating variant) | Built on rl-garden's own `UniO4`; OPE gating ported from [Uni-O4](https://github.com/Lei-Kun/Uni-O4)'s `main.py:280-330`, `abppo.py:314-322`, `dynamics_eval.py::rollout` |

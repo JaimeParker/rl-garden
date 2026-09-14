@@ -12,7 +12,7 @@ storing a hidden-state snapshot at every position affordable). Here ``stride``
 is simply ``1``: every buffer position is a valid, independently-sampleable
 window start once it has ``burn_in_len + learning_len + forward_len`` steps of
 contiguous history ahead of it. This buffer therefore shares
-``_CheckpointedSequenceReplayBuffer`` (storage/checkpoint scaffolding,
+``SequenceReplayBuffer`` (``cross_episode=True``: storage/checkpoint scaffolding,
 ``RecurrentSamplingMixin`` sampling/contiguity/n-step accumulation,
 ``FinalObsTableMixin`` final-obs side table, ``SumTree`` priority tree) with
 ``RecurrentReplayBuffer`` unmodified, and leaves the hidden-state checkpoint
@@ -27,8 +27,8 @@ from typing import Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._checkpointed_sequence_buffer import _CheckpointedSequenceReplayBuffer
 from rl_garden.buffers.replay_buffer import _tree_to_device
+from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.common.types import Obs
 
 
@@ -45,7 +45,7 @@ class TransformerReplayBufferSample:
     is_weights: torch.Tensor                    # (B,)
 
 
-class TransformerReplayBuffer(_CheckpointedSequenceReplayBuffer):
+class TransformerReplayBuffer(SequenceReplayBuffer):
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -68,6 +68,7 @@ class TransformerReplayBuffer(_CheckpointedSequenceReplayBuffer):
             action_space,
             num_envs,
             buffer_size,
+            cross_episode=True,
             burn_in_len=burn_in_len,
             learning_len=learning_len,
             forward_len=forward_len,

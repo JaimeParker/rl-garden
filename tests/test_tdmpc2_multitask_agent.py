@@ -6,7 +6,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, run_offline_pretraining
-from rl_garden.algorithms.tdmpc2.multitask import TDMPC2Multitask
+from rl_garden.algorithms.tdmpc2_multitask import TDMPC2Multitask
 
 _TASKS = ["task_a", "task_b", "task_c"]
 _OBS_DIMS = [4, 6, 5]
@@ -79,13 +79,13 @@ def test_gradient_step_produces_finite_losses_and_updates_both_optimizers(tmp_pa
     world_model = agent.policy.world_model
 
     dyn_before = [p.detach().clone() for p in world_model._dynamics.parameters()]
-    pi_before = [p.detach().clone() for p in world_model._pi.parameters()]
+    pi_before = [p.detach().clone() for p in agent.policy.actor.parameters()]
 
     info = agent.train(gradient_steps=1, compute_info=True)
 
     assert info["total_loss"] == info["total_loss"]  # not NaN
     assert any(not torch.equal(a, b) for a, b in zip(dyn_before, world_model._dynamics.parameters()))
-    assert any(not torch.equal(a, b) for a, b in zip(pi_before, world_model._pi.parameters()))
+    assert any(not torch.equal(a, b) for a, b in zip(pi_before, agent.policy.actor.parameters()))
 
 
 def test_predict_action_masking_holds_through_a_training_step(tmp_path):
@@ -96,7 +96,7 @@ def test_predict_action_masking_holds_through_a_training_step(tmp_path):
 
     z = torch.randn(5, world_model.latent_dim)
     task = torch.tensor([0, 2, 0, 2, 0])  # action_dim=2 < max=3
-    action, _ = world_model.pi(z, task)
+    action, _ = agent.policy.pi(z, task)
     assert torch.all(action[:, 2] == 0.0)
 
 
