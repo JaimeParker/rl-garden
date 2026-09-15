@@ -63,8 +63,15 @@ class _FakeLogger:
     def __init__(self):
         self.scalars = []
 
-    def add_scalar(self, tag: str, value: float, step: int) -> None:
-        self.scalars.append((tag, value, step))
+    def add_scalar(
+        self,
+        tag: str,
+        value: float,
+        step: int,
+        *,
+        step_metric: str | None = None,
+    ) -> None:
+        self.scalars.append((tag, value, step, step_metric))
 
 
 def _agent() -> RLPDHybrid:
@@ -147,8 +154,8 @@ def test_hil_serl_learner_loop_logs_actor_episode_metrics(tmp_path):
     loop._on_transition(transition)
 
     assert logger.scalars == [
-        ("train/success_at_end", 1.0, 1),
-        ("train/return", 2.0, 1),
+        ("train/success_at_end", 1.0, 1, None),
+        ("train/return", 2.0, 1, None),
     ]
 
 

@@ -39,6 +39,7 @@ from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.real_world.sync import LearnerSyncServer
 
 _TRANSITION_TENSOR_KEYS = ("obs", "next_obs", "action", "reward", "done")
+_EVAL_STEP_METRIC = "steps/eval_received_transitions"
 
 
 class LearnerLoop:
@@ -60,12 +61,16 @@ class LearnerLoop:
         publish_freq: int = 100,
         idle_poll_interval: float = 0.1,
         monitor_interval: float = 5.0,
+        eval_freq: Optional[int] = None,
     ) -> None:
         self.agent = agent
         self.train_freq = train_freq
         self.publish_freq = publish_freq
         self.idle_poll_interval = idle_poll_interval
         self.monitor_interval = monitor_interval
+        self.eval_freq = (
+            int(getattr(agent, "eval_freq", 0)) if eval_freq is None else int(eval_freq)
+        )
 
         self._lock = threading.Lock()
         self._received = 0
@@ -74,7 +79,10 @@ class LearnerLoop:
         self._last_monitor_ts: Optional[float] = None
         self._last_monitor_received = 0
         self._last_monitor_update = 0
+        self._last_train_log_step = 0
+        self._last_eval_step = 0
         self._server = LearnerSyncServer(host, port, on_transition=self._on_transition)
+        self._define_wandb_step_metrics()
 
     @property
     def received_transitions(self) -> int:
@@ -124,22 +132,21 @@ class LearnerLoop:
         on-disk dataset (e.g. HIL-SERL's demo/correction data). No-op by
         default -- SERL doesn't need it."""
 
-    def _should_log_train_info(self, gradient_steps: int) -> bool:
+    def _should_log_train_info(self, step: int) -> bool:
         if getattr(self.agent, "logger", None) is None:
             return False
         log_freq = int(getattr(self.agent, "log_freq", 0))
         if log_freq <= 0:
             return False
-        update = int(self.agent.global_update)
-        return update // log_freq < (update + gradient_steps) // log_freq
+        return self._last_train_log_step // log_freq < step // log_freq
 
-    def _log_train_info(self, info: dict[str, float]) -> None:
+    def _log_train_info(self, info: dict[str, float], step: int) -> None:
         if not info:
             return
         logger = getattr(self.agent, "logger", None)
         if logger is None:
             return
-        logger.log_metrics(info, int(self.agent.global_update))
+        logger.log_metrics(info, step)
 
     def _log_episode_metrics(self, metrics: Any, step: int) -> None:
         if not isinstance(metrics, dict):
@@ -153,14 +160,76 @@ class LearnerLoop:
 
     def _train_step(self, compute_info: Optional[bool] = None) -> dict[str, float]:
         gradient_steps = max(1, int(self.train_freq * self.agent.utd))
+        step = self.received_transitions
         if compute_info is None:
-            compute_info = self._should_log_train_info(gradient_steps)
+            compute_info = self._should_log_train_info(step)
         with self._lock:
             info = self.agent.train(gradient_steps, compute_info=compute_info)
         if compute_info:
-            self._log_train_info(info)
+            self._log_train_info(info, step)
+            self._last_train_log_step = step
+        self._maybe_evaluate(step)
         self._maybe_save_periodic_checkpoint()
         return info
+
+    def _maybe_evaluate(self, step: int) -> None:
+        if self.eval_freq <= 0:
+            return
+        if getattr(self.agent, "eval_env", None) is None:
+            return
+        if self._last_eval_step // self.eval_freq >= step // self.eval_freq:
+            return
+
+        start = time.perf_counter()
+        metrics = self.agent._evaluate()
+        eval_time = time.perf_counter() - start
+        self._last_eval_step = step
+
+        logger = getattr(self.agent, "logger", None)
+        if logger is not None:
+            for key, value in metrics.items():
+                if isinstance(value, (int, float)):
+                    logger.add_scalar(
+                        f"eval/{key}",
+                        float(value),
+                        step,
+                        step_metric=_EVAL_STEP_METRIC,
+                    )
+            logger.add_scalar(
+                "time/eval_time",
+                eval_time,
+                step,
+                step_metric=_EVAL_STEP_METRIC,
+            )
+
+        if bool(getattr(self.agent, "std_log", False)):
+            eval_return = metrics.get("return")
+            eval_success = metrics.get("success_at_end", metrics.get("success_once"))
+            print(
+                "[eval] "
+                f"step={step} "
+                f"return={self._fmt_metric(eval_return)} "
+                f"success_at_end={self._fmt_metric(eval_success)}",
+                flush=True,
+            )
+
+    @staticmethod
+    def _fmt_metric(value: Any) -> str:
+        if value is None:
+            return "nan"
+        try:
+            return f"{float(value):.4f}"
+        except (TypeError, ValueError):
+            return "nan"
+
+    def _define_wandb_step_metrics(self) -> None:
+        logger = getattr(self.agent, "logger", None)
+        define_metric = getattr(logger, "define_metric", None)
+        if define_metric is None:
+            return
+        define_metric(_EVAL_STEP_METRIC)
+        define_metric("eval/*", step_metric=_EVAL_STEP_METRIC)
+        define_metric("time/eval_time", step_metric=_EVAL_STEP_METRIC)
 
     def _maybe_save_periodic_checkpoint(self) -> None:
         agent = self.agent

@@ -15,6 +15,7 @@ Example:
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import time
@@ -27,10 +28,14 @@ import numpy as np
 import torch
 import tyro
 
-from rl_garden.algorithms import ResidualSAC
+from rl_garden.algorithms import ResidualHilSerlSAC
 from rl_garden.common import seed_everything
 from rl_garden.common.checkpoint import load_checkpoint_file
-from rl_garden.common.cli_args import image_encoder_factory_from_args, image_keys_from_env
+from rl_garden.common.cli_args import (
+    image_encoder_factory_from_args,
+    image_keys_from_env,
+    vit_sac_kwargs_from_args,
+)
 from rl_garden.common.utils import get_device
 from rl_garden.envs import ManiSkillEnvConfig, make_maniskill_env
 from rl_garden.policies.base_policies import make_base_policy
@@ -50,23 +55,40 @@ class EvalResidualRGBDPegArgs:
     include_state: bool = True
     camera_width: Optional[int] = 64
     camera_height: Optional[int] = 64
-    encoder: Literal["plain_conv", "resnet10", "resnet18"] = "plain_conv"
+    encoder: Literal["plain_conv", "resnet10", "resnet18", "vit"] = "plain_conv"
     encoder_features_dim: int = 256
     image_fusion_mode: Literal["stack_channels", "per_key"] = "per_key"
+    vit_fusion_mode: Literal["per_key", "stack_channels"] = "per_key"
+    vit_embed_dim: int = 128
+    vit_depth: int = 1
+    vit_num_heads: int = 4
+    vit_embed_norm: bool = False
+    vit_augmentation: Literal["random_shift", "none"] = "random_shift"
+    vit_random_shift_pad: int = 4
+    vit_actor_feature_dim: int = 128
+    vit_critic_spatial_emb_dim: int = 1024
     pretrained_weights: Optional[str] = None
     freeze_resnet_encoder: bool = False
     freeze_resnet_backbone: bool = False
+    pooling_method: Literal[
+        "spatial_learned_embeddings", "spatial_softmax", "avg"
+    ] = "spatial_softmax"
+    plain_conv_weight_init: Literal["kaiming_uniform", "orthogonal"] = "kaiming_uniform"
+    plain_conv_last_act: bool = True
+    plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten"
+    image_keys: Optional[str] = None
     per_camera_rgbd: bool = True
 
     control_mode: str = "pd_ee_delta_pose"
     sim_backend: str = "gpu"
     render_backend: str = "gpu"
-    reward_mode: str = "normalized_dense"
-    robot_uids: str = "panda_wristcam_gripper_closed"
-    fix_peg_pose: bool = False
-    fix_box: bool = True
-    fixed_peg_xy: tuple[float, float] = (-0.05, -0.15)
-    fixed_peg_z_rot_deg: float = 67.5
+    reward_mode: Optional[str] = "normalized_dense"
+    env_kwargs_json: str = "{}"
+    robot_uids: Optional[str] = "panda_wristcam_gripper_closed"
+    fix_peg_pose: Optional[bool] = False
+    fix_box: Optional[bool] = True
+    fixed_peg_xy: Optional[tuple[float, float]] = (-0.05, -0.15)
+    fixed_peg_z_rot_deg: Optional[float] = 67.5
 
     residual_action_scale: float = 0.1
     base_policy: Literal["act", "sac", "zero"] = "act"
@@ -247,6 +269,9 @@ def combined_camera_frame(
 
 
 def _make_eval_env(args: EvalResidualRGBDPegArgs):
+    env_kwargs = json.loads(args.env_kwargs_json) if args.env_kwargs_json else {}
+    if not isinstance(env_kwargs, dict):
+        raise TypeError("env_kwargs_json must decode to a JSON object.")
     cfg = ManiSkillEnvConfig(
         env_id=args.env_id,
         num_envs=args.num_eval_envs,
@@ -261,6 +286,7 @@ def _make_eval_env(args: EvalResidualRGBDPegArgs):
         fix_box=args.fix_box,
         fixed_peg_xy=args.fixed_peg_xy,
         fixed_peg_z_rot_deg=args.fixed_peg_z_rot_deg,
+        env_kwargs=env_kwargs,
         reconfiguration_freq=1,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
@@ -305,11 +331,12 @@ def _make_base_action_provider(args: EvalResidualRGBDPegArgs, env):
     return provider
 
 
-def _make_agent(args: EvalResidualRGBDPegArgs, env, device: torch.device) -> ResidualSAC:
+def _make_agent(args: EvalResidualRGBDPegArgs, env, device: torch.device) -> ResidualHilSerlSAC:
     factory = image_encoder_factory_from_args(args)
     image_keys = image_keys_from_env(env, args)
+    sac_kwargs = vit_sac_kwargs_from_args(args, image_keys)
     base_action_provider = _make_base_action_provider(args, env)
-    return ResidualSAC(
+    return ResidualHilSerlSAC(
         env=env,
         eval_env=env,
         base_action_provider=base_action_provider,
@@ -331,6 +358,7 @@ def _make_agent(args: EvalResidualRGBDPegArgs, env, device: torch.device) -> Res
         image_keys=image_keys,
         image_encoder_factory=factory,
         image_fusion_mode=args.image_fusion_mode,
+        **sac_kwargs,
     )
 
 
@@ -388,8 +416,13 @@ def _apply_checkpoint_config(args: EvalResidualRGBDPegArgs, checkpoint: dict) ->
         args.encoder = inferred_encoder  # type: ignore[assignment]
     if inferred_encoder is None:
         has_plain_conv = any(".cnn." in key for key in policy_state)
+        has_vit = any(".image_encoders." in key for key in policy_state) or any(
+            key.startswith("_actor_adapter.") for key in policy_state
+        )
         if has_plain_conv:
             args.encoder = "plain_conv"
+        elif has_vit:
+            args.encoder = "vit"
 
     inferred_features_dim = _infer_encoder_features_dim(policy_state)
     if inferred_features_dim is not None:

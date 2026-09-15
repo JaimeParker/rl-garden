@@ -56,6 +56,7 @@ class HilSerlLearnerLoop(LearnerLoop):
         publish_freq: int = 100,
         idle_poll_interval: float = 0.1,
         monitor_interval: float = 5.0,
+        eval_freq: int | None = None,
     ) -> None:
         super().__init__(
             agent,
@@ -65,6 +66,7 @@ class HilSerlLearnerLoop(LearnerLoop):
             publish_freq,
             idle_poll_interval,
             monitor_interval,
+            eval_freq,
         )
         self._checkpoint_dir = checkpoint_dir
         self._buffer_period = buffer_period

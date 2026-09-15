@@ -34,6 +34,7 @@ class EpisodeMetricTracker:
         self._return = 0.0
         self._length = 0
         self._success_once = False
+        self._intervened_steps = 0
 
     def record(
         self,
@@ -41,23 +42,28 @@ class EpisodeMetricTracker:
         terminated: Any,
         truncated: Any,
         info: dict[str, Any],
+        intervened: Any = False,
     ) -> Optional[dict[str, float]]:
         reward_value = self._float_mean(reward)
         self._return += reward_value
         self._length += 1
         success = self._bool_any(info.get("success", False))
         self._success_once = self._success_once or success
+        if self._bool_any(intervened):
+            self._intervened_steps += 1
 
         done = self._bool_any(terminated) or self._bool_any(truncated)
         if not done:
             return None
 
+        episode_len = max(1, self._length)
         fallback = {
             "return": self._return,
             "episode_len": float(self._length),
-            "reward": self._return / max(1, self._length),
+            "reward": self._return / episode_len,
             "success_once": float(self._success_once),
             "success_at_end": float(success),
+            "intervention_rate": self._intervened_steps / episode_len,
         }
         metrics = self._final_info_episode_metrics(info)
         if metrics is None:
@@ -188,8 +194,9 @@ class ActorLoop:
                 policy_action = self._predict(obs)
                 env_action = policy_action.to(self.env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                intervened = "intervene_action" in info
                 episode_metrics = self.episode_metrics.record(
-                    reward, terminated, truncated, info
+                    reward, terminated, truncated, info, intervened=intervened
                 )
 
                 executed_action = info.get("intervene_action", policy_action)
@@ -298,8 +305,9 @@ class FWBWActorLoop:
                     )
                 env_action = policy_action.to(ActorLoop.env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
+                intervened = "intervene_action" in info
                 episode_metrics = self.episode_metrics.record(
-                    reward, terminated, truncated, info
+                    reward, terminated, truncated, info, intervened=intervened
                 )
 
                 executed_action = info.get("intervene_action", policy_action)

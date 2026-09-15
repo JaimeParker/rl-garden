@@ -396,6 +396,7 @@ def test_actor_loop_uses_hitl_reset_after_done_hook_without_manual_reset(capsys)
         "reward": 0.0,
         "success_once": 1.0,
         "success_at_end": 1.0,
+        "intervention_rate": 0.0,
     }
     assert "[actor] step=1 success=true" in capsys.readouterr().out
 
@@ -422,6 +423,30 @@ def test_actor_loop_falls_back_to_manual_seeded_reset_without_hook():
     assert len(agent.reset_obs) == 2
     assert torch.equal(agent.reset_obs[0], torch.full((1, 4), 1.0))
     assert torch.equal(agent.reset_obs[1], torch.full((1, 4), 2.0))
+
+
+def test_actor_loop_records_episode_intervention_rate():
+    class _IntervenedDoneEnv(_DoneAfterOneStepEnv):
+        def step(self, action):
+            next_obs, reward, terminated, truncated, info = super().step(action)
+            info["intervene_action"] = torch.ones((1, 6), dtype=torch.float32)
+            return next_obs, reward, terminated, truncated, info
+
+    env = _IntervenedDoneEnv()
+    agent = _FakeLoopAgent()
+    sync_client = _FakeSyncClient()
+    loop = ResidualHilSerlActorLoop(
+        env,
+        agent,
+        sync_client,
+        control_hz=1_000_000.0,
+        seed=7,
+        show_rgb_window=False,
+    )
+
+    loop.run(total_steps=1)
+
+    assert sync_client.transitions[0]["episode_metrics"]["intervention_rate"] == 1.0
 
 
 def test_actor_env_request_uses_visual_camera_resolution_for_actor():
@@ -562,14 +587,25 @@ def test_actor_rgb_viewer_splits_stacked_multicamera_rgb_channels():
 def test_run_learner_initializes_demo_buffer_and_loop(monkeypatch, tmp_path):
     captured = {}
     fake_agent = _FakeAgent()
+    train_env = _FakeEnv()
+    eval_env = _FakeEnv()
 
     monkeypatch.setattr(
         "rl_garden.training.hitl.residual_hil_serl._build_env",
-        lambda args, env_request, **kwargs: _FakeEnv(),
+        lambda args, env_request, **kwargs: train_env,
     )
     monkeypatch.setattr(
+        "rl_garden.training.hitl.residual_hil_serl._build_eval_env",
+        lambda args, env_request: eval_env,
+    )
+
+    def _fake_build(args, env, eval_env_arg, logger, checkpoint_dir):
+        captured["build_eval_env"] = eval_env_arg
+        return fake_agent
+
+    monkeypatch.setattr(
         "rl_garden.training.hitl.residual_hil_serl.build_residual_hil_serl",
-        lambda args, env, eval_env, logger, checkpoint_dir: fake_agent,
+        _fake_build,
     )
 
     class _FakeLogger:
@@ -601,6 +637,7 @@ def test_run_learner_initializes_demo_buffer_and_loop(monkeypatch, tmp_path):
         demo_buffer_size=64,
         demo_data_ratio=0.25,
         buffer_period=50,
+        eval_freq=100,
     )
     _run_learner(args)
 
@@ -610,3 +647,5 @@ def test_run_learner_initializes_demo_buffer_and_loop(monkeypatch, tmp_path):
     assert captured["learner"]["host"] == "0.0.0.0"
     assert captured["learner"]["port"] == 6000
     assert captured["learner"]["buffer_period"] == 50
+    assert captured["learner"]["eval_freq"] == 100
+    assert captured["build_eval_env"] is eval_env

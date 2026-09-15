@@ -119,6 +119,14 @@ def _build_env(args, env_request, *, enable_teleop: bool, enable_classifier: boo
     return env
 
 
+def _build_eval_env(args, env_request):
+    from rl_garden.envs.backend_registry import make_evaluation_env
+
+    if args.env_backend != "maniskill":
+        return None
+    return make_evaluation_env(args.env_backend, env_request)
+
+
 def build_residual_hil_serl(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import ResidualHilSerlSAC
     from rl_garden.common.cli_args import (
@@ -491,9 +499,6 @@ class ResidualHilSerlActorLoop:
                 env_action, final_actions, base_actions = self._select_action(obs)
                 env_action = env_action.to(self._env_device(obs))
                 next_obs, reward, terminated, truncated, info = self.env.step(env_action)
-                episode_metrics = self.episode_metrics.record(
-                    reward, terminated, truncated, info
-                )
                 print(
                     f"[actor] step={step + 1} success={self._success_label(info)}",
                     flush=True,
@@ -502,6 +507,9 @@ class ResidualHilSerlActorLoop:
                     self.rgb_viewer.show(self._viewer_obs(next_obs))
 
                 intervened = "intervene_action" in info
+                episode_metrics = self.episode_metrics.record(
+                    reward, terminated, truncated, info, intervened=intervened
+                )
                 replay_action = final_actions
                 if intervened:
                     replay_action = self.agent.action_scaler.scale(
@@ -769,8 +777,20 @@ def _run_learner(args) -> None:
         args, run_name=run_name, create_eval_env=False
     )
     env = _build_env(args, env_request, enable_teleop=False, enable_classifier=False)
+    eval_env = None
+    if args.eval_freq > 0:
+        eval_request = _residual_hil_serl_env_request(
+            args, run_name=run_name, create_eval_env=True
+        )
+        eval_env = _build_eval_env(args, eval_request)
+        if eval_env is None and args.std_log:
+            print(
+                "[eval] learner-side eval is only enabled for env_backend='maniskill'; "
+                f"skipping env_backend={args.env_backend!r}.",
+                flush=True,
+            )
     agent = build_residual_hil_serl(
-        args, env, None, logger=logger, checkpoint_dir=checkpoint_dir
+        args, env, eval_env, logger=logger, checkpoint_dir=checkpoint_dir
     )
     apply_checkpoint_retention(agent, args)
     agent.init_demo_buffer(args.demo_buffer_size, args.demo_data_ratio)
@@ -785,6 +805,7 @@ def _run_learner(args) -> None:
         train_freq=args.train_freq,
         publish_freq=args.publish_freq,
         monitor_interval=args.sync_monitor_interval_s,
+        eval_freq=args.eval_freq if eval_env is not None else 0,
     )
     try:
         loop.run()

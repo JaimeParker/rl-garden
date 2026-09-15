@@ -40,14 +40,31 @@ class _FakePolicy:
 
 class _FakeLogger:
     def __init__(self):
+        self.defined_metrics = []
         self.metrics = []
         self.scalars = []
 
-    def log_metrics(self, metrics: dict[str, float], step: int) -> None:
-        self.metrics.append((metrics, step))
+    def define_metric(self, name: str, *, step_metric: str | None = None) -> None:
+        self.defined_metrics.append((name, step_metric))
 
-    def add_scalar(self, tag: str, value: float, step: int) -> None:
-        self.scalars.append((tag, value, step))
+    def log_metrics(
+        self,
+        metrics: dict[str, float],
+        step: int,
+        *,
+        step_metric: str | None = None,
+    ) -> None:
+        self.metrics.append((metrics, step, step_metric))
+
+    def add_scalar(
+        self,
+        tag: str,
+        value: float,
+        step: int,
+        *,
+        step_metric: str | None = None,
+    ) -> None:
+        self.scalars.append((tag, value, step, step_metric))
 
 
 class _FakeAgent:
@@ -61,6 +78,9 @@ class _FakeAgent:
         save_final_checkpoint: bool = True,
         log_freq: int = 1000,
         logger=None,
+        eval_freq: int = 0,
+        eval_env=None,
+        std_log: bool = False,
     ):
         self.buffer_device = "cpu"
         self.replay_buffer = _FakeReplayBuffer()
@@ -74,9 +94,13 @@ class _FakeAgent:
         self.save_final_checkpoint = save_final_checkpoint
         self.log_freq = log_freq
         self.logger = logger
+        self.eval_freq = eval_freq
+        self.eval_env = eval_env
+        self.std_log = std_log
         self.global_update = 0
         self.save_calls: list[tuple[str, bool]] = []
         self.compute_info_calls: list[bool] = []
+        self.eval_calls = 0
 
     def train(self, gradient_steps: int, compute_info: bool = False):
         self.compute_info_calls.append(compute_info)
@@ -87,6 +111,10 @@ class _FakeAgent:
 
     def save(self, path, include_replay_buffer: bool = False):
         self.save_calls.append((str(path), include_replay_buffer))
+
+    def _evaluate(self):
+        self.eval_calls += 1
+        return {"return": 2.0, "success_at_end": 1.0}
 
 
 def _transition(value: float = 0.0) -> dict[str, torch.Tensor]:
@@ -110,6 +138,18 @@ def test_on_transition_adds_to_replay_buffer_with_device_cast():
     assert loop.received_transitions == 1
 
 
+def test_learner_loop_defines_wandb_custom_step_metrics():
+    logger = _FakeLogger()
+    agent = _FakeAgent(logger=logger)
+
+    LearnerLoop(agent, "127.0.0.1", 0)
+
+    assert ("steps/eval_received_transitions", None) in logger.defined_metrics
+    assert ("eval/*", "steps/eval_received_transitions") in logger.defined_metrics
+    assert ("time/eval_time", "steps/eval_received_transitions") in logger.defined_metrics
+    assert not any(name == "train/*" for name, _ in logger.defined_metrics)
+
+
 def test_on_transition_passes_extra_kwargs_through():
     agent = _FakeAgent()
     loop = LearnerLoop(agent, "127.0.0.1", 0)
@@ -128,15 +168,17 @@ def test_on_transition_logs_actor_episode_metrics_without_storing_them():
         "return": 3.0,
         "success_at_end": 1.0,
         "success_once": 1.0,
+        "intervention_rate": 0.5,
     }
 
     loop._on_transition(transition)
 
     assert "episode_metrics" not in agent.replay_buffer.add_calls[0]
     assert logger.scalars == [
-        ("train/return", 3.0, 1),
-        ("train/success_at_end", 1.0, 1),
-        ("train/success_once", 1.0, 1),
+        ("train/return", 3.0, 1, None),
+        ("train/success_at_end", 1.0, 1, None),
+        ("train/success_once", 1.0, 1, None),
+        ("train/intervention_rate", 0.5, 1, None),
     ]
 
 
@@ -248,13 +290,51 @@ def test_train_step_logs_metrics_when_update_crosses_log_freq():
     agent = _FakeAgent(utd=1.0, log_freq=2, logger=logger)
     loop = LearnerLoop(agent, "127.0.0.1", 0, train_freq=1, publish_freq=1)
 
+    loop._on_transition(_transition())
     loop._train_step()
     assert agent.compute_info_calls == [False]
     assert logger.metrics == []
 
+    loop._on_transition(_transition())
     loop._train_step()
     assert agent.compute_info_calls == [False, True]
-    assert logger.metrics == [({"critic_loss": 1.25}, 2)]
+    assert logger.metrics == [({"critic_loss": 1.25}, 2, None)]
+
+
+def test_train_step_runs_eval_when_received_transitions_cross_eval_freq():
+    logger = _FakeLogger()
+    agent = _FakeAgent(eval_freq=2, eval_env=object(), logger=logger)
+    loop = LearnerLoop(agent, "127.0.0.1", 0, train_freq=1, publish_freq=1)
+
+    loop._on_transition(_transition())
+    loop._train_step()
+    assert agent.eval_calls == 0
+
+    loop._on_transition(_transition())
+    loop._train_step()
+    assert agent.eval_calls == 1
+    assert ("eval/return", 2.0, 2, "steps/eval_received_transitions") in logger.scalars
+    assert (
+        "eval/success_at_end",
+        1.0,
+        2,
+        "steps/eval_received_transitions",
+    ) in logger.scalars
+    assert any(
+        tag == "time/eval_time"
+        and step == 2
+        and step_metric == "steps/eval_received_transitions"
+        for tag, _, step, step_metric in logger.scalars
+    )
+
+
+def test_train_step_skips_eval_without_eval_env():
+    agent = _FakeAgent(eval_freq=1, eval_env=None)
+    loop = LearnerLoop(agent, "127.0.0.1", 0, train_freq=1, publish_freq=1)
+
+    loop._train_step()
+
+    assert agent.eval_calls == 0
 
 
 def test_run_saves_final_checkpoint_on_stop_when_enabled():

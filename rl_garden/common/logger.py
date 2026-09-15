@@ -95,9 +95,25 @@ class Logger:
             raise RuntimeError("wandb.init() returned None; failed to initialize wandb run.")
         return cls(wandb_run=run, log_type="wandb")
 
-    def add_scalar(self, tag: str, value: Any, step: int) -> None:
+    def define_metric(self, name: str, *, step_metric: Optional[str] = None) -> None:
         if self.wandb_run is not None:
-            self.wandb_run.log({tag: value}, step=step)
+            define_metric = getattr(self.wandb_run, "define_metric", None)
+            if define_metric is not None:
+                define_metric(name, step_metric=step_metric)
+
+    def add_scalar(
+        self,
+        tag: str,
+        value: Any,
+        step: int,
+        *,
+        step_metric: Optional[str] = None,
+    ) -> None:
+        if self.wandb_run is not None:
+            if step_metric is None:
+                self.wandb_run.log({tag: value}, step=step)
+            else:
+                self.wandb_run.log({step_metric: step, tag: value})
         if self.writer is not None:
             self.writer.add_scalar(tag, value, step)
 
@@ -158,6 +174,7 @@ class Logger:
         *,
         metric_namespaces: dict[str, str] | None = None,
         default_namespace: str = "losses",
+        step_metric: Optional[str] = None,
     ) -> None:
         """Log RL training metrics with explicit namespace mapping.
 
@@ -180,7 +197,7 @@ class Logger:
                 continue
             # Use explicit mapping or default namespace
             full_path = metric_namespaces.get(key, f"{default_namespace}/{key}")
-            self.add_scalar(full_path, value, step)
+            self.add_scalar(full_path, value, step, step_metric=step_metric)
 
     @staticmethod
     def format_metrics(
