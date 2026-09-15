@@ -6,7 +6,10 @@ from torch import nn
 from gymnasium import spaces
 
 from rl_garden.models.act.config import ACTCheckpointSpec
-from rl_garden.models.act.provider import ACTBaseActionProvider
+from rl_garden.models.act.provider import (
+    ACTBaseActionProvider,
+    make_act_visual_obs_getter,
+)
 from rl_garden.policies.base_policies.act import ACTBasePolicy
 
 
@@ -44,6 +47,27 @@ def test_visual_act_space_still_accepts_channel_stacked_rgb_key() -> None:
         ACTCheckpointSpec(state_dim=5, action_dim=2, visual=True),
         obs_space,
         act_space,
+    )
+
+
+def test_visual_act_space_accepts_state_only_policy_obs_with_external_visuals() -> None:
+    obs_space = spaces.Dict(
+        {
+            "state": spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=(5,),
+                dtype=np.float32,
+            ),
+        }
+    )
+    act_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+
+    ACTBaseActionProvider._validate_spaces(
+        ACTCheckpointSpec(state_dim=5, action_dim=2, visual=True),
+        obs_space,
+        act_space,
+        has_external_visual_obs=True,
     )
 
 
@@ -92,3 +116,25 @@ def test_act_wrapper_to_refreshes_nested_provider_device() -> None:
 
     assert policy.device.type == "meta"
     assert provider.device.type == "meta"
+
+
+def test_act_visual_getter_uses_same_step_base_policy_cache() -> None:
+    class FakeEnv:
+        def __init__(self) -> None:
+            self.configured_size = None
+            self.visual_obs = {
+                "rgb": torch.full((1, 12, 16, 3), 17, dtype=torch.uint8),
+            }
+
+        def configure_base_policy_observation(self, image_size) -> None:
+            self.configured_size = image_size
+
+        def get_base_policy_observation(self):
+            return self.visual_obs
+
+    env = FakeEnv()
+    getter = make_act_visual_obs_getter(env, image_size=(12, 16))
+
+    assert getter is not None
+    assert env.configured_size == (12, 16)
+    assert getter()["rgb"].shape == (1, 12, 16, 3)

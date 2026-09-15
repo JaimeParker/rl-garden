@@ -23,6 +23,16 @@ env = make_robotwin_env(
 else, including threaded execution, task lifecycle management, action
 conversion, and reward injection, is internal to the RoboTwin env package.
 
+For the `open_laptop` ACT + Residual SAC delta-EE configuration, use the
+[RoboTwin fork](https://github.com/Nole326/RoboTwin) pinned to
+[`77ed01b786767dc1f912ff8e1cf0148ed7a7aae2`](https://github.com/Nole326/RoboTwin/tree/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2).
+It contains the executor changes previously delivered as an external patch.
+See the [pipeline guide](ROBOTWIN_OPEN_LAPTOP_RESIDUAL_CURRENT.md) for checkout
+and path setup, and the fork's
+[executor documentation](https://github.com/Nole326/RoboTwin/blob/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2/docs/DELTA_EE_EXECUTOR.md)
+for the changes. This dependency pin is specific to that configuration; it does
+not change the generic PPO examples below.
+
 ## Design Decisions
 
 RoboTwin support was designed to fit rl-garden, not to copy RLinf directly.

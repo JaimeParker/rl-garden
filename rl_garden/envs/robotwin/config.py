@@ -7,7 +7,9 @@ from typing import Any, Literal, Optional
 
 
 ControlMode = Literal["delta_joint_pos", "joint_pos", "delta_ee"]
+ObservationMode = Literal["state", "rgb"]
 RewardMode = Literal["dense", "sparse"]
+RewardShapingMode = Literal["absolute", "relative", "potential", "hybrid"]
 
 
 @dataclass
@@ -37,6 +39,7 @@ class RoboTwinEnvConfig:
     group_size: int = 1
     use_fixed_reset_state_ids: bool = False
     record_metrics: bool = True
+    executor_timeout_seconds: float = 180.0
 
     # Profiling.
     profile_timing: bool = False
@@ -55,6 +58,7 @@ class RoboTwinEnvConfig:
 
     # Observation/action behavior. RoboTwin-native end-effector delta control is
     # named "delta_ee" to match RoboTwin's take_action(action_type=...).
+    obs_mode: ObservationMode = "rgb"
     include_wrist_cameras: bool = True
     image_size: tuple[int, int] = (224, 224)
     head_camera_type: str = "D435"
@@ -66,11 +70,30 @@ class RoboTwinEnvConfig:
     ee_delta_rot_scale: float = 0.15
     gripper_delta_scale: float = 0.2
 
+    # Delta-EE executor settings forwarded to Base_Task.
+    delta_ee_command_reference: bool = False
+    delta_ee_command_reanchor: bool = False
+    delta_ee_planner_type: Optional[str] = None
+    delta_ee_command_reanchor_position_tolerance: float = 0.005
+    delta_ee_command_reanchor_rotation_tolerance: float = 0.03490658503988659
+    delta_ee_terminal_settle_tolerance: float = 0.0005
+    delta_ee_terminal_settle_max_ticks: int = 250
+
     # Reward behavior.
     reward_mode: RewardMode = "dense"
     reward_scale: float = 1.0
     reward_bias: float = 0.0
+    reward_shaping_mode: RewardShapingMode = "absolute"
     use_relative_reward: bool = False
+    dense_success_reward: float = 1.0
+    potential_discount: float = 0.99
+    potential_weight: float = 5.0
+    dense_weight: float = 0.03
+    relative_weight: float = 3.0
+    step_penalty: float = 0.003
+    stall_threshold: float = 1e-4
+    stall_penalty: float = 0.035
+    backtrack_penalty: float = 0.06
 
     # RoboTwin task defaults copied from RLinf_support env configs where useful.
     planner_backend: str = "mplib"
@@ -81,3 +104,41 @@ class RoboTwinEnvConfig:
     def __post_init__(self) -> None:
         if self.control_mode == "delta_ee" and self.action_dim != 14:
             raise ValueError("delta_ee control mode requires action_dim=14.")
+        if self.clear_cache_freq < 1:
+            raise ValueError("clear_cache_freq must be at least 1.")
+        if self.executor_timeout_seconds <= 0:
+            raise ValueError("executor_timeout_seconds must be positive.")
+        if self.reward_mode not in {"dense", "sparse"}:
+            raise ValueError(
+                f"Unsupported reward_mode={self.reward_mode!r}; "
+                "expected 'dense' or 'sparse'."
+            )
+        if self.reward_shaping_mode not in {
+            "absolute",
+            "relative",
+            "potential",
+            "hybrid",
+        }:
+            raise ValueError(
+                f"Unsupported reward_shaping_mode={self.reward_shaping_mode!r}."
+            )
+        if self.use_relative_reward and self.reward_shaping_mode != "absolute":
+            raise ValueError(
+                "use_relative_reward is the legacy dense reward delta switch; "
+                "do not combine it with reward_shaping_mode."
+            )
+        nonnegative = {
+            "dense_success_reward": self.dense_success_reward,
+            "potential_weight": self.potential_weight,
+            "dense_weight": self.dense_weight,
+            "relative_weight": self.relative_weight,
+            "step_penalty": self.step_penalty,
+            "stall_threshold": self.stall_threshold,
+            "stall_penalty": self.stall_penalty,
+            "backtrack_penalty": self.backtrack_penalty,
+        }
+        for name, value in nonnegative.items():
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative, got {value}.")
+        if not 0.0 <= self.potential_discount <= 1.0:
+            raise ValueError("potential_discount must be in [0, 1].")

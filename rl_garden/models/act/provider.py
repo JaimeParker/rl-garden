@@ -21,6 +21,7 @@ from rl_garden.models.act.config import (
 )
 
 StateObsGetter = Callable[[], torch.Tensor]
+VisualObsGetter = Callable[[], dict[str, torch.Tensor]]
 
 
 class BaseActionProvider(Protocol):
@@ -150,6 +151,29 @@ def make_act_state_obs_getter(
     return _getter
 
 
+def make_act_visual_obs_getter(
+    env: Any,
+    *,
+    image_size: tuple[int, int],
+) -> Optional[VisualObsGetter]:
+    """Bind an optional same-step, base-policy-resolution visual cache."""
+
+    current = env
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        configure = getattr(current, "configure_base_policy_observation", None)
+        getter = getattr(current, "get_base_policy_observation", None)
+        if callable(configure) and callable(getter):
+            configure(image_size)
+            return getter
+        next_env = getattr(current, "env", None)
+        if next_env is current:
+            break
+        current = next_env
+    return None
+
+
 def _remap_legacy_act_state_dict(
     state_dict: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
@@ -214,6 +238,9 @@ class ACTBaseActionProvider(nn.Module):
         norm_stats: Optional[dict[str, Any]] = None,
         state_obs_getter: Optional[StateObsGetter] = None,
         auto_state_obs_getter: bool = False,
+        visual_obs_getter: Optional[VisualObsGetter] = None,
+        auto_visual_obs_getter: bool = False,
+        source_image_size: Optional[tuple[int, int]] = None,
         temporal_agg: bool = True,
         temporal_agg_k: float = 0.01,
         image_size: int | tuple[int, int] | None = None,
@@ -230,6 +257,9 @@ class ACTBaseActionProvider(nn.Module):
         self._norm_stats = self._tensorize_norm_stats(norm_stats)
         self._state_obs_getter = state_obs_getter
         self._auto_state_obs_getter = auto_state_obs_getter
+        self._visual_obs_getter = visual_obs_getter
+        self._auto_visual_obs_getter = auto_visual_obs_getter
+        self.source_image_size = source_image_size
         self.image_size = self._normalize_image_size(
             config.image_size if image_size is None else image_size
         )
@@ -253,11 +283,21 @@ class ACTBaseActionProvider(nn.Module):
     def bind_env(self, env: Any) -> None:
         """Rebind the env-backed full-state getter used by state-only ACT."""
 
-        if not self._auto_state_obs_getter:
-            return
-        self._state_obs_getter = make_act_state_obs_getter(
-            env, expected_dim=self.spec.state_dim
-        )
+        if self._auto_state_obs_getter:
+            self._state_obs_getter = make_act_state_obs_getter(
+                env, expected_dim=self.spec.state_dim
+            )
+        if self._auto_visual_obs_getter:
+            assert self.source_image_size is not None
+            self._visual_obs_getter = make_act_visual_obs_getter(
+                env,
+                image_size=self.source_image_size,
+            )
+            if self._visual_obs_getter is None:
+                raise ValueError(
+                    "The configured ACT source image size requires an environment "
+                    "with a same-step base-policy observation cache."
+                )
 
     @staticmethod
     def _tensorize_norm_stats(
@@ -290,6 +330,7 @@ class ACTBaseActionProvider(nn.Module):
         state_dict_key: str = "ema_agent",
         env: Any | None = None,
         state_obs_getter: Optional[StateObsGetter] = None,
+        source_image_size: Optional[tuple[int, int]] = None,
         temporal_agg: bool = True,
         temporal_agg_k: float = 0.01,
         image_size: int | tuple[int, int] | None = None,
@@ -307,6 +348,8 @@ class ACTBaseActionProvider(nn.Module):
         config, spec = infer_act_config(state_dict)
         state_obs_dim = None
         auto_state_obs_getter = False
+        visual_obs_getter = None
+        auto_visual_obs_getter = False
         if state_obs_getter is None and env is not None:
             env_state_dim = cls._state_dim_from_space(observation_space)
             if env_state_dim != spec.state_dim:
@@ -319,11 +362,33 @@ class ACTBaseActionProvider(nn.Module):
         elif state_obs_getter is not None:
             state_obs_dim = spec.state_dim
 
+        if source_image_size is not None:
+            if not spec.visual:
+                raise ValueError(
+                    "ACT source image size can only be configured for a visual "
+                    "checkpoint."
+                )
+            if env is None:
+                raise ValueError(
+                    "ACT source image size requires the environment instance."
+                )
+            visual_obs_getter = make_act_visual_obs_getter(
+                env,
+                image_size=source_image_size,
+            )
+            if visual_obs_getter is None:
+                raise ValueError(
+                    "The configured ACT source image size requires an environment "
+                    "with a same-step base-policy observation cache."
+                )
+            auto_visual_obs_getter = True
+
         cls._validate_spaces(
             spec,
             observation_space,
             action_space,
             state_obs_dim=state_obs_dim,
+            has_external_visual_obs=visual_obs_getter is not None,
         )
 
         policy = ACTPolicyModel(
@@ -341,6 +406,9 @@ class ACTBaseActionProvider(nn.Module):
             norm_stats=load_act_norm_stats(checkpoint, stats_path),
             state_obs_getter=state_obs_getter,
             auto_state_obs_getter=auto_state_obs_getter,
+            visual_obs_getter=visual_obs_getter,
+            auto_visual_obs_getter=auto_visual_obs_getter,
+            source_image_size=source_image_size,
             temporal_agg=temporal_agg,
             temporal_agg_k=temporal_agg_k,
             image_size=image_size,
@@ -367,6 +435,7 @@ class ACTBaseActionProvider(nn.Module):
         action_space: spaces.Box,
         *,
         state_obs_dim: Optional[int] = None,
+        has_external_visual_obs: bool = False,
     ) -> None:
         state_dim = state_obs_dim or cls._state_dim_from_space(observation_space)
         action_dim = int(action_space.shape[0])
@@ -382,7 +451,7 @@ class ACTBaseActionProvider(nn.Module):
             )
         if spec.visual and not isinstance(observation_space, spaces.Dict):
             raise ValueError("Visual ACT checkpoint requires Dict observations.")
-        if spec.visual and not cls._has_visual_keys(
+        if spec.visual and not has_external_visual_obs and not cls._has_visual_keys(
             observation_space, legacy_key="rgb", prefix="rgb_", channels=3
         ):
             raise ValueError(
@@ -577,6 +646,19 @@ class ACTBaseActionProvider(nn.Module):
         )
 
     def _prepare_visual_obs(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if self._visual_obs_getter is not None:
+            visual_obs = self._visual_obs_getter()
+            obs = {
+                **obs,
+                **{
+                    key: value
+                    for key, value in visual_obs.items()
+                    if key == "rgb"
+                    or key == "depth"
+                    or key.startswith("rgb_")
+                    or key.startswith("depth_")
+                },
+            }
         rgb = self._camera_group_to_bnc_hw(
             obs, legacy_key="rgb", prefix="rgb_", channels_per_camera=3
         )

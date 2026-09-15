@@ -35,7 +35,7 @@ from rl_garden.encoders.plain_conv import PlainConv
 # a ``BaseFeaturesExtractor``. This lets the caller swap PlainConv for a ResNet
 # without changing the CombinedExtractor.
 ImageEncoderFactory = Callable[[spaces.Box], BaseFeaturesExtractor]
-ImageFusionMode = Literal["stack_channels", "per_key"]
+ImageFusionMode = Literal["stack_channels", "per_key", "shared_gated"]
 ImageAugmentationMode = Literal["none", "random_shift"]
 
 _AUG_STACK_KEY = "_rl_garden_aug_stack_image"
@@ -97,9 +97,10 @@ class CombinedExtractor(BaseFeaturesExtractor):
         augmentation_seed: Optional[int] = None,
     ) -> None:
         assert isinstance(observation_space, spaces.Dict)
-        if fusion_mode not in ("stack_channels", "per_key"):
+        if fusion_mode not in ("stack_channels", "per_key", "shared_gated"):
             raise ValueError(
-                "fusion_mode must be either 'stack_channels' or 'per_key', "
+                "fusion_mode must be 'stack_channels', 'per_key', or "
+                "'shared_gated', "
                 f"got {fusion_mode!r}"
             )
         if image_augmentation not in ("none", "random_shift"):
@@ -125,6 +126,8 @@ class CombinedExtractor(BaseFeaturesExtractor):
         factory = image_encoder_factory or default_image_encoder_factory()
         image_encoder: Optional[BaseFeaturesExtractor] = None
         image_encoders: nn.ModuleDict = nn.ModuleDict()
+        view_embeddings: Optional[torch.Tensor] = None
+        view_gate: Optional[nn.Module] = None
         if self._has_images:
             if fusion_mode == "stack_channels":
                 total_channels = 0
@@ -143,6 +146,33 @@ class CombinedExtractor(BaseFeaturesExtractor):
                     )
                 )
                 features_dim += image_encoder.features_dim
+            elif fusion_mode == "shared_gated":
+                specs = list(image_specs.values())
+                first_h, first_w, first_c = specs[0]
+                if any(spec != specs[0] for spec in specs[1:]):
+                    raise ValueError(
+                        "shared_gated requires every camera to have identical "
+                        f"H/W/C, got {image_specs!r}"
+                    )
+                image_encoder = factory(
+                    spaces.Box(
+                        low=0.0,
+                        high=1.0,
+                        shape=(first_c, first_h, first_w),
+                        dtype=np.float32,
+                    )
+                )
+                latent_dim = image_encoder.features_dim
+                view_embeddings = torch.empty(len(image_specs), latent_dim)
+                nn.init.normal_(view_embeddings, mean=0.0, std=0.02)
+                view_gate = nn.Sequential(
+                    nn.LayerNorm(latent_dim),
+                    nn.Linear(latent_dim, 1, bias=False),
+                )
+                # Start as a simple mean over cameras. Training can then learn
+                # to downweight occluded or uninformative views.
+                nn.init.zeros_(view_gate[-1].weight)
+                features_dim += latent_dim
             else:
                 for k, (h, w, c) in image_specs.items():
                     encoder = factory(
@@ -186,6 +216,10 @@ class CombinedExtractor(BaseFeaturesExtractor):
         self.enable_stacking = enable_stacking
         self.image_encoder = image_encoder
         self.image_encoders = image_encoders
+        self.view_embeddings = (
+            nn.Parameter(view_embeddings) if view_embeddings is not None else None
+        )
+        self.view_gate = view_gate
         self.proprio = proprio
         self.vector_extractors = vector_extractors
         self.image_augmentation = image_augmentation
@@ -304,6 +338,19 @@ class CombinedExtractor(BaseFeaturesExtractor):
             assert self.image_encoder is not None
             encoded = self.image_encoder(self._stack_images(obs))
             return [encoded.detach() if stop_gradient else encoded]
+        if self.fusion_mode == "shared_gated":
+            assert self.image_encoder is not None
+            assert self.view_embeddings is not None
+            assert self.view_gate is not None
+            per_view = []
+            for index, key in enumerate(self.image_keys):
+                image = self._image_for_key(obs, key)
+                encoded = self.image_encoder(image)
+                per_view.append(encoded + self.view_embeddings[index])
+            views = torch.stack(per_view, dim=1)
+            weights = torch.softmax(self.view_gate(views), dim=1)
+            fused = torch.sum(weights * views, dim=1)
+            return [fused.detach() if stop_gradient else fused]
 
         encoded = []
         for key in self.image_keys:

@@ -71,15 +71,38 @@ class RoboTwinConfig:
     assets_path: Optional[str] = None
     seeds_path: Optional[str] = None
     step_lim: int = 400
+    executor_timeout_seconds: float = 180.0
+    clear_cache_freq: int = 8
     planner_backend: str = "mplib"
     embodiment: list = field(default_factory=lambda: ["aloha-agilex"])
     reward_mode: str = "dense"
+    reward_shaping_mode: str = "absolute"
+    use_relative_reward: bool = False
+    dense_success_reward: float = 1.0
+    potential_discount: float = 0.99
+    potential_weight: float = 5.0
+    dense_weight: float = 0.03
+    relative_weight: float = 3.0
+    step_penalty: float = 0.003
+    stall_threshold: float = 1e-4
+    stall_penalty: float = 0.035
+    backtrack_penalty: float = 0.06
 
     # control scaling
     joint_delta_scale: float = 0.05
     gripper_delta_scale: float = 0.2
     ee_delta_pos_scale: float = 0.03
     ee_delta_rot_scale: float = 0.15
+
+    # Delta-EE executor.  These are forwarded verbatim to RoboTwin's task
+    # setup and are recorded in experiment configuration.
+    delta_ee_command_reference: bool = False
+    delta_ee_command_reanchor: bool = False
+    delta_ee_planner_type: Optional[str] = None
+    delta_ee_command_reanchor_position_tolerance: float = 0.005
+    delta_ee_command_reanchor_rotation_tolerance: float = 0.03490658503988659
+    delta_ee_terminal_settle_tolerance: float = 0.0005
+    delta_ee_terminal_settle_max_ticks: int = 250
 
     # device
     device: str = "auto"

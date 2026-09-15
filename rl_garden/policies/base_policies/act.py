@@ -44,6 +44,7 @@ class ACTBasePolicy(BasePolicyProvider):
         temporal_agg: bool = True,
         temporal_agg_k: float = 0.01,
         image_size: int | tuple[int, int] | None = None,
+        source_image_size: tuple[int, int] | None = None,
         strict: bool = True,
         device: torch.device | str = "cpu",
     ) -> "ACTBasePolicy":
@@ -59,6 +60,7 @@ class ACTBasePolicy(BasePolicyProvider):
             temporal_agg=temporal_agg,
             temporal_agg_k=temporal_agg_k,
             image_size=image_size,
+            source_image_size=source_image_size,
             strict=strict,
             device=device,
         )
