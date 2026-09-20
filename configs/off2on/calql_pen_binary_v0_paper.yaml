@@ -21,7 +21,8 @@ hidden_dim: 512
 actor_hidden_layers: 2
 critic_hidden_layers: 3
 actor_use_layer_norm: false
-critic_use_layer_norm: false
+# rl-garden Pen stability override; not part of the original paper recipe.
+critic_use_layer_norm: true
 n_critics: 2
 cql_alpha: 1.0
 online_cql_alpha: 1.0

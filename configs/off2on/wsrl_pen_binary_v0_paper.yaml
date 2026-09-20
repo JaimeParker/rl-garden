@@ -15,9 +15,9 @@
 # critic_ensemble_size=10/critic_subsample_size=2/use_layer_norm=True
 # regardless of --use_redq. So both phases of WSRL's own Adroit recipe use
 # the REDQ+LayerNorm architecture below -- this is WSRL's own warm-start
-# recipe, deliberately stronger than the plain Cal-QL paper's own
-# calql_pen_binary_v0_paper.yaml (n_critics=2, no LayerNorm), the same
-# distinction already established for wsrl_antmaze_*_paper.yaml.
+# recipe. It keeps the larger REDQ ensemble than rl-garden's local Cal-QL Pen
+# config (n_critics=2); both now use critic LayerNorm, with the Cal-QL setting
+# documented there as a Pen stability override rather than a paper parameter.
 # std_parameterization=exp and kernel_init (translating official
 # kernel_scale_final=1e-2) follow adroit_wsrl/adroit_cql's own arch, not
 # antmaze's uniform/orthogonal_near_zero_output choice for the same reason

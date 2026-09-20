@@ -44,6 +44,7 @@ data/
 3rd_party/RoboTwin
 prompts/
 demos/
+reports/
 docs/superpowers/
 pretrained/*
 !pretrained/README.md
