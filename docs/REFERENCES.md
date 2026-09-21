@@ -83,6 +83,7 @@ this repository.
 | FloQ | `algorithms/floq.py` | Farebrother et al. 2025, [arXiv:2509.06863](https://arxiv.org/abs/2509.06863) | Ported from [floq](https://github.com/CMU-AIRe/floq), a fork of the official FQL code; built on rl-garden's own `FQL` |
 | FINO | `algorithms/fino.py` | Shin et al., "Flow Matching with Injected Noise for Offline-to-Online RL", ICLR 2026, [OpenReview 6wd38R8L0Z](https://openreview.net/forum?id=6wd38R8L0Z) (no arXiv preprint found) | Ported from [FINO](https://github.com/CTID282/FINO), a fork of the official FQL code; built on rl-garden's own `FQL` |
 | ValueFlows | `algorithms/value_flows.py` | Dong et al. 2025, [arXiv:2510.07650](https://arxiv.org/abs/2510.07650) | Ported from [value-flows](https://github.com/chongyi-zheng/value-flows), an independent fork of the official FQL code; built on rl-garden's own `FQL` |
+| FAC | `algorithms/fac.py` | Chae et al., "Flow Actor-Critic for Offline Reinforcement Learning", ICLR 2026, [arXiv:2602.18015](https://arxiv.org/abs/2602.18015) | Ported from [FAC](https://github.com/JongseongChae/FAC), a fork of the official FQL code; built on rl-garden's own `FQL` |
 
 ## Offline-to-Online
 
@@ -97,6 +98,7 @@ this repository.
 | Off2OnFloQ | `algorithms/floq.py` | Farebrother et al. 2025, [arXiv:2509.06863](https://arxiv.org/abs/2509.06863) | Off2on wiring follows `ACFQL`'s pattern (no action chunking); built on rl-garden's own `FloQ` |
 | Off2OnFINO | `algorithms/fino.py` | Shin et al., "Flow Matching with Injected Noise for Offline-to-Online RL", ICLR 2026, [OpenReview 6wd38R8L0Z](https://openreview.net/forum?id=6wd38R8L0Z) (no arXiv preprint found) | Off2on wiring follows `Off2OnFloQ`'s pattern; built on rl-garden's own `FINO` |
 | Off2OnValueFlows | `algorithms/value_flows.py` | Dong et al. 2025, [arXiv:2510.07650](https://arxiv.org/abs/2510.07650) | Off2on wiring follows `FQL`/`FloQ`'s pattern (no action chunking); built on rl-garden's own `ValueFlows` |
+| Off2OnFAC | `algorithms/fac.py` | Chae et al., "Flow Actor-Critic for Offline Reinforcement Learning", ICLR 2026, [arXiv:2602.18015](https://arxiv.org/abs/2602.18015) | Off2on `online_finetuning=True` branch (`agents/fac.py:54-65`) cross-checked against the reference; built on rl-garden's own `FAC` |
 | SO2 / Off2OnSO2 | `algorithms/so2.py` | Zhang et al. 2024, [arXiv:2312.07685](https://arxiv.org/abs/2312.07685), "A Perspective of Q-value Estimation on Offline-to-Online RL" | Ported from [SO2](https://github.com/opendilab/SO2)'s `origin/code` branch (`ding/policy/edac.py`); built on rl-garden's own `SAC`/`OfflineSAC` |
 
 ## Shared infrastructure (not algorithm-specific)

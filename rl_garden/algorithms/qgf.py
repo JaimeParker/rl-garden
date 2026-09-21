@@ -346,11 +346,11 @@ class QGFCore:
         if self.offline_sampling == "with_replace":
             return self.replay_buffer.sample(batch_size)
         if self.offline_sampling == "without_replace":
-            sample = getattr(self.replay_buffer, "sample_without_replace", None)
+            sample = getattr(self.replay_buffer, "sample_without_repeat", None)
             if sample is None:
                 raise ValueError(
                     "offline_sampling='without_replace' requires a replay buffer "
-                    "with sample_without_replace()."
+                    "with sample_without_repeat()."
                 )
             return sample(batch_size)
         raise ValueError(f"Unknown offline_sampling: {self.offline_sampling!r}")

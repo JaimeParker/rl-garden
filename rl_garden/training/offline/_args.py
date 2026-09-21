@@ -676,6 +676,32 @@ class OfflineFINOArgs(OfflineFQLArgs):
 
 
 @dataclass
+class OfflineFACArgs(OfflineFQLArgs):
+    """FAC (Flow Actor-Critic, ICLR 2026, arXiv 2602.18015) hyperparameters.
+    Extends FQL's twin flow-matching actor/critic with a conservative
+    critic penalty gated by a BC-flow log-density threshold, trained through
+    a BC-pretrain -> logp-cache -> actor-critic schedule (see
+    ``rl_garden/algorithms/fac.py``). FQL's ``alpha`` field is inherited but
+    unused by FAC -- the BC-distillation weight is ``fac_lambda`` instead.
+    """
+
+    q_agg: Literal["mean", "min"] = "min"
+    normalize_q_loss: bool = True
+    fac_alpha: float = 1.0
+    fac_lambda: float = 1.0
+    fac_threshold: Literal[
+        "batch_adaptive", "batch_wide_constant", "dataset_wide_constant"
+    ] = "batch_adaptive"
+    logp_method: Literal["exact", "hutch-rade", "hutch-gaus"] = "exact"
+    logp_hutch_probes: int = 8
+    weight_type: Literal["linear", "logarithmic", "convex", "concave"] = "linear"
+    bc_lr: float = 3e-4
+    bc_batch_size: Optional[int] = None
+    bc_pretrain_epochs: int = 250
+    bc_pretrain_steps: Optional[int] = None
+
+
+@dataclass
 class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
     Box or Dict (vision) observations."""

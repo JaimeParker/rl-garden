@@ -6,6 +6,7 @@ from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.bc import BC
 from rl_garden.algorithms.bcq import BCQ
 from rl_garden.algorithms.bppo import BPPO
+from rl_garden.algorithms.fac import FAC, Off2OnFAC
 from rl_garden.algorithms.flash_sac import FlashSAC
 from rl_garden.algorithms.flow_bc import FlowBC
 from rl_garden.algorithms.flow_ppo import FlowPPO
@@ -85,6 +86,7 @@ __all__ = [
     "BPPO",
     "CalQL",
     "ConsistencyDistillBC",
+    "FAC",
     "FlashSAC",
     "FlowBC",
     "FlowPPO",
@@ -113,6 +115,7 @@ __all__ = [
     "OfflineSAC",
     "Off2OnAWAC",
     "Off2OnCalQL",
+    "Off2OnFAC",
     "Off2OnFloQ",
     "Off2OnFINO",
     "Off2OnValueFlows",

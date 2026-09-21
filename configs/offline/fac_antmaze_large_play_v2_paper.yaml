@@ -1,0 +1,43 @@
+# FAC (Flow Actor-Critic, ICLR 2026, arXiv 2602.18015) offline on D4RL
+# antmaze-large-play-v2. Reference command (3rd_party/FAC/README.md:30-31):
+#   python main.py --env_name=antmaze-large-play-v2 \
+#     --agent.fac_alpha=5.0 --agent.fac_lambda=0.03 \
+#     --agent.fac_threshold='dataset_wide_constant'
+#
+# No offline D4RL antmaze YAML exists yet for the FQL family (fql/floq/fino
+# only ship OGBench configs) -- env/dataset/reward_bias keys below are
+# copied from configs/off2on/iql_antmaze_large_play_v2_noret.yaml (the
+# closest existing D4RL antmaze template in this repo) instead.
+#
+# reward_bias=-1.0 shifts the sparse 0/1 D4RL antmaze reward to -1/0, per
+# the reference's envs/d4rl_utils.py:31-37 ('antmaze' in env_name ->
+# rewards - 1.0).
+#
+# Left at FACArgs/OfflineFQLArgs defaults for explicitness (match the
+# reference's fac.py:493-524 defaults for this task): q_agg resolves to
+# "min" from OfflineFACArgs, logp_method=exact, weight_type=linear,
+# gamma=0.995, tau=0.005, flow_steps=10. bc_pretrain_steps left unset --
+# derived from bc_pretrain_epochs=250.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: antmaze-large-play-v2
+offline_dataset: antmaze-large-play-v2
+reward_scale: 1.0
+reward_bias: -1.0
+
+# Counts actor-critic updates only, matching the reference's offline_steps --
+# the BC-flow prelude (250 epochs, bc_pretrain_epochs default) runs before
+# these 1M AC updates and is not part of this count
+# (rl_garden/algorithms/fac.py's module docstring).
+num_offline_steps: 1000000
+
+fac_alpha: 5.0
+fac_lambda: 0.03
+fac_threshold: dataset_wide_constant
+
+num_eval_episodes: 100
+eval_episode_horizon: 1000
+eval_freq: 20000
+
+log_type: wandb
+seed: 0

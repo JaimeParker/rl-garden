@@ -20,9 +20,9 @@ platforms can be integrated without creating platform-specific training entrypoi
   DPPO, SACFlow, ACRLPD, plus recurrent and transformer SAC/PPO variants. See
   the [Training Entrypoints](#training-entrypoints) table for the full list.
 - **Offline RL and imitation:** BC, Diffusion BC, IQL, CQL, Cal-QL, BCQ, PLAS,
-  EDAC, SPOT, ReBRAC, FQL, QGF, QAM, TD3+BC, AWAC, and multitask TDMPC2.
-- **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, and ACFQL pretraining,
-  warm start, and online fine-tuning.
+  EDAC, SPOT, ReBRAC, FQL, QGF, QAM, FAC, TD3+BC, AWAC, and multitask TDMPC2.
+- **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, FAC, and ACFQL
+  pretraining, warm start, and online fine-tuning.
 - **Observations:** a single strict Dict contract -- a ``state`` vector key
   (any low-dim signal, proprioception included, folds into it), optional
   ``state_<name>`` auxiliary/privileged low-dim keys, and any number of
@@ -104,8 +104,8 @@ argument selects the algorithm:
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
 | Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dreamer_v3`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
-| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `acfql` |
+| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `fac`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `fac`, `acfql` |
 
 Every registered algorithm's exact args and defaults can be listed with
 `--print-config`; use `python examples/train_online.py --help` (or

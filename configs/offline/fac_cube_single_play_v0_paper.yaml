@@ -1,0 +1,39 @@
+# FAC (Flow Actor-Critic, ICLR 2026, arXiv 2602.18015) offline on OGBench
+# cube-single-play-singletask-v0. Reference command
+# (3rd_party/FAC/README.md:54-55):
+#   python main.py --env_name=cube-single-play-singletask-v0 \
+#     --agent.fac_alpha=0.5 --agent.fac_lambda=10.0 --agent.q_agg='mean'
+#
+# env_id vs offline_dataset: OGBench's dataset name keeps the dataset-type
+# word ("play") immediately before "singletask"; the env id drops it -- see
+# docs/guides/ogbench-integration.md's "env-id vs dataset-name" section
+# (copied from configs/offline/floq_cube_single_play_v0_paper.yaml).
+#
+# Left at FACArgs/OfflineFQLArgs defaults for explicitness (match the
+# reference's fac.py:493-524 defaults for this task): fac_threshold=
+# batch_adaptive, logp_method=exact, weight_type=linear, gamma=0.995,
+# tau=0.005, flow_steps=10. bc_pretrain_steps left unset -- derived from
+# bc_pretrain_epochs=250. reward_scale=1.0/reward_bias=0.0 are also left at
+# default: OGBench singletask rewards are already in [-1, 0].
+env_backend: ogbench
+dataset_backend: ogbench
+env_id: cube-single-singletask-v0
+offline_dataset: cube-single-play-singletask-v0
+
+# FAC's own train script offline budget for this task family; not
+# OfflineDatasetArgs's own 100_000 default. Counts actor-critic updates
+# only, matching the reference's offline_steps -- the BC-flow prelude (250
+# epochs, bc_pretrain_epochs default) runs before these 1M AC updates and is
+# not part of this count (rl_garden/algorithms/fac.py's module docstring).
+num_offline_steps: 1000000
+
+fac_alpha: 0.5
+fac_lambda: 10.0
+q_agg: mean
+
+num_eval_episodes: 50
+eval_episode_horizon: 200
+eval_freq: 20000
+
+log_type: wandb
+seed: 0
