@@ -1,0 +1,59 @@
+# RLPD on AntMaze-Large-Diverse-v2 (D4RL legacy), 1M-step rerun of
+# rlpd_antmaze_large_diverse_v2_wsrl.yaml (see that file for the original
+# WSRL-source reconciliation notes).
+#
+# Two changes vs the original 500k run (nyfw1uul, 2026-09-03):
+# 1. total_timesteps: 500000 -> 1000000. The original run's eval/success_at_end
+#    was flat 0 across all 99 eval checkpoints, but train/success_at_end
+#    (stochastic rollout) showed a clear rising trend through the very end of
+#    budget (~55% density in the final 10%), suggesting the run was cut off
+#    mid-convergence rather than plateaued.
+# 2. target_entropy: 0.0 -> auto. The original literal 0.0 was copied from
+#    WSRL's own sac_config.py, but WSRL's agent code
+#    (wsrl/agents/sac.py:526-527) treats any target_entropy >= 0.0 as a
+#    sentinel and resolves it to -action_dim (-8.0 for AntMaze's 8-dim
+#    action) at runtime -- rl-garden's sac.py has no equivalent sentinel and
+#    used the literal 0.0, so the original run's actual entropy target
+#    diverged from what WSRL's own baseline really trains with. Fixing this
+#    also aligns with wsrl_kitchen_partial_v0_paper.yaml's own validated
+#    target_entropy=auto convention elsewhere in this repo.
+env_backend: d4rl_legacy
+dataset_backend: d4rl_legacy
+env_id: antmaze-large-diverse-v2
+offline_dataset: antmaze-large-diverse-v2
+num_envs: 1
+num_eval_envs: 1
+
+reward_scale: 10.0
+reward_bias: -5.0
+offline_data_ratio: 0.5
+offline_buffer_size: 1200000
+
+total_timesteps: 1000000
+learning_starts: 5000
+training_freq: 1
+utd: 4.0
+batch_size: 1024
+buffer_size: 1000000
+gamma: 0.99
+tau: 0.005
+policy_lr: 0.0001
+q_lr: 0.0003
+alpha_lr: 0.0001
+target_entropy: auto
+
+n_critics: 10
+critic_subsample_size: 1
+actor_use_layer_norm: true
+critic_use_layer_norm: true
+hidden_dim: 256
+actor_hidden_layers: 2
+critic_hidden_layers: 4
+std_parameterization: uniform
+kernel_init: orthogonal_near_zero_output
+
+capture_video: false
+log_type: wandb
+eval_freq: 5000
+num_eval_steps: 2000
+seed: 0

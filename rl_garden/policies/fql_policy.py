@@ -60,6 +60,10 @@ from rl_garden.networks import (
     EnsembleQCritic,
     KernelInit,
 )
+from rl_garden.policies._fql_networks import (
+    FQLEnsembleCritic,
+    FQLVectorField,
+)
 from rl_garden.policies.base import BasePolicy
 
 # This family only implements two of the mixin's three values (see
@@ -95,6 +99,7 @@ class FQLPolicy(BasePolicy):
         encoder_sharing: EncoderSharing = "shared_critic_grad",
         critic_extractor: Optional[BaseFeaturesExtractor] = None,
         actor_bc_flow_encoder: Optional[BaseFeaturesExtractor] = None,
+        reference_compatible: bool = False,
     ) -> None:
         assert isinstance(action_space, spaces.Box), "FQL requires a Box action space."
         if n_critics < 2:
@@ -133,52 +138,65 @@ class FQLPolicy(BasePolicy):
         critic_fd = self.critic_features_dim
         action_dim = int(np.prod(action_space.shape))
         net_arch = list(net_arch)
+        self.reference_compatible = reference_compatible
 
-        self.actor_bc_flow = ActorVectorField(
-            actor_fd,
-            action_dim,
-            hidden_dims=net_arch,
-            use_time_conditioning=True,
-            use_layer_norm=actor_use_layer_norm,
-            kernel_init=kernel_init,
-            activation_fn=activation_fn,
-        )
-        self.actor_onestep_flow = ActorVectorField(
-            actor_fd,
-            action_dim,
-            hidden_dims=net_arch,
-            use_time_conditioning=False,
-            use_layer_norm=actor_use_layer_norm,
-            kernel_init=kernel_init,
-            activation_fn=activation_fn,
-        )
+        vector_field_cls = FQLVectorField if reference_compatible else ActorVectorField
+        critic_cls = FQLEnsembleCritic if reference_compatible else EnsembleQCritic
+        if reference_compatible:
+            self.actor_bc_flow = vector_field_cls(
+                actor_fd, action_dim, net_arch, time_conditioned=True
+            )
+            self.actor_onestep_flow = vector_field_cls(
+                actor_fd, action_dim, net_arch, time_conditioned=False
+            )
+            self.critic = critic_cls(critic_fd, action_dim, net_arch, n_critics)
+            self.critic_target = critic_cls(critic_fd, action_dim, net_arch, n_critics)
+        else:
+            self.actor_bc_flow = ActorVectorField(
+                actor_fd,
+                action_dim,
+                hidden_dims=net_arch,
+                use_time_conditioning=True,
+                use_layer_norm=actor_use_layer_norm,
+                kernel_init=kernel_init,
+                activation_fn=activation_fn,
+            )
+            self.actor_onestep_flow = ActorVectorField(
+                actor_fd,
+                action_dim,
+                hidden_dims=net_arch,
+                use_time_conditioning=False,
+                use_layer_norm=actor_use_layer_norm,
+                kernel_init=kernel_init,
+                activation_fn=activation_fn,
+            )
 
-        self.critic = EnsembleQCritic(
-            critic_fd,
-            action_space,
-            hidden_dims=net_arch,
-            n_critics=n_critics,
-            use_layer_norm=critic_use_layer_norm,
-            use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-        )
-        self.critic_target = EnsembleQCritic(
-            critic_fd,
-            action_space,
-            hidden_dims=net_arch,
-            n_critics=n_critics,
-            use_layer_norm=critic_use_layer_norm,
-            use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-        )
+            self.critic = EnsembleQCritic(
+                critic_fd,
+                action_space,
+                hidden_dims=net_arch,
+                n_critics=n_critics,
+                use_layer_norm=critic_use_layer_norm,
+                use_group_norm=critic_use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=critic_dropout_rate,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+                activation_fn=activation_fn,
+            )
+            self.critic_target = EnsembleQCritic(
+                critic_fd,
+                action_space,
+                hidden_dims=net_arch,
+                n_critics=n_critics,
+                use_layer_norm=critic_use_layer_norm,
+                use_group_norm=critic_use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=critic_dropout_rate,
+                kernel_init=kernel_init,
+                backbone_type=backbone_type,
+                activation_fn=activation_fn,
+            )
         self.critic_target.load_state_dict(self.critic.state_dict())
         for p in self.critic_target.parameters():
             p.requires_grad_(False)
@@ -248,9 +266,13 @@ class FQLPolicy(BasePolicy):
 
     def compute_flow_actions(self, features: torch.Tensor, noises: torch.Tensor, num_steps: int) -> torch.Tensor:
         """Multi-step teacher rollout used only as the distill-loss target."""
-        return self.actor_bc_flow.integrate(
-            features, noises, num_steps, low=self.action_low, high=self.action_high
-        )
+        if self.reference_compatible:
+            actions = noises
+            for step in range(num_steps):
+                times = torch.full((features.shape[0], 1), step / num_steps, device=features.device, dtype=features.dtype)
+                actions = actions + self.actor_bc_flow(features, actions, times) / num_steps
+            return actions.clamp(-1.0, 1.0)
+        return self.actor_bc_flow.integrate(features, noises, num_steps, low=self.action_low, high=self.action_high)
 
     def q_values_all(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False

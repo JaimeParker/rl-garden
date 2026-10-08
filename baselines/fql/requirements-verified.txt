@@ -1,0 +1,27 @@
+# Read-only record of the isolated runtime that completed the FQL OGBench
+# reproduction. It is intentionally not consumed by scripts/install_baseline.sh
+# and is not a portable CUDA bootstrap recipe. GPU/JAX wheel selection must
+# match the target driver and CUDA runtime.
+jax==0.4.35
+jaxlib==0.4.34
+# ``[with_cuda]`` pulls the NVIDIA CUDA wheels required by a driver-only host.
+jax-cuda12-plugin[with_cuda]==0.4.35
+jax-cuda12-pjrt==0.4.35
+absl-py==2.5.0
+flax==0.10.2
+optax==0.2.4
+chex==0.1.88
+distrax==0.1.5
+ml-collections==1.1.0
+ogbench==1.1.0
+gymnasium==0.29.1
+numpy==2.4.6
+wandb==0.25.0
+dm-control==1.0.41
+mujoco==3.9.0
+glfw==2.10.2
+imageio==2.38.0
+pillow==12.3.0
+tqdm==4.70.1
+tensorflow-probability==0.23.0
+orbax-checkpoint==0.10.3

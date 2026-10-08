@@ -59,6 +59,7 @@ def _fac_kwargs(
         "flow_steps": args.flow_steps,
         "q_agg": args.q_agg,
         "normalize_q_loss": args.normalize_q_loss,
+        "net_arch": list(args.net_arch),
         "n_critics": args.n_critics,
         "actor_use_layer_norm": args.actor_use_layer_norm,
         "critic_use_layer_norm": args.critic_use_layer_norm,

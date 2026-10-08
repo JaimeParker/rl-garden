@@ -13,6 +13,7 @@ from rl_garden.algorithms.flow_ppo import FlowPPO
 from rl_garden.algorithms.floq import FloQ, Off2OnFloQ
 from rl_garden.algorithms.fino import FINO, Off2OnFINO
 from rl_garden.algorithms.fql import FQL
+from rl_garden.algorithms.off2on_fql import Off2OnFQL
 from rl_garden.algorithms.value_flows import ValueFlows, Off2OnValueFlows
 from rl_garden.algorithms.calql import CalQL
 from rl_garden.algorithms.consistency_distill_bc import ConsistencyDistillBC
@@ -93,6 +94,7 @@ __all__ = [
     "FloQ",
     "FINO",
     "FQL",
+    "Off2OnFQL",
     "ValueFlows",
     "CQL",
     "DAgger",

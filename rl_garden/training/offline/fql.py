@@ -27,6 +27,8 @@ class FQLArgs(
 ):
     """FQL offline pretraining. Box or Dict (vision) observations."""
 
+    reference_compatible: bool = False
+
 
 def _fql_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
@@ -54,6 +56,8 @@ def _fql_kwargs(
         "flow_steps": args.flow_steps,
         "q_agg": args.q_agg,
         "normalize_q_loss": args.normalize_q_loss,
+        "reference_compatible": args.reference_compatible,
+        "net_arch": list(args.net_arch),
         "n_critics": args.n_critics,
         "actor_use_layer_norm": args.actor_use_layer_norm,
         "critic_use_layer_norm": args.critic_use_layer_norm,
@@ -86,9 +90,15 @@ def _fql_kwargs(
 
 
 def build_fql(args, env_spec, logger, eval_env=None):
+    import torch
+
     from rl_garden.algorithms import FQL
     from rl_garden.training.inspection import construct_agent
 
+    if args.reference_compatible:
+        torch.set_float32_matmul_precision("highest")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     return construct_agent(FQL, **_fql_kwargs(args, env_spec, logger, eval_env))
 
 

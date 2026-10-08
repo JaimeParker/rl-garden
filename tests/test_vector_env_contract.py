@@ -144,6 +144,37 @@ def test_partial_termination_final_observation_matches_maniskill_convention():
     assert infos["final_info"]["episode"]["l"][0].item() == 2
 
 
+def test_object_batched_terminal_info_preserves_success_and_episode_metrics():
+    env = _make_adapter([2, 5])
+    translated = env._translate_infos(
+        {
+            "final_info": {
+                # OGBench scene exposes this scalar as dtype=object through
+                # SyncVectorEnv, despite every populated element being boolean.
+                # The second slot is absent, not a failed success result; its
+                # Gymnasium field mask must remain false after translation.
+                "success": np.array([False, None], dtype=object),
+                "_success": np.array([True, False]),
+                "episode": {
+                    "r": np.array([-3.0, 9.0], dtype=np.float32),
+                    "l": np.array([750, 750], dtype=np.int64),
+                    "success_at_end": np.array([0.0, 1.0], dtype=np.float32),
+                },
+            },
+            "_final_info": np.array([True, False]),
+        },
+        np.zeros((2, 1), dtype=np.float32),
+    )
+
+    final_info = translated["final_info"]
+    assert torch.equal(final_info["success"], torch.tensor([False, False]))
+    assert torch.equal(final_info["_success"], torch.tensor([True, False]))
+    assert torch.equal(translated["_final_info"], torch.tensor([True, False]))
+    assert torch.equal(final_info["episode"]["r"], torch.tensor([-3.0, 9.0]))
+    assert torch.equal(final_info["episode"]["l"], torch.tensor([750, 750]))
+    assert torch.equal(final_info["episode"]["success_at_end"], torch.tensor([0.0, 1.0]))
+
+
 def test_dict_observation_space_is_translated_and_stacked():
     from gymnasium.vector import AutoresetMode, SyncVectorEnv
 

@@ -43,7 +43,6 @@ num_eval_episodes: 50
 eval_episode_horizon: 1000
 offline_eval_freq: 100000
 online_eval_freq: 100000
-online_eval_schedule: "100000:100000:50"
 checkpoint_freq: 100000
 log_freq: 5000
 log_type: wandb

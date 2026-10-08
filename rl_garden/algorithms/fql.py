@@ -62,6 +62,7 @@ import torch.nn.functional as F
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
@@ -70,7 +71,7 @@ from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.networks import Activation, KernelInit
 from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
-from rl_garden.observations import ObsGroups, resolve_obs_groups
+from rl_garden.observations import ObsGroups, ObservationSchema, resolve_obs_groups
 from rl_garden.policies.fql_policy import EncoderSharing, FQLPolicy
 
 
@@ -121,6 +122,7 @@ class FQLCore:
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
+        reference_compatible: bool = False,
     ) -> None:
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
@@ -132,6 +134,27 @@ class FQLCore:
             raise ValueError(
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
             )
+        if reference_compatible:
+            invalid = []
+            if encoder_config is not None:
+                invalid.append("visual/encoded observations")
+            if critic_encoder_config is not None or obs_groups is not None:
+                invalid.append("asymmetric observation encoders/groups")
+            if encoder_sharing not in (None, "shared_critic_grad"):
+                invalid.append("encoder_sharing")
+            if n_critics != 2:
+                invalid.append("n_critics != 2")
+            if actor_use_layer_norm or not critic_use_layer_norm:
+                invalid.append("actor_use_layer_norm/critic_use_layer_norm")
+            if actor_use_group_norm or critic_use_group_norm or critic_dropout_rate is not None:
+                invalid.append("group norm or critic dropout")
+            if backbone_type != "mlp" or activation_fn != "gelu" or kernel_init != "xavier_uniform":
+                invalid.append("backbone_type, activation_fn, or kernel_init")
+            if invalid:
+                raise ValueError(
+                    "reference_compatible FQL only supports the published state MLP recipe; unsupported: "
+                    + ", ".join(invalid)
+                )
 
         self.tau = tau
         self.actor_lr = actor_lr
@@ -164,6 +187,7 @@ class FQLCore:
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
+        self.reference_compatible = reference_compatible
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return ("critic_optimizer", "actor_optimizer")
@@ -201,6 +225,7 @@ class FQLCore:
                 if self.critic_encoder_config is not None
                 else None
             ),
+            "reference_compatible": self.reference_compatible,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -231,6 +256,21 @@ class FQLCore:
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
+        if self.reference_compatible:
+            if ObservationSchema.from_space(observation_space).has_images:
+                raise ValueError(
+                    "reference_compatible FQL only supports the published state MLP recipe; "
+                    "unsupported: visual/encoded observations"
+                )
+            action_space = self.env.single_action_space
+            if not (
+                torch.allclose(torch.as_tensor(action_space.low), torch.full(action_space.shape, -1.0))
+                and torch.allclose(torch.as_tensor(action_space.high), torch.ones(action_space.shape))
+            ):
+                raise ValueError(
+                    "reference_compatible FQL requires actions normalized to [-1, 1], "
+                    "matching the JAX reference's literal clipping."
+                )
         # Mixin resolves the actor/critic pair (actor_onestep_flow's own
         # encoder + critic's own encoder, or one shared encoder). FQL needs a
         # third encoder for actor_bc_flow -- the plan's documented single
@@ -261,6 +301,7 @@ class FQLCore:
             backbone_type=self.backbone_type,
             activation_fn=self.activation_fn,
             actor_bc_flow_encoder=actor_bc_flow_encoder,
+            reference_compatible=self.reference_compatible,
             **extractor_kwargs,
         ).to(self.device)
 
@@ -428,6 +469,113 @@ class FQLCore:
             self.tau,
         )
 
+    def reference_losses(
+        self, data, *, next_noise: torch.Tensor, x0: torch.Tensor, times: torch.Tensor,
+        distill_noise: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Compute all published FQL losses from caller-supplied random tensors.
+
+        This is intentionally tensor-valued for a JAX/PyTorch parity harness.
+        It only applies to the state-only reference recipe.
+        """
+        if not self.reference_compatible:
+            raise RuntimeError("reference_losses requires reference_compatible=True.")
+        obs_features = self.policy.extract_critic_features(data.obs)
+        next_features = self.policy.extract_critic_features(data.next_obs)
+        with torch.no_grad():
+            next_action = self.policy.actor_onestep_flow(next_features, next_noise).clamp(-1.0, 1.0)
+            next_q = self._aggregate_target_q(self.policy.q_values_all(next_features, next_action, target=True))
+            target_q = data.rewards + self.gamma * (1.0 - data.dones) * next_q
+        q_all = self.policy.q_values_all(obs_features, data.actions)
+        critic_loss = self._critic_loss(q_all, target_q)
+        x_t = (1.0 - times) * x0 + times * data.actions
+        pred = self.policy.actor_bc_flow(obs_features, x_t, times)
+        bc_flow_loss = F.mse_loss(pred, data.actions - x0)
+        actor_actions = self.policy.actor_onestep_flow(obs_features, distill_noise)
+        with torch.no_grad():
+            target_actions = self.policy.compute_flow_actions(obs_features, distill_noise, self.flow_steps)
+        distill_loss = F.mse_loss(actor_actions, target_actions)
+        q_pi = self.policy.q_values_all(obs_features, actor_actions.clamp(-1.0, 1.0)).mean(dim=0)
+        q_loss = -q_pi.mean()
+        if self.normalize_q_loss:
+            q_loss = (1.0 / q_pi.abs().mean()).detach() * q_loss
+        actor_loss = bc_flow_loss + self.alpha * distill_loss + q_loss
+        return {"critic_loss": critic_loss, "actor_loss": actor_loss, "bc_flow_loss": bc_flow_loss,
+                "distill_loss": distill_loss, "q_loss": q_loss, "q": q_pi.mean(), "target_q": target_q.mean()}
+
+    def reference_update(
+        self, data, *, next_noise: torch.Tensor, x0: torch.Tensor, times: torch.Tensor,
+        distill_noise: torch.Tensor,
+    ) -> dict[str, float]:
+        """One FQL update where every gradient and EMA source is pre-update."""
+        losses = self.reference_losses(
+            data,
+            next_noise=next_noise, x0=x0, times=times, distill_noise=distill_noise,
+        )
+        critic_params = tuple(self.policy.critic_and_encoder_parameters())
+        actor_params = tuple(self.policy.actor_parameters())
+        critic_grads = torch.autograd.grad(losses["critic_loss"], critic_params)
+        actor_grads = torch.autograd.grad(losses["actor_loss"], actor_params)
+        pre_critic = [parameter.detach().clone() for parameter in self.policy.critic.parameters()]
+        self.critic_optimizer.zero_grad(set_to_none=True)
+        self.actor_optimizer.zero_grad(set_to_none=True)
+        for parameter, grad in zip(critic_params, critic_grads):
+            parameter.grad = grad
+        for parameter, grad in zip(actor_params, actor_grads):
+            parameter.grad = grad
+        self._clip_grad_norm(critic_params)
+        self._clip_grad_norm(actor_params)
+        self.critic_optimizer.step()
+        self.actor_optimizer.step()
+        for target, source in zip(self.policy.critic_target.parameters(), pre_critic):
+            target.data.mul_(1.0 - self.tau).add_(source, alpha=self.tau)
+        for scheduler in self._lr_schedulers:
+            if scheduler is not None:
+                scheduler.step()
+        return {key: float(value.detach().item()) for key, value in losses.items() if key.endswith("loss")}
+
+    def _reference_update(self, data) -> dict[str, float]:
+        batch, action_dim = data.actions.shape
+        device, dtype = data.actions.device, data.actions.dtype
+        return self.reference_update(
+            data,
+            next_noise=torch.randn(batch, action_dim, device=device, dtype=dtype),
+            x0=torch.randn(batch, action_dim, device=device, dtype=dtype),
+            times=torch.rand(batch, 1, device=device, dtype=dtype),
+            distill_noise=torch.randn(batch, action_dim, device=device, dtype=dtype),
+        )
+
+    def load(
+        self,
+        path,
+        strict: bool = True,
+        load_replay_buffer: bool = True,
+        load_optimizers: bool = True,
+    ):
+        """Reject incompatible reference-mode checkpoints before any state mutation.
+
+        ``BaseAlgorithm.load`` deliberately exposes no metadata-validation hook.
+        This mode changes the policy layout and update semantics, so it must
+        remain incompatible even when callers select ``strict=False``.
+        """
+        checkpoint = load_checkpoint_file(path, map_location=self.device)
+        stored = bool(
+            checkpoint.get("metadata", {})
+            .get("hyperparameters", {})
+            .get("reference_compatible", False)
+        )
+        if stored != self.reference_compatible:
+            raise ValueError(
+                "Incompatible checkpoint: reference_compatible mismatch "
+                f"(checkpoint={stored}, current={self.reference_compatible})."
+            )
+        return super().load(
+            path,
+            strict=strict,
+            load_replay_buffer=load_replay_buffer,
+            load_optimizers=load_optimizers,
+        )
+
     def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
         """Run ``gradient_steps`` FQL updates.
 
@@ -449,11 +597,15 @@ class FQLCore:
             # the encoder via critic_loss (the encoder IS the policy's
             # critic_extractor, or actor_extractor when shared; only the
             # actor's encoder(s) differ).
-            obs_features = self.policy.extract_critic_features(data.obs)
-
-            critic_metrics = self._critic_update(data, obs_features)
-            actor_metrics = self._actor_update(data, obs_features)
-            self._update_targets()
+            if self.reference_compatible:
+                reference_metrics = self._reference_update(data)
+                critic_metrics = {"critic_loss": reference_metrics["critic_loss"]}
+                actor_metrics = {key: value for key, value in reference_metrics.items() if key != "critic_loss"}
+            else:
+                obs_features = self.policy.extract_critic_features(data.obs)
+                critic_metrics = self._critic_update(data, obs_features)
+                actor_metrics = self._actor_update(data, obs_features)
+                self._update_targets()
 
             for key, value in {**critic_metrics, **actor_metrics}.items():
                 metrics_sum[key] = metrics_sum.get(key, 0.0) + value
@@ -507,6 +659,7 @@ class FQL(FQLCore, OfflineRLAlgorithm):
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
+        reference_compatible: bool = False,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -570,6 +723,18 @@ class FQL(FQLCore, OfflineRLAlgorithm):
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
+            reference_compatible=reference_compatible,
         )
 
         self._setup_model()
+
+    def _evaluate(self) -> dict[str, float]:
+        metrics = super()._evaluate()
+        completed = int(metrics.get("episodes_completed", 0))
+        if self.reference_compatible and completed != self.num_eval_episodes:
+            raise RuntimeError(
+                "Reference-compatible FQL evaluation did not complete the requested "
+                f"{self.num_eval_episodes} episodes before its {self.num_eval_steps}-step cap "
+                f"(completed {completed})."
+            )
+        return metrics

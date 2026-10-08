@@ -151,6 +151,7 @@ def test_phase_registries_discover_expected_algorithms():
         "floq",
         "value_flows",
         "fino",
+        "fql",
         "fac",
         "spot",
         "so2",

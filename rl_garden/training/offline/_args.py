@@ -594,6 +594,7 @@ class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
 
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
+    net_arch: tuple[int, ...] = (512, 512, 512, 512)
     critic_use_layer_norm: bool = True
     alpha: float = 10.0
     flow_steps: int = 10

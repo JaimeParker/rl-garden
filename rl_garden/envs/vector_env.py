@@ -86,6 +86,55 @@ class TorchVectorEnvAdapter(VectorWrapper):
             return {key: self._convert_tree(v) for key, v in value.items()}
         return self._to_torch(value)
 
+    def _convert_info_tree(self, value: Any, *, field_mask: Any | None = None) -> Any:
+        """Convert terminal info without losing Gymnasium's object-batched scalars.
+
+        ``SyncVectorEnv`` represents some scalar info values as object arrays.
+        OGBench scene tasks expose ``success`` this way, even though every
+        element is a boolean.  Torch cannot consume an object array directly,
+        so first restore its homogeneous NumPy dtype.  Object values that do
+        not normalize to a tensor-compatible array remain an explicit error:
+        terminal metrics must not be silently discarded.
+        """
+        if isinstance(value, dict):
+            return {
+                key: self._convert_info_tree(v, field_mask=value.get(f"_{key}"))
+                for key, v in value.items()
+            }
+        if isinstance(value, np.ndarray) and value.dtype == object:
+            entries = value.reshape(-1).tolist()
+            missing = np.asarray([entry is None for entry in entries], dtype=bool)
+            present = [entry for entry in entries if entry is not None]
+            if missing.any():
+                if field_mask is None:
+                    raise TypeError(
+                        "Cannot translate terminal info with missing object values without "
+                        "its Gymnasium field mask."
+                    )
+                valid = np.asarray(field_mask, dtype=bool).reshape(-1)
+                if valid.shape != missing.shape or np.any(missing & valid):
+                    raise TypeError(
+                        "Terminal info contains a missing value marked present by its "
+                        "Gymnasium field mask."
+                    )
+                value = np.asarray(present)
+                if value.dtype == object:
+                    raise TypeError(
+                        "Cannot translate an object-valued terminal info field to a tensor; "
+                        "the field must contain homogeneous numeric or boolean values."
+                    )
+                filled = np.zeros(missing.shape, dtype=value.dtype)
+                filled[~missing] = value
+                value = filled.reshape(field_mask.shape)
+            else:
+                value = np.asarray(value.tolist())
+            if value.dtype == object:
+                raise TypeError(
+                    "Cannot translate an object-valued terminal info field to a tensor; "
+                    "the field must contain homogeneous numeric or boolean values."
+                )
+        return self._to_torch(value)
+
     def _translate_infos(self, infos: dict[str, Any], obs: Any) -> dict[str, Any]:
         out = dict(infos)
         final_obs_raw = out.pop("final_obs", None)
@@ -95,7 +144,7 @@ class TorchVectorEnvAdapter(VectorWrapper):
         if mask is not None:
             out["_final_observation"] = self._to_torch(mask)
         if "final_info" in out:
-            out["final_info"] = self._convert_tree(out["final_info"])
+            out["final_info"] = self._convert_info_tree(out["final_info"])
         if "_final_info" in out:
             out["_final_info"] = self._to_torch(out["_final_info"])
         return out
