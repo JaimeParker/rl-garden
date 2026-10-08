@@ -136,6 +136,105 @@ def test_apply_mapping_to_args_updates_nested_dataclass():
     assert not hasattr(args, "unknown")
 
 
+def test_apply_mapping_to_args_replaces_frozen_dataclass():
+    from rl_garden.observations import ObservationConfig
+
+    args = eval_checkpoint.EvalCheckpointArgs()
+
+    obs_mapping = {
+        "depth": [],
+        "extra_state": [],
+        "frame_stack": 1,
+        "image_size": None,
+        "rgb": ["cam0"],
+        "state": True,
+        "unknown": 1,
+    }
+    eval_checkpoint._apply_mapping_to_args(args, {"obs": obs_mapping})
+
+    assert isinstance(args.obs, ObservationConfig)
+    assert args.obs.rgb == ("cam0",)
+    assert args.obs.depth == ()
+    assert args.obs.frame_stack == 1
+    assert not hasattr(args.obs, "unknown")
+
+    from rl_garden.training.off2on._registry import registry as off2on_registry
+
+    off2on_registry.discover()
+    calql_args_cls = off2on_registry.entries()["calql"].args_cls
+    calql_args = calql_args_cls()
+    eval_checkpoint._apply_mapping_to_args(calql_args, {"obs": obs_mapping})
+    assert calql_args.obs.rgb == ("cam0",)
+
+
+def test_apply_mapping_to_args_skips_none_for_dataclass_field():
+    """Checkpoint metadata serializes an unset sentinel dataclass field (see
+    resolve_obs_groups_config in rl_garden/common/cli_args.py) as a bare
+    ``None``. Applying it must not replace the dataclass attribute with
+    ``None`` (real crash path: off2on CalQL args, hyperparameters carrying
+    ``obs_groups: None``, then resolve_obs_groups_config dereferencing
+    ``.actor`` on ``None``)."""
+    from rl_garden.observations import ObsGroups
+    from rl_garden.training.off2on._registry import registry as off2on_registry
+
+    off2on_registry.discover()
+    calql_args = off2on_registry.entries()["calql"].args_cls()
+
+    eval_checkpoint._apply_mapping_to_args(calql_args, {"obs_groups": None})
+
+    assert isinstance(calql_args.obs_groups, ObsGroups)
+    assert calql_args.obs_groups.actor is None
+    assert calql_args.obs_groups.critic is None
+
+
+def test_apply_mapping_to_args_converts_json_float_sentinels():
+    """rl_garden.common.effective_config.json_value() serializes non-finite
+    float fields (e.g. CQLArgs.cql_clip_diff_min/max defaulting to +-inf) as
+    the JSON strings "Infinity"/"-Infinity"/"NaN", because config.json is
+    written with json.dumps(..., allow_nan=False). Reading such a run's
+    config.json back through _apply_mapping_to_args must invert that
+    encoding, or a float-typed field ends up holding a Python str and
+    rl_garden/algorithms/cql.py's `_cql_regularizer` crashes with
+    `TypeError: clamp() received (Tensor, str, str)`."""
+    from rl_garden.training.off2on._registry import registry as off2on_registry
+
+    off2on_registry.discover()
+    calql_args = off2on_registry.entries()["calql"].args_cls()
+
+    eval_checkpoint._apply_mapping_to_args(
+        calql_args,
+        {
+            "cql_clip_diff_min": "-Infinity",
+            "cql_clip_diff_max": "Infinity",
+            "env_id": "Infinity",
+            "seed": 5,
+        },
+    )
+
+    assert calql_args.cql_clip_diff_min == float("-inf")
+    assert isinstance(calql_args.cql_clip_diff_min, float)
+    assert calql_args.cql_clip_diff_max == float("inf")
+    assert isinstance(calql_args.cql_clip_diff_max, float)
+    # A non-float field holding the literal string "Infinity" must not be
+    # coerced -- the sentinel conversion is gated on the current attribute
+    # already being a float.
+    assert calql_args.env_id == "Infinity"
+    assert calql_args.seed == 5
+
+    import math
+
+    eval_checkpoint._apply_mapping_to_args(
+        calql_args, {"cql_clip_diff_min": "NaN"}
+    )
+    assert math.isnan(calql_args.cql_clip_diff_min)
+
+    # Finite float values pass through unchanged.
+    eval_checkpoint._apply_mapping_to_args(
+        calql_args, {"cql_clip_diff_max": -200.0}
+    )
+    assert calql_args.cql_clip_diff_max == -200.0
+
+
 def test_append_metric_values_masks_final_info():
     metrics = {}
     mask = torch.tensor([False, True, True])

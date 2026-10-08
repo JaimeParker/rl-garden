@@ -21,7 +21,7 @@ import json
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -176,12 +176,51 @@ def _resolve_phase_and_algorithm(
     return matches[0]
 
 
+# Inverse of rl_garden.common.effective_config.json_value()'s non-finite-
+# float encoding: config.json is written with json.dumps(..., allow_nan=
+# False), so json_value() cannot emit raw Infinity/-Infinity/NaN JSON tokens
+# and instead writes these string sentinels for any non-finite float field
+# (e.g. CalQLArgs.cql_clip_diff_min/max defaulting to float("-inf")/float(
+# "inf")). Reading such a config.json back here must invert that encoding
+# before assigning onto a float-typed field, or it ends up holding the
+# Python str "-Infinity"/"Infinity" -- observed as `TypeError: clamp()
+# received (Tensor, str, str)` in rl_garden/algorithms/cql.py's
+# `_cql_regularizer` when replaying a run whose cql_clip_diff_min/max were
+# left at their +-inf default (no config yaml overrides them).
+_JSON_FLOAT_SENTINELS: dict[str, float] = {
+    "Infinity": float("inf"),
+    "-Infinity": float("-inf"),
+    "NaN": float("nan"),
+}
+
+
 def _set_existing_attr(target: Any, key: str, value: Any) -> None:
     if not hasattr(target, key):
         return
     current = getattr(target, key)
+    if (
+        isinstance(current, float)
+        and isinstance(value, str)
+        and value in _JSON_FLOAT_SENTINELS
+    ):
+        value = _JSON_FLOAT_SENTINELS[value]
+    if is_dataclass(current) and value is None:
+        # Checkpoint metadata stores resolved (collapsed) hyperparameters:
+        # a structured dataclass field that was left at its sentinel default
+        # (e.g. ObsGroups()/EncoderConfig()) is serialized as a bare `None`
+        # (see resolve_obs_groups_config/resolve_critic_encoder_config in
+        # rl_garden/common/cli_args.py). Applying that `None` back onto the
+        # dataclass-typed attribute would replace the sentinel instance with
+        # a literal None, breaking downstream code that expects the
+        # dataclass shape. Leave the current (default) value in place.
+        return
     if is_dataclass(current) and isinstance(value, Mapping):
-        _apply_mapping_to_args(current, value)
+        if getattr(type(current), "__dataclass_params__").frozen:
+            field_names = {f.name for f in fields(current)}
+            updates = {k: v for k, v in value.items() if k in field_names}
+            setattr(target, key, replace(current, **updates))
+        else:
+            _apply_mapping_to_args(current, value)
     else:
         setattr(target, key, value)
 
