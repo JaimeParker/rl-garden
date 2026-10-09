@@ -90,3 +90,33 @@ def test_terminated_window_excludes_truncation(tmp_path):
     # events; terminated_window (termination-only) must reflect only index 2.
     assert torch.equal(ds._dones, torch.tensor([0.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
     assert torch.equal(ds._terminated, torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0]))
+
+
+def test_done_window_ignores_explicit_episode_end_key(tmp_path):
+    """An explicit `episode_end` key (e.g. a converted Adroit-binary file's
+    `episode_end=success`) is the true replay-buffer boundary for TD/MC
+    purposes (`h5_dataset.py::_load_traj_transitions`), but NOT what
+    `done_window` means here: SUPE/OPAL's `done_window` is always the
+    combined terminated-OR-truncated boundary (matching upstream SUPE's own
+    `dones` convention), regardless of whether the H5 separately carries an
+    `episode_end` key with a different pattern -- a success flag is not an
+    episode boundary for this dataset's purposes."""
+    path = tmp_path / "explicit_episode_end.h5"
+    length = 6
+    with h5py.File(path, "w") as f:
+        g = f.create_group("traj_0")
+        g.create_dataset("obs", data=np.random.randn(length + 1, 4).astype(np.float32))
+        g.create_dataset(
+            "actions", data=np.random.uniform(-1, 1, (length, 2)).astype(np.float32)
+        )
+        g.create_dataset("rewards", data=np.zeros(length, dtype=np.float32))
+        terminated = np.array([False, False, True, False, False, False])
+        truncated = np.array([False, True, False, False, False, False])
+        # A third, different pattern -- must NOT be what done_window follows.
+        episode_end = np.array([False, False, False, False, True, False])
+        g.create_dataset("terminated", data=terminated)
+        g.create_dataset("truncated", data=truncated)
+        g.create_dataset("episode_end", data=episode_end)
+
+    ds = WindowedTrajectoryDataset(path, chunk_size=3)
+    assert torch.equal(ds._dones, torch.tensor([0.0, 1.0, 1.0, 0.0, 0.0, 0.0]))

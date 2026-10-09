@@ -182,12 +182,18 @@ def _load_traj_transitions(
             "or explicit next_obs/next_observations."
         )
 
-    dones = _transition_done(traj, length, device)
-    episode_ends = (
-        _to_tensor(traj["episode_end"], device).bool()[:length]
-        if "episode_end" in traj
-        else dones
-    )
+    dones, truncated = _transition_done(traj, length, device)
+    if "episode_end" in traj:
+        episode_ends = _to_tensor(traj["episode_end"], device).bool()[:length]
+    elif truncated is not None:
+        # No explicit boundary key: the true episode boundary is every TD
+        # done plus every truncation, e.g. a WSRL-style H5 that writes
+        # "terminated" and "truncated" as separate datasets
+        # (rl_garden/datasets/wsrl_generation.py's WSRLTrajectoryWriter) --
+        # `dones` alone would silently drop the truncation boundary.
+        episode_ends = dones.bool() | truncated
+    else:
+        episode_ends = dones.bool()
     return (
         obs,
         next_obs,
@@ -279,7 +285,14 @@ def load_h5_dataset_to_replay_buffer(
                 and hasattr(buffer, "_mc_table")
                 and hasattr(buffer, "gamma")
             ):
-                mc_parts.append(_mc_returns(rewards, dones, float(buffer.gamma)))
+                # The MC recursion must reset at every true episode boundary
+                # (`episode_ends`), not just at TD `dones` -- a truncation
+                # boundary with no separate `dones=True` there must still
+                # stop the backward sweep, or a later episode's rewards
+                # bleed (discounted) into this one's returns.
+                mc_parts.append(
+                    _mc_returns(rewards, episode_ends.float(), float(buffer.gamma))
+                )
 
     if not action_parts:
         raise ValueError(f"No trajectories found in H5 file: {path}")

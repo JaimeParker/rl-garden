@@ -27,27 +27,52 @@ def _first_existing(data: dict[str, Any], names: tuple[str, ...]) -> Any:
 
 def _transition_done(
     traj: dict[str, Any], length: int, device: torch.device
-) -> torch.Tensor:
-    done_parts = []
-    for key in (
-        "dones",
-        "done",
-        "terminated",
-        "terminations",
-        "truncated",
-        "truncations",
-    ):
-        if key in traj:
-            value = torch.as_tensor(traj[key][:length], device=device).bool()
-            done_parts.append(value)
-    if not done_parts:
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Return ``(done, truncated)`` for a loaded trajectory's transitions.
+
+    ``done`` is the TD/Bellman stop-bootstrap flag: the OR of every
+    *terminal* field present (``dones``/``done``/``terminated``/
+    ``terminations``). ``truncated`` is a separate OR of every *truncation*
+    field present (``truncated``/``truncations``), kept out of ``done``
+    because an artificial ``max_episode_steps`` cutoff must not stop TD
+    bootstrapping -- online rollouts never fold truncation into the
+    bootstrap-stop flag either (``off_policy.py``'s ``_compute_done_masks``,
+    default ``bootstrap_at_done="truncated"``, keeps bootstrapping through
+    it). ``truncated`` is ``None`` when the trajectory has no truncation
+    field at all.
+
+    If the trajectory has no terminal field, ``done`` falls back to marking
+    only the final transition (the pre-existing single-signal convention) --
+    but only when there is no truncation field either. A truncation-only
+    trajectory already carries a real boundary signal (just not one that
+    should stop bootstrapping), so in that case ``done`` is all-``False``;
+    see ``_load_traj_transitions``'s ``episode_end`` fallback for where that
+    boundary is actually recorded.
+    """
+    done_parts = [
+        torch.as_tensor(traj[key][:length], device=device).bool()
+        for key in ("dones", "done", "terminated", "terminations")
+        if key in traj
+    ]
+    truncated_parts = [
+        torch.as_tensor(traj[key][:length], device=device).bool()
+        for key in ("truncated", "truncations")
+        if key in traj
+    ]
+    truncated: torch.Tensor | None = None
+    for part in truncated_parts:
+        truncated = part if truncated is None else (truncated | part)
+
+    if done_parts:
+        done = done_parts[0]
+        for part in done_parts[1:]:
+            done = done | part
+    elif truncated is not None:
+        done = torch.zeros(length, device=device, dtype=torch.bool)
+    else:
         done = torch.zeros(length, device=device, dtype=torch.bool)
         done[-1] = True
-        return done.float()
-    done = done_parts[0]
-    for part in done_parts[1:]:
-        done = done | part
-    return done.float()
+    return done.float(), truncated
 
 
 def _find_nested(data: dict[str, Any], key: str) -> Any | None:
@@ -199,9 +224,9 @@ def _add_flat_transitions(
     episode_ends: torch.Tensor | None = None,
 ) -> int:
     """``episode_ends`` marks each episode's true final transition (termination
-    *or* truncation), independent of ``dones`` -- callers whose ``dones``
-    already represents the true boundary (e.g. ManiSkill H5, which ORs every
-    terminal-like field) can pass the same tensor for both.
+    *or* truncation), independent of ``dones`` -- callers whose source data
+    has no way to distinguish the two (e.g. a single combined terminal
+    field) can pass the same tensor for both.
     """
     total = actions.shape[0]
     usable = (total // buffer.num_envs) * buffer.num_envs

@@ -26,7 +26,7 @@ from typing import Any, Iterator, Optional
 
 import torch
 
-from rl_garden.buffers._dataset_common import _concat
+from rl_garden.buffers._dataset_common import _concat, _transition_done
 from rl_garden.buffers._h5_common import _read_node, _require_h5py
 from rl_garden.buffers.h5_dataset import _load_traj_transitions
 from rl_garden.common.obs_utils import index_obs
@@ -100,21 +100,37 @@ class WindowedTrajectoryDataset:
                 traj = _read_node(f[key])
                 if not isinstance(traj, dict):
                     continue
-                obs, next_obs, actions, rewards, dones, _episode_ends = (
+                obs, next_obs, actions, rewards, _dones, _episode_ends = (
                     _load_traj_transitions(traj, self.device)
                 )
                 length = actions.shape[0]
                 num_windows = length - chunk_size + 1
                 if num_windows <= 0:
                     continue
+                # `done_window` wants the combined boundary (terminated OR
+                # truncated, see `WindowedTrajectorySample`'s docstring),
+                # byte-identical to the pre-fix `_transition_done`'s single
+                # OR-everything return value in every key shape. It is
+                # *not* sourced from `_load_traj_transitions`'s `dones`
+                # (now TD-only, excludes truncation) or its `episode_ends`
+                # (which defers to an explicit `episode_end` key when the
+                # H5 has one -- e.g. a converted Adroit-binary file's
+                # `episode_end=success`, a success flag that is not this
+                # dataset's episode boundary). So it's computed directly
+                # from `_transition_done`'s own `(done, truncated)` pair,
+                # ignoring any explicit `episode_end` key entirely.
+                done_raw, truncated = _transition_done(traj, length, self.device)
+                combined = done_raw.bool()
+                if truncated is not None:
+                    combined = combined | truncated
                 terminated = _terminated_only(traj, length, self.device)
                 if terminated is None:
-                    terminated = dones
+                    terminated = combined.float()
                 obs_parts.append(obs)
                 next_obs_parts.append(next_obs)
                 action_parts.append(actions)
                 reward_parts.append(rewards)
-                done_parts.append(dones)
+                done_parts.append(combined.float())
                 terminated_parts.append(terminated)
                 valid_start_parts.append(
                     running_total + torch.arange(num_windows, device=self.device)
