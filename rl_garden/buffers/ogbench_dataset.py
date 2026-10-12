@@ -11,6 +11,8 @@ per-family reward-recomputation code is needed here (unlike
 - ``terminals`` (1 at each fixed-length trajectory's last step, regardless
   of task completion -- a real dataset trajectory boundary) maps directly
   to ``episode_end``.
+- Monte-Carlo returns reset at ``done | episode_end`` (success step or
+  trajectory end), so cross-trajectory bleed at timeouts cannot happen.
 
 For these sparse-reward singletask tasks, success is algebraically
 identical to ``1 - masks`` (success is the only thing that flips a mask to
@@ -144,8 +146,9 @@ def load_ogbench_dataset_to_replay_buffer(
         obs, next_obs = _match_obs_to_buffer(buffer, obs, next_obs)
 
         successes = dones if hasattr(buffer, "_step_success") else None
+        mc_boundary = dones.bool() | episode_ends
         mc_returns = (
-            _mc_returns(rewards, dones, float(buffer.gamma))
+            _mc_returns(rewards, mc_boundary.float(), float(buffer.gamma))
             if hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma")
             else None
         )

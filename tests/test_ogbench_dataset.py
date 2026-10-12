@@ -5,6 +5,7 @@ import types
 
 import numpy as np
 import pytest
+import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import (
@@ -221,3 +222,64 @@ def test_load_ogbench_dataset_closes_throwaway_env(monkeypatch):
     load_ogbench_dataset_to_replay_buffer(buffer, "antmaze-large-navigate-singletask-v0")
 
     assert captured["env"].closed
+
+
+def _mc_buffer(gamma):
+    return MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
+        action_space=spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=10,
+        gamma=gamma,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+
+def _flat_dataset(rewards, masks, terminals):
+    n = len(rewards)
+    observations = np.arange(n * _OBS_DIM, dtype=np.float32).reshape(n, _OBS_DIM)
+    return {
+        "observations": observations,
+        "next_observations": observations + 1,
+        "actions": np.zeros((n, _ACTION_DIM), dtype=np.float32),
+        "terminals": np.array(terminals, dtype=np.float32),
+        "rewards": np.array(rewards, dtype=np.float32),
+        "masks": np.array(masks, dtype=np.float32),
+    }
+
+
+def test_mc_returns_reset_at_timeout_without_success(monkeypatch):
+    # The timeout (terminals=1, masks=1) sits at a non-final index of the flat
+    # array so that keying the reset on `dones` vs `terminals` gives different results.
+    dataset = _flat_dataset(
+        rewards=[-1.0, -1.0, -1.0, -1.0, 0.0],
+        masks=[1.0, 1.0, 1.0, 1.0, 0.0],
+        terminals=[0.0, 0.0, 1.0, 0.0, 1.0],
+    )
+    _install_fake_ogbench(monkeypatch, dataset)
+    buffer = _mc_buffer(gamma=0.5)
+
+    load_ogbench_dataset_to_replay_buffer(buffer, "antmaze-large-navigate-singletask-v0")
+
+    expected = torch.tensor([-1.75, -1.5, -1.0, -1.0, 0.0])
+    assert torch.allclose(buffer._external_mc[:5, 0], expected)
+    assert buffer._externally_valid[:5, 0].all()
+
+
+def test_mc_returns_reset_at_success_step_before_trajectory_end(monkeypatch):
+    # The TD backup stops at done = 1 - mask, so the MC reference must also reset
+    # there; resetting only at `terminals` would give [-1.25, -0.5, -1.0].
+    dataset = _flat_dataset(
+        rewards=[-1.0, 0.0, -1.0],
+        masks=[1.0, 0.0, 1.0],
+        terminals=[0.0, 0.0, 1.0],
+    )
+    _install_fake_ogbench(monkeypatch, dataset)
+    buffer = _mc_buffer(gamma=0.5)
+
+    load_ogbench_dataset_to_replay_buffer(buffer, "antmaze-large-navigate-singletask-v0")
+
+    expected = torch.tensor([-1.0, 0.0, -1.0])
+    assert torch.allclose(buffer._external_mc[:3, 0], expected)
+    assert buffer._externally_valid[:3, 0].all()
