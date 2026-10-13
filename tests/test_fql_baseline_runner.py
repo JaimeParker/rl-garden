@@ -18,10 +18,13 @@ def test_presets_cover_trained_task_phase_recipes_with_explicit_task_parameters(
         "antmaze-large-task1-offline",
         "humanoidmaze-medium-task2-offline",
         "antsoccer-arena-task4-off2on",
+        "puzzle-3x3-task4-offline",
         "puzzle-4x4-task4-off2on",
     }
     assert PRESETS["antmaze-large-task1-offline"].q_agg == "min"
     assert PRESETS["humanoidmaze-medium-task2-offline"].discount == pytest.approx(0.995)
+    assert PRESETS["puzzle-3x3-task4-offline"].online_steps == 0
+    assert PRESETS["puzzle-3x3-task4-offline"].reward_task_id == 4
     assert PRESETS["puzzle-4x4-task4-off2on"].reward_task_id == 4
 
 

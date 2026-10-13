@@ -12,6 +12,7 @@ evaluation suite. The complete task/phase configuration is in `presets.py`.
 | `antmaze-large-task1-offline` | `antmaze-large-navigate-singletask-task1-v0` | 1M offline | 10 / .99 / min |
 | `humanoidmaze-medium-task2-offline` | `humanoidmaze-medium-navigate-singletask-task2-v0` | 1M offline | 30 / .995 / mean |
 | `antsoccer-arena-task4-off2on` | `antsoccer-arena-navigate-singletask-task4-v0` | 1M offline + 1M online | 30 / .995 / mean |
+| `puzzle-3x3-task4-offline` | `puzzle-3x3-play-singletask-task4-v0` | 1M offline | 1000 / .99 / mean |
 | `puzzle-4x4-task4-off2on` | `puzzle-4x4-play-singletask-task4-v0` | 1M offline + 1M online | 1000 / .99 / mean |
 
 ## Setup

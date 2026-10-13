@@ -1,0 +1,40 @@
+# FQL state-based OGBench paper recipe (puzzle-3x3 play task4).
+env_backend: ogbench
+dataset_backend: ogbench
+env_id: puzzle-3x3-singletask-task4-v0
+offline_dataset: puzzle-3x3-play-singletask-task4-v0
+obs:
+  state: true
+num_eval_envs: 1
+num_offline_steps: 1000000
+buffer_size: 2000000
+batch_size: 256
+offline_sampling: with_replace
+gamma: 0.99
+tau: 0.005
+actor_lr: 0.0003
+critic_lr: 0.0003
+alpha: 1000.0
+flow_steps: 10
+q_agg: mean
+normalize_q_loss: false
+net_arch: [512, 512, 512, 512]
+n_critics: 2
+actor_use_layer_norm: false
+critic_use_layer_norm: true
+kernel_init: xavier_uniform
+activation_fn: gelu
+reference_compatible: true
+weight_decay: 0.0
+use_adamw: false
+lr_schedule: constant
+grad_clip_norm: null
+reward_scale: 1.0
+reward_bias: 0.0
+num_eval_episodes: 50
+eval_episode_horizon: 500
+eval_freq: 100000
+checkpoint_freq: 100000
+log_freq: 5000
+log_type: wandb
+seed: 0
