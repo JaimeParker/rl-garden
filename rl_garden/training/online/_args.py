@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, ObservationArgs
 from rl_garden.common.env_args import EnvRunArgs
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.observations.config import ObservationConfig
 
 
 @dataclass
@@ -205,12 +206,11 @@ class VisionTDMPC2TrainingArgs(TDMPC2TrainingArgs, ObservationArgs):
 
 @dataclass
 class DreamerV3TrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
-    """DreamerV3 hyperparameters -- values match the plan's decisions and
-    r2dreamer/official-JAX defaults (see ``rl_garden.algorithms.dreamer_v3``
-    module docstring); ``size12M`` preset default (plan decision 6)."""
+    """DreamerV3 hyperparameters -- values match the r2dreamer/official-JAX defaults (see ``rl_garden.algorithms.dreamer_v3``
+    module docstring); ``size12M`` preset default."""
 
     total_timesteps: int = 1_000_000
-    size: Literal["12M", "25M", "50M", "100M", "200M", "400M"] = "12M"
+    size: Literal["12M", "25M", "50M", "100M", "200M", "400M", "ncrl_m"] = "12M"
     stoch: int = 32
     unimix: float = 0.01
     blocks: int = 8
@@ -248,7 +248,79 @@ class DreamerV3TrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     buffer_device: str = "cuda"
     learning_starts: int = 1_024
     # None (default) resolves to "bfloat16" on CUDA, "float32" on CPU --
-    # see DreamerV3's own docstring (plan decision 5).
+    # see DreamerV3's own docstring.
+    compute_dtype: Optional[Literal["float32", "bfloat16"]] = None
+
+
+def _ncrl_default_observation() -> ObservationConfig:
+    # The pretrained RSSM encoder is image-only (NCRL's 64x64 rgb).
+    return ObservationConfig(state=False, rgb=("default",), image_size=(64, 64))
+
+
+@dataclass
+class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
+    """NCRL stage-2 online fine-tuning (``rl_garden.algorithms.ncrl``).
+    Defaults follow the official ``finetune.yaml`` + ``scripts/finetune.sh``
+    (survey section 8). The RSSM architecture comes from
+    ``--pretrained_world_model`` (an ``RSSMPretrain`` checkpoint), so the
+    DreamerV3 size/layer flags do not exist here. ``episode_frames``/
+    ``action_repeat`` default (``None``) to the dm_control backend's values
+    (1000 frames, ``--dm_control.action_repeat``); other backends must set
+    them. ``learning_starts=None`` means 10 episodes. Ablations:
+    ``--online_ratio 1.0`` turns rehearsal off (and with it guidance, which
+    trains on the retrieved data); ``--no-use_guidance`` turns guidance off.
+    ``backbone`` must match the pretrained checkpoint's (checkpoints without
+    one are ``dreamer_v3``)."""
+
+    obs: ObservationConfig = field(default_factory=_ncrl_default_observation)
+    total_timesteps: int = 250_000
+    pretrained_world_model: str = ""
+    backbone: Literal["dreamer_v3", "ncrl"] = "ncrl"
+    retrieval_db: Optional[str] = None
+    prior_dataset_dir: Optional[str] = None
+    online_ratio: float = 0.75
+    num_retrieve_episodes: int = 500
+    max_retrieve_iterations: int = 10
+    use_guidance: bool = True
+    bc_train_steps: int = 150_000
+    bc_batch_size: int = 256
+    bc_lr: float = 1e-4
+    guidance_schedule: tuple[str, float, float, int] = ("linear", 1.0, 0.1, 100_000)
+    episode_frames: Optional[int] = None
+    action_repeat: Optional[int] = None
+    warmup_frames: int = 15_000
+    learning_starts: Optional[int] = None
+    batch_size: int = 16
+    batch_length: int = 64
+    train_ratio: float = 256.0
+    imag_horizon: int = 16
+    discount: float = 0.99
+    lam: float = 0.95
+    actor_ent: float = 1e-4
+    model_lr: float = 1e-4
+    reward_lr: float = 1e-4
+    actor_lr: float = 8e-5
+    critic_lr: float = 8e-5
+    adam_eps: float = 1e-5
+    weight_decay: float = 1e-6
+    grad_clip: float = 100.0
+    slow_target_fraction: float = 0.02
+    ac_units: int = 512
+    actor_layers: int = 3
+    critic_layers: int = 3
+    padded_action_dim: Optional[int] = None
+    reward_bins: int = 255
+    kl_free: float = 1.0
+    kl_free_mode: Literal["per_element", "mean"] = "mean"
+    dyn_scale: float = 1.0
+    rep_scale: float = 0.1
+    recon_scale: float = 1.0
+    # 250k policy steps = the official 500k-frame run. Each step stores a
+    # uint8 64x64x3 frame (12 KiB) plus the float32 RSSM carry (ncrl_m:
+    # (4096 + 32*48) * 4 B = 22 KiB), ~34 KiB/step -> ~8 GiB on buffer_device;
+    # 500 prior episodes x 500 steps add another ~8 GiB.
+    buffer_size: int = 250_000
+    buffer_device: str = "cuda"
     compute_dtype: Optional[Literal["float32", "bfloat16"]] = None
 
 

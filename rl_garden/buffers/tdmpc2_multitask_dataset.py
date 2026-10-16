@@ -5,6 +5,7 @@ dependency -- reads only plain ``dict``-of-``torch.Tensor`` files.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import torch
@@ -37,21 +38,42 @@ def infer_multitask_dataset_specs(
     )
 
 
-def load_multitask_dataset(buffer: MmapMultitaskEpisodeBuffer, dataset_dir: str | Path) -> int:
+def load_multitask_dataset(
+    buffer: MmapMultitaskEpisodeBuffer,
+    dataset_dir: str | Path,
+    *,
+    tasks: Sequence[str] = (),
+    max_episodes_per_task: int = 0,
+) -> int:
     """Zero-pad every task's episodes to ``buffer.obs_dim``/``buffer.action_dim``
     (matching upstream's ``MultitaskWrapper._pad_obs``/``step()`` truncation
     scheme, applied here at load time instead of per-env-step) and bulk-load
     them via ``buffer.load_episode``. Returns the total transition count
     loaded.
+
+    ``tasks`` (empty = all) restricts loading to a subset and
+    ``max_episodes_per_task`` (0 = all) keeps each task's first N episodes.
+    Task ids stay the manifest indices, so task embeddings are unaffected.
     """
     dataset_dir = Path(dataset_dir)
-    tasks, obs_dims, action_dims, _episode_lengths = infer_multitask_dataset_specs(dataset_dir)
+    manifest_tasks, obs_dims, action_dims, _episode_lengths = infer_multitask_dataset_specs(dataset_dir)
+    unknown = sorted(set(tasks) - set(manifest_tasks))
+    if unknown:
+        raise ValueError(f"Tasks {unknown} are not in {dataset_dir}/manifest.json.")
+    if max_episodes_per_task < 0:
+        raise ValueError(f"max_episodes_per_task must be >= 0, got {max_episodes_per_task}.")
 
     total = 0
-    for task_idx, task in enumerate(tasks):
+    for task_idx, task in enumerate(manifest_tasks):
+        if tasks and task not in tasks:
+            continue
         episodes_path = dataset_dir / task / "episodes.pt"
         data = torch.load(episodes_path, weights_only=True)
         obs, action, reward = data["obs"], data["action"], data["reward"]
+        if max_episodes_per_task > 0:
+            obs = obs[:max_episodes_per_task]
+            action = action[:max_episodes_per_task]
+            reward = reward[:max_episodes_per_task]
         num_episodes, episode_length = obs.shape[0], obs.shape[1]
 
         obs_dim = obs_dims[task_idx]

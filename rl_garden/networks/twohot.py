@@ -8,7 +8,7 @@ soft two-hot target, and decoded back to a scalar with ``two_hot_inv``.
 
 ``symexp_twohot_bins``/``twohot_logprob``/``twohot_mean`` below are
 DreamerV3's *own* two-hot variant (r2dreamer ``distributions.py:67-129,242-
-251``; plan section A) -- symexp-spaced bins fixed at construction (not
+251``) -- symexp-spaced bins fixed at construction (not
 linearly spaced between a learned ``vmin``/``vmax`` like ``two_hot`` above),
 and an exact float target rather than a symlog-clamped one. Kept as separate
 functions rather than folded into ``two_hot``/``two_hot_inv`` above: the bin

@@ -39,17 +39,10 @@ def squash(
     return mu, pi, log_pi
 
 
-def termination_statistics(
-    pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-9
-) -> dict[str, torch.Tensor]:
-    """Precision/recall/F1 diagnostics for the termination classifier."""
-    pred = pred.squeeze(-1)
-    target = target.squeeze(-1)
-    rate = target.sum() / len(target)
-    tp = ((pred > 0.5) & (target == 1)).sum()
-    fn = ((pred <= 0.5) & (target == 1)).sum()
-    fp = ((pred > 0.5) & (target == 0)).sum()
-    recall = tp / (tp + fn + eps)
-    precision = tp / (tp + fp + eps)
-    f1 = 2 * (precision * recall) / (precision + recall + eps)
-    return {"termination_rate": rate, "termination_f1": f1}
+def critic_with_detached_params(critic: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
+    """``critic(x)`` evaluated with detached copies of its parameters: the
+    output stays differentiable w.r.t. ``x`` but sends no gradient into the
+    critic's parameters (upstream TD-MPC2's ``_detach_Qs``, used by the actor
+    update)."""
+    params = {name: p.detach() for name, p in critic.named_parameters()}
+    return torch.func.functional_call(critic, params, (x,))

@@ -82,7 +82,7 @@ class OfflineCommonArgs(
 
 
 @dataclass
-class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
+class TDMPC2MultitaskTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     """TD-MPC2 multitask offline pretraining.
 
     Deliberately does NOT inherit ``EnvRunArgs``/``EnvBackendArgs``/
@@ -96,6 +96,10 @@ class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
 
     dataset_dir: str = ""
     mmap_dir: str = ""
+    # Load only these manifest tasks (empty = all) and each task's first N
+    # episodes (0 = all); task ids keep their full-manifest indices.
+    tasks: tuple[str, ...] = ()
+    max_episodes_per_task: int = 0
     device: str = "auto"
     num_offline_steps: int = 10_000_000
     buffer_size: int = 1_000_000
@@ -126,6 +130,87 @@ class TDMPC2MultitaskTrainingArgs(CheckpointArgs, LoggingArgs):
     discount_denom: float = 5.0
     discount_min: float = 0.95
     discount_max: float = 0.995
+
+
+@dataclass
+class PWMTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
+    """PWM offline policy learning on a frozen multitask world model.
+
+    Same base set as ``TDMPC2MultitaskTrainingArgs`` (no ``EnvRunArgs``/
+    ``OfflineDatasetArgs``): ``dataset_dir`` is the converted TD-MPC2
+    multitask dataset, ``task`` picks one of its tasks and doubles as the
+    eval ``env_id`` on ``eval_env_backend``. Evaluation runs ``eval_runs``
+    episodes in parallel; its step cap is derived from the task's episode
+    length (``num_eval_steps`` is not read).
+    """
+
+    dataset_dir: str = ""
+    mmap_dir: str = ""
+    world_model_checkpoint: str = ""
+    task: str = ""
+    eval_env_backend: str = "dm_control"
+    device: str = "auto"
+    num_offline_steps: int = 10_000
+    horizon: int = 16
+    batch_size: int = 512
+    gamma: float = 0.99
+    lam: float = 0.95
+    actor_lr: float = 5e-4
+    critic_lr: float = 5e-4
+    lr_final: float = 1e-5
+    actor_grad_norm: float = 1.0
+    critic_grad_norm: float = 100.0
+    critic_iterations: int = 8
+    critic_batches: int = 4
+    num_critics: int = 3
+    actor_units: tuple[int, ...] = (400, 200, 100)
+    critic_units: tuple[int, ...] = (400, 200)
+    init_logstd: float = -1.0
+    min_logstd: float = -1.427
+    ret_rms: bool = True
+    eval_freq: int = 200
+    eval_runs: int = 10
+
+
+@dataclass
+class RSSMPretrainTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
+    """Reward-free RSSM world-model pretraining (NCRL stage 1, see
+    ``rl_garden.algorithms.rssm_pretrain``). Same base set as
+    ``TDMPC2MultitaskTrainingArgs``: no live env and no ``offline_dataset``.
+    ``dataset_dir`` is the output of ``tools/conversion/convert_ncrl_dataset.py``
+    (one embodiment directory, or a root of several that are mixed by
+    episode). ``size`` names a ``RSSM_SIZES`` row; ``deter``/``hidden``/
+    ``classes``/``cnn_depth`` override single fields of it.
+    ``padded_action_dim=None`` takes the manifest's value. ``backbone="ncrl"``
+    (default) builds the official NCRL networks (64x64 images only);
+    ``"dreamer_v3"`` the DreamerV3 ones."""
+
+    dataset_dir: str = ""
+    dataset_backend: Literal["mmap", "buffer"] = "mmap"
+    backbone: Literal["dreamer_v3", "ncrl"] = "ncrl"
+    device: str = "auto"
+    buffer_device: str = "cuda"
+    num_offline_steps: int = 200_000
+    batch_size: int = 32
+    batch_length: int = 64
+    lr: float = 1e-4
+    adam_eps: float = 1e-5
+    weight_decay: float = 1e-6
+    grad_clip: float = 100.0
+    size: str = "ncrl_m"
+    deter: Optional[int] = None
+    hidden: Optional[int] = None
+    stoch: int = 32
+    classes: Optional[int] = None
+    blocks: int = 8
+    cnn_depth: Optional[int] = None
+    kl_free: float = 1.0
+    kl_free_mode: Literal["per_element", "mean"] = "mean"
+    dyn_scale: float = 1.0
+    rep_scale: float = 0.1
+    recon_scale: float = 1.0
+    compute_dtype: Literal["float32", "bfloat16"] = "bfloat16"
+    padded_action_dim: Optional[int] = None
 
 
 @dataclass

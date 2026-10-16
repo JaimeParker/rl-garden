@@ -1,8 +1,9 @@
 """Unit tests for ``rl_garden.networks.twohot``'s DreamerV3 additions and
-``rl_garden.networks.dreamer_nets`` (plan model-based-base Part 2, section A).
+``rl_garden.networks.dreamer_nets``.
 """
 from __future__ import annotations
 
+import pytest
 import torch
 
 from rl_garden.networks.dreamer_nets import (
@@ -11,6 +12,7 @@ from rl_garden.networks.dreamer_nets import (
     OneHotDist,
     ReturnEMA,
     RMSNorm,
+    TwoHotDist,
     bounded_normal,
     dreamer_weight_init_,
 )
@@ -74,8 +76,6 @@ def test_blocklinear_shapes_and_fan_in():
 
 
 def test_blocklinear_rejects_non_divisible_channels():
-    import pytest
-
     with pytest.raises(ValueError):
         BlockLinear(63, 24, blocks=8)
 
@@ -125,3 +125,51 @@ def test_bounded_normal_mean_is_bounded_by_tanh_and_std_in_range():
 def test_mlphead_outscale_zero_zeroes_the_last_layer():
     head = MLPHead(10, 5, output="mse", outscale=0.0)
     assert torch.allclose(head.last.weight, torch.zeros_like(head.last.weight))
+
+
+def test_onehot_dist_probs_straight_through_gradient_equals_probs_gradient():
+    logits = torch.randn(4, 6, 5, requires_grad=True)
+    weights = torch.randn(4, 6, 5)
+    dist = OneHotDist(logits, unimix=0.01, straight_through="probs")
+    sample = dist.rsample()
+    torch.testing.assert_close(sample.detach(), sample.detach().round())  # one-hot up to float rounding
+    torch.testing.assert_close(sample.detach().sum(-1), torch.ones(4, 6))
+    (grad_sample,) = torch.autograd.grad((sample * weights).sum(), logits)
+    (grad_probs,) = torch.autograd.grad((OneHotDist(logits, unimix=0.01).probs * weights).sum(), logits)
+    torch.testing.assert_close(grad_sample, grad_probs)
+
+
+def test_onehot_dist_rejects_unknown_straight_through():
+    with pytest.raises(ValueError, match="straight_through"):
+        OneHotDist(torch.zeros(2, 3), straight_through="gumbel_soft")
+
+
+def _twohot_target_probs(head: MLPHead, value: torch.Tensor) -> torch.Tensor:
+    """The two-hot target of ``value`` (``(N, 1)``): the gradient of
+    ``log_prob(value)`` at uniform logits is ``target - 1 / num_bins``."""
+    logits = torch.zeros(value.shape[0], head.out_dim, requires_grad=True)
+    TwoHotDist(logits, head._bins, head.twohot_space).log_prob(value).sum().backward()
+    return logits.grad + 1.0 / head.out_dim
+
+
+def test_symlog_twohot_encode_decode_round_trip():
+    head = MLPHead(4, 255, output="symexp_twohot", twohot_space="symlog")
+    torch.testing.assert_close(head._bins, torch.linspace(-20.0, 20.0, 255))
+    value = torch.tensor([[-50.0], [-3.2], [-0.4], [0.0], [0.7], [5.0], [120.0]])
+    target = _twohot_target_probs(head, value)
+    torch.testing.assert_close(target.sum(-1), torch.ones(value.shape[0]))
+    assert int((target > 1e-6).sum(-1).max()) <= 2
+    decoded = TwoHotDist(torch.log(target.clamp_min(1e-30)), head._bins, "symlog").mode
+    torch.testing.assert_close(decoded, value, rtol=1e-5, atol=1e-5)
+
+
+def test_symlog_and_raw_twohot_decode_differently_on_the_same_logits():
+    torch.manual_seed(0)
+    raw = MLPHead(4, 255, output="symexp_twohot")
+    symlog_head = MLPHead(4, 255, output="symexp_twohot", twohot_space="symlog")
+    assert raw.state_dict().keys() == symlog_head.state_dict().keys()
+    logits = torch.randn(8, 255) * 0.5
+    raw_value = TwoHotDist(logits, raw._bins, "raw").mode
+    symlog_value = TwoHotDist(logits, symlog_head._bins, "symlog").mode
+    assert torch.isfinite(raw_value).all() and torch.isfinite(symlog_value).all()
+    assert not torch.allclose(raw_value, symlog_value)

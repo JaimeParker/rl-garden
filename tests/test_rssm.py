@@ -1,5 +1,4 @@
-"""Unit tests for ``rl_garden.world_models.rssm.RSSM`` (plan model-based-
-base Part 2, section B).
+"""Unit tests for ``rl_garden.world_models.rssm.RSSM``.
 """
 from __future__ import annotations
 

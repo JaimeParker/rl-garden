@@ -28,7 +28,8 @@ Algorithm families, by base class:
 | Family | Base class(es) | Examples |
 |---|---|---|
 | Online RL (rollout + replay/buffer) | `OffPolicyAlgorithm` / `OnPolicyAlgorithm` | SAC, PPO, TD3 |
-| Model-based online RL (world model + planner/policy) | `ModelBasedAlgorithm(OffPolicyAlgorithm)` | TD-MPC2 |
+| Model-based online RL (world model + planner/policy) | `ModelBasedAlgorithm(OffPolicyAlgorithm)` | TD-MPC2, DreamerV3, NCRL (`NCRL(DreamerV3)`) |
+| Model-based offline RL (dataset-driven world model) | `OfflineModelBasedAlgorithm(OfflineRLAlgorithm)` | TD-MPC2 multitask, PWM, RSSMPretrain |
 | Offline RL with a replay buffer | `OfflineRLAlgorithm` (+ `run_offline`) | IQL, CQL, AWAC |
 | Off2on (offline pretrain, then online) | `<Algo>Core` / `<Algo>(Core, OfflineRLAlgorithm)` / `_<Algo>RolloutTrainingShell(Off2OnReplayMixin, Core, OffPolicyAlgorithm)` / `Off2On<Algo>(Shell)` | IQL, AWAC (canonical) |
 | Chunked-dataset imitation (no replay buffer) | `OfflineRLAlgorithm`, own `train()` | BC, DiffusionBC, FlowBC, DAgger |
@@ -240,6 +241,10 @@ The following policy classes do not follow the contract above:
   env; see `rl_garden/policies/tdmpc2_multitask_policy.py`'s docstring).
   `TDMPC2Policy` (single-task) is now **in** contract (below) and no longer
   belongs on this list.
+- `PWMPolicy` — plain `nn.Module` (actor + `V(z)` critic ensemble + return
+  normalizer) over frozen world-model latents: no observation space,
+  `actor_extractor` or `encoder_sharing` (no observation encoder is trained);
+  see `rl_garden/algorithms/pwm.py`'s docstring.
 
 The FQL family (`FQLPolicy`, `FloQPolicy`, `ValueFlowsPolicy`, `FINOPolicy`)
 is an in-contract exception: under `encoder_sharing="separate"`, it keeps an
@@ -269,8 +274,26 @@ decision-time planning (CEM/MPPI) injected into the policy; DreamerV3 uses
 an amortized actor-critic trained within imagination and needs no planner.
 
 **`ModelBasedAlgorithm`** (`rl_garden/algorithms/model_based.py`,
-`OffPolicyAlgorithm` subclass) is the base for this family. Override exactly
-three hooks, never `train()`/`_gradient_step()` themselves (both are shared):
+`OffPolicyAlgorithm` subclass) is the online base for this family;
+**`OfflineModelBasedAlgorithm`** (`rl_garden/algorithms/offline_model_based.py`,
+`OfflineRLAlgorithm` subclass) is the offline (dataset-driven) base. Both take
+their gradient step from `ModelBasedStepMixin`
+(`rl_garden/algorithms/_model_based_step.py`): `_sample_train_batch()`
+(default `self.replay_buffer.sample(self.batch_size)`), then the three hooks
+below. Override exactly those three hooks, never `train()`/`_gradient_step()`
+themselves (both are shared). TD-MPC2's shared losses and optimizers
+(`_update_pi`, the soft-CE value loss, `world_optimizer`/`pi_optimizer`,
+target-Q update, shared checkpoint metadata) live in `TDMPC2Core`
+(`rl_garden/algorithms/tdmpc2.py`, injected via `_init_tdmpc2_params(...)`),
+shared by `TDMPC2(TDMPC2Core, ModelBasedAlgorithm)` and
+`TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm)`.
+
+`PWM` (`PWM(PWMCore, OfflineModelBasedAlgorithm)`, `rl_garden/algorithms/pwm.py`)
+and `RSSMPretrain` (`rl_garden/algorithms/rssm_pretrain.py`) are further offline
+hosts of the same base; `NCRL(DreamerV3)` (`rl_garden/algorithms/ncrl.py`) is an
+online subclass of `DreamerV3`. Registered names: `pwm` and `rssm_pretrain`
+(offline, bespoke runners, `training/offline/{pwm,rssm_pretrain}.py`) and `ncrl`
+(online, `training/online/ncrl.py`). See `docs/guides/ncrl.md`.
 
 - `_update_model(batch) -> (metrics, posterior)` — trains the world model
   (and, for TD-MPC2, the critic in the same backward — a TD-MPC2-specific
@@ -303,9 +326,11 @@ replaces, not adds to, that iteration's regular `train()` call.
 
 **DreamerV3-specific wiring**: uses `SequenceReplayBuffer(cross_episode=True,
 priority=False, carry_spec={"deter": ..., "stoch": ...})` to store and restore
-the RSSM's recurrent state across training windows. The carry flows through
-`OffPolicyAlgorithm`'s `_replay_buffer_add_kwargs` (on rollout) and is written
-back via `_replay_buffer_step_kwargs` hooks after gradient steps. The policy
+the RSSM's recurrent state across training windows. The carry is stored on
+rollout through `OffPolicyAlgorithm`'s `_replay_buffer_add_kwargs` hook, and
+`DreamerV3._update_model` refreshes it after every model loss by calling
+`self.replay_buffer.write_back_carry(batch.indices, carry)` with the detached
+posterior. The policy
 maintains eval-only state through `DreamerPolicy.predict()`, separate from the
 buffer's training-time carry.
 
@@ -466,7 +491,7 @@ None and should_create_eval_env(args)`, builds an optional eval env.
 
 For algorithms with **no replay buffer** — the chunked-dataset imitation family
 (`diffusion_bc`, `consistency_distill_bc`, `a2a_bc`,
-`hilp`, `opal`, `tdmpc2_multitask`). `run_offline` assumes `agent.replay_buffer`
+`hilp`, `opal`, `tdmpc2_multitask`, `pwm`). `run_offline` assumes `agent.replay_buffer`
 populated by `load_offline_dataset`, which these algorithms don't have, so the
 run file inlines the same config-session and logging setup `run_offline` would
 otherwise do, then calls `run_offline_pretraining` directly. Args compose only
@@ -515,7 +540,11 @@ there is no shared runner to call.
 
 `_validate_config` (`algorithm_registry.py`) hardcodes which offline algorithms
 require which CLI flag. `tdmpc2_multitask` has its own branch (`--dataset_dir` +
-`--mmap_dir`). A separate tuple — `("diffusion_bc",
+`--mmap_dir`). `pwm` has its own branch (`--dataset_dir`,
+`--mmap_dir`, `--world_model_checkpoint`, `--task`) and `rssm_pretrain` has one
+(`--dataset_dir`). On the online side `ncrl` has a branch requiring
+`--pretrained_world_model` (and `--retrieval_db` when `--online_ratio < 1`).
+A separate tuple — `("diffusion_bc",
 "consistency_distill_bc", "a2a_bc", "hilp", "opal")` — requires
 `--dataset_path`; everything else (the generic-runner shape) requires
 `--offline_dataset`. If your new bespoke-runner algorithm uses `--dataset_path`,

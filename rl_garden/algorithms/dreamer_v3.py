@@ -1,8 +1,6 @@
 """``DreamerV3``: RSSM world model + imagination-based actor-critic, ported
 from ``3rd_party/r2dreamer/dreamer.py`` (``rep_loss="dreamer"`` branch);
-official semantics win where r2dreamer deviates (see the plan's
-"Decisions" list). Reference: scratchpad ``dreamer-code-survey.md``
-sections 3-4, 9-10; plan ``~/.claude/plans/dreamer-v3.md`` sections B/E/F.
+official semantics win where r2dreamer deviates.
 
 Model-based-base architecture: ``ModelBasedAlgorithm(OffPolicyAlgorithm)``
 supplies the vectorized rollout loop, replay-buffer wiring, checkpointing,
@@ -17,8 +15,8 @@ rollout hooks (``_on_env_reset``, ``_rollout_action``,
 default ``BaseAlgorithm._eval_action`` path, see that class's docstring).
 
 **Deviation from ``ModelBasedAlgorithm``'s documented hook contract**
-(explicitly flagged, per model-based-base rules: the plan beats a base
-class's docstring where the two conflict for this concrete case): that
+(explicitly flagged: this concrete algorithm's needs beat the base
+class's docstring where the two conflict): that
 base's ``_update_model`` docstring says "trains the world model" (implying
 its own backward/optimizer step), matching TD-MPC2's convention. DreamerV3
 instead needs exactly ONE backward pass over a single ``LaProp`` optimizer,
@@ -35,24 +33,23 @@ directly testable -- see that method's own docstring), adds them to the
 stashed model losses, does the ONE combined backward, AGC-clips, and steps
 the optimizer + LR scheduler.
 
-**``contdisc``** (plan decision 2): default ``False`` here (constructor
+**``contdisc``** (design decision): default ``False`` here (constructor
 kwarg, threaded straight into ``RSSM``, see that class's own docstring for
 the exact behavioural difference from official JAX's default ``True``).
 
-**``torch.compile``** (plan decision 5): DEFERRED, not used anywhere in
+**``torch.compile``** (design decision): DEFERRED, not used anywhere in
 this module. Official JAX is jit-compiled end to end; r2dreamer wraps its
 own ``_cal_grad`` in ``torch.compile(mode="reduce-overhead")``
 (``dreamer.py:163``). Enabling ``torch.compile`` here is a follow-up, not
 attempted in this commit -- also see ``docs/guides/dreamer-v3.md``.
 
 **Discrete (``spaces.Discrete``) action spaces are out of scope for this
-class** (``DreamerPolicy`` itself implements both action heads per plan
-decision 4, but this algorithm currently only supports ``spaces.Box``):
+class** (``DreamerPolicy`` itself implements both action heads by design, but this algorithm currently only supports ``spaces.Box``):
 wiring a discrete action through the replay buffer (whose storage shape is
 literally ``action_space.shape`` -- ``()`` for ``Discrete``, not the
 one-hot ``(n,)`` vector RSSM's dynamics core needs internally) and through
 ``RSSM.model_loss``'s ``batch.action`` (consumed directly, already assumed
-one-hot) is a real design question the plan does not resolve, so this
+one-hot) is a real design question left unresolved, so this
 class raises ``NotImplementedError`` for anything but ``Box`` rather than
 guessing at an untested contract -- flagged in the port's final report as
 an open question, not silently shipped half-working.
@@ -100,7 +97,7 @@ class DreamerV3(ModelBasedAlgorithm):
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        size: Literal["12M", "25M", "50M", "100M", "200M", "400M"] = "12M",
+        size: Literal["12M", "25M", "50M", "100M", "200M", "400M", "ncrl_m"] = "12M",
         stoch: int = 32,
         unimix: float = 0.01,
         blocks: int = 8,
@@ -167,7 +164,7 @@ class DreamerV3(ModelBasedAlgorithm):
                 f"{type(self).__name__} only supports spaces.Box action spaces in this "
                 f"port (see class docstring); got {type(env.single_action_space)}."
             )
-        # Train-ratio -> (training_freq, utd) derivation (plan section F):
+        # Train-ratio -> (training_freq, utd) derivation:
         # train_ratio is upstream's own definition -- "1 gradient update per
         # batch_steps/train_ratio env steps collected", batch_steps =
         # batch_size*batch_length (dreamer-code-survey.md section 6). Setting
@@ -216,7 +213,7 @@ class DreamerV3(ModelBasedAlgorithm):
         )
 
         self.size = size
-        self._rssm_size = rssm_size if rssm_size is not None else RSSM_SIZES[f"size{size}"]
+        self._rssm_size = rssm_size if rssm_size is not None else RSSM_SIZES.get(size) or RSSM_SIZES[f"size{size}"]
         self.stoch = stoch
         self.unimix = unimix
         self.blocks = blocks
@@ -334,7 +331,7 @@ class DreamerV3(ModelBasedAlgorithm):
     # ------------------------------------------------------------------
     # Rollout: carry the RSSM state across env steps via observe() itself
     # (no explicit zeroing in the loop -- is_first masking inside observe()
-    # does the reset, plan section F).
+    # does the reset).
     # ------------------------------------------------------------------
 
     def _on_env_reset(self, obs) -> None:
@@ -349,7 +346,7 @@ class DreamerV3(ModelBasedAlgorithm):
                 obs_device, self._rollout_state, self._rollout_is_first, deterministic=False
             )
             if not learning_has_started:
-                # Random-action prefill (plan section F): the RSSM carry is
+                # Random-action prefill: the RSSM carry is
                 # still advanced through observe() above (needed regardless
                 # of exploration phase -- it is a fact about obs, not about
                 # which action gets taken from it); only the EXECUTED action
@@ -417,14 +414,14 @@ class DreamerV3(ModelBasedAlgorithm):
     def _update_model(self, batch) -> tuple[dict[str, float], Any]:
         with torch.autocast(**self._autocast_kwargs):
             losses, posterior = self.world_model.model_loss(batch)
-        # fp32 reduction (plan section F): autocast keeps a bf16 .mean()
+        # fp32 reduction: autocast keeps a bf16 .mean()
         # result in bf16; cast each scalar loss back to float32 before it
         # ever contributes to the single combined backward in
         # _update_actor_critic.
         losses = {k: v.float() for k, v in losses.items()}
         self._pending_model_losses = losses
         # Write the freshly-computed posterior deter/stoch back into the
-        # buffer's per-step carry table (detached -- plan section F), so the
+        # buffer's per-step carry table (detached), so the
         # next sample() of these slots warm-starts from an up-to-date
         # posterior instead of the value stored when they were first added
         # (r2dreamer buffer.update / JAX Replay.update).
@@ -479,7 +476,7 @@ class DreamerV3(ModelBasedAlgorithm):
                     frozen_rssm, policy_fn, start_state, horizon=self.imag_horizon, grad=False
                 )
                 feat_all = frozen_rssm.features(traj.states)  # (imag_horizon+1, horizon*num_envs, latent)
-                imag_reward = frozen_rssm.reward_head(feat_all).mode
+                imag_reward = frozen_rssm.reward_value(traj.states)
                 imag_cont = frozen_rssm.cont_head(feat_all).mean
                 imag_value = frozen_critic(feat_all).mode
                 imag_slow_value = frozen_slow_critic(feat_all).mode
@@ -506,8 +503,7 @@ class DreamerV3(ModelBasedAlgorithm):
             logp = action_dist.log_prob(traj.actions).unsqueeze(-1)
             entropy = action_dist.entropy().unsqueeze(-1)
             weight_detached = weight[:-1].detach()
-            # .float() before the final .mean() reduction (plan section F:
-            # "losses reduced in fp32") -- autocast keeps every op above
+            # .float() before the final .mean() reduction (            # "losses reduced in fp32") -- autocast keeps every op above
             # in bf16 when enabled; only the scalar loss itself needs fp32.
             actor_loss = -(
                 (logp * adv.detach() + self.act_entropy * entropy) * weight_detached
@@ -564,11 +560,17 @@ class DreamerV3(ModelBasedAlgorithm):
             recon_loss = sum(
                 v for k, v in self._pending_model_losses.items() if k not in _MODEL_LOSS_SCALE_KEYS
             )
+            model_losses = self._pending_model_losses
+            # Terms are added one by one in the original left-to-right order
+            # so the default (both heads present) sum is bit-identical; a head
+            # the RSSM was built without has no key and is skipped.
+            total_loss = self.dyn_scale * model_losses["dyn"] + self.rep_scale * model_losses["rep"]
+            if "rew" in model_losses:
+                total_loss = total_loss + self.rew_scale * model_losses["rew"]
+            if "con" in model_losses:
+                total_loss = total_loss + self.con_scale * model_losses["con"]
             total_loss = (
-                self.dyn_scale * self._pending_model_losses["dyn"]
-                + self.rep_scale * self._pending_model_losses["rep"]
-                + self.rew_scale * self._pending_model_losses["rew"]
-                + self.con_scale * self._pending_model_losses["con"]
+                total_loss
                 + self.recon_scale * recon_loss
                 + self.policy_scale * imag["actor_loss"]
                 + self.value_scale * imag["critic_loss"]

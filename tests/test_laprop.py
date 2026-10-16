@@ -1,6 +1,5 @@
 """Unit tests for ``rl_garden.common.optim.laprop`` (``LaProp``, ``linear_warmup``)
-and ``rl_garden.common.optim.agc`` (``clip_grad_agc_``), DreamerV3's optimizer
-(plan model-based-base Part 2 / decision 1).
+and ``rl_garden.common.optim.agc`` (``clip_grad_agc_``), DreamerV3's optimizer.
 """
 from __future__ import annotations
 

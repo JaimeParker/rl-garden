@@ -1,8 +1,7 @@
 """``LatentConsistencyModel``: TD-MPC2's implicit world model, ported from
 ``3rd_party/tdmpc2/tdmpc2/common/world_model.py`` and split out of this
 repo's former single-class ``WorldModel`` that used to live in the
-now-deleted ``rl_garden.algorithms.tdmpc2`` package, per the model-based-base
-plan part 1.2/1.3 -- this class keeps
+now-deleted ``rl_garden.algorithms.tdmpc2`` package -- this class keeps
 only the *model* half (encoder, latent projection, dynamics, reward, optional
 termination head); the actor (policy prior) and critic (Q-ensemble) that used
 to live on the same class now belong to
@@ -29,6 +28,11 @@ planning/imagination). ``observe()`` therefore ignores its incoming
 ``state``/``action``/``is_first`` entirely and just wraps a fresh embedding
 into ``State`` -- unlike a recurrent model (DreamerV3's RSSM), which folds
 the previous state and action into the new one.
+
+State convention for the latent-consistency family (this class,
+``MultitaskWorldModel``, ``BoundTaskWorldModel``): ``State == {"z": (..., latent_dim)}``.
+``rl_garden.planners.mppi`` and the TD-MPC2 policies/algorithms read the
+``"z"`` key directly; any model fed to them must use it.
 """
 from __future__ import annotations
 
@@ -39,12 +43,41 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rl_garden.common.obs_utils import index_obs
+from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks.normed_mlp import SimNorm, mlp
-from rl_garden.networks.twohot import soft_ce
+from rl_garden.networks.symlog import symlog
+from rl_garden.networks.twohot import soft_ce, two_hot_inv
 from rl_garden.world_models.base import State, WorldModel
+from rl_garden.world_models.batch import SequenceBatch
+
+
+def decode_two_hot(
+    logits: torch.Tensor, num_bins: int, vmin: float, vmax: float, *, symlog_space: bool = False
+) -> torch.Tensor:
+    """Scalar ``(..., 1)`` from TD-MPC2 two-hot logits over linear bins in
+    symlog space. ``symlog_space=False`` is ``two_hot_inv`` (softmax
+    expectation, then ``symexp``); ``symlog_space=True`` stops before the
+    ``symexp``. ``num_bins`` 0/1 follow ``two_hot_inv``'s raw-regression
+    branches."""
+    if not symlog_space:
+        return two_hot_inv(logits, num_bins, vmin, vmax)
+    if num_bins == 0:
+        return symlog(logits)
+    if num_bins == 1:
+        return logits
+    bins = torch.linspace(vmin, vmax, num_bins, device=logits.device, dtype=logits.dtype)
+    return torch.sum(F.softmax(logits, dim=-1) * bins, dim=-1, keepdim=True)
+
+
+def masked_reward_mean(values: torch.Tensor, reward_valid: Optional[torch.Tensor]) -> torch.Tensor:
+    """Mean of per-column reward losses ``values`` (``(B, ...)``) over the
+    columns ``reward_valid`` (``(B,)`` bool) marks; ``None`` keeps the plain
+    ``.mean()``."""
+    if reward_valid is None:
+        return values.mean()
+    return values[reward_valid].mean()
 
 
 class LatentConsistencyModel(WorldModel):
@@ -99,7 +132,7 @@ class LatentConsistencyModel(WorldModel):
         every ``nn.Linear``'s default-init draws (at construction) and every
         ``trunc_normal_`` draw (at ``apply(weight_init)``) interleave in one
         fixed order relative to the shared ``torch`` RNG stream. Splitting
-        actor/critic out to ``TDMPC2Policy`` (plan 1.3) means that order can
+        actor/critic out to ``TDMPC2Policy`` means that order can
         now only be reproduced if construction of *every* module (this
         model's, then the policy's actor, critic, critic-target) happens
         first, and *then* every module's init pass runs in that same order
@@ -144,6 +177,16 @@ class LatentConsistencyModel(WorldModel):
         self.vmax)``."""
         return self._reward(torch.cat([state["z"], action], dim=-1))
 
+    def reward_value(
+        self, state: State, action: torch.Tensor, *, symlog_space: bool = False
+    ) -> torch.Tensor:
+        """``decode_two_hot`` of ``reward()``: real-scale reward, or with
+        ``symlog_space=True`` the softmax expectation over the symlog-space
+        bins (``symexp`` of it equals the real-scale value)."""
+        return decode_two_hot(
+            self.reward(state, action), self.num_bins, self.vmin, self.vmax, symlog_space=symlog_space
+        )
+
     def continue_(self, state: State) -> Optional[torch.Tensor]:
         """Probability of continuing past ``state``. ``None`` when
         ``episodic=False`` (no termination head is built at all -- callers
@@ -173,32 +216,39 @@ class LatentConsistencyModel(WorldModel):
             "model": iter(model_params),
         }
 
-    def model_loss(self, batch: dict) -> tuple[dict[str, torch.Tensor], State]:
+    def _target_latents(self, obs, horizon: int, batch_size: int) -> torch.Tensor:
+        with torch.no_grad():
+            next_obs = flatten_leading_dims(index_obs(obs, slice(1, None)))
+            return self.encode(next_obs).reshape(horizon, batch_size, -1)
+
+    def model_loss(self, batch: SequenceBatch) -> tuple[dict[str, torch.Tensor], State]:
         """Rho-weighted latent-consistency + reward soft-CE losses over a
         ``(horizon + 1, B)`` obs window, moved (same numerics) from this
         repo's former ``TDMPC2._gradient_step``.
 
-        ``batch`` keys: ``"obs"`` (``(horizon + 1, B, ...)`` windowed
-        observations), ``"action"`` (``(horizon, B, action_dim)``),
-        ``"reward"`` (``(horizon, B, 1)``), ``"next_z"`` (``(horizon, B,
-        latent_dim)``, the caller's already-computed no-grad
-        ``encode(obs[1:])`` -- reused here instead of re-encoding, since the
-        caller needs it anyway for its own TD-target), and -- only read
-        when ``self.episodic`` -- ``"terminated"`` (``(horizon, B, 1)``
-        float).
+        ``batch`` (``SequenceBatch``) fields read: ``obs`` (``(horizon + 1,
+        B, ...)``), ``action`` (``(horizon, B, action_dim)``), ``reward``
+        (``(horizon, B, 1)``), ``next_z`` (``(horizon, B, latent_dim)``
+        no-grad ``encode(obs[1:])``; computed here under ``no_grad`` when
+        ``None`` -- TD-MPC2 passes its own copy because its TD target needs
+        the same tensor), ``reward_valid`` (``(B,)`` bool or ``None``), and
+        -- only when ``self.episodic`` -- ``terminated`` (``(horizon, B,
+        1)`` float).
 
         Returns ``({"consistency_loss", "reward_loss", "termination_loss"},
         {"z": zs})`` where ``zs`` is the **live** (graph-attached) dynamics
         rollout ``zs[0] = encode(obs[0])``, ``zs[t + 1] = step({"z": zs[t]},
-        action[t])["z"]`` -- see ``WorldModel.model_loss``'s docstring (plan
-        item 0). The caller's critic value loss reads this live tensor
+        action[t])["z"]`` -- see ``WorldModel.model_loss``'s docstring. The caller's critic value loss reads this live tensor
         directly so its gradient reaches this model's dynamics/encoder
         exactly like upstream's single shared graph; the caller detaches it
         itself for the actor update, matching upstream's ``update_pi(zs
         .detach(), ...)`` call site.
         """
-        obs, action, reward, next_z = batch["obs"], batch["action"], batch["reward"], batch["next_z"]
+        obs, action, reward = batch.obs, batch.action, batch.reward
         horizon, batch_size = action.shape[0], action.shape[1]
+        next_z = batch.next_z
+        if next_z is None:
+            next_z = self._target_latents(obs, horizon, batch_size)
 
         z = self.encode(index_obs(obs, 0))
         zs = torch.empty(horizon + 1, batch_size, self.latent_dim, device=z.device, dtype=z.dtype)
@@ -215,14 +265,15 @@ class LatentConsistencyModel(WorldModel):
         reward_preds = self.reward({"z": _zs}, action)
         reward_loss = torch.zeros((), device=zs.device)
         for t in range(horizon):
-            reward_loss = reward_loss + soft_ce(
-                reward_preds[t], reward[t], self.num_bins, self.vmin, self.vmax, self.bin_size
-            ).mean() * self.rho**t
+            reward_loss = reward_loss + masked_reward_mean(
+                soft_ce(reward_preds[t], reward[t], self.num_bins, self.vmin, self.vmax, self.bin_size),
+                batch.reward_valid,
+            ) * self.rho**t
         reward_loss = reward_loss / horizon
 
         if self.episodic:
             termination_pred = self._termination(zs[1:])
-            termination_loss = F.binary_cross_entropy_with_logits(termination_pred, batch["terminated"])
+            termination_loss = F.binary_cross_entropy_with_logits(termination_pred, batch.terminated)
         else:
             termination_loss = torch.zeros((), device=zs.device)
 

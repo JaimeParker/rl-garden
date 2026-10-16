@@ -379,12 +379,26 @@ class BaseAlgorithmRegistry:
                         kind="runtime-derived",
                         detail=origin,
                     )
+        if self.phase_name == "online" and command.algorithm == "ncrl":
+            if not getattr(args, "pretrained_world_model", None):
+                raise ConfigError(
+                    "--pretrained_world_model is required for ncrl (train from scratch with dreamer_v3)."
+                )
+            if args.online_ratio < 1.0 and not args.retrieval_db:
+                raise ConfigError("--retrieval_db is required for ncrl when --online_ratio < 1.")
         if self.phase_name == "offline":
             if command.algorithm == "tdmpc2_multitask":
                 if not getattr(args, "dataset_dir", None):
                     raise ConfigError("--dataset_dir is required for tdmpc2_multitask.")
                 if not getattr(args, "mmap_dir", None):
                     raise ConfigError("--mmap_dir is required for tdmpc2_multitask.")
+            elif command.algorithm == "pwm":
+                for flag in ("dataset_dir", "mmap_dir", "world_model_checkpoint", "task"):
+                    if not getattr(args, flag, None):
+                        raise ConfigError(f"--{flag} is required for pwm.")
+            elif command.algorithm == "rssm_pretrain":
+                if not getattr(args, "dataset_dir", None):
+                    raise ConfigError("--dataset_dir is required for rssm_pretrain.")
             elif command.algorithm in (
                 "diffusion_bc",
                 "consistency_distill_bc",

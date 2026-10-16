@@ -431,6 +431,7 @@ they enforce the lazy-import invariant across every backend.
 |---------|-------|
 | `custom` | — (this doc's own template, `rl_garden/envs/custom/`) |
 | `d4rl_legacy` | [`docs/guides/d4rl-legacy-expansion.md`](../../docs/guides/d4rl-legacy-expansion.md) |
+| `dm_control` | [`docs/guides/dm-control-integration.md`](../../docs/guides/dm-control-integration.md) |
 | `isaaclab` | [`docs/guides/isaaclab-custom-tasks.md`](../../docs/guides/isaaclab-custom-tasks.md) |
 | `maniskill` | — |
 | `metaworld` | [`docs/guides/metaworld-integration.md`](../../docs/guides/metaworld-integration.md) |

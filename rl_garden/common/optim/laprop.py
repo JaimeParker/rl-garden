@@ -22,8 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Ported from ``3rd_party/r2dreamer/optim/laprop.py`` (plan model-based-base
-Part 2 / decision 1: DreamerV3's single unified optimizer over world model +
+Ported from ``3rd_party/r2dreamer/optim/laprop.py`` (DreamerV3's single unified optimizer over world model +
 encoder/decoder + actor + critic, combined here with ``agc.py``'s per-
 parameter clipping in place of a global grad-norm clip). LaProp differs from
 Adam by normalizing the gradient by its RMS *before* accumulating the

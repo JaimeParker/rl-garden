@@ -46,13 +46,17 @@ Key hyperparameters (see `rl_garden/training/online/_args.py::DreamerV3TrainingA
 
 ### Model Size Presets
 
-The `size` parameter determines the RSSM's capacity:
+The `size` parameter selects a row of `RSSM_SIZES` (`rl_garden/world_models/rssm.py`).
+The stochastic state is always `stoch=32` variables with `discrete` classes each:
 
-```python
-# size12M: deter_size=200, hidden_size=600, stoch_size=32×32, units=640
-# size25M: deter_size=300, hidden_size=1000, stoch_size=32×32, units=1024
-# ... up to size400M with larger dimensions
-```
+| Preset | `deter` | `hidden` | `discrete` | `units` | `cnn_depth` |
+|---|---|---|---|---|---|
+| `12M` | 2048 | 256 | 16 | 256 | 16 |
+| `25M` | 3072 | 384 | 24 | 384 | 24 |
+| `50M` | 4096 | 512 | 32 | 512 | 32 |
+| `100M` | 6144 | 768 | 48 | 768 | 48 |
+| `200M` | 8192 | 1024 | 64 | 1024 | 64 |
+| `400M` | 12288 | 1536 | 96 | 1536 | 96 |
 
 For rapid prototyping, use `12M`; scale up for complex visual tasks.
 

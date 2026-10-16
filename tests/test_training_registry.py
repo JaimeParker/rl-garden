@@ -105,6 +105,7 @@ def test_phase_registries_discover_expected_algorithms():
         "acrlpd",
         "tdmpc2",
         "dreamer_v3",
+        "ncrl",
         "dagger",
         "policy_distillation",
         "gail",
@@ -129,6 +130,7 @@ def test_phase_registries_discover_expected_algorithms():
         "calql",
         "wsrl",
         "tdmpc2_multitask",
+        "pwm",
         "td3_bc",
         "awac",
         "qgf",
@@ -141,6 +143,7 @@ def test_phase_registries_discover_expected_algorithms():
         "bppo",
         "unio4",
         "unio4_ope",
+        "rssm_pretrain",
     }
     assert set(off2on.entries()) == {
         "wsrl",

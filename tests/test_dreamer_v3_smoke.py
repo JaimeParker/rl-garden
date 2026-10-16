@@ -157,8 +157,7 @@ def test_checkpoint_roundtrip_includes_slow_critic_and_return_ema(tmp_path):
     for key, value in agent.policy.state_dict().items():
         assert torch.equal(value, loaded.policy.state_dict()[key]), key
 
-    # Explicitly confirm slow_critic and return_ema round-trip (plan section
-    # E: "state_dict must include slow_critic and return_ema buffers") --
+    # Explicitly confirm slow_critic and return_ema round-trip (state_dict must include slow_critic and return_ema buffers) --
     # both are plain nn.Module children of DreamerPolicy, so the generic
     # policy.state_dict() equality check above already covers them; these
     # extra asserts pin exactly which keys prove it.
@@ -181,7 +180,7 @@ def test_rgb_checkpoint_roundtrip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Fixer pass (2026-09-14, plan model-based-base Part 2 / DreamerV3): gradient
+# Fixer pass: gradient
 # isolation, rollout-reset wiring, contdisc -> imagination disc.
 # ---------------------------------------------------------------------------
 

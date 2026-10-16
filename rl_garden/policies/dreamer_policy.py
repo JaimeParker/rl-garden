@@ -1,6 +1,6 @@
 """``DreamerPolicy(BasePolicy)``: the actor (policy prior) + critic (value
 function) + slow (target) critic + return-normalization state that sits on
-top of an ``RSSM`` world model (plan model-based-base Part 2, section E).
+top of an ``RSSM`` world model.
 
 ``actor_extractor = rssm`` -- same in-contract, stateful-world-model-as-
 extractor pattern ``TDMPC2Policy`` establishes for TD-MPC2 (see
@@ -15,8 +15,7 @@ the (replay-based ``repval``) critic loss through one shared optimizer (see
 separate actor/critic extractor split to stop-gradient between.
 
 Deviation from ``BasePolicy``'s abstract ``predict(obs, deterministic) ->
-Tensor`` contract (documented, plan-directed -- model-based-base plan
-section E, DreamerV3 plan section F): ``predict()`` here takes and returns
+Tensor`` contract (documented, intentional): ``predict()`` here takes and returns
 explicit recurrent state (``state``, ``is_first`` in; ``(action, new_state)``
 out), matching the RSSM's own ``observe()`` contract and following the same
 "stateful rollout needs its own explicit-state API, `BasePolicy.predict`'s
@@ -30,7 +29,7 @@ must be aware of the different signature/return type; the DEFAULT
 ``BaseAlgorithm._eval_action``/``OffPolicyAlgorithm._policy_action`` paths
 (which call ``policy.predict(obs, deterministic=...)`` expecting a bare
 Tensor) are never reached for DreamerV3 -- ``DreamerV3`` overrides
-``_rollout_action`` (per plan section F) and ``_eval_action_and_critic_action``/
+``_rollout_action`` and ``_eval_action_and_critic_action``/
 ``_eval_start_hook``/``_eval_step_hook`` (mirroring
 ``rl_garden.algorithms.sequence_sac.SequenceSAC``'s ``_rollout_hidden``/
 ``_eval_hidden`` split) so both the rollout and eval loops always call this
@@ -163,8 +162,7 @@ class DreamerPolicy(BasePolicy):
         guarantee a sample stays in range, see that function's docstring).
         The action just taken is stored back into the returned state under
         ``"prev_action"`` so a caller threading this state through
-        successive calls never needs to pass the action separately (plan
-        section E)."""
+        successive calls never needs to pass the action separately."""
         embed = self.world_model.encode(obs)
         batch_size = embed.shape[0]
         device = embed.device

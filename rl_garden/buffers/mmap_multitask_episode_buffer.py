@@ -11,7 +11,7 @@ sampling, just over mmap-backed storage with an extra ``task`` field. Unlike
 the online single-task buffer, this one is populated exactly once via bulk
 ``load_episode()`` calls (no online rollout, no ring-buffer overwrite) --
 ``add()`` is therefore unsupported. It does NOT get ``SequenceReplayBuffer``'s
-strict-mode tail-step fix (model-based-base plan 1.6): that fix depends on a
+strict-mode tail-step fix: that fix depends on a
 final-obs side table populated by ``add()``'s ``next_obs`` argument, but this
 buffer is populated by ``load_episode()`` from an already-converted offline
 dataset that was never given a true final observation to begin with (see

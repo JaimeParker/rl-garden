@@ -62,8 +62,7 @@ def _drqv2_conv_factory(config: Any):
 
 def _dreamer_conv_factory(config: Any):
     # DreamerV3's world model constructs the whole-Dict DreamerConvEncoder
-    # directly (RSSM owns representation learning end to end, plan
-    # model-based-base Part 2 section C) -- never through this factory.
+    # directly (RSSM owns representation learning end to end) -- never through this factory.
     # This registry entry is the CombinedExtractor-compatible per-image
     # adapter (_DreamerConvImageOnly) so any algorithm can still pick this
     # CNN for its image branch through the ordinary --encoder.backbone path.

@@ -1,5 +1,5 @@
-"""Tests for ``rl_garden.buffers.sequence_replay_buffer.SequenceReplayBuffer``
-(model-based-base plan 1.6): strict (``cross_episode=False``) mode never
+"""Tests for ``rl_garden.buffers.sequence_replay_buffer.SequenceReplayBuffer``:
+strict (``cross_episode=False``) mode never
 returns a window crossing an episode boundary, but -- unlike the former
 strict single-episode-window buffer it replaces -- no longer loses tail steps at an
 episode's end; tolerant (``cross_episode=True``) mode's checkpoint/priority
@@ -93,7 +93,7 @@ def test_strict_rejects_tolerant_only_kwargs():
 
 
 def test_priority_is_an_independent_constructor_argument():
-    # priority (2026-09-14, DreamerV3 plan section D): no longer derived
+    # priority: no longer derived
     # from cross_episode -- cross_episode=True now supports both
     # priority=True (tolerant, unchanged) and priority=False (uniform, new).
     tolerant = SequenceReplayBuffer(
@@ -204,8 +204,7 @@ def test_sample_shapes_and_action_reward_alignment():
 
 
 # ---------------------------------------------------------------------------
-# Strict mode -- tail-step fix (model-based-base plan 1.6 / scratchpad
-# tdmpc2-upstream-vs-port.md section 3). Before this fix, ANY window whose
+# Strict mode -- tail-step fix. Before this fix, ANY window whose
 # span reached an episode's true final transition was rejected outright
 # (a documented limitation of the buffer this replaces); SequenceReplayBuffer now
 # accepts it and patches the true final observation in from the final-obs
@@ -335,8 +334,7 @@ def test_tolerant_mode_checkpoint_hooks_round_trip_hidden_state():
 
 
 # ---------------------------------------------------------------------------
-# Uniform mode (cross_episode=True, priority=False) -- DreamerV3, plan
-# section D. No priority tree, no checkpoint grid: windows are drawn
+# Uniform mode (cross_episode=True, priority=False) -- DreamerV3. No priority tree, no checkpoint grid: windows are drawn
 # uniformly over ring-buffer-contiguous spans and may cross an episode
 # boundary (masked downstream via the stored per-step is_first, not
 # episode_starts). Every step's model carry is stored densely and can be

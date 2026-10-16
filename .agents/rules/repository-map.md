@@ -8,9 +8,17 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   algorithm's `encoder_config`/`obs_groups`/`critic_encoder_config`/
   `encoder_sharing` into built feature extractors via `_policy_extractor_kwargs()`).
   `model_based.py` holds `ModelBasedAlgorithm` (`OffPolicyAlgorithm` subclass;
-  TD-MPC2's base, see `.agents/rules/adding-algorithm.md`'s "model-based
-  algorithms" section) — flat modules `tdmpc2.py`/`tdmpc2_multitask.py`, no
-  sub-package.
+  TD-MPC2/DreamerV3's online base) and `offline_model_based.py` holds
+  `OfflineModelBasedAlgorithm` (`OfflineRLAlgorithm` subclass; offline base);
+  both share the three-hook gradient step in `_model_based_step.py`
+  (`ModelBasedStepMixin`) — see `.agents/rules/adding-algorithm.md`'s
+  "model-based algorithms" section. Flat modules `tdmpc2.py` (`TDMPC2Core` +
+  `TDMPC2`)/`tdmpc2_multitask.py`/`dreamer_v3.py`, no sub-package.
+  Also flat: `pwm.py` (`PWMCore`/`PWM`, SHAC-style actor-critic on a frozen
+  multitask world model; offline host subclass), `rssm_pretrain.py`
+  (`RSSMPretrain`, reward-free RSSM pretraining; offline host subclass), and
+  `ncrl.py` (`NCRL(DreamerV3)`, online fine-tuning with rehearsal and BC
+  guidance).
 - `rl_garden/observations/` — the observation composition contract (Layer A):
   `ObservationConfig` ("what is observed" — state/rgb/depth cameras/extra_state
   auxiliary keys, image size, frame stacking), `ObservationSchema`/`Modality`/
@@ -23,12 +31,18 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `super().__init__(..., actor_extractor=..., critic_extractor=...,
   encoder_sharing=...)`, and use `extract_actor_features()`/`extract_critic_features()`
   and their dimension properties for head construction.
+  `bc_guide.py` holds the behaviour-cloning guide policy NCRL swaps in during
+  guidance windows; `action_mask.py` holds the padded-action-dim masking (`masked_bounded_normal`)
+  for NCRL's multi-embodiment actor.
 - `rl_garden/buffers/` — tensor, dict, Monte-Carlo, and rollout buffers.
   `sequence_replay_buffer.py` holds `SequenceReplayBuffer`, the unified
   `(T, N)` windowed buffer strict single-episode windows (TD-MPC2,
   `cross_episode=False`) and boundary-tolerant windows
   (`RecurrentReplayBuffer`/`TransformerReplayBuffer`, `cross_episode=True`)
   are both built from.
+  `rehearsal_sequence_buffer.py` holds `RehearsalSequenceBuffer` (online + retrieved
+  prior episodes mixed per batch, NCRL); `sequence_dataset.py` reads the on-disk
+  image sequence-dataset format (`MmapSequenceDataset`, used by `rssm_pretrain`).
 - `rl_garden/encoders/` — state, CNN, RGBD/proprio, pooling, FiLM, and ResNet
   encoders (Layer B — "how observations are encoded"). `config.py` holds
   `EncoderConfig` (the `--encoder.*` CLI surface); `registry.py` holds
@@ -43,8 +57,13 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `init.py`).
 - `rl_garden/world_models/` — the abstract `WorldModel`/`State` contract
   (`base.py`) every model-based algorithm's learned dynamics model
-  implements, the shared `imagine()` rollout primitive (`imagine.py`), and
-  TD-MPC2's `LatentConsistencyModel` (`latent_consistency.py`). A world
+  implements, the `SequenceBatch` window batch every `model_loss` reads
+  (`batch.py`), the shared `imagine()` rollout primitive (`imagine.py`),
+  TD-MPC2's `LatentConsistencyModel` (`latent_consistency.py`) and
+  `MultitaskWorldModel` (`multitask_latent_consistency.py`),
+  `BoundTaskWorldModel` (`bound_task.py`, a multitask model with one task id
+  bound, usable by `imagine()`/the planner), and DreamerV3's `RSSM`
+  (`rssm.py`) with its `ObservationDecoder` (`decoder.py`). A world
   model owns encoder/dynamics/reward/(optional termination) only — actor
   and critic live on the owning `BasePolicy` (see `rl_garden/policies/`
   below and `.agents/rules/adding-algorithm.md`'s "model-based algorithms"
@@ -58,9 +77,15 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   checkpoint I/O, optimization, types, and utilities.
 - `rl_garden/envs/` — backend registry and implementations, environment factories,
   wrappers, and custom environments.
+  `envs/dm_control/` is the dm_control suite wrapper package (`config.py`,
+  `env.py`, `tasks.py`, `custom_tasks/` for NCRL's custom tasks), registered by
+  `envs/backends/dm_control.py`; `envs/wrappers/multitask_pad.py` pads
+  observations/actions of one task to a multitask model's dims (PWM evaluation).
 - `rl_garden/models/` — ACT and reward models.
 - `rl_garden/training/` — registry base and independent `online/`, `offline/`, and
   `off2on/` packages.
+  New entrypoints: `online/ncrl.py` (`ncrl`), `offline/pwm.py` (`pwm`) and
+  `offline/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
 - `robot_infra/` — optional submodule ([rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra)):
   controllers, teleoperation, real-robot support. No dependency on `rl_garden`.
 - Real-robot actor/learner loops, the `franka_real` env backend, and
@@ -77,6 +102,10 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   (third-party baseline reproduction runners that *patch* a specific idea into
   a copied source tree, e.g. `run_iql_fixed_mixing.py` — different purpose
   from `baselines/`, see below).
+  World-model tools in `conversion/`: `convert_ncrl_dataset.py` (NCRL npz
+  episodes to the sequence dataset), `build_ncrl_retrieval_db.py` (first-frame
+  embedding DB for rehearsal), `convert_tdmpc2_checkpoint.py` (upstream/HF TD-MPC2
+  multitask checkpoint to an rl-garden `MultitaskWorldModel`).
 - `baselines/` — top-level package for running *unmodified* official JAX
   baseline repos (Cal-QL, wsrl, IQL-jax) against rl-garden's canonical
   environments, for pure numeric comparison. See
@@ -90,6 +119,7 @@ agent rules; this file is a plain orientation reference, not a rules doc.
 - `docs/` — public documentation, split into `guides/` (operational how-to),
   `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
   notes).
+  World-model docs: `guides/{ncrl,dm-control-integration}.md`.
 - `3rd_party/` — vendored reference submodules and external clones; read-only,
   do not edit unless explicitly requested. `Cal-QL`, `wsrl`, and
   `implicit_q_learning` are registered as real git submodules (see

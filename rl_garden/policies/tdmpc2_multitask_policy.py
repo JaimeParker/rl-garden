@@ -2,7 +2,7 @@
 ``BaseAlgorithm.save()``/``load()``/``state_dict()`` keep working unmodified
 for ``TDMPC2Multitask``. Still **out of** the ``BasePolicy`` contract (unlike
 the single-task ``rl_garden.policies.tdmpc2_policy.TDMPC2Policy``, which
-graduated into it per plan 1.3) -- multitask training never touches a live
+graduated into it when it was split out) -- multitask training never touches a live
 env (see ``rl_garden.algorithms.tdmpc2_multitask``'s module docstring), so there is no
 observation/action space or rollout ``actor_extractor`` role for this class
 to declare; it remains a documented exception in
@@ -10,7 +10,7 @@ to declare; it remains a documented exception in
 
 Owns the actor (Gaussian prior head with task-conditioned action masking),
 critic (Q-ensemble), critic target and running scale -- moved out of
-``MultitaskWorldModel`` per plan 1.3, mirroring the single-task
+``MultitaskWorldModel`` in the model/policy split, mirroring the single-task
 model/policy split (``rl_garden.policies.tdmpc2_policy.TDMPC2Policy``).
 
 ``predict()`` (action selection via the CEM planner) is out of scope for v1:
@@ -29,7 +29,12 @@ from rl_garden.networks.normed_mlp import mlp
 from rl_garden.networks.q_ensemble import QEnsemble
 from rl_garden.networks.running_scale import RunningScale
 from rl_garden.networks.twohot import two_hot_inv
-from rl_garden.policies._tdmpc2_math import gaussian_logprob, log_std, squash
+from rl_garden.policies._tdmpc2_math import (
+    critic_with_detached_params,
+    gaussian_logprob,
+    log_std,
+    squash,
+)
 from rl_garden.policies.base import BasePolicy
 from rl_garden.world_models.multitask_latent_consistency import MultitaskWorldModel
 
@@ -123,10 +128,13 @@ class MultitaskTDMPC2Policy(BasePolicy):
         assert return_type in ("min", "avg", "all")
         z = self.world_model.task_embed(z, task)
         za = torch.cat([z, a], dim=-1)
-        qnet = self.critic_target if target else self.critic
-        out = qnet(za)
-        if detach and not target:
-            out = out.detach()
+        if target:
+            out = self.critic_target(za)
+        elif detach:
+            # Parameter-only detach, see TDMPC2Policy.Q.
+            out = critic_with_detached_params(self.critic, za)
+        else:
+            out = self.critic(za)
 
         if return_type == "all":
             return out

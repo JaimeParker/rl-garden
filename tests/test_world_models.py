@@ -15,6 +15,7 @@ from gymnasium import spaces
 
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.world_models.base import State, WorldModel
+from rl_garden.world_models.batch import SequenceBatch
 from rl_garden.world_models.latent_consistency import LatentConsistencyModel
 
 
@@ -47,6 +48,10 @@ class _FakeWorldModel(WorldModel):
 
     def reward(self, state: State, action: torch.Tensor) -> torch.Tensor:
         return state["h"].sum(-1, keepdim=True) + action.sum(-1, keepdim=True)
+
+    def reward_value(self, state: State, action: torch.Tensor, *, symlog_space: bool = False) -> torch.Tensor:
+        del symlog_space
+        return self.reward(state, action)
 
     def continue_(self, state: State):
         return torch.full((state["h"].shape[0], 1), 0.9)
@@ -135,7 +140,7 @@ def test_continue_is_none_when_not_episodic_and_a_probability_when_episodic():
 
 def test_model_loss_zs_is_deterministic_across_repeated_calls():
     """``model_loss()``'s internal dynamics rollout (formerly the standalone
-    ``rollout()`` method, deleted per model-based-base plan item 0 -- the
+    ``rollout()`` method, deleted in the base-class refactor -- the
     live posterior it returns now replaces that second call site) has no
     RNG/dropout of its own, so two calls on identical inputs must produce
     bit-identical ``zs``."""
@@ -146,7 +151,7 @@ def test_model_loss_zs_is_deterministic_across_repeated_calls():
     reward = torch.randn(horizon, batch, 1)
     with torch.no_grad():
         next_z = model.encode(obs[1:].reshape(-1, 4)).reshape(horizon, batch, -1)
-    batch_dict = {"obs": obs, "action": action, "reward": reward, "next_z": next_z}
+    batch_dict = SequenceBatch(obs=obs, action=action, reward=reward, next_z=next_z)
 
     _, posterior1 = model.model_loss(batch_dict)
     _, posterior2 = model.model_loss(batch_dict)
@@ -163,7 +168,7 @@ def test_model_loss_returns_named_losses_and_live_posterior():
     reward = torch.randn(horizon, batch, 1)
     with torch.no_grad():
         next_z = model.encode(obs[1:].reshape(-1, 4)).reshape(horizon, batch, -1)
-    batch_dict = {"obs": obs, "action": action, "reward": reward, "next_z": next_z}
+    batch_dict = SequenceBatch(obs=obs, action=action, reward=reward, next_z=next_z)
 
     losses, posterior = model.model_loss(batch_dict)
 
@@ -171,6 +176,6 @@ def test_model_loss_returns_named_losses_and_live_posterior():
     for value in losses.values():
         assert torch.isfinite(value)
     assert posterior["z"].shape == (horizon + 1, batch, model.latent_dim)
-    # Live (graph-attached), not detached -- plan item 0: the caller's
+    # Live (graph-attached), not detached -- the caller's
     # critic value loss must backprop into this model's own parameters.
     assert posterior["z"].requires_grad is True

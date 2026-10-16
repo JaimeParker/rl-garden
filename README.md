@@ -20,7 +20,9 @@ platforms can be integrated without creating platform-specific training entrypoi
   DPPO, SACFlow, ACRLPD, plus recurrent and transformer SAC/PPO variants. See
   the [Training Entrypoints](#training-entrypoints) table for the full list.
 - **Offline RL and imitation:** BC, Diffusion BC, IQL, CQL, Cal-QL, BCQ, PLAS,
-  EDAC, SPOT, ReBRAC, FQL, QGF, QAM, FAC, TD3+BC, AWAC, and multitask TDMPC2.
+  EDAC, SPOT, ReBRAC, FQL, QGF, QAM, FAC, TD3+BC, AWAC, multitask TDMPC2, PWM
+  (policy learning on a frozen multitask world model), and reward-free RSSM
+  pretraining.
 - **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, FAC, and ACFQL
   pretraining, warm start, and online fine-tuning.
 - **Observations:** a single strict Dict contract -- a ``state`` vector key
@@ -39,9 +41,13 @@ platforms can be integrated without creating platform-specific training entrypoi
   explicit storage and sample devices.
 - **Model-based RL:** world model base class, imagine rollout, MPPI planner, and
   `ModelBasedAlgorithm` base for learning + planning models (TD-MPC2, DreamerV3
-  for state and pixels; see [`docs/guides/dreamer-v3.md`](docs/guides/dreamer-v3.md)).
+  for state and pixels; see [`docs/guides/dreamer-v3.md`](docs/guides/dreamer-v3.md)),
+  PWM, and NCRL (pretrained-RSSM
+  Dreamer fine-tuning with rehearsal and guidance;
+  see [`docs/guides/ncrl.md`](docs/guides/ncrl.md)).
 - **Environment backends:** a registry-based interface with ManiSkill, RoboTwin,
-  IsaacLab, MuJoCo, MuJoCo Warp (GPU), Minari, legacy D4RL/Adroit/Kitchen, a
+  IsaacLab, MuJoCo, MuJoCo Warp (GPU), dm_control (see
+  [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)), Minari, legacy D4RL/Adroit/Kitchen, a
   real-robot Franka backend, and a template for adding further platforms.
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration
   recording, and learned reward classifiers.
@@ -103,8 +109,8 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dreamer_v3`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `fac`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dreamer_v3`, `ncrl`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
+| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `fac`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask`, `pwm`, `rssm_pretrain` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `fac`, `acfql` |
 
 Every registered algorithm's exact args and defaults can be listed with

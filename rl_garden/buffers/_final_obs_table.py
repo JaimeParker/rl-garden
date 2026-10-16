@@ -11,7 +11,7 @@ generalized to Box observations too.
 
 The host buffer must expose: ``observation_space`` (a ``spaces.Dict``, the
 rl-garden observation contract -- every current user, ``SequenceReplayBuffer``
-(both ``cross_episode`` modes, model-based-base plan 1.6) and
+(both ``cross_episode`` modes) and
 ``LazyNextNStepReplayBuffer``, is Dict-only), ``storage_device``,
 ``buffer_size``.
 """

@@ -1,12 +1,10 @@
 """DreamerV3 building blocks shared by ``rl_garden.world_models.rssm.RSSM``
-and ``rl_garden.world_models.decoder.ObservationDecoder`` (model-based-base
-plan Part 2, section A): normalization, the block-diagonal dynamics/decoder
+and ``rl_garden.world_models.decoder.ObservationDecoder``: normalization, the block-diagonal dynamics/decoder
 linear layer, weight init, the generic MLP builder, return normalization,
 and every distribution head DreamerV3 uses. Ported numerically from
 ``3rd_party/r2dreamer/{networks,distributions,tools}.py``; official JAX
 (``3rd_party/dreamerv3/dreamerv3/{nets,heads}.py``) confirms every constant
-below is identical between the two reference implementations (scratchpad
-``dreamer-code-survey.md`` sections 1, 3, 7).
+below is identical between the two reference implementations.
 
 Every module here is autocast-safe (no float64, no in-place ops on autocast
 outputs) since the owning ``RSSM``/heads are wrapped in ``torch.autocast``
@@ -16,6 +14,7 @@ not touch autocast.
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -98,7 +97,7 @@ class BlockLinear(nn.Module):
     ``networks.py:24-56`` (identical block-diagonal einsum in official JAX
     ``nets.py:254-278``). Used for the RSSM's block-GRU dynamics core and
     the decoder's deterministic-state space projection -- ``blocks=8`` is
-    DreamerV3's fixed choice (plan decision), independent of hidden size.
+    DreamerV3's fixed choice, independent of hidden size.
     """
 
     def __init__(self, in_ch: int, out_ch: int, blocks: int, outscale: float = 1.0) -> None:
@@ -183,8 +182,7 @@ class ReturnEMA(nn.Module):
     tracks the ``[5, 95]``-percentile range of imagined returns with an EMA
     of rate ``0.01``, and reports ``(offset, scale)`` where ``scale =
     max(1, p95 - p05)`` -- used to normalize the actor's advantage, not to
-    renormalize the critic's own regression target (scratchpad
-    ``dreamer-code-survey.md`` section 4).
+    renormalize the critic's own regression target.
 
     ``x`` is cast to float32 before ``torch.quantile`` regardless of its
     input dtype: quantile is unreliable in bf16/fp16, and this module may be
@@ -220,9 +218,25 @@ class OneHotDist(torch.distributions.OneHotCategorical):
     differentiable rollout at all. NOT used for the discrete action head
     (decision 4: that one is a plain ``torch.distributions.Categorical``,
     no unimix, matching official JAX's ``policy_dist_disc: categorical``).
+
+    ``straight_through`` picks the ``rsample()`` gradient estimator:
+    ``"gumbel_hard"`` (default, r2dreamer) is ``gumbel_softmax(hard=True)``,
+    whose gradient flows through the noisy softmax; ``"probs"`` (NCRL's
+    ``OneHotDist.sample``, ``3rd_party/ncrl/src/dreamer/rssm.py:74-82``) is a
+    categorical sample plus ``probs - probs.detach()``, whose gradient is that
+    of the (unimix-mixed) probabilities. Both draw the same forward sample
+    distribution.
     """
 
-    def __init__(self, logits: torch.Tensor, unimix: float = 0.0) -> None:
+    def __init__(
+        self,
+        logits: torch.Tensor,
+        unimix: float = 0.0,
+        straight_through: Literal["gumbel_hard", "probs"] = "gumbel_hard",
+    ) -> None:
+        if straight_through not in ("gumbel_hard", "probs"):
+            raise ValueError(f"straight_through must be 'gumbel_hard' or 'probs', got {straight_through!r}.")
+        self.straight_through = straight_through
         probs = F.softmax(logits.float(), dim=-1)
         uniform = unimix / probs.shape[-1]
         probs = probs * (1.0 - unimix) + uniform
@@ -235,6 +249,9 @@ class OneHotDist(torch.distributions.OneHotCategorical):
 
     def rsample(self, sample_shape: torch.Size = torch.Size(), temperature: float = 1.0) -> torch.Tensor:
         del sample_shape
+        if self.straight_through == "probs":
+            hard = super().sample().detach()
+            return hard + self.probs - self.probs.detach()
         return F.gumbel_softmax(self.logits, tau=temperature, hard=True, dim=-1)
 
     def sample(self, sample_shape: torch.Size = torch.Size()) -> torch.Tensor:
@@ -319,26 +336,44 @@ class SymlogMSEDist:
         return -_sum_trailing_dims(distance)
 
 
+TwohotSpace = Literal["raw", "symlog"]
+
+
 class TwoHotDist:
     """Distribution-like reward/critic-head wrapper around
     ``rl_garden.networks.twohot.twohot_logprob``/``twohot_mean`` (r2dreamer
     ``symexp_twohot``/``TwoHot``, ``distributions.py:67-129,242-251``) --
     255 symexp-spaced bins, ``outscale=0.0`` at construction (``MLPHead``'s
-    job) so the head starts near a uniform distribution over bins."""
+    job) so the head starts near a uniform distribution over bins.
 
-    def __init__(self, logits: torch.Tensor, bins: torch.Tensor) -> None:
+    ``space`` is where the two-hot target is interpolated and the mean taken:
+
+    - ``"raw"`` (DreamerV3): ``bins`` are the symexp-spaced raw-scale bins;
+      the target is interpolated in raw scale, decoded as ``E_p[bin]``.
+    - ``"symlog"`` (NCRL's ``SymTwoHot``, ``3rd_party/ncrl/src/dreamer/
+      dreamer_utils.py:9-56``): ``bins`` are ``linspace(-20, 20)`` in symlog
+      space (the raw bins' positions); the target is ``symlog``'d and
+      interpolated there, decoded as ``symexp(E_p[bin])``.
+    """
+
+    def __init__(self, logits: torch.Tensor, bins: torch.Tensor, space: TwohotSpace = "raw") -> None:
         self.logits = logits
         self.bins = bins
+        self.space = space
 
     @property
     def mode(self) -> torch.Tensor:
+        if self.space == "symlog":
+            return symexp(twohot_mean(self.logits, self.bins))
         return twohot_mean(self.logits, self.bins)
 
     @property
     def mean(self) -> torch.Tensor:
-        return twohot_mean(self.logits, self.bins)
+        return self.mode
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        if self.space == "symlog":
+            value = symlog(value)
         return twohot_logprob(self.logits, self.bins, value)
 
 
@@ -367,6 +402,11 @@ class MLPHead(nn.Module):
     ``outscale`` rescales the final linear layer's weight post-init (reward/
     critic ``0.0``, actor ``0.01``, decoder ``1.0`` == no-op) -- see
     ``_apply_outscale``.
+
+    ``twohot_space`` (``"symexp_twohot"`` only, see ``TwoHotDist``): ``"raw"``
+    (default, DreamerV3) or ``"symlog"`` (NCRL). ``_bins`` holds the bins of
+    that space and is a non-persistent buffer, so the choice does not change
+    the state-dict keys.
     """
 
     def __init__(
@@ -382,11 +422,15 @@ class MLPHead(nn.Module):
         min_std: float = 0.1,
         max_std: float = 1.0,
         act: type[nn.Module] = nn.SiLU,
+        twohot_space: TwohotSpace = "raw",
     ) -> None:
         super().__init__()
         if output not in _OUTPUT_KINDS:
             raise ValueError(f"Unknown MLPHead output kind {output!r}; expected one of {_OUTPUT_KINDS}.")
+        if twohot_space not in ("raw", "symlog"):
+            raise ValueError(f"twohot_space must be 'raw' or 'symlog', got {twohot_space!r}.")
         self.output = output
+        self.twohot_space = twohot_space
         self.out_dim = out_dim
         self.min_std = min_std
         self.max_std = max_std
@@ -400,7 +444,12 @@ class MLPHead(nn.Module):
         _apply_outscale(self.last, outscale)
 
         if output == "symexp_twohot":
-            self.register_buffer("_bins", symexp_twohot_bins(out_dim), persistent=False)
+            if twohot_space == "symlog":
+                # NCRL SymTwoHot's bins; the same positions as symlog(symexp_twohot_bins) for odd out_dim.
+                bins = torch.linspace(-20.0, 20.0, out_dim)
+            else:
+                bins = symexp_twohot_bins(out_dim)
+            self.register_buffer("_bins", bins, persistent=False)
 
     def forward(self, x: torch.Tensor):
         out = self.last(self.mlp(x))
@@ -411,7 +460,7 @@ class MLPHead(nn.Module):
         if self.output == "binary":
             return torch.distributions.Independent(torch.distributions.Bernoulli(logits=out), 1)
         if self.output == "symexp_twohot":
-            return TwoHotDist(out, self._bins)
+            return TwoHotDist(out, self._bins, self.twohot_space)
         if self.output == "symlog_mse":
             return SymlogMSEDist(out)
         return MSEDist(out)  # output == "mse"

@@ -1,5 +1,4 @@
-"""``ObservationDecoder``: DreamerV3's reconstruction decoder (plan model-
-based-base Part 2, section C), ported from r2dreamer's ``ConvDecoder``/
+"""``ObservationDecoder``: DreamerV3's reconstruction decoder, ported from r2dreamer's ``ConvDecoder``/
 ``MultiDecoder`` (``networks.py:144-189,237-310``; identical structure in
 official JAX ``rssm.py:288-359``).
 

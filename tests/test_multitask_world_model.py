@@ -2,7 +2,7 @@
 action masking, padded obs/action dims -- against synthetic tasks with
 heterogeneous dims (no simulator/hardware).
 
-Rewritten for the model/policy split (model-based-base plan 1.2/1.3):
+Rewritten for the model/policy split:
 ``pi``/``Q``/target-Q/``soft_update_target_Q`` moved from
 ``MultitaskWorldModel`` to ``MultitaskTDMPC2Policy``;
 ``MultitaskWorldModel.next(z, a, task)`` became

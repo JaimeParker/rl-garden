@@ -32,6 +32,7 @@ from rl_garden.algorithms.idql import IDQL
 from rl_garden.algorithms.iql import IQL
 from rl_garden.algorithms.jsrl import JSRL
 from rl_garden.algorithms.mean_flow_bc import MeanFlowBC
+from rl_garden.algorithms.ncrl import NCRL
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
     OfflinePretrainResult,
@@ -47,10 +48,12 @@ from rl_garden.algorithms.off2on_iql import Off2OnIQL
 from rl_garden.algorithms.off2on_spot import Off2OnSPOT
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
+from rl_garden.algorithms.offline_model_based import OfflineModelBasedAlgorithm
 from rl_garden.algorithms.offline_sac import OfflineSAC
 from rl_garden.algorithms.plas import PLAS
 from rl_garden.algorithms.policy_distillation import PolicyDistillation
 from rl_garden.algorithms.ppo import PPO
+from rl_garden.algorithms.pwm import PWM, PWMCore
 from rl_garden.algorithms.qam import QAM
 from rl_garden.algorithms.qgf import QGF
 from rl_garden.algorithms.rebrac import ReBRAC
@@ -58,6 +61,7 @@ from rl_garden.algorithms.recurrent_ppo import RecurrentPPO
 from rl_garden.algorithms.recurrent_sac import RecurrentSAC
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
+from rl_garden.algorithms.rssm_pretrain import RSSMPretrain
 from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sac_flow import SACFlow
 from rl_garden.algorithms.sequence_ppo import SequencePPO
@@ -68,7 +72,7 @@ from rl_garden.algorithms.spot import SPOT
 from rl_garden.algorithms.supe import SUPE
 from rl_garden.algorithms.td3 import TD3
 from rl_garden.algorithms.td3_bc import TD3BC
-from rl_garden.algorithms.tdmpc2 import TDMPC2
+from rl_garden.algorithms.tdmpc2 import TDMPC2, TDMPC2Core
 from rl_garden.algorithms.tdmpc2_multitask import TDMPC2Multitask
 from rl_garden.algorithms.transformer_ppo import TransformerPPO
 from rl_garden.algorithms.transformer_sac import TransformerSAC
@@ -111,7 +115,9 @@ __all__ = [
     "IQL",
     "JSRL",
     "MeanFlowBC",
+    "NCRL",
     "OfflineEnvSpec",
+    "OfflineModelBasedAlgorithm",
     "OfflinePretrainResult",
     "OfflineRLAlgorithm",
     "OfflineSAC",
@@ -129,6 +135,8 @@ __all__ = [
     "PLAS",
     "PolicyDistillation",
     "PPO",
+    "PWM",
+    "PWMCore",
     "QAM",
     "QGF",
     "ReBRAC",
@@ -136,6 +144,7 @@ __all__ = [
     "RecurrentSAC",
     "RLPD",
     "RLPDHybrid",
+    "RSSMPretrain",
     "SAC",
     "SACFlow",
     "SequencePPO",
@@ -147,6 +156,7 @@ __all__ = [
     "TD3",
     "TD3BC",
     "TDMPC2",
+    "TDMPC2Core",
     "TDMPC2Multitask",
     "TransformerPPO",
     "TransformerSAC",

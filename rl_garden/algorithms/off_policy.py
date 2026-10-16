@@ -222,8 +222,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         uses the returned dict as this iteration's ``losses`` (for logging)
         and SKIPS its own ``self.train(...)`` call for this one iteration
         only, instead of also taking the loop's regular per-iteration
-        update on top. Added for ``ModelBasedAlgorithm``/``TDMPC2``
-        (model-based-base plan 1.5): TD-MPC2 overrides this to run a
+        update on top. Added for ``ModelBasedAlgorithm``/``TDMPC2``:
+        TD-MPC2 overrides this to run a
         ``learning_starts``-sized pretrain burst exactly at the seed-step
         boundary (matching upstream TD-MPC2's ``seed_steps`` semantics) via
         ``self.train(self.learning_starts, ...)`` -- the base loop's per-

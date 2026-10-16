@@ -1,7 +1,6 @@
-"""``RSSM(WorldModel)``: DreamerV3's recurrent state-space model (plan
-model-based-base Part 2, section B), ported from r2dreamer's ``RSSM``/
+"""``RSSM(WorldModel)``: DreamerV3's recurrent state-space model, ported from r2dreamer's ``RSSM``/
 ``Deter`` (``rssm.py``; identical block-GRU/KL math in official JAX
-``dreamerv3/rssm.py``). See scratchpad ``dreamer-code-survey.md`` section 1.
+``dreamerv3/rssm.py``).
 
 State: ``{"deter": (B, deter), "stoch": (B, stoch=32, discrete), "logits":
 (B, stoch, discrete)}`` -- ``"logits"`` holds whichever logits produced
@@ -20,17 +19,23 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Iterator, Literal, Optional
 
 import torch
 import torch.nn as nn
+from gymnasium import spaces
 
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.dreamer_conv import DreamerConvEncoder
 from rl_garden.networks.dreamer_nets import BlockLinear, MLPHead, OneHotDist, RMSNorm, dreamer_weight_init_
+from rl_garden.networks.ncrl_nets import NCRLBlockGRU, NCRLConvDecoder, NCRLConvEncoder, NCRLHead, ncrl_logits_mlp
+from rl_garden.networks.symlog import symexp, symlog
+from rl_garden.networks.twohot import twohot_mean
 from rl_garden.observations.schema import ObservationSchema
 from rl_garden.world_models.base import State, WorldModel
+from rl_garden.world_models.batch import SequenceBatch
 from rl_garden.world_models.decoder import ObservationDecoder
 
 
@@ -38,8 +43,7 @@ from rl_garden.world_models.decoder import ObservationDecoder
 class RSSMSize:
     """One row of DreamerV3's model-size table (r2dreamer
     ``configs/model/size{12,25,50,100,200,400}M.yaml``; identical in
-    official JAX ``configs.yaml``'s ``size12m``..``size400m`` anchors,
-    scratchpad ``dreamer-code-survey.md`` section 8). ``discrete`` is the
+    official JAX ``configs.yaml``'s ``size12m``..``size400m`` anchors). ``discrete`` is the
     number of classes per stochastic variable (the ``stoch=32`` variable
     *count* itself is fixed across every size, an ``RSSM`` constructor
     argument, not part of this table); ``units`` sizes every MLP head/
@@ -60,7 +64,34 @@ RSSM_SIZES: dict[str, RSSMSize] = {
     "size100M": RSSMSize(deter=6144, hidden=768, discrete=48, units=768, cnn_depth=48),
     "size200M": RSSMSize(deter=8192, hidden=1024, discrete=64, units=1024, cnn_depth=64),
     "size400M": RSSMSize(deter=12288, hidden=1536, discrete=96, units=1536, cnn_depth=96),
+    # NCRL stage-1 pretraining (deviation from the official code: the 280M model scaled down): the
+    # official 280M model (deter 12288 / hidden 1536 / 32x96 / cnn 96) scaled
+    # down to fit one 24-48 GB card. ``units`` = ``hidden`` as in NCRL's
+    # decoder (``units=hidden``).
+    "ncrl_m": RSSMSize(deter=4096, hidden=1024, discrete=48, units=1024, cnn_depth=48),
 }
+
+RSSM_HEADS = ("reward", "continue")
+RSSM_BACKBONES = ("dreamer_v3", "ncrl")
+
+
+def build_rssm_encoder(
+    backbone: str, observation_space: spaces.Dict, schema: ObservationSchema, size: RSSMSize
+) -> BaseFeaturesExtractor:
+    """The encoder that goes with ``RSSM(backbone=...)``: ``DreamerConvEncoder``
+    or the official NCRL ``NCRLConvEncoder``."""
+    if backbone == "ncrl":
+        return NCRLConvEncoder(observation_space, schema, depth=size.cnn_depth)
+    if backbone == "dreamer_v3":
+        return DreamerConvEncoder(observation_space, schema, depth=size.cnn_depth, units=size.units)
+    raise ValueError(f"backbone must be one of {RSSM_BACKBONES}, got {backbone!r}.")
+
+
+def _categorical_kl(logits_left: torch.Tensor, logits_right: torch.Tensor) -> torch.Tensor:
+    logprob_left = torch.log_softmax(logits_left, dim=-1)
+    logprob_right = torch.log_softmax(logits_right, dim=-1)
+    prob_left = torch.softmax(logits_left, dim=-1)
+    return (prob_left * (logprob_left - logprob_right)).sum(dim=-1)
 
 
 def kl_loss(
@@ -77,18 +108,30 @@ def kl_loss(
     are ``(..., stoch, discrete)``; returns ``(dyn_loss, rep_loss)``, each
     ``(...,)`` (both trailing dims reduced).
     """
-
-    def _categorical_kl(logits_left: torch.Tensor, logits_right: torch.Tensor) -> torch.Tensor:
-        logprob_left = torch.log_softmax(logits_left, dim=-1)
-        logprob_right = torch.log_softmax(logits_right, dim=-1)
-        prob_left = torch.softmax(logits_left, dim=-1)
-        return (prob_left * (logprob_left - logprob_right)).sum(dim=-1)
-
     rep_loss = _categorical_kl(post_logits, prior_logits.detach()).sum(dim=-1)
     dyn_loss = _categorical_kl(post_logits.detach(), prior_logits).sum(dim=-1)
     rep_loss = torch.clamp(rep_loss, min=free)
     dyn_loss = torch.clamp(dyn_loss, min=free)
     return dyn_loss, rep_loss
+
+
+def kl_loss_mean_free(
+    post_logits: torch.Tensor, prior_logits: torch.Tensor, free: float, unimix: float = 0.0
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """NCRL's free-nats variant (``3rd_party/ncrl`` ``rssm.py:201-208``):
+    same dyn/rep KL terms as :func:`kl_loss`, but averaged over every leading
+    (batch/time) dim FIRST and only then clipped to ``free`` -- so the clip
+    gates the batch-mean KL, not each element. Returns two scalars.
+
+    ``unimix > 0`` mixes that fraction of uniform mass into both sides
+    before the KL, as NCRL's ``_get_dist`` does (``rssm.py:59-66,126``);
+    ``unimix == 0`` leaves the logits untouched."""
+    if unimix > 0.0:
+        post_logits = OneHotDist(post_logits, unimix=unimix).logits
+        prior_logits = OneHotDist(prior_logits, unimix=unimix).logits
+    rep_loss = _categorical_kl(post_logits, prior_logits.detach()).sum(dim=-1).mean()
+    dyn_loss = _categorical_kl(post_logits.detach(), prior_logits).sum(dim=-1).mean()
+    return torch.clamp(dyn_loss, min=free), torch.clamp(rep_loss, min=free)
 
 
 class _Deter(nn.Module):
@@ -164,7 +207,7 @@ class RSSM(WorldModel):
     stochastic state plus deterministic GRU state, an observation decoder,
     and reward/continue heads -- all trained by one call to ``model_loss()``.
 
-    ``contdisc`` (constructor flag, default ``False`` -- plan decision 2):
+    ``contdisc`` (constructor flag, default ``False``):
     official JAX's default is ``True``, which multiplies the continue
     head's training target by ``(1 - 1/discount_horizon)`` and, as a
     consequence, uses ``disc=1`` (no separate discount factor) when building
@@ -175,10 +218,40 @@ class RSSM(WorldModel):
     continue head, when building that same imagination weight. This
     class's default (``False``) matches r2dreamer's behaviour; setting it
     ``True`` matches official JAX's. Either way, the caller (the owning
-    algorithm's actor-critic update, plan section F) is responsible for
+    algorithm's actor-critic update) is responsible for
     picking ``disc`` (``1`` vs. ``1 - 1/discount_horizon``) consistently
     with this flag -- this class only changes the continue head's own
     training target.
+
+    NCRL options (defaults keep DreamerV3's behaviour):
+
+    - ``heads``: which of ``("reward", "continue")`` to build. A head left out
+      is never constructed (``self.reward_head``/``self.cont_head`` is
+      ``None``), contributes no parameters and no ``model_loss`` key
+      (``"rew"``/``"con"``). ``reward()``/``reward_value()`` then raise
+      ``RuntimeError`` and ``continue_()`` returns ``None`` (the caller
+      supplies its own discount, ``WorldModel.continue_``'s documented
+      fallback). NCRL pretraining uses ``()``, fine-tuning ``("reward",)``.
+    - ``reward_detached``: the reward loss reads ``features(posterior)
+      .detach()`` so no reward gradient reaches the representation (NCRL).
+    - ``kl_free_mode``: ``"per_element"`` clips each dyn/rep KL element to
+      ``kl_free`` (DreamerV3, :func:`kl_loss`); ``"mean"`` averages over
+      batch/time first and clips the mean, with ``unimix`` applied to both
+      distributions first (as in NCRL, :func:`kl_loss_mean_free`).
+    - ``reward_layers``/``reward_units``: reward-head depth and width
+      (``units=None`` means ``size.units``). NCRL uses 2 x 512.
+    - ``reward_twohot_space``: ``"raw"`` (DreamerV3) or ``"symlog"`` (NCRL's
+      ``SymTwoHot``) two-hot for the reward head, see ``TwoHotDist``.
+    - ``straight_through``: the stochastic-state ``rsample`` gradient,
+      ``"gumbel_hard"`` (DreamerV3) or ``"probs"`` (NCRL), see ``OneHotDist``.
+    - ``backbone``: ``"dreamer_v3"`` (default) or ``"ncrl"``, the official NCRL
+      networks (``rl_garden.networks.ncrl_nets``): LayerNorm and torch default
+      init, a block-GRU without action normalization, prior/posterior logits
+      heads, ``NCRLHead`` reward/continue heads (``reward_units``/
+      ``reward_layers`` as above) and the transposed-conv ``NCRLConvDecoder``
+      (image-only, 64x64, hidden width ``size.hidden``; ``decoder_layers`` is
+      unused). Pair it with an ``NCRLConvEncoder``. ``features()`` is the same
+      ``cat[deter, stoch_flat]``; ``NCRLHead`` splits it again.
     """
 
     def __init__(
@@ -200,19 +273,49 @@ class RSSM(WorldModel):
         contdisc: bool = False,
         discount_horizon: float = 333.0,
         act: type[nn.Module] = nn.SiLU,
+        heads: tuple[str, ...] = RSSM_HEADS,
+        reward_detached: bool = False,
+        kl_free_mode: Literal["per_element", "mean"] = "per_element",
+        reward_layers: int = 1,
+        reward_units: Optional[int] = None,
+        reward_twohot_space: Literal["raw", "symlog"] = "raw",
+        straight_through: Literal["gumbel_hard", "probs"] = "gumbel_hard",
+        backbone: Literal["dreamer_v3", "ncrl"] = "dreamer_v3",
     ) -> None:
         super().__init__()
+        unknown_heads = set(heads) - set(RSSM_HEADS)
+        if unknown_heads:
+            raise ValueError(f"Unknown RSSM heads {sorted(unknown_heads)}; choose from {RSSM_HEADS}.")
+        if kl_free_mode not in ("per_element", "mean"):
+            raise ValueError(f"kl_free_mode must be 'per_element' or 'mean', got {kl_free_mode!r}.")
+        if straight_through not in ("gumbel_hard", "probs"):
+            raise ValueError(f"straight_through must be 'gumbel_hard' or 'probs', got {straight_through!r}.")
+        if backbone not in RSSM_BACKBONES:
+            raise ValueError(f"backbone must be one of {RSSM_BACKBONES}, got {backbone!r}.")
+        self.backbone = backbone
+        self.heads = tuple(heads)
+        self.reward_detached = reward_detached
+        self.kl_free_mode = kl_free_mode
+        self.straight_through = straight_through
         self.encoder = encoder
         self._stoch = stoch
         self._discrete = size.discrete
         self._deter = size.deter
         self._unimix = unimix
+        self.blocks = blocks
         self.kl_free = kl_free
         self.contdisc = contdisc
         self.discount_horizon = discount_horizon
 
         self.flat_stoch = stoch * size.discrete
         self.latent_dim = self.flat_stoch + self._deter
+
+        if backbone == "ncrl":
+            self._build_ncrl_networks(
+                schema, action_dim, size, blocks, obs_layers, img_layers, dyn_layers, reward_bins,
+                reward_layers, reward_units, reward_twohot_space, act,
+            )
+            return
 
         self._deter_net = _Deter(
             self._deter, self.flat_stoch, action_dim, size.hidden, blocks, dyn_layers, act
@@ -237,12 +340,22 @@ class RSSM(WorldModel):
         self._img_net = nn.Sequential(*img_net)
         self._img_net.apply(dreamer_weight_init_)
 
-        self.reward_head = MLPHead(
-            self.latent_dim, reward_bins, output="symexp_twohot", layers=1, units=size.units, outscale=0.0
-        )
-        self.cont_head = MLPHead(
-            self.latent_dim, 1, output="binary", layers=1, units=size.units, outscale=1.0
-        )
+        self.reward_head: Optional[MLPHead] = None
+        if "reward" in self.heads:
+            self.reward_head = MLPHead(
+                self.latent_dim,
+                reward_bins,
+                output="symexp_twohot",
+                layers=reward_layers,
+                units=size.units if reward_units is None else reward_units,
+                outscale=0.0,
+                twohot_space=reward_twohot_space,
+            )
+        self.cont_head: Optional[MLPHead] = None
+        if "continue" in self.heads:
+            self.cont_head = MLPHead(
+                self.latent_dim, 1, output="binary", layers=1, units=size.units, outscale=1.0
+            )
         self.decoder = ObservationDecoder(
             schema,
             self._deter,
@@ -250,6 +363,43 @@ class RSSM(WorldModel):
             depth=size.cnn_depth,
             units=size.units,
             state_layers=decoder_layers,
+        )
+
+    def _build_ncrl_networks(
+        self,
+        schema: ObservationSchema,
+        action_dim: int,
+        size: RSSMSize,
+        blocks: int,
+        obs_layers: int,
+        img_layers: int,
+        dyn_layers: int,
+        reward_bins: int,
+        reward_layers: int,
+        reward_units: Optional[int],
+        reward_twohot_space: Literal["raw", "symlog"],
+        act: type[nn.Module],
+    ) -> None:
+        """``backbone="ncrl"``: the same attributes as the DreamerV3 branch,
+        built from ``rl_garden.networks.ncrl_nets``."""
+        deter, flat_stoch = self._deter, self.flat_stoch
+        self._deter_net = NCRLBlockGRU(deter, flat_stoch, action_dim, size.hidden, blocks, dyn_layers, act)
+        self._obs_net = ncrl_logits_mlp(deter + self.encoder.features_dim, size.hidden, obs_layers, flat_stoch, act)
+        self._img_net = ncrl_logits_mlp(deter, size.hidden, img_layers, flat_stoch, act)
+        head_units = size.units if reward_units is None else reward_units
+        self.reward_head = None
+        if "reward" in self.heads:
+            self.reward_head = NCRLHead(
+                deter, flat_stoch, reward_bins, output="symexp_twohot", layers=reward_layers,
+                units=head_units, blocks=blocks, act=act, twohot_space=reward_twohot_space,
+            )
+        self.cont_head = None
+        if "continue" in self.heads:
+            self.cont_head = NCRLHead(
+                deter, flat_stoch, 1, output="binary", layers=1, units=head_units, blocks=blocks, act=act
+            )
+        self.decoder = NCRLConvDecoder(
+            schema, deter, flat_stoch, depth=size.cnn_depth, units=size.hidden, blocks=blocks, act=act
         )
 
     # ------------------------------------------------------------------
@@ -293,29 +443,59 @@ class RSSM(WorldModel):
         stoch_flat = stoch.reshape(*stoch.shape[:-2], -1)
         new_deter = self._deter_net(stoch_flat, deter, action)
         posterior_logits = self._posterior_logits(new_deter, embed)
-        new_stoch = OneHotDist(posterior_logits, unimix=self._unimix).rsample()
+        new_stoch = OneHotDist(posterior_logits, self._unimix, self.straight_through).rsample()
         return {"deter": new_deter, "stoch": new_stoch, "logits": posterior_logits}
 
     def step(self, state: State, action: torch.Tensor, *, sample: bool = True) -> State:
         stoch_flat = state["stoch"].reshape(*state["stoch"].shape[:-2], -1)
         new_deter = self._deter_net(stoch_flat, state["deter"], action)
         prior_logits = self._prior_logits(new_deter)
-        dist = OneHotDist(prior_logits, unimix=self._unimix)
+        dist = OneHotDist(prior_logits, self._unimix, self.straight_through)
         new_stoch = dist.rsample() if sample else dist.mode
         return {"deter": new_deter, "stoch": new_stoch, "logits": prior_logits}
 
     def reward(self, state: State, action: torch.Tensor) -> torch.Tensor:
-        """Raw symexp-twohot bin logits (``WorldModel.reward``'s documented
-        contract) -- decode with ``rl_garden.networks.twohot.twohot_mean``.
+        """Raw two-hot bin logits (``WorldModel.reward``'s documented
+        contract) -- decode with :meth:`reward_value`.
         Ignores ``action`` (reward/continue heads read only ``feat``, see
-        module docstring)."""
+        module docstring). Raises ``RuntimeError`` when built without the
+        reward head (``heads`` excludes ``"reward"``)."""
         del action
+        self._require_reward_head()
         feat = self.features(state)
         return self.reward_head.last(self.reward_head.mlp(feat))
 
-    def continue_(self, state: State) -> torch.Tensor:
+    def reward_value(
+        self, state: State, action: Optional[torch.Tensor] = None, *, symlog_space: bool = False
+    ) -> torch.Tensor:
+        """Scalar reward ``(..., 1)``, identical to ``reward_head(feat).mode``.
+        With ``symlog_space=True`` the same probabilities are averaged over
+        the bins' symlog positions, i.e. ``E_p[symlog(bin)]`` -- the mean in
+        symlog space, which is not ``symlog`` of the real-scale mean.
+
+        ``reward_twohot_space="raw"``: ``E_p[bin]`` over the symexp-spaced
+        bins. ``"symlog"``: ``symexp(E_p[bin])`` over the symlog-spaced bins
+        (``E_p[bin]`` itself when ``symlog_space=True``). Ignores ``action``."""
+        self._require_reward_head()
+        logits = self.reward(state, action)
+        bins = self.reward_head._bins
+        if self.reward_head.twohot_space == "symlog":
+            mean = twohot_mean(logits, bins)
+            return mean if symlog_space else symexp(mean)
+        if symlog_space:
+            bins = symlog(bins)
+        return twohot_mean(logits, bins)
+
+    def _require_reward_head(self) -> None:
+        if self.reward_head is None:
+            raise RuntimeError("This RSSM was built without a reward head (heads excludes 'reward').")
+
+    def continue_(self, state: State) -> Optional[torch.Tensor]:
         """Continuation probability, shape ``(..., 1)`` (unsqueezed, matching
-        ``LatentConsistencyModel.continue_``'s own shape convention)."""
+        ``LatentConsistencyModel.continue_``'s own shape convention), or
+        ``None`` when built without the continue head."""
+        if self.cont_head is None:
+            return None
         feat = self.features(state)
         logits = self.cont_head.last(self.cont_head.mlp(feat))
         return torch.sigmoid(logits)
@@ -329,30 +509,29 @@ class RSSM(WorldModel):
         return torch.cat([state["deter"], stoch_flat], dim=-1)
 
     def parameter_groups(self) -> dict[str, Iterator[nn.Parameter]]:
-        model_params = itertools.chain(
-            self._deter_net.parameters(),
-            self._obs_net.parameters(),
-            self._img_net.parameters(),
-            self.reward_head.parameters(),
-            self.cont_head.parameters(),
-            self.decoder.parameters(),
-        )
+        modules = [self._deter_net, self._obs_net, self._img_net, self.reward_head, self.cont_head, self.decoder]
+        model_params = itertools.chain.from_iterable(m.parameters() for m in modules if m is not None)
         return {"encoder": self.encoder.parameters(), "model": model_params}
 
-    def model_loss(self, batch) -> tuple[dict[str, torch.Tensor], State]:
-        """Trains the world model over a ``DreamerSequenceBatch``
-        (``rl_garden.buffers.sequence_replay_buffer``, plan section D):
+    def model_loss(self, batch: SequenceBatch) -> tuple[dict[str, torch.Tensor], State]:
+        """Trains the world model over a ``SequenceBatch`` -- in practice a
+        ``DreamerSequenceBatch`` (``rl_garden.buffers.sequence_replay_buffer``,), reading ``obs``/``action``/``reward``/``is_first``/
+        ``terminated``/``carry`` and the optional ``reward_valid`` (``(B,)``
+        bool; ``None`` = every column labelled, otherwise the reward loss
+        averages over the labelled columns only). ``reward`` may be
+        ``(horizon, B)`` (the buffer's layout) or ``(horizon, B, 1)``:
         ``horizon`` posterior steps warm-started from ``batch.carry``,
         dyn/rep KL (free bits ``self.kl_free``), per-key reconstruction
         (``self.decoder``), reward (``symexp_twohot``), and continue
-        (``binary``, target ``contdisc``-aware -- see class docstring).
+        (``binary``, target ``contdisc``-aware -- see class docstring). The
+        ``"rew"``/``"con"`` keys appear only when that head was built
+        (``heads``); ``batch.terminated`` is read only for the continue head.
 
         Every returned loss is already mean-reduced but NOT scaled by the
         loss-scale table (``dyn=1.0, rep=0.1, recon=1.0/key, rew=1.0,
-        con=1.0`` -- r2dreamer/JAX ``loss_scales``, scratchpad
-        ``dreamer-code-survey.md`` section 3) -- the owning algorithm applies
+        con=1.0`` -- r2dreamer/JAX ``loss_scales``) -- the owning algorithm applies
         those and sums (``WorldModel.model_loss``'s own docstring; this
-        repo's model-based-base convention, see ``ModelBasedAlgorithm``).
+        repo's convention, see ``ModelBasedAlgorithm``).
 
         Prior logits for the KL are computed ONCE, batched over the whole
         ``(horizon, B)`` posterior sequence AFTER the per-step ``observe()``
@@ -390,7 +569,10 @@ class RSSM(WorldModel):
         post_logits = torch.stack(post_logits_steps, dim=0)
 
         prior_logits = self._prior_logits(post_deter)
-        dyn_loss, rep_loss = kl_loss(post_logits, prior_logits, self.kl_free)
+        if self.kl_free_mode == "mean":
+            dyn_loss, rep_loss = kl_loss_mean_free(post_logits, prior_logits, self.kl_free, self._unimix)
+        else:
+            dyn_loss, rep_loss = kl_loss(post_logits, prior_logits, self.kl_free)
 
         stoch_flat = post_stoch.reshape(*post_stoch.shape[:-2], -1)
         feat = torch.cat([post_deter, stoch_flat], dim=-1)
@@ -406,14 +588,23 @@ class RSSM(WorldModel):
                 target = target.float() / 255.0
             losses[key] = -dist.log_prob(target).mean()
 
-        reward_dist = self.reward_head(feat)
-        losses["rew"] = -reward_dist.log_prob(batch.reward.unsqueeze(-1)).mean()
+        if self.reward_head is not None:
+            reward = batch.reward if batch.reward.dim() == batch.action.dim() else batch.reward.unsqueeze(-1)
+            reward_dist = self.reward_head(feat.detach() if self.reward_detached else feat)
+            if batch.reward_valid is None:
+                losses["rew"] = -reward_dist.log_prob(reward).mean()
+            else:
+                losses["rew"] = -reward_dist.log_prob(reward)[:, batch.reward_valid].mean()
 
-        if self.contdisc:
-            cont_target = (1.0 - batch.is_terminal.float()) * (1.0 - 1.0 / self.discount_horizon)
-        else:
-            cont_target = 1.0 - batch.is_terminal.float()
-        cont_dist = self.cont_head(feat)
-        losses["con"] = -cont_dist.log_prob(cont_target.unsqueeze(-1)).mean()
+        if self.cont_head is not None:
+            terminated = batch.terminated.float()
+            if terminated.dim() == batch.action.dim():
+                terminated = terminated.squeeze(-1)
+            if self.contdisc:
+                cont_target = (1.0 - terminated) * (1.0 - 1.0 / self.discount_horizon)
+            else:
+                cont_target = 1.0 - terminated
+            cont_dist = self.cont_head(feat)
+            losses["con"] = -cont_dist.log_prob(cont_target.unsqueeze(-1)).mean()
 
         return losses, {"deter": post_deter, "stoch": post_stoch, "logits": post_logits}

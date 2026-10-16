@@ -1,6 +1,6 @@
 """``imagine()``: the one shared "roll a ``WorldModel`` forward under a
 policy, with no new observations" primitive every imagination-based
-model-based algorithm (DreamerV3; a future PWM) builds its actor-critic
+model-based algorithm (DreamerV3, PWM, NCRL) builds its actor-critic
 targets from. TD-MPC2's own decision-time planner (``rl_garden.planners
 .mppi``) does its own specialized rollout instead (it needs per-candidate
 elite re-weighting mid-rollout, not a single fixed-policy trajectory) and
@@ -29,8 +29,7 @@ def clone_and_freeze(module: _ModuleT) -> _ModuleT:
     model + actor + critic + slow critic to roll imagination forward and
     compute reward/continue/value TARGETS from, while a separate, live
     forward pass through the currently-training modules produces the actual
-    losses (r2dreamer ``dreamer.py``'s ``_imagine``/``clone_and_freeze``
-    pattern, scratchpad ``dreamer-code-survey.md`` section 10). Official JAX
+    losses (r2dreamer ``dreamer.py``'s ``_imagine``/``clone_and_freeze`` pattern). Official JAX
     needs no such snapshot at all -- its functional autodiff (``nj.grad``)
     only ever differentiates the explicit module list it's given, so a
     plain forward pass through the "same" online parameters is already
@@ -101,16 +100,16 @@ def imagine(
     were dropped from here). A caller building reward/continue/value targets
     from the result computes them batched over the returned ``states`` with
     its own heads, exactly as ``DreamerV3._update_actor_critic`` does
-    (``model.reward_head``/``model.cont_head``/the critic, each called once
-    on ``model.features(traj.states)``, never once per step inside this
-    rollout).
+    (``model.reward_value(traj.states)``/``model.continue_(...)``/the critic,
+    each called once on the batched ``traj.states``, never once per step inside
+    this rollout).
 
     ``start_state`` tensors are ``(B, ...)``. For Dreamer-style reuse, flatten
     a ``(T_data, B_data, ...)`` batch of posterior states from
     ``model.model_loss()`` into one ``(T_data * B_data, ...)`` batch before
     calling this -- Dreamer's own convention is that imagination starts from
     *every* posterior state of a training batch, flattened, not just each
-    sequence's last step (scratchpad ``dreamer-code-survey.md`` section 10).
+    sequence's last step.
     ``model.model_loss()``'s returned posterior states are live (graph-
     attached, see ``WorldModel.model_loss``'s docstring) -- a caller building
     ``start_state`` for a ``grad=False`` imagination pass must ``.detach()``

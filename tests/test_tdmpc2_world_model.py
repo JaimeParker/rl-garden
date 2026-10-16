@@ -2,7 +2,7 @@
 envs (no simulator/hardware), following ``tests/test_sac_core.py``'s
 ``DummyVecEnv``/hand-built-batch pattern.
 
-Rewritten against the model/policy split (model-based-base plan 1.2/1.3):
+Rewritten against the model/policy split:
 the world model (``rl_garden.world_models.latent_consistency
 .LatentConsistencyModel``, reached via ``agent.policy.world_model``) now
 holds only encoder/dynamics/reward/termination; the actor/critic/critic

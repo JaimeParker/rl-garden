@@ -7,8 +7,7 @@ JAX ``agent.py:482-490``), converted from that method's batch-major ``(B,
 T)`` layout to this repo's time-major ``(T, B, ...)`` layout (``rl_garden``
 replay/rollout tensors are ``(T, N, ...)``, see ``AGENTS.md``).
 
-Superseded design note (2026-09-14, plan model-based-base Part 2 / DreamerV3
-section A): this module used to hold a simpler single-``continues`` TD(lam)
+Superseded design note: this module used to hold a simpler single-``continues`` TD(lam)
 recurrence (still correct for that design, but not what Dreamer's own
 actor-critic loss uses). Dreamer needs ``last`` (episode/replay-window
 boundary) and ``term`` (true MDP termination) as two independent signals --

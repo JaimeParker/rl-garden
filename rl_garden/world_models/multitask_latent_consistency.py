@@ -4,15 +4,16 @@
 Deliberately a separate class from ``rl_garden.world_models.latent_consistency
 .LatentConsistencyModel`` rather than a ``task_embedding=...`` branch folded
 into it: nearly every method's call signature changes (a ``task`` argument,
-threaded as an optional keyword per the model-based-base plan's "task kwarg
-threading" note purely so each overriding method's *signature* still matches
-``WorldModel``'s -- every method that needs it (``encode``/``step``/
+threaded as an optional keyword purely so each overriding method's
+*signature* still matches ``WorldModel``'s -- every method that needs it (``encode``/``step``/
 ``reward``) asserts it is not ``None`` at runtime, so ``task`` is actually
 **required** for this subclass, not truly optional; this class is therefore
 not usable through a generic ``WorldModel`` consumer that doesn't know to
 pass ``task``, e.g. ``rl_garden.world_models.imagine.imagine()`` -- only
 ``TDMPC2Multitask``, which always threads a task id through, drives this
-model), and the encoder doesn't go through rl-garden's
+model; ``rl_garden.world_models.bound_task.BoundTaskWorldModel`` binds one
+task id and exposes the plain ``WorldModel`` signatures for those consumers),
+and the encoder doesn't go through rl-garden's
 ``BaseFeaturesExtractor`` at all (see module docstring below) -- keeping
 this fully separate means the already tested single-task path is never
 touched.
@@ -53,6 +54,8 @@ import torch.nn.functional as F
 from rl_garden.networks.normed_mlp import SimNorm, mlp
 from rl_garden.networks.twohot import soft_ce
 from rl_garden.world_models.base import State, WorldModel
+from rl_garden.world_models.batch import SequenceBatch
+from rl_garden.world_models.latent_consistency import decode_two_hot, masked_reward_mean
 
 
 class MultitaskWorldModel(WorldModel):
@@ -181,6 +184,20 @@ class MultitaskWorldModel(WorldModel):
         z = self.task_embed(state["z"], task)
         return self._reward(torch.cat([z, action], dim=-1))
 
+    def reward_value(
+        self,
+        state: State,
+        action: torch.Tensor,
+        *,
+        symlog_space: bool = False,
+        task: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Scalar reward decoded from ``reward()`` -- same semantics as
+        ``LatentConsistencyModel.reward_value``."""
+        return decode_two_hot(
+            self.reward(state, action, task=task), self.num_bins, self.vmin, self.vmax, symlog_space=symlog_space
+        )
+
     def features(self, state: State) -> torch.Tensor:
         return state["z"]
 
@@ -199,27 +216,26 @@ class MultitaskWorldModel(WorldModel):
             ),
         }
 
-    def model_loss(self, batch: dict) -> tuple[dict[str, torch.Tensor], State]:
+    def model_loss(self, batch: SequenceBatch) -> tuple[dict[str, torch.Tensor], State]:
         """Rho-weighted latent-consistency + reward soft-CE losses, task-
         conditioned at every step -- mirrors
         ``LatentConsistencyModel.model_loss`` (see that method's docstring,
-        including plan item 0: the returned posterior state is live, not
+        including that the returned posterior state is live, not
         detached).
 
-        ``batch`` keys: ``"obs"`` (``(horizon + 1, B, obs_dim)``, already
-        task-padded), ``"action"`` (``(horizon, B, action_dim)``),
-        ``"reward"`` (``(horizon, B, 1)``), ``"task"`` (``(B,)``), ``"next_z"``
-        (``(horizon, B, latent_dim)``, the caller's already-computed no-grad
-        ``encode(obs[1:], task)``, reused here instead of re-encoding).
+        ``batch`` (``SequenceBatch``) fields read: ``obs`` (``(horizon + 1,
+        B, obs_dim)``, already task-padded), ``action`` (``(horizon, B,
+        action_dim)``), ``reward`` (``(horizon, B, 1)``), ``task`` (``(B,)``),
+        ``next_z`` (``(horizon, B, latent_dim)`` no-grad ``encode(obs[1:],
+        task)``; computed here under ``no_grad`` when ``None``), and
+        ``reward_valid`` (``(B,)`` bool or ``None``).
         """
-        obs, action, reward, task, next_z = (
-            batch["obs"],
-            batch["action"],
-            batch["reward"],
-            batch["task"],
-            batch["next_z"],
-        )
+        obs, action, reward, task = batch.obs, batch.action, batch.reward, batch.task
         horizon, batch_size = action.shape[0], action.shape[1]
+        next_z = batch.next_z
+        if next_z is None:
+            with torch.no_grad():
+                next_z = self.encode(obs[1:], task)
 
         z = self.encode(obs[0], task)
         zs = torch.empty(horizon + 1, batch_size, self.latent_dim, device=z.device, dtype=z.dtype)
@@ -236,9 +252,10 @@ class MultitaskWorldModel(WorldModel):
         reward_preds = self.reward({"z": _zs}, action, task=task)
         reward_loss = torch.zeros((), device=zs.device)
         for t in range(horizon):
-            reward_loss = reward_loss + soft_ce(
-                reward_preds[t], reward[t], self.num_bins, self.vmin, self.vmax, self.bin_size
-            ).mean() * self.rho**t
+            reward_loss = reward_loss + masked_reward_mean(
+                soft_ce(reward_preds[t], reward[t], self.num_bins, self.vmin, self.vmax, self.bin_size),
+                batch.reward_valid,
+            ) * self.rho**t
         reward_loss = reward_loss / horizon
 
         losses = {"consistency_loss": consistency_loss, "reward_loss": reward_loss}

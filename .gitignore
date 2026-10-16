@@ -55,3 +55,6 @@ temp/
 *.pt
 
 *.html
+
+# Local-only golden fixtures (generated on a remote server, never committed)
+tests/fixtures/tdmpc2_parity.json

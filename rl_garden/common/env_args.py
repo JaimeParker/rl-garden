@@ -193,6 +193,28 @@ class MetaWorldConfig:
 
 
 @dataclass
+class DMControlConfig:
+    """dm_control-specific env settings. CLI prefix: ``--dm_control.<field>``
+
+    The task itself is ``--env_id`` (``<domain>-<task>[-hard]``, NCRL TASK_SET
+    naming, e.g. ``walker-walk``); image size is ``--obs.image_size``
+    (default 64x64).
+    """
+
+    device: str = "cpu"
+    # "sync" (single process) or "async" (one OS process per env, each with
+    # its own GL context for pixel observations).
+    vectorization: str = "sync"
+    # Physics frames per policy step (1000-frame episodes -> 1000/action_repeat steps).
+    action_repeat: int = 2
+    # MuJoCo camera index rendered as rgb_default; None -> 2 for quadruped, 0 otherwise.
+    camera_id: Optional[int] = None
+    # NCRL hard variant: per-frame reward zeroed below 0.2 (cheetah) / 0.6
+    # (others), minus 0.1*||a||. A "-hard" env_id suffix also enables it.
+    hard: bool = False
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -213,6 +235,7 @@ class EnvBackendArgs:
     ogbench: OGBenchConfig = field(default_factory=OGBenchConfig)
     rlbench: RLBenchConfig = field(default_factory=RLBenchConfig)
     metaworld: MetaWorldConfig = field(default_factory=MetaWorldConfig)
+    dm_control: DMControlConfig = field(default_factory=DMControlConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

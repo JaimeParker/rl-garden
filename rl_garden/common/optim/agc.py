@@ -1,8 +1,7 @@
 """Adaptive Gradient Clipping (AGC), ported from
 ``3rd_party/r2dreamer/optim/agc.py`` (itself derived from the technique in
 Brock et al. 2021, "High-Performance Large-Scale Image Recognition Without
-Normalization") -- DreamerV3's sole gradient-clipping mechanism (plan
-model-based-base Part 2 / decision 1): per-parameter, not a single global
+Normalization") -- DreamerV3's sole gradient-clipping mechanism: per-parameter, not a single global
 grad-norm clip. Identical in the official JAX reference
 (``embodied/jax/opt.py:109-123``): ``upper = clip * max(pmin, ||param||)``,
 ``scale = 1 / max(1, ||grad|| / upper)``.

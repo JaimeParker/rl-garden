@@ -2,12 +2,10 @@
 dynamics model implements, shared across decision-time-planning models
 (TD-MPC2's latent-consistency model, ``rl_garden.world_models
 .latent_consistency.LatentConsistencyModel``) and imagination-based models
-(DreamerV3's RSSM, a future consumer -- see ``rl_garden.world_models.imagine``
-and the model-based-base plan's Part 2).
+(DreamerV3's RSSM, see ``rl_garden.world_models.imagine``).
 
 Vocabulary, shared across the three concrete "what does the model predict"
-families this base is designed to fit (see the model-based-base plan and
-scratchpad ``dreamer-code-survey.md`` section 10, "interface fit"):
+families this base is designed to fit:
 
 - **embedding vs. state.** ``encode(obs)`` produces an *observation
   embedding* -- for Dreamer's RSSM this is a token from the CNN/MLP encoder,
@@ -50,6 +48,7 @@ import torch.nn as nn
 
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.world_models.batch import SequenceBatch
 
 #: Per-model state representation. Batch dimension first (or ``(B, ...)``
 #: inside a ``(T, B, ...)`` rollout array, see ``rl_garden.world_models
@@ -148,8 +147,19 @@ class WorldModel(nn.Module, ABC):
         """Predicted reward at ``state`` (some models also condition on
         ``action``; a model that doesn't may accept and ignore it). Returns
         whatever the concrete model's reward head natively outputs -- e.g.
-        two-hot bin logits for TD-MPC2/DreamerV3 (decode with
-        ``rl_garden.networks.twohot.two_hot_inv``), not a scalar."""
+        two-hot bin logits for TD-MPC2/DreamerV3, not a scalar. Use
+        ``reward_value`` for a scalar; ``reward`` stays the training-loss
+        input."""
+
+    @abstractmethod
+    def reward_value(
+        self, state: State, action: Optional[torch.Tensor], *, symlog_space: bool = False
+    ) -> torch.Tensor:
+        """Scalar predicted reward, shape ``(..., 1)``, decoded from
+        ``reward()``'s native output by the model that owns the encoding.
+        ``symlog_space=True`` returns the prediction in symlog space (no
+        final ``symexp``), as PWM's actor objective needs; the exact meaning
+        for each model is documented on its override."""
 
     def continue_(self, state: State) -> Optional[torch.Tensor]:
         """Probability of the episode continuing past ``state`` (Dreamer's
@@ -182,18 +192,20 @@ class WorldModel(nn.Module, ABC):
         heads; NOT the actor/critic, which live on the policy)."""
 
     @abstractmethod
-    def model_loss(self, batch) -> tuple[dict[str, torch.Tensor], State]:
+    def model_loss(self, batch: SequenceBatch) -> tuple[dict[str, torch.Tensor], State]:
         """Computes this model's own training losses (never the actor/critic
         losses -- those read the posterior states this returns, but are
         computed by the owning policy/algorithm) from ``batch`` (a
-        subclass-defined, algorithm-supplied structure -- typically an
-        obs/action/reward window). Returns ``(losses, posterior_states)``
+        ``rl_garden.world_models.batch.SequenceBatch``: a time-major
+        obs/action/reward window plus the optional fields a given model
+        reads; ``batch.reward_valid`` restricts the reward loss to the
+        labelled columns). Returns ``(losses, posterior_states)``
         where ``posterior_states`` is a ``State`` whose tensors are
         ``(horizon [+ 1], B, ...)`` time-major and **live** (graph-attached,
         not detached), ready to seed ``imagine()`` or feed a separately
         trained critic without the caller re-running ``observe()``.
 
-        Revised 2026-09-14 (model-based-base plan item 0): posterior states
+        Revised 2026-09-14 (base-class refactor): posterior states
         were originally specified detached, forcing a caller whose critic
         must backprop into the model's own encoder/dynamics (TD-MPC2) to
         re-run a second, duplicate rollout for a live-gradient copy. Returning

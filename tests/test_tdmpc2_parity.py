@@ -35,7 +35,7 @@ instead covered functionally by ``tests/test_sequence_replay_buffer.py``.
 
 The fixture is regenerated only via ``generate_fixture()``, gated by the
 ``TDMPC2_PARITY_REGEN=1`` environment variable (never implicitly during a
-normal test run) -- see ``.agents``/model-based-base plan section 1.0.
+normal test run).
 Regenerate on 6017 (after any intentional numeric fix) with:
 
     TDMPC2_PARITY_REGEN=1 python -m pytest tests/test_tdmpc2_parity.py -q -p no:cacheprovider
@@ -176,7 +176,7 @@ def _seed_and_configure_determinism() -> tuple[int, bool]:
     torch.set_num_threads(1)
     # warn_only=True: fall back to a warning instead of a hard error for any
     # CPU op without a deterministic implementation, rather than blocking
-    # the whole parity test on one op ("if the ops allow", plan 1.0).
+    # the whole parity test on one op ("if the ops allow").
     torch.use_deterministic_algorithms(True, warn_only=True)
     return previous_num_threads, previous_deterministic
 
@@ -205,9 +205,11 @@ def generate_fixture() -> dict:
         "torch_version": torch.__version__,
         "platform": platform.platform(),
         "provenance": (
-            "Generated on 6017 after fixing tdmpc2 bugs 1(a) (target_Q cloned "
-            "after _apply_init) and 1(b) (planner _estimate_value bootstraps "
-            "with the online Q, not target_Q) -- model-based-base plan 1.0."
+            "Generated on 6017; regenerated after the Q(detach) fix "
+            "(TDMPC2Policy.Q(detach=True) detaches critic parameters, not the "
+            "output, so the actor gets dQ/da). Earlier fixes kept: target_Q "
+            "cloned after _apply_init; planner _estimate_value bootstraps with "
+            "the online Q."
         ),
         "config": _CONFIG,
         "metrics": _build_and_run(),

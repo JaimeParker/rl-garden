@@ -8,10 +8,11 @@ Scope for this port (see the brainstorming session this was planned from):
   picks ``OfflineTrainer`` (never ``OnlineTrainer``) whenever
   ``cfg.multitask`` -- multitask training never touches a live env; data
   comes entirely from a pre-converted dataset (see
-  ``rl_garden.buffers.tdmpc2_multitask_dataset``). This class therefore inherits
-  ``OfflineRLAlgorithm``, not ``BaseAlgorithm``/``OffPolicyAlgorithm``, and
-  implements ``train(gradient_steps)`` for the generic
-  ``run_offline_pretraining`` loop instead of a custom ``learn()``.
+  ``rl_garden.buffers.tdmpc2_multitask_dataset``). This class therefore sits on
+  ``OfflineModelBasedAlgorithm`` (``OfflineRLAlgorithm`` + the shared
+  three-hook gradient step) with ``TDMPC2Core`` for the losses/optimizers
+  it shares with the single-task ``TDMPC2``; the generic
+  ``run_offline_pretraining`` loop drives its inherited ``train()``.
 - **No CEM planner / no eval.** The planner (``act()``/``_plan()`` upstream)
   is only invoked for live rollout, which multitask training never does in
   this port -- evaluation (upstream's ``OfflineTrainer.eval()``, which needs
@@ -29,17 +30,19 @@ from typing import Any, Optional, Sequence
 
 import torch
 
-from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.algorithms.tdmpc2 import _compute_discount
+from rl_garden.algorithms.offline import OfflineEnvSpec
+from rl_garden.algorithms.offline_model_based import OfflineModelBasedAlgorithm
+from rl_garden.algorithms.tdmpc2 import TDMPC2Core, _compute_discount
 from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
 from rl_garden.buffers.mmap_storage import MmapMode
 from rl_garden.common.logger import Logger
-from rl_garden.networks.twohot import soft_ce
 from rl_garden.policies.tdmpc2_multitask_policy import MultitaskTDMPC2Policy
+from rl_garden.world_models.base import State
+from rl_garden.world_models.batch import SequenceBatch
 from rl_garden.world_models.multitask_latent_consistency import MultitaskWorldModel
 
 
-class TDMPC2Multitask(OfflineRLAlgorithm):
+class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
     _compatible_checkpoint_algorithms = ("TDMPC2Multitask",)
 
     def __init__(
@@ -119,32 +122,34 @@ class TDMPC2Multitask(OfflineRLAlgorithm):
         self.episode_lengths = list(episode_lengths)
         self.mmap_dir = mmap_dir
         self.mmap_mode = mmap_mode
-        self.horizon = horizon
         self.task_dim = task_dim
-        self.latent_dim = latent_dim
         self.enc_dim = enc_dim
         self.num_enc_layers = num_enc_layers
-        self.mlp_dim = mlp_dim
-        self.simnorm_dim = simnorm_dim
-        self.num_q = num_q
-        self.num_bins = num_bins
-        self.vmin = vmin
-        self.vmax = vmax
-        self.dropout = dropout
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-        self.entropy_coef = entropy_coef
-        self.lr = lr
-        self.enc_lr_scale = enc_lr_scale
-        self.grad_clip_norm = grad_clip_norm
         self.tau = tau
-        self.rho = rho
-        self.consistency_coef = consistency_coef
-        self.reward_coef = reward_coef
-        self.value_coef = value_coef
-        self.discount_denom = discount_denom
-        self.discount_min = discount_min
-        self.discount_max = discount_max
+        self._init_tdmpc2_params(
+            horizon=horizon,
+            latent_dim=latent_dim,
+            mlp_dim=mlp_dim,
+            simnorm_dim=simnorm_dim,
+            num_q=num_q,
+            num_bins=num_bins,
+            vmin=vmin,
+            vmax=vmax,
+            dropout=dropout,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            entropy_coef=entropy_coef,
+            lr=lr,
+            enc_lr_scale=enc_lr_scale,
+            grad_clip_norm=grad_clip_norm,
+            rho=rho,
+            consistency_coef=consistency_coef,
+            reward_coef=reward_coef,
+            value_coef=value_coef,
+            discount_denom=discount_denom,
+            discount_min=discount_min,
+            discount_max=discount_max,
+        )
 
         self._setup_model()
 
@@ -191,17 +196,7 @@ class TDMPC2Multitask(OfflineRLAlgorithm):
             tau=self.tau,
         ).to(self.device)
         world_model = self.policy.world_model  # now on self.device
-
-        param_groups = world_model.parameter_groups()
-        enc_params = list(param_groups["encoder"])
-        other_params = list(param_groups["model"]) + list(self.policy.critic.parameters())
-        self.world_optimizer = torch.optim.Adam(
-            [
-                {"params": enc_params, "lr": self.lr * self.enc_lr_scale},
-                {"params": other_params, "lr": self.lr},
-            ]
-        )
-        self.pi_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.lr, eps=1e-5)
+        self._build_tdmpc2_optimizers()
 
         self.replay_buffer = MmapMultitaskEpisodeBuffer(
             obs_dim=world_model.obs_dim,
@@ -215,7 +210,7 @@ class TDMPC2Multitask(OfflineRLAlgorithm):
         )
 
     # ------------------------------------------------------------------
-    # Gradient step
+    # Gradient step: OfflineModelBasedAlgorithm's three hooks.
     # ------------------------------------------------------------------
 
     def _td_target(
@@ -228,105 +223,58 @@ class TDMPC2Multitask(OfflineRLAlgorithm):
         action, _ = self.policy.pi(next_z, task)
         return reward + discount * self.policy.Q(next_z, action, task, return_type="min", target=True)
 
-    def _update_pi(self, zs: torch.Tensor, task: torch.Tensor) -> dict[str, float]:
-        action, info = self.policy.pi(zs, task)
-        qs = self.policy.Q(zs, action, task, return_type="avg", detach=True)
-        self.policy.scale.update(qs[0])
-        qs = self.policy.scale(qs)
-
-        rho_pows = self.rho ** torch.arange(zs.shape[0], device=zs.device)
-        pi_loss = (
-            -(self.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1, 2)) * rho_pows
-        ).mean()
-
-        self.pi_optimizer.zero_grad(set_to_none=True)
-        pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.grad_clip_norm)
-        self.pi_optimizer.step()
-
-        return {
-            "pi_loss": float(pi_loss.detach()),
-            "pi_grad_norm": float(pi_grad_norm),
-            "pi_scale": float(self.policy.scale.value.item()),
-        }
-
-    def _update_step(self) -> dict[str, float]:
+    def _update_model(self, batch) -> tuple[dict[str, float], State]:
+        """Consistency + reward + **value** losses in one joint
+        ``world_optimizer`` backward, as ``TDMPC2._update_model`` (no
+        termination head here); per-task discount in the TD target."""
         world_model = self.policy.world_model
-        sample = self.replay_buffer.sample(self.batch_size)
-        obs, action, reward, task = sample.obs, sample.action, sample.reward, sample.task
-        horizon = action.shape[0]
+        obs, action, reward, task = batch.obs, batch.action, batch.reward, batch.task
         reward = reward.unsqueeze(-1)
         discount = self.discount[task].unsqueeze(-1)
 
         with torch.no_grad():
-            next_obs = obs[1:]
-            next_z = world_model.encode(next_obs, task)
+            next_z = world_model.encode(obs[1:], task)
             td_targets = self._td_target(next_z, reward, discount, task)
 
         world_model.train()
-        batch = {"obs": obs, "action": action, "reward": reward, "task": task, "next_z": next_z}
-        losses, posterior = world_model.model_loss(batch)
+        model_batch = SequenceBatch(obs=obs, action=action, reward=reward, task=task, next_z=next_z)
+        losses, posterior = world_model.model_loss(model_batch)
 
-        # posterior["z"] is live (graph-attached, plan item 0) -- the
+        # posterior["z"] is live (graph-attached) -- the
         # critic's value loss reads it directly so its gradient reaches the
         # world model's dynamics/encoder too, matching upstream's single
         # shared graph, with no second rollout call needed.
-        zs_live = posterior["z"]
-        _zs = zs_live[:-1]
-        qs = self.policy.Q(_zs, action, task, return_type="all")
-
-        value_loss = torch.zeros((), device=self.device)
-        for t in range(horizon):
-            for qi in range(self.num_q):
-                value_loss = value_loss + soft_ce(
-                    qs[qi, t], td_targets[t], self.num_bins, self.vmin, self.vmax, world_model.bin_size
-                ).mean() * self.rho**t
-        value_loss = value_loss / (horizon * self.num_q)
+        qs = self.policy.Q(posterior["z"][:-1], action, task, return_type="all")
+        value_loss = self._value_loss(qs, td_targets)
 
         total_loss = (
             self.consistency_coef * losses["consistency_loss"]
             + self.reward_coef * losses["reward_loss"]
             + self.value_coef * value_loss
         )
+        grad_norm = self._step_world_optimizer(total_loss)
 
-        self.world_optimizer.zero_grad(set_to_none=True)
-        total_loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            list(world_model.parameters()) + list(self.policy.critic.parameters()), self.grad_clip_norm
-        )
-        self.world_optimizer.step()
-
-        # .detach(): posterior["z"] is live and the world model has already
-        # been updated above via world_optimizer.step() -- see
-        # TDMPC2._gradient_step's identical comment.
-        pi_info = self._update_pi(posterior["z"].detach(), task)
-        self.policy.soft_update_target_Q()
-        world_model.eval()
-
-        self._global_update += 1
-        info = {
+        metrics = {
             "consistency_loss": float(losses["consistency_loss"].detach()),
             "reward_loss": float(losses["reward_loss"].detach()),
             "value_loss": float(value_loss.detach()),
             "total_loss": float(total_loss.detach()),
             "grad_norm": float(grad_norm),
         }
-        info.update(pi_info)
-        return info
+        return metrics, posterior
 
-    def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
-        del compute_info  # every step's info dict is cheap; always computed.
-        info: dict[str, float] = {}
-        for _ in range(gradient_steps):
-            info = self._update_step()
-        return info
+    def _update_actor_critic(self, batch, posterior: State) -> dict[str, float]:
+        # .detach(): the world model was already stepped in _update_model --
+        # see TDMPC2._update_actor_critic.
+        return self._update_pi(posterior["z"].detach(), (batch.task,))
+
+    def _update_targets(self) -> None:
+        super()._update_targets()
+        self.policy.world_model.eval()
 
     # ------------------------------------------------------------------
     # Checkpointing
     # ------------------------------------------------------------------
-
-    def _optimizer_names(self) -> tuple[str, ...]:
-        return ("world_optimizer", "pi_optimizer")
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
@@ -335,30 +283,8 @@ class TDMPC2Multitask(OfflineRLAlgorithm):
             "obs_dims": self.obs_dims,
             "action_dims": self.action_dims,
             "episode_lengths": self.episode_lengths,
-            "horizon": self.horizon,
             "task_dim": self.task_dim,
-            "latent_dim": self.latent_dim,
-            "num_q": self.num_q,
-            "num_bins": self.num_bins,
-            "vmin": self.vmin,
-            "vmax": self.vmax,
-            "discount_denom": self.discount_denom,
-            "discount_min": self.discount_min,
-            "discount_max": self.discount_max,
-            "lr": self.lr,
-            "enc_lr_scale": self.enc_lr_scale,
-            "grad_clip_norm": self.grad_clip_norm,
             "tau": self.tau,
-            "rho": self.rho,
-            "consistency_coef": self.consistency_coef,
-            "reward_coef": self.reward_coef,
-            "value_coef": self.value_coef,
-            "dropout": self.dropout,
-            "log_std_min": self.log_std_min,
-            "log_std_max": self.log_std_max,
-            "entropy_coef": self.entropy_coef,
-            "simnorm_dim": self.simnorm_dim,
             "enc_dim": self.enc_dim,
             "num_enc_layers": self.num_enc_layers,
-            "mlp_dim": self.mlp_dim,
         }

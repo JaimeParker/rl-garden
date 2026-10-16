@@ -34,7 +34,12 @@ from rl_garden.networks.q_ensemble import QEnsemble
 from rl_garden.networks.running_scale import RunningScale
 from rl_garden.networks.twohot import two_hot_inv
 from rl_garden.planners.mppi import MPPIPlanner, PlannerConfig
-from rl_garden.policies._tdmpc2_math import gaussian_logprob, log_std, squash
+from rl_garden.policies._tdmpc2_math import (
+    critic_with_detached_params,
+    gaussian_logprob,
+    log_std,
+    squash,
+)
 from rl_garden.policies.base import BasePolicy
 from rl_garden.world_models.latent_consistency import LatentConsistencyModel
 
@@ -50,8 +55,7 @@ class TDMPC2Policy(BasePolicy):
     ``actor`` then ``critic`` (+ zero its last layer) then ``critic_target``
     (phase 2) -- reproducing upstream's single combined
     ``self.apply(weight_init)`` pass over one class that used to hold all of
-    these submodules together, before the model/actor/critic split (plan
-    1.2/1.3). Splitting construction (phase 1) from init (phase 2) like this
+    these submodules together, before the model/actor/critic split. Splitting construction (phase 1) from init (phase 2) like this
     is what lets that single RNG-consuming pass be reproduced across two
     separate ``nn.Module`` objects.
     """
@@ -155,15 +159,18 @@ class TDMPC2Policy(BasePolicy):
         detach: bool = False,
     ) -> torch.Tensor:
         """``return_type`` in {"min", "avg", "all"}; ``target`` selects the
-        Polyak-averaged ``critic_target`` ensemble; ``detach`` stops
-        gradient into ``self.critic``'s parameters (used for the actor
-        update) without touching values."""
+        Polyak-averaged ``critic_target`` ensemble; ``detach`` runs the
+        online critic with detached parameters, so gradient still reaches
+        ``z``/``a`` (the actor update's dQ/da) but never ``self.critic``'s
+        parameters -- upstream's ``_detach_Qs``."""
         assert return_type in ("min", "avg", "all")
         za = torch.cat([z, a], dim=-1)
-        qnet = self.critic_target if target else self.critic
-        out = qnet(za)
-        if detach and not target:
-            out = out.detach()
+        if target:
+            out = self.critic_target(za)
+        elif detach:
+            out = critic_with_detached_params(self.critic, za)
+        else:
+            out = self.critic(za)
 
         if return_type == "all":
             return out
@@ -219,9 +226,10 @@ class TDMPC2Policy(BasePolicy):
 
     def predict(self, obs: Obs, deterministic: bool = False) -> torch.Tensor:
         if self.use_planner:
-            embed = self.world_model.encode(obs)
-            is_first = torch.full((embed.shape[0],), self._t0, dtype=torch.bool, device=embed.device)
-            state = self.world_model.observe(None, None, embed, is_first)
+            with torch.no_grad():
+                embed = self.world_model.encode(obs)
+                is_first = torch.full((embed.shape[0],), self._t0, dtype=torch.bool, device=embed.device)
+                state = self.world_model.observe(None, None, embed, is_first)
             action, self._prev_mean = self._planner.plan(
                 self.world_model,
                 state,

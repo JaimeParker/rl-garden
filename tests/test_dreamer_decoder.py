@@ -1,6 +1,5 @@
 """Unit tests for ``rl_garden.encoders.dreamer_conv.DreamerConvEncoder`` and
-``rl_garden.world_models.decoder.ObservationDecoder`` (plan model-based-base
-Part 2, section C).
+``rl_garden.world_models.decoder.ObservationDecoder``.
 """
 from __future__ import annotations
 

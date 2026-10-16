@@ -1,8 +1,7 @@
 """``SequenceReplayBuffer``: unified ``(T, N)`` windowed replay buffer,
 sampling ``(window_len, B)`` windows, that both TD-MPC2's strict single-
 episode windows and the R2D2-style recurrent/transformer buffers' tolerant
-(boundary-masked) windows are built from -- model-based-base plan 1.6,
-merging the former ``rl_garden.buffers.episode_slice_buffer`` module
+(boundary-masked) windows are built from, merging the former ``rl_garden.buffers.episode_slice_buffer`` module
 (strict single-episode-window buffer + its sampling mixin, both deleted) and
 the former ``_CheckpointedSequenceReplayBuffer`` scaffold (also deleted --
 its storage/checkpoint/priority machinery lives here now) into one class,
@@ -18,8 +17,7 @@ selected at construction time by ``cross_episode``:
   ``RecurrentSamplingMixin``); only a genuine ring-buffer-wraparound read is
   rejected. Windows are proposed by a priority sum-tree over a sparse
   ``stride``-periodic checkpoint grid.
-- ``cross_episode=True, priority=False`` (**uniform**, DreamerV3, model-based-
-  base Part 2 / plan section D): windows are drawn uniformly (no priority
+- ``cross_episode=True, priority=False`` (**uniform**, DreamerV3): windows are drawn uniformly (no priority
   tree, no checkpoint grid) over every ring-buffer-contiguous
   ``[t0, t0 + horizon]`` span; an episode boundary inside the window is fine
   (masked downstream via the per-step ``is_first`` this mode stores, not
@@ -44,8 +42,7 @@ buffer is this class used **directly** with ``cross_episode=False`` (no
 subclass -- ``StrictWindowSamplingMixin`` gives it everything ``add()``/
 ``sample()`` need, plus the tail-step fix below).
 
-**Tail-step fix** (model-based-base plan 1.6, scratchpad
-``tdmpc2-upstream-vs-port.md`` section 3): a strict-mode ring buffer relies
+**Tail-step fix**: a strict-mode ring buffer relies
 on gymnasium vector-env autoreset to write the *next* episode's reset
 observation into the storage slot immediately after an episode's last
 transition -- so, before this fix, any window needing that slot (i.e. one
@@ -82,13 +79,14 @@ from rl_garden.buffers.replay_buffer import DictArray, _tree_to_device
 from rl_garden.buffers.sum_tree import SumTree
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
+from rl_garden.world_models.batch import SequenceBatch
 
 
 class StrictWindowSamplingMixin:
     """Episode-strict windowed sampling: reject (not mask) any candidate
     whose ``[t0, t0 + horizon]`` span isn't fully contiguous within one
     episode. Moved unchanged from the former episode-slice sampling module
-    (deleted, model-based-base plan 1.6) -- shared verbatim by ``SequenceReplayBuffer``
+    (deleted) -- shared verbatim by ``SequenceReplayBuffer``
     (``cross_episode=False``, which layers an additional tail-step
     acceptance path on top via its own ``_valid_window_batch`` override, see
     module docstring) and ``MmapMultitaskEpisodeBuffer``.
@@ -169,10 +167,10 @@ class SequenceReplayBufferSample:
     terminated: torch.Tensor    # (horizon, B), bool
 
 
-@dataclass
-class DreamerSequenceBatch:
+@dataclass(kw_only=True)
+class DreamerSequenceBatch(SequenceBatch):
     """``cross_episode=True, priority=False`` (uniform) sample -- DreamerV3's
-    windowed batch, plan section D.
+    windowed batch.
 
     The window covers ``horizon + 1`` consecutive ring-buffer rows per
     selected ``(env, t0)`` pair; row 0 supplies only the warm-start
@@ -199,14 +197,23 @@ class DreamerSequenceBatch:
     separate storage for either, only ``is_first`` is new per-step state.
     """
 
-    obs: Obs                          # (horizon + 1, B, *obs_shape) -- row 0 is carry-only
-    action: torch.Tensor              # (horizon, B, act_dim)
-    reward: torch.Tensor              # (horizon, B)
-    is_first: torch.Tensor            # (horizon, B) bool -- row t's own reset flag
-    is_terminal: torch.Tensor         # (horizon, B) bool -- transition into row t was terminal
+    # Inherited from SequenceBatch (always set by _sample_uniform):
+    #   obs (horizon + 1, B, *obs_shape) -- row 0 is carry-only
+    #   action (horizon, B, act_dim); reward (horizon, B)
+    #   is_first (horizon, B) bool -- row t's own reset flag
+    #   terminated (horizon, B) bool -- transition into row t was terminal
+    #     (also readable/writable as ``is_terminal``, Dreamer's name)
+    #   carry {key: (B, *carry_shape)} -- row-0 warm start, per carry_spec
+    #   indices (idx_grid, env_grid), each (horizon, B), storage_device -- pass to write_back_carry()
     is_last: torch.Tensor             # (horizon, B) bool -- transition into row t ended the episode
-    carry: dict[str, torch.Tensor]    # {key: (B, *carry_shape)} -- row-0 warm start, per carry_spec
-    indices: tuple[torch.Tensor, torch.Tensor]  # (idx_grid, env_grid), each (horizon, B), storage_device -- pass to write_back_carry()
+
+    @property
+    def is_terminal(self) -> torch.Tensor:
+        return self.terminated
+
+    @is_terminal.setter
+    def is_terminal(self, value: torch.Tensor) -> None:
+        self.terminated = value
 
 
 class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseReplayBuffer):
@@ -373,7 +380,7 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
             self.window_len = horizon + 1
 
             if cross_episode:
-                # Uniform mode (DreamerV3, plan section D): per-step is_first
+                # Uniform mode (DreamerV3): per-step is_first
                 # flag (rl-garden's dones/episode_ends already give
                 # is_terminal/is_last, see DreamerSequenceBatch's docstring)
                 # and a dense per-step model-carry table, one slot per
@@ -667,7 +674,7 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
             action=action,
             reward=reward,
             is_first=is_first,
-            is_terminal=is_terminal,
+            terminated=is_terminal,
             is_last=is_last,
             carry=carry,
             indices=indices,

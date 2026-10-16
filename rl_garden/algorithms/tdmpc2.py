@@ -13,8 +13,7 @@ was brainstormed from):
   attempted here.
 - **``episodic=False`` only.** Kept as a TDMPC2-level restriction (see
   ``episodic`` docs below) even though ``SequenceReplayBuffer``'s
-  strict-mode tail-step fix (model-based-base plan 1.6) now lets a sampled
-  window's *last* position carry a true terminal transition -- re-enabling
+  strict-mode tail-step fix now lets a sampled window's *last* position carry a true terminal transition -- re-enabling
   ``episodic=True`` end to end is a separate, not-yet-done change.
 - **Joint world-model optimizer kept, as upstream does** (encoder + latent
   projection + dynamics + reward + termination + Q share one Adam; ``pi`` has
@@ -28,7 +27,7 @@ was brainstormed from):
   choice (``ModelBasedAlgorithm``'s three-hook split doesn't require it, see
   that class's docstring); "model update" here means "model + critic".
 
-**Model-based-base plan 1.5/1.7**: this class is ``ModelBasedAlgorithm``
+**Model-based base**: this class is ``ModelBasedAlgorithm``
 (``OffPolicyAlgorithm``)'s first concrete consumer -- its rollout, replay
 buffer wiring, checkpointing, and eval loop are the same vectorized
 ``training_freq``/``utd``-driven loop every other online algorithm uses,
@@ -44,6 +43,16 @@ with rollout within one ``learn()`` call) -- sharing one mutable state
 between the two would let an eval episode's planning corrupt an in-progress
 training episode's warm-started mean, and vice versa. See
 ``_rollout_action``'s own docstring.
+
+**``TDMPC2Core``** (this module) holds what the single-task ``TDMPC2`` and
+the offline multitask ``TDMPC2Multitask`` share -- hyperparameter injection
+(``_init_tdmpc2_params``), the ``world_optimizer``/``pi_optimizer`` pair, the
+rho-weighted soft-CE value loss, the joint world-model optimizer step, the
+actor update (``_update_pi``), the target-Q Polyak update, and the shared
+checkpoint metadata -- following the repo's Core / host pattern
+(``.agents/rules/adding-algorithm.md``): ``TDMPC2(TDMPC2Core,
+ModelBasedAlgorithm)`` adds rollout/planning, ``TDMPC2Multitask(TDMPC2Core,
+OfflineModelBasedAlgorithm)`` adds the multitask dataset.
 """
 from __future__ import annotations
 
@@ -65,6 +74,7 @@ from rl_garden.observations import ObsGroups
 from rl_garden.planners.mppi import PlannerConfig
 from rl_garden.policies.tdmpc2_policy import TDMPC2Policy
 from rl_garden.world_models.base import State
+from rl_garden.world_models.batch import SequenceBatch
 from rl_garden.world_models.latent_consistency import LatentConsistencyModel
 
 
@@ -75,7 +85,168 @@ def _compute_discount(
     return min(max((frac - 1) / frac, discount_min), discount_max)
 
 
-class TDMPC2(ModelBasedAlgorithm):
+class TDMPC2Core:
+    """Mixin (no base class) with TD-MPC2's shared losses and optimizers --
+    see the module docstring. Host classes call ``_init_tdmpc2_params(...)``
+    before ``_setup_model()`` and ``_build_tdmpc2_optimizers()`` once
+    ``self.policy`` exists. ``task_args`` below is the extra positional
+    conditioning forwarded to ``self.policy.pi``/``self.policy.Q``: ``()`` for
+    ``TDMPC2Policy``, ``(task,)`` for ``MultitaskTDMPC2Policy``."""
+
+    def _init_tdmpc2_params(
+        self,
+        *,
+        horizon: int,
+        latent_dim: int,
+        mlp_dim: int,
+        simnorm_dim: int,
+        num_q: int,
+        num_bins: int,
+        vmin: float,
+        vmax: float,
+        dropout: float,
+        log_std_min: float,
+        log_std_max: float,
+        entropy_coef: float,
+        lr: float,
+        enc_lr_scale: float,
+        grad_clip_norm: float,
+        rho: float,
+        consistency_coef: float,
+        reward_coef: float,
+        value_coef: float,
+        discount_denom: float,
+        discount_min: float,
+        discount_max: float,
+    ) -> None:
+        self.horizon = horizon
+        self.latent_dim = latent_dim
+        self.mlp_dim = mlp_dim
+        self.simnorm_dim = simnorm_dim
+        self.num_q = num_q
+        self.num_bins = num_bins
+        self.vmin = vmin
+        self.vmax = vmax
+        self.dropout = dropout
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+        self.entropy_coef = entropy_coef
+        self.lr = lr
+        self.enc_lr_scale = enc_lr_scale
+        self.grad_clip_norm = grad_clip_norm
+        self.rho = rho
+        self.consistency_coef = consistency_coef
+        self.reward_coef = reward_coef
+        self.value_coef = value_coef
+        self.discount_denom = discount_denom
+        self.discount_min = discount_min
+        self.discount_max = discount_max
+        # Two-hot bin width for the value loss's soft-CE targets (same bins
+        # as the world model's reward head and the policy's Q-heads).
+        self.value_bin_size = (vmax - vmin) / (num_bins - 1) if num_bins > 1 else 0.0
+
+    def _build_tdmpc2_optimizers(self) -> None:
+        """``world_optimizer`` = encoder group at ``lr * enc_lr_scale`` +
+        (model + critic) group at ``lr`` -- one joint optimizer, as upstream
+        (module docstring); ``pi_optimizer`` = actor only."""
+        param_groups = self.policy.world_model.parameter_groups()
+        enc_params = list(param_groups["encoder"])
+        other_params = list(param_groups["model"]) + list(self.policy.critic.parameters())
+        self.world_optimizer = torch.optim.Adam(
+            [
+                {"params": enc_params, "lr": self.lr * self.enc_lr_scale},
+                {"params": other_params, "lr": self.lr},
+            ]
+        )
+        self.pi_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.lr, eps=1e-5)
+
+    def _value_loss(self, qs: torch.Tensor, td_targets: torch.Tensor) -> torch.Tensor:
+        """Rho-weighted soft-CE of every Q-head's logits ``qs`` (``(num_q,
+        horizon, B, num_bins)``) against ``td_targets`` (``(horizon, B, 1)``),
+        averaged over ``horizon * num_q``. Loops over ``t``/``q`` because
+        ``two_hot`` only accepts ``(B, 1)`` inputs."""
+        horizon = td_targets.shape[0]
+        value_loss = torch.zeros((), device=self.device)
+        for t in range(horizon):
+            for qi in range(self.num_q):
+                value_loss = value_loss + soft_ce(
+                    qs[qi, t], td_targets[t], self.num_bins, self.vmin, self.vmax, self.value_bin_size
+                ).mean() * self.rho**t
+        return value_loss / (horizon * self.num_q)
+
+    def _step_world_optimizer(self, total_loss: torch.Tensor) -> torch.Tensor:
+        """One joint backward + clip (world model + critic) + step; returns
+        the pre-clip gradient norm."""
+        self.world_optimizer.zero_grad(set_to_none=True)
+        total_loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            list(self.policy.world_model.parameters()) + list(self.policy.critic.parameters()),
+            self.grad_clip_norm,
+        )
+        self.world_optimizer.step()
+        return grad_norm
+
+    def _update_pi(self, zs: torch.Tensor, task_args: tuple[torch.Tensor, ...] = ()) -> dict[str, float]:
+        """Actor update on detached latents ``zs`` (``(horizon + 1, B,
+        latent)``): maximize the scaled online Q (parameter-detached critic,
+        so dQ/da reaches the actor) plus the entropy bonus, rho-weighted
+        over time."""
+        action, info = self.policy.pi(zs, *task_args)
+        qs = self.policy.Q(zs, action, *task_args, return_type="avg", detach=True)
+        self.policy.scale.update(qs[0])
+        qs = self.policy.scale(qs)
+
+        rho_pows = self.rho ** torch.arange(zs.shape[0], device=zs.device)
+        pi_loss = (
+            -(self.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1, 2)) * rho_pows
+        ).mean()
+
+        self.pi_optimizer.zero_grad(set_to_none=True)
+        pi_loss.backward()
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.grad_clip_norm)
+        self.pi_optimizer.step()
+
+        return {
+            "pi_loss": float(pi_loss.detach()),
+            "pi_grad_norm": float(pi_grad_norm),
+            "pi_scale": float(self.policy.scale.value.item()),
+        }
+
+    def _update_targets(self) -> None:
+        self.policy.soft_update_target_Q()
+
+    def _optimizer_names(self) -> tuple[str, ...]:
+        return ("world_optimizer", "pi_optimizer")
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            **super()._checkpoint_metadata(),
+            "horizon": self.horizon,
+            "latent_dim": self.latent_dim,
+            "mlp_dim": self.mlp_dim,
+            "num_q": self.num_q,
+            "num_bins": self.num_bins,
+            "vmin": self.vmin,
+            "vmax": self.vmax,
+            "discount_denom": self.discount_denom,
+            "discount_min": self.discount_min,
+            "discount_max": self.discount_max,
+            "lr": self.lr,
+            "enc_lr_scale": self.enc_lr_scale,
+            "grad_clip_norm": self.grad_clip_norm,
+            "rho": self.rho,
+            "consistency_coef": self.consistency_coef,
+            "reward_coef": self.reward_coef,
+            "value_coef": self.value_coef,
+            "dropout": self.dropout,
+            "log_std_min": self.log_std_min,
+            "log_std_max": self.log_std_max,
+            "entropy_coef": self.entropy_coef,
+            "simnorm_dim": self.simnorm_dim,
+        }
+
+
+class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
     _compatible_checkpoint_algorithms = ("TDMPC2",)
     # One shared encoder feeds both the policy head and the Q-heads through a
     # single joint world-model optimizer (see module docstring) -- there is
@@ -193,8 +364,7 @@ class TDMPC2(ModelBasedAlgorithm):
             raise NotImplementedError(
                 "episodic=True is not supported by this port yet: "
                 "SequenceReplayBuffer's strict mode now lets a sampled window's "
-                "last position carry a true terminal transition (model-based-"
-                "base plan 1.6's tail-step fix), but every non-tail position "
+                "last position carry a true terminal transition (the tail-step fix), but every non-tail position "
                 "inside a window is still rejected on any boundary, so the "
                 "termination classifier would still be starved of positive "
                 "examples relative to upstream's per-episode-block storage. "
@@ -206,7 +376,6 @@ class TDMPC2(ModelBasedAlgorithm):
         self.discount = discount
 
         self.use_planner = use_planner
-        self.horizon = horizon
         self.num_samples = num_samples
         self.num_elites = num_elites
         self.num_pi_trajs = num_pi_trajs
@@ -214,31 +383,33 @@ class TDMPC2(ModelBasedAlgorithm):
         self.min_std = min_std
         self.max_std = max_std
         self.temperature = temperature
-
-        self.latent_dim = latent_dim
-        self.mlp_dim = mlp_dim
-        self.simnorm_dim = simnorm_dim
-        self.num_q = num_q
-        self.num_bins = num_bins
-        self.vmin = vmin
-        self.vmax = vmax
-        self.dropout = dropout
         self.episodic = episodic
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-        self.entropy_coef = entropy_coef
-
-        self.lr = lr
-        self.enc_lr_scale = enc_lr_scale
-        self.grad_clip_norm = grad_clip_norm
-        self.rho = rho
-        self.consistency_coef = consistency_coef
-        self.reward_coef = reward_coef
-        self.value_coef = value_coef
         self.termination_coef = termination_coef
-        self.discount_denom = discount_denom
-        self.discount_min = discount_min
-        self.discount_max = discount_max
+
+        self._init_tdmpc2_params(
+            horizon=horizon,
+            latent_dim=latent_dim,
+            mlp_dim=mlp_dim,
+            simnorm_dim=simnorm_dim,
+            num_q=num_q,
+            num_bins=num_bins,
+            vmin=vmin,
+            vmax=vmax,
+            dropout=dropout,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            entropy_coef=entropy_coef,
+            lr=lr,
+            enc_lr_scale=enc_lr_scale,
+            grad_clip_norm=grad_clip_norm,
+            rho=rho,
+            consistency_coef=consistency_coef,
+            reward_coef=reward_coef,
+            value_coef=value_coef,
+            discount_denom=discount_denom,
+            discount_min=discount_min,
+            discount_max=discount_max,
+        )
 
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -309,18 +480,7 @@ class TDMPC2(ModelBasedAlgorithm):
             tau=self.tau,
             use_planner=self.use_planner,
         ).to(self.device)
-        world_model = self.policy.world_model  # now on self.device
-
-        param_groups = world_model.parameter_groups()
-        enc_params = list(param_groups["encoder"])
-        other_params = list(param_groups["model"]) + list(self.policy.critic.parameters())
-        self.world_optimizer = torch.optim.Adam(
-            [
-                {"params": enc_params, "lr": self.lr * self.enc_lr_scale},
-                {"params": other_params, "lr": self.lr},
-            ]
-        )
-        self.pi_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.lr, eps=1e-5)
+        self._build_tdmpc2_optimizers()
 
         self.replay_buffer = SequenceReplayBuffer(
             observation_space=self.env.single_observation_space,
@@ -360,12 +520,13 @@ class TDMPC2(ModelBasedAlgorithm):
         if not learning_has_started:
             action = self._explore_action(obs)
         elif self.use_planner:
-            obs_device = self._obs_to_policy_device(obs)
-            embed = self.policy.world_model.encode(obs_device)
-            is_first = torch.full(
-                (embed.shape[0],), self._rollout_t0, dtype=torch.bool, device=embed.device
-            )
-            state = self.policy.world_model.observe(None, None, embed, is_first)
+            with torch.no_grad():
+                obs_device = self._obs_to_policy_device(obs)
+                embed = self.policy.world_model.encode(obs_device)
+                is_first = torch.full(
+                    (embed.shape[0],), self._rollout_t0, dtype=torch.bool, device=embed.device
+                )
+                state = self.policy.world_model.observe(None, None, embed, is_first)
             action, self._rollout_prev_mean = self.policy.planner.plan(
                 self.policy.world_model,
                 state,
@@ -405,7 +566,7 @@ class TDMPC2(ModelBasedAlgorithm):
         """Consistency + reward + termination + **value** losses in one
         joint ``world_optimizer`` backward pass (TD-MPC2-specific: the
         critic trains in the same backward as the model, see class
-        docstring). Returns the LIVE posterior ``{"z": zs}`` (plan item 0);
+        docstring). Returns the LIVE posterior ``{"z": zs}``;
         ``_update_actor_critic`` detaches it before the actor update."""
         world_model = self.policy.world_model
         obs, action, reward, terminated = batch.obs, batch.action, batch.reward, batch.terminated
@@ -418,22 +579,18 @@ class TDMPC2(ModelBasedAlgorithm):
             next_z = self._encode_window(next_obs, horizon, batch_size)
             td_targets = self._td_target(next_z, reward, terminated_f)
 
-        model_batch = {"obs": obs, "action": action, "reward": reward, "next_z": next_z}
-        if self.episodic:
-            model_batch["terminated"] = terminated_f
+        model_batch = SequenceBatch(
+            obs=obs,
+            action=action,
+            reward=reward,
+            next_z=next_z,
+            terminated=terminated_f if self.episodic else None,
+        )
         losses, posterior = world_model.model_loss(model_batch)
 
         zs_live = posterior["z"]
-        _zs = zs_live[:-1]
-        qs = self.policy.Q(_zs, action, return_type="all")
-
-        value_loss = torch.zeros((), device=self.device)
-        for t in range(horizon):
-            for qi in range(self.num_q):
-                value_loss = value_loss + soft_ce(
-                    qs[qi, t], td_targets[t], self.num_bins, self.vmin, self.vmax, world_model.bin_size
-                ).mean() * self.rho**t
-        value_loss = value_loss / (horizon * self.num_q)
+        qs = self.policy.Q(zs_live[:-1], action, return_type="all")
+        value_loss = self._value_loss(qs, td_targets)
 
         total_loss = (
             self.consistency_coef * losses["consistency_loss"]
@@ -442,12 +599,7 @@ class TDMPC2(ModelBasedAlgorithm):
             + self.value_coef * value_loss
         )
 
-        self.world_optimizer.zero_grad(set_to_none=True)
-        total_loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            list(world_model.parameters()) + list(self.policy.critic.parameters()), self.grad_clip_norm
-        )
-        self.world_optimizer.step()
+        grad_norm = self._step_world_optimizer(total_loss)
 
         metrics = {
             "consistency_loss": float(losses["consistency_loss"].detach()),
@@ -459,37 +611,12 @@ class TDMPC2(ModelBasedAlgorithm):
         }
         return metrics, posterior
 
-    def _update_pi(self, zs: torch.Tensor) -> dict[str, float]:
-        action, info = self.policy.pi(zs)
-        qs = self.policy.Q(zs, action, return_type="avg", detach=True)
-        self.policy.scale.update(qs[0])
-        qs = self.policy.scale(qs)
-
-        rho_pows = self.rho ** torch.arange(zs.shape[0], device=zs.device)
-        pi_loss = (
-            -(self.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1, 2)) * rho_pows
-        ).mean()
-
-        self.pi_optimizer.zero_grad(set_to_none=True)
-        pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.grad_clip_norm)
-        self.pi_optimizer.step()
-
-        return {
-            "pi_loss": float(pi_loss.detach()),
-            "pi_grad_norm": float(pi_grad_norm),
-            "pi_scale": float(self.policy.scale.value.item()),
-        }
-
     def _update_actor_critic(self, batch, posterior: State) -> dict[str, float]:
-        # .detach(): posterior["z"] is live (plan item 0) and the world model
+        # .detach(): posterior["z"] is live and the world model
         # has already been updated in _update_model() -- the actor update
         # must not also backprop into (now-stale) world-model gradients,
         # matching upstream's update_pi(zs.detach(), ...).
         return self._update_pi(posterior["z"].detach())
-
-    def _update_targets(self) -> None:
-        self.policy.soft_update_target_Q()
 
     # ------------------------------------------------------------------
     # Eval hooks (see BaseAlgorithm._evaluate() -- reused unmodified)
@@ -515,41 +642,16 @@ class TDMPC2(ModelBasedAlgorithm):
     # Checkpointing
     # ------------------------------------------------------------------
 
-    def _optimizer_names(self) -> tuple[str, ...]:
-        return ("world_optimizer", "pi_optimizer")
-
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
             "episode_length": self.episode_length,
-            "horizon": self.horizon,
             "num_samples": self.num_samples,
             "num_elites": self.num_elites,
             "num_pi_trajs": self.num_pi_trajs,
             "iterations": self.iterations,
-            "latent_dim": self.latent_dim,
-            "mlp_dim": self.mlp_dim,
-            "num_q": self.num_q,
-            "num_bins": self.num_bins,
-            "vmin": self.vmin,
-            "vmax": self.vmax,
             "episodic": self.episodic,
-            "discount_denom": self.discount_denom,
-            "discount_min": self.discount_min,
-            "discount_max": self.discount_max,
-            "lr": self.lr,
-            "enc_lr_scale": self.enc_lr_scale,
-            "grad_clip_norm": self.grad_clip_norm,
-            "rho": self.rho,
-            "consistency_coef": self.consistency_coef,
-            "reward_coef": self.reward_coef,
-            "value_coef": self.value_coef,
             "termination_coef": self.termination_coef,
-            "dropout": self.dropout,
-            "log_std_min": self.log_std_min,
-            "log_std_max": self.log_std_max,
-            "entropy_coef": self.entropy_coef,
-            "simnorm_dim": self.simnorm_dim,
             "use_planner": self.use_planner,
             "seed_steps": self.seed_steps,
             "encoder_sharing": self.encoder_sharing,

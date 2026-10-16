@@ -64,6 +64,7 @@ d4rl-legacy-manip = [
 ]
 ogbench = ["ogbench"]
 metaworld = ["metaworld"]
+dm_control = ["dm_control>=1.0.15", "mujoco>=3.0"]
 wandb = ["wandb"]
 dev = ["pytest", "ruff"]
 

@@ -1,11 +1,10 @@
-"""``DreamerConvEncoder``: DreamerV3's observation encoder (plan model-based-
-base Part 2, section C), ported from r2dreamer's ``ConvEncoder``/``MLP``
+"""``DreamerConvEncoder``: DreamerV3's observation encoder, ported from r2dreamer's ``ConvEncoder``/``MLP``
 (``networks.py:192-234,313-336``; identical structure in official JAX
 ``rssm.py:210-250``).
 
 Two extractors share the conv-stack builder below (``_build_dreamer_cnn``):
 
-- ``DreamerConvEncoder``, the one described by the plan -- unlike every
+- ``DreamerConvEncoder``, DreamerV3's encoder -- unlike every
   other entry in ``rl_garden.encoders.registry`` (each an image-only factory
   plugged into ``CombinedExtractor`` alongside a separate ``ProprioEncoder``
   for state keys), this consumes the WHOLE Dict observation itself (images

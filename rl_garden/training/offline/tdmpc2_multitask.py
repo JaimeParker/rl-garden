@@ -201,7 +201,12 @@ def _run_tdmpc2_multitask(
     persist_effective_config(materialized, config_path)
     logger.update_config(json_value(materialized))
 
-    loaded = load_multitask_dataset(agent.replay_buffer, args.dataset_dir)
+    loaded = load_multitask_dataset(
+        agent.replay_buffer,
+        args.dataset_dir,
+        tasks=args.tasks,
+        max_episodes_per_task=args.max_episodes_per_task,
+    )
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:
         print(

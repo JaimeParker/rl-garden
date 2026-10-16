@@ -44,6 +44,10 @@ class _FakeWorldModel(WorldModel):
     def reward(self, state: State, action: torch.Tensor) -> torch.Tensor:
         return state["h"].sum(-1, keepdim=True) + action.sum(-1, keepdim=True)
 
+    def reward_value(self, state: State, action: torch.Tensor, *, symlog_space: bool = False) -> torch.Tensor:
+        del symlog_space
+        return self.reward(state, action)
+
     def continue_(self, state: State):
         return torch.full((state["h"].shape[0], 1), 0.9)
 

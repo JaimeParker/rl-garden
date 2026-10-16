@@ -1,9 +1,9 @@
 """Tests for the CEM/MPPI planner (``rl_garden.planners.mppi``) in isolation
 from the full agent/env loop.
 
-Moved from ``tests/test_tdmpc2_planner.py`` (model-based-base plan 1.4): the
+Moved from ``tests/test_tdmpc2_planner.py``: the
 planner's world-model argument is now a bare ``LatentConsistencyModel`` (no
-``pi``/``Q`` -- those moved to ``TDMPC2Policy``, plan 1.3), and
+``pi``/``Q`` -- those moved to ``TDMPC2Policy``), and
 ``policy_prior``/``value_fn`` are injected callbacks instead of
 ``world_model.pi``/``world_model.Q`` calls.
 """

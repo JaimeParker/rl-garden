@@ -21,9 +21,9 @@ other consumer in this repo (Dreamer's imagination-based actor-critic uses
 
 ``policy_prior``/``value_fn`` are injected callbacks rather than direct
 ``model.pi``/``model.Q`` calls: the actor (policy prior head) and critic
-(Q-ensemble) live on ``TDMPC2Policy``, not on the world model (plan 1.3), so
+(Q-ensemble) live on ``TDMPC2Policy``, not on the world model, so
 the planner -- which only ever touches the model's ``step``/``reward``/
-``continue_`` methods plus its two-hot decode constants -- stays decoupled
+``continue_``/``reward_value`` methods and its ``episodic`` flag -- stays decoupled
 from where the policy/value networks actually live.
 """
 from __future__ import annotations
@@ -33,7 +33,6 @@ from typing import Callable, Optional
 
 import torch
 
-from rl_garden.networks.twohot import two_hot_inv
 from rl_garden.world_models.base import State, WorldModel
 
 
@@ -92,9 +91,7 @@ def _estimate_value(
     termination = torch.zeros(num_samples, 1, dtype=torch.float32, device=z0.device)
     cur_state = state
     for t in range(horizon):
-        reward = two_hot_inv(
-            model.reward(cur_state, actions[t]), model.num_bins, model.vmin, model.vmax
-        )
+        reward = model.reward_value(cur_state, actions[t])
         cur_state = model.step(cur_state, actions[t])
         g = g + disc * (1 - termination) * reward
         disc = disc * discount

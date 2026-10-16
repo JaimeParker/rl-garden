@@ -144,3 +144,57 @@ def test_dreamer_v3_critic_encoder_rejected_at_preflight():
 
     with pytest.raises(ConfigError, match="only supports"):
         registry._validate_config(command)
+
+
+def test_dreamer_v3_dry_run_size_ncrl_m_resolves_to_ncrl_m_preset(monkeypatch):
+    """``--size ncrl_m`` maps verbatim onto ``RSSM_SIZES["ncrl_m"]`` (the
+    numeric presets keep their ``size<N>`` keys). --dry-run constructs the
+    agent on a real dm_control env, so this only runs on 6017."""
+    import io
+    from contextlib import redirect_stdout
+
+    from rl_garden.training import inspection
+    from rl_garden.training.online import registry
+    from rl_garden.world_models.rssm import RSSM_SIZES
+
+    built = {}
+    construct_agent = inspection.construct_agent
+
+    def capture_agent(target, /, **kwargs):
+        built["agent"] = construct_agent(target, **kwargs)
+        return built["agent"]
+
+    monkeypatch.setattr(inspection, "construct_agent", capture_agent)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        registry.run_cli(
+            [
+                "dreamer_v3",
+                "--env_backend",
+                "dm_control",
+                "--env_id",
+                "walker-walk",
+                "--num_envs",
+                "1",
+                "--num_eval_envs",
+                "1",
+                "--size",
+                "ncrl_m",
+                "--buffer_size",
+                "400",
+                "--buffer_device",
+                "cpu",
+                "--log_type",
+                "none",
+                "--obs.no-state",
+                "--obs.rgb",
+                "default",
+                "--obs.image-size",
+                "64",
+                "64",
+                "--dry-run",
+            ]
+        )
+    config = json.loads(buf.getvalue())
+    assert config["algorithm"]["constructor_kwargs"]["size"] == "ncrl_m"
+    assert built["agent"]._rssm_size == RSSM_SIZES["ncrl_m"]
