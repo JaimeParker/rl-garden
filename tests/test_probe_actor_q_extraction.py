@@ -13,7 +13,6 @@ from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.factory import build_observation_encoder
 from rl_garden.encoders.plain_conv import PlainConv
 
-
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "tools"

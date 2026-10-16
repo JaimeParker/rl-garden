@@ -6,7 +6,7 @@ from rl_garden.networks.gtrxl import GTrXLLatentEncoder
 
 
 def _make_encoder(**overrides) -> GTrXLLatentEncoder:
-    kwargs = dict(input_dim=8, embed_dim=16, head_dim=8, num_heads=2, num_layers=2, memory_len=4)
+    kwargs = {"input_dim": 8, "embed_dim": 16, "head_dim": 8, "num_heads": 2, "num_layers": 2, "memory_len": 4}
     kwargs.update(overrides)
     return GTrXLLatentEncoder(**kwargs)
 

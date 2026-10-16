@@ -19,8 +19,8 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
-from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.envs.wrappers.frame_stack import ImageFrameStackWrapper
 
 IMAGE_KEY = "rgb_cam"

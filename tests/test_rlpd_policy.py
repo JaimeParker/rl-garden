@@ -44,7 +44,7 @@ def test_rlpd_policy_default_matches_plain_sac_policy_shapes():
     )
     features = torch.randn(5, obs_space.shape[0])
     actions = torch.randn(5, 2).clamp(-1, 1)
-    action, log_prob = policy.actor.action_log_prob(features)
+    action, _log_prob = policy.actor.action_log_prob(features)
     assert action.shape == (5, 2)
     q_all = policy.critic.forward_all(features, actions)
     assert q_all.shape == (3, 5, 1)

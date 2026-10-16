@@ -275,6 +275,23 @@ def test_checked_in_presets_pass_static_preflight():
         assert config.selection["algorithm"] == algorithm
 
 
+def test_train_off2on_script_launches():
+    """Canary: examples/train_off2on.py starts as a script (train_online and
+    pretrain_offline are covered by the subprocess tests above and in
+    test_cql_calql.py); every other off2on CLI check runs in-process."""
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "examples/train_off2on.py", "--help"],
+        cwd=repo_root,
+        env=os.environ | {"MPLCONFIGDIR": "/tmp"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--print-config" in result.stdout
+
+
 def test_robotwin_launcher_keeps_dependency_env_and_forwards_cli_override():
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ | {

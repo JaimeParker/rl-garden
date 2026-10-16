@@ -8,10 +8,12 @@ top-level function, not a nested one.
 """
 from __future__ import annotations
 
-import socket
-from contextlib import closing
+import shutil
+import tempfile
+import time
 
 import numpy as np
+import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -32,24 +34,34 @@ from rl_garden.common.ddp import (
 )
 
 
-def _free_port() -> int:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("ddp")]
 
 
-def _init_gloo(rank: int, world_size: int, port: int) -> None:
+def _init_gloo(rank: int, world_size: int, init_method: str) -> None:
     dist.init_process_group(
         backend="gloo",
-        init_method=f"tcp://127.0.0.1:{port}",
+        init_method=init_method,
         world_size=world_size,
         rank=rank,
     )
 
 
+def _destroy_gloo() -> None:
+    # torch 2.6 gloo: destroy_process_group can deadlock while a gloo worker thread is
+    # still releasing the last collective's tensors; a GIL-free pause lets it finish.
+    time.sleep(0.2)
+    dist.destroy_process_group()
+
+
 def _spawn(worker, world_size: int, extra_args: tuple = ()) -> None:
-    port = _free_port()
-    mp.spawn(worker, args=(world_size, port, *extra_args), nprocs=world_size, join=True)
+    # File-based rendezvous: a pre-picked TCP port can be taken by any process on
+    # a shared (host-network) machine before rank 0 binds it.
+    store_dir = tempfile.mkdtemp(prefix="rl_garden_ddp_")
+    init_method = f"file://{store_dir}/store"
+    try:
+        mp.spawn(worker, args=(world_size, init_method, *extra_args), nprocs=world_size, join=True)
+    finally:
+        shutil.rmtree(store_dir, ignore_errors=True)
 
 
 class _TinyModule(nn.Module):
@@ -59,59 +71,59 @@ class _TinyModule(nn.Module):
         self.register_buffer("stat", torch.full((2,), value))
 
 
-def _broadcast_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _broadcast_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     module = _TinyModule(value=float(rank + 1))  # rank 0 -> 1.0, rank 1 -> 2.0
     broadcast_module_state(module, src=0)
     assert torch.equal(module.weight, torch.full((3,), 1.0))
     assert torch.equal(module.stat, torch.full((2,), 1.0))
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_broadcast_module_state_two_processes():
     _spawn(_broadcast_worker, world_size=2)
 
 
-def _allreduce_grads_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _allreduce_grads_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     module = _TinyModule(value=0.0)
     module.weight.grad = torch.full((3,), float(rank + 1))  # 1.0, 2.0 -> mean 1.5
     allreduce_grads(module)
     assert torch.allclose(module.weight.grad, torch.full((3,), 1.5))
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_allreduce_grads_two_processes():
     _spawn(_allreduce_grads_worker, world_size=2)
 
 
-def _allreduce_grads_skips_none_grad_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _allreduce_grads_skips_none_grad_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     module = _TinyModule(value=0.0)
     # No .grad set anywhere -- must not raise.
     allreduce_grads(module)
     assert module.weight.grad is None
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_allreduce_grads_noop_when_no_grad():
     _spawn(_allreduce_grads_skips_none_grad_worker, world_size=2)
 
 
-def _allreduce_mean_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _allreduce_mean_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     value = torch.tensor(float(rank + 1))  # 1.0, 2.0 -> mean 1.5
     result = allreduce_mean(value)
     assert torch.allclose(result, torch.tensor(1.5))
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_allreduce_mean_two_processes():
     _spawn(_allreduce_mean_worker, world_size=2)
 
 
-def _pin_backend_device_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _pin_backend_device_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     from rl_garden.common.env_args import IsaacLabConfig, ManiSkillConfig
 
     assert is_ddp_active()
@@ -125,19 +137,19 @@ def _pin_backend_device_worker(rank: int, world_size: int, port: int) -> None:
     pin_backend_config_device(maniskill_cfg, rank)
     assert maniskill_cfg.sim_backend == f"gpu:{rank}"
     assert maniskill_cfg.render_backend == f"gpu:{rank}"
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_pin_backend_config_device_rewrites_when_ddp_active():
     _spawn(_pin_backend_device_worker, world_size=2)
 
 
-def _pin_backend_device_via_cli_entrypoint_worker(rank: int, world_size: int, port: int) -> None:
+def _pin_backend_device_via_cli_entrypoint_worker(rank: int, world_size: int, init_method: str) -> None:
     """pin_backend_config_device must rewrite the *real* backend_config object
     reached via make_env_request(args, run_name) -- not just a config
     instance built directly in a test, which wouldn't catch a frozen
     dataclass or another mutability obstacle on the real call path."""
-    _init_gloo(rank, world_size, port)
+    _init_gloo(rank, world_size, init_method)
     from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online.ppo import PPOArgs
 
@@ -151,7 +163,7 @@ def _pin_backend_device_via_cli_entrypoint_worker(rank: int, world_size: int, po
     pin_backend_config_device(req.backend_config, rank)
 
     assert req.backend_config.sim_device == f"cuda:{rank}"
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_pin_backend_config_device_rewrites_real_object_from_cli_entrypoint():
@@ -179,8 +191,8 @@ def test_ddp_helpers_are_noop_outside_a_process_group():
     shutdown_ddp()  # must not raise outside a process group
 
 
-def _shutdown_ddp_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _shutdown_ddp_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     assert is_ddp_active()
     shutdown_ddp()
     assert not is_ddp_active()
@@ -221,8 +233,8 @@ class _FakeBoxEnv:
         return self._obs(), reward, terminated, truncated, {}
 
 
-def _ppo_target_kl_raises_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _ppo_target_kl_raises_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     assert is_ddp_active()
     try:
         PPO(_FakeBoxEnv(), device="cpu", target_kl=0.1, eval_freq=0, log_freq=0)
@@ -230,15 +242,15 @@ def _ppo_target_kl_raises_worker(rank: int, world_size: int, port: int) -> None:
     except ValueError as exc:
         raised = "target_kl" in str(exc)
     assert raised
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_ppo_raises_when_target_kl_set_under_ddp():
     _spawn(_ppo_target_kl_raises_worker, world_size=2)
 
 
-def _ppo_ddp_e2e_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _ppo_ddp_e2e_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     base_seed = 7
     agent = PPO(
         _FakeBoxEnv(num_envs=4),
@@ -268,7 +280,7 @@ def _ppo_ddp_e2e_worker(rank: int, world_size: int, port: int) -> None:
                 "PPO policy weights diverged across DDP ranks after training -- "
                 "grad-allreduce insertion point is not wired correctly."
             )
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_ppo_ddp_end_to_end_weights_converge_across_ranks():

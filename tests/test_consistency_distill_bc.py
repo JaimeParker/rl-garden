@@ -177,7 +177,7 @@ def test_net_cls_mismatch_against_teacher_checkpoint_fails_loudly(tmp_path):
             cond_steps=1,
             denoising_steps=10,
             net_cls=DiffusionUNet1D,
-            net_kwargs=dict(down_dims=(8, 16), kernel_size=3, n_groups=4),
+            net_kwargs={"down_dims": (8, 16), "kernel_size": 3, "n_groups": 4},
             batch_size=16,
             device="cpu",
         )

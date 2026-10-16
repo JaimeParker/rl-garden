@@ -4,11 +4,12 @@ the offline SPOT class.
 """
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
-from unittest.mock import MagicMock
 
 from rl_garden.algorithms import OfflineEnvSpec
 from rl_garden.algorithms.off2on_spot import Off2OnSPOT
@@ -26,20 +27,20 @@ def simple_env():
 
 
 def _make_off2on(simple_env, **kwargs) -> Off2OnSPOT:
-    defaults = dict(
-        buffer_size=200,
-        buffer_device="cpu",
-        learning_starts=10,
-        batch_size=8,
-        gamma=0.99,
-        training_freq=4,
-        utd=1.0,
-        net_arch=[16, 16],
-        vae_hidden_dim=16,
-        vae_iterations=0,
-        device="cpu",
-        seed=42,
-    )
+    defaults = {
+        "buffer_size": 200,
+        "buffer_device": "cpu",
+        "learning_starts": 10,
+        "batch_size": 8,
+        "gamma": 0.99,
+        "training_freq": 4,
+        "utd": 1.0,
+        "net_arch": [16, 16],
+        "vae_hidden_dim": 16,
+        "vae_iterations": 0,
+        "device": "cpu",
+        "seed": 42,
+    }
     defaults.update(kwargs)
     return Off2OnSPOT(env=simple_env, **defaults)
 

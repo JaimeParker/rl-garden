@@ -429,7 +429,7 @@ def test_convert_torchvision_checkpoint_script_outputs_loadable_weights(tmp_path
     assert "stem_conv.weight" in converted
     assert "blocks.0.conv1.weight" in converted
     assert "blocks.1.proj.weight" in converted
-    assert all(not k.startswith("fc.") for k in converted.keys())
+    assert all(not k.startswith("fc.") for k in converted)
 
     # Should load without triggering the zero-backbone-overlap guard.
     ResNetEncoder(space, pretrained_weights="converted")

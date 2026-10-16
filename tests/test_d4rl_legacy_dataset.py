@@ -12,8 +12,8 @@ from rl_garden.buffers.d4rl_legacy_dataset import (
     infer_specs_from_d4rl_legacy,
     load_d4rl_legacy_dataset_to_replay_buffer,
 )
-from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.mc_buffer import MCReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 
 
 class _FakeD4RLEnv:

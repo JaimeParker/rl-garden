@@ -16,7 +16,6 @@ from rl_garden.buffers.robomimic_dataset import (
     flatten_robomimic_obs,
     infer_specs_from_robomimic,
 )
-from rl_garden.envs.robomimic.config import RobomimicEnvConfig
 from rl_garden.envs.robomimic.env import _RobomimicGymV21Adapter
 
 _KEY_DIMS = {

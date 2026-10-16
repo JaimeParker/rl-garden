@@ -47,18 +47,18 @@ def _mock_dict_env(num_envs: int = 2) -> MagicMock:
 
 
 def _off2on_kwargs(**overrides) -> dict[str, object]:
-    kwargs = dict(
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        learning_starts=0,
-        training_freq=1,
-        eval_freq=0,
-        net_arch={"pi": [16], "qf": [16]},
-        n_critics=4,
-        critic_subsample_size=None,
-    )
+    kwargs = {
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "learning_starts": 0,
+        "training_freq": 1,
+        "eval_freq": 0,
+        "net_arch": {"pi": [16], "qf": [16]},
+        "n_critics": 4,
+        "critic_subsample_size": None,
+    }
     kwargs.update(overrides)
     return kwargs
 

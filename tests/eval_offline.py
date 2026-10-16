@@ -15,12 +15,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import torch
 import tyro
 
-from rl_garden.algorithms import CalQL, CQL, OfflineEnvSpec, WSRL
+from rl_garden.algorithms import CQL, WSRL, CalQL, OfflineEnvSpec
 from rl_garden.common import seed_everything
 from rl_garden.common.checkpoint import _canonical_algorithm_class, load_checkpoint_file
 from rl_garden.common.utils import get_device
@@ -39,7 +38,7 @@ class EvalOfflineArgs:
     seed: int = 1
     device: str = "auto"
     buffer_device: str = "cpu"
-    output_dir: Optional[str] = None
+    output_dir: str | None = None
     video_fps: int = 30
     capture_video: bool = True
 

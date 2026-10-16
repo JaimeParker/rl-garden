@@ -153,19 +153,19 @@ class _FakeVisionEnv:
 
 
 def _make_agent(**overrides) -> ACFQL:
-    kwargs = dict(
-        env=_FakeEnv(),
-        horizon_length=HORIZON,
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=300,
-        batch_size=8,
-        learning_starts=9,  # >= horizon_length(3) * num_envs(3)
-        training_freq=3,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-    )
+    kwargs = {
+        "env": _FakeEnv(),
+        "horizon_length": HORIZON,
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 300,
+        "batch_size": 8,
+        "learning_starts": 9,  # >= horizon_length(3) * num_envs(3)
+        "training_freq": 3,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+    }
     kwargs.update(overrides)
     return ACFQL(**kwargs)
 

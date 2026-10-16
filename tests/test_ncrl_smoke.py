@@ -10,7 +10,6 @@ import math
 
 import pytest
 import torch
-
 from _ncrl_online_synthetic import (
     ENV_ACTION_DIM,
     PADDED_ACTION_DIM,
@@ -20,10 +19,10 @@ from _ncrl_online_synthetic import (
 )
 
 from rl_garden.algorithms.ncrl import (
-    NCRL,
     _ACTION_FROM_ACTOR,
     _ACTION_FROM_BC,
     _ACTION_FROM_RANDOM,
+    NCRL,
     dv2_lambda_return,
     load_retrieval_db,
 )

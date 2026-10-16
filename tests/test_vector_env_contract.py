@@ -97,7 +97,7 @@ def test_reset_and_step_return_torch_tensors_on_configured_device():
     assert env.observation_space.shape == (2, 1)
 
     actions = torch.zeros(2, 1)
-    next_obs, rewards, terminated, truncated, infos = env.step(actions)
+    next_obs, rewards, terminated, truncated, _infos = env.step(actions)
     assert isinstance(next_obs, torch.Tensor)
     assert isinstance(rewards, torch.Tensor) and rewards.dtype == torch.float32
     assert isinstance(terminated, torch.Tensor) and terminated.dtype == torch.bool
@@ -124,7 +124,7 @@ def test_partial_termination_final_observation_matches_maniskill_convention():
     env.reset()
     actions = torch.zeros(2, 1)
     env.step(actions)  # step 1
-    obs, rewards, terminated, truncated, infos = env.step(actions)  # step 2
+    obs, _rewards, terminated, _truncated, infos = env.step(actions)  # step 2
 
     assert torch.equal(terminated, torch.tensor([True, False]))
     # SAME_STEP autoreset: env0's returned obs is already the reset observation.
@@ -194,7 +194,7 @@ def test_dict_observation_space_is_translated_and_stacked():
     env.reset()
     actions = torch.zeros(2, 1)
     env.step(actions)  # step 1
-    obs, rewards, terminated, truncated, infos = env.step(actions)  # step 2: both terminate
+    _obs, _rewards, terminated, _truncated, infos = env.step(actions)  # step 2: both terminate
 
     assert torch.equal(terminated, torch.tensor([True, True]))
     final_obs = infos["final_observation"]

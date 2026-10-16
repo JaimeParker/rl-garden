@@ -10,10 +10,10 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import OfflineEnvSpec, UniO4
-from rl_garden.observations import ObservationContractError
 from rl_garden.algorithms.bppo import BPPOCriticMixin
 from rl_garden.algorithms.offline import OfflineRLAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
+from rl_garden.observations import ObservationContractError
 from rl_garden.policies.unio4_mixture_policy import UniO4MixturePolicy
 
 
@@ -83,20 +83,20 @@ class _CompletedEpisodeEvalEnv:
 
 
 def _make_agent(**kwargs) -> UniO4:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=256,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        critic_warmup_steps=3,
-        bc_ensemble_steps=3,
-        num_policies=3,
-        value_hidden_dims=(16,),
-        q_hidden_dims=(16,),
-        actor_hidden_dims=(16,),
-        target_update_freq=1,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 256,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "critic_warmup_steps": 3,
+        "bc_ensemble_steps": 3,
+        "num_policies": 3,
+        "value_hidden_dims": (16,),
+        "q_hidden_dims": (16,),
+        "actor_hidden_dims": (16,),
+        "target_update_freq": 1,
+    }
     defaults.update(kwargs)
     return UniO4(**defaults)
 

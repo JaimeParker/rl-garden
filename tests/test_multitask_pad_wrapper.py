@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import pytest
 import torch
+from test_pwm_smoke import FakeStateVectorEnv
 
 from rl_garden.envs.wrappers.multitask_pad import MultitaskPadWrapper
-from test_pwm_smoke import FakeStateVectorEnv
 
 
 def _wrap(env, **overrides):
-    params = dict(obs_dim=6, action_dim=3, task_idx=2, task_obs_dim=4, task_action_dim=2)
+    params = {"obs_dim": 6, "action_dim": 3, "task_idx": 2, "task_obs_dim": 4, "task_action_dim": 2}
     params.update(overrides)
     return MultitaskPadWrapper(env, **params)
 
@@ -43,7 +43,7 @@ def test_pads_final_observation():
     original_step = env.step
 
     def step_with_final(actions):
-        obs, reward, term, trunc, info = original_step(actions)
+        obs, reward, term, trunc, _info = original_step(actions)
         return obs, reward, term, trunc, {"final_observation": {"state": torch.ones(2, 4)}}
 
     env.step = step_with_final

@@ -3,7 +3,10 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from rl_garden.networks.actor_vector_field import ActorVectorField, flow_onestep_distill_loss
+from rl_garden.networks.actor_vector_field import (
+    ActorVectorField,
+    flow_onestep_distill_loss,
+)
 
 
 def _teacher_student(features_dim=4, action_dim=3, hidden=(16, 16)):

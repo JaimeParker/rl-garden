@@ -6,7 +6,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
-
 from _ncrl_online_synthetic import EMBODIMENTS, make_pretrain_artifacts
 
 from rl_garden.algorithms.ncrl import (

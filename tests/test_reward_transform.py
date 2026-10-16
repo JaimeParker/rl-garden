@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import gymnasium as gym
 import numpy as np
@@ -15,7 +16,7 @@ from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
 class _DummyEnv(gym.Env):
     """Tiny env returning a fixed reward sequence for testing."""
 
-    metadata = {"render_modes": []}
+    metadata: ClassVar[dict[str, list[str]]] = {"render_modes": []}
 
     def __init__(self, rewards):
         self.observation_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
@@ -129,8 +130,8 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
     # Build a tiny H5 with one trajectory and verify the loaded buffer reflects
     # the scaled rewards.
     h5py = pytest.importorskip("h5py")
-    from rl_garden.buffers.mc_buffer import MCReplayBuffer
     from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
+    from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
     path = tmp_path / "tiny.h5"
     obs = np.zeros((4, 3), dtype=np.float32)  # 3 transitions, 4 obs frames
@@ -165,8 +166,8 @@ def test_h5_loader_applies_reward_scale_bias(tmp_path: Path):
 
 def test_h5_loader_sparse_mc_uses_success_key_not_standard_table(tmp_path: Path):
     h5py = pytest.importorskip("h5py")
-    from rl_garden.buffers.mc_buffer import MCReplayBuffer
     from rl_garden.buffers.h5_dataset import load_h5_dataset_to_replay_buffer
+    from rl_garden.buffers.mc_buffer import MCReplayBuffer
 
     path = tmp_path / "sparse.h5"
     obs = np.zeros((4, 3), dtype=np.float32)

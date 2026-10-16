@@ -13,15 +13,15 @@ from gymnasium import spaces
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from _ncrl_synthetic import write_benchmark  # noqa: E402
-from convert_ncrl_dataset import convert_dataset  # noqa: E402
+from _ncrl_synthetic import write_benchmark
+from convert_ncrl_dataset import convert_dataset
 
-from rl_garden.buffers.sequence_dataset import (  # noqa: E402
+from rl_garden.buffers.sequence_dataset import (
     MmapSequenceDataset,
     infer_sequence_dataset_spec,
     load_sequence_dataset,
 )
-from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer  # noqa: E402
+from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 
 EMBODIMENTS = {"cheetah": (6, (9, 12, 10)), "quadruped": (12, (11, 8, 10))}
 HORIZON = 4

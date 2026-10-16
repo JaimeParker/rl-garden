@@ -5,8 +5,8 @@ adaptive-LR branch, for both plain PPO and RecurrentPPO.
 from __future__ import annotations
 
 import numpy as np
-import torch
 import pytest
+import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
@@ -44,11 +44,11 @@ class _FakeBoxEnv:
 
 
 def _ppo_kwargs(**overrides) -> dict:
-    kwargs = dict(
-        num_steps=8, num_minibatches=2, update_epochs=2, device="cpu",
-        lr_schedule="adaptive_kl", eval_freq=0, log_freq=0,
-        net_arch=[16], target_kl=None,
-    )
+    kwargs = {
+        "num_steps": 8, "num_minibatches": 2, "update_epochs": 2, "device": "cpu",
+        "lr_schedule": "adaptive_kl", "eval_freq": 0, "log_freq": 0,
+        "net_arch": [16], "target_kl": None,
+    }
     kwargs.update(overrides)
     return kwargs
 
@@ -221,7 +221,10 @@ def test_adaptive_kl_reaches_buffer_through_cli_args_entrypoint():
     calls PPO(...)/RecurrentPPO(...) directly, bypassing the CLI args layer
     entirely, so this is the only test exercising the actual entrypoint."""
     from rl_garden.training.online.ppo import PPOArgs, build_ppo
-    from rl_garden.training.online.recurrent_ppo import RecurrentPPOArgs, build_recurrent_ppo
+    from rl_garden.training.online.recurrent_ppo import (
+        RecurrentPPOArgs,
+        build_recurrent_ppo,
+    )
 
     env = _FakeBoxEnv()
     args = PPOArgs(

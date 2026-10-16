@@ -24,21 +24,21 @@ class DummyDictVecEnv:
 
 
 def _make_agent(**overrides) -> TD3:
-    kwargs = dict(
-        env=DummyDictVecEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=16,
-        batch_size=2,
-        learning_starts=0,
-        training_freq=1,
-        eval_freq=0,
-        hidden_dim=16,
-        feature_dim=8,
-        encoder_config=EncoderConfig(
+    kwargs = {
+        "env": DummyDictVecEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 16,
+        "batch_size": 2,
+        "learning_starts": 0,
+        "training_freq": 1,
+        "eval_freq": 0,
+        "hidden_dim": 16,
+        "feature_dim": 8,
+        "encoder_config": EncoderConfig(
             backbone="drqv2_conv", proprio_latent_dim=4, image_augmentation="none"
         ),
-    )
+    }
     kwargs.update(overrides)
     return TD3(**kwargs)
 

@@ -82,22 +82,22 @@ class DummyDictVecEnv(DummyVecEnv):
         return self._obs(), reward, terminated, truncated_t, {}
 
 
-_TINY_KWARGS = dict(
-    device="cpu",
-    buffer_device="cpu",
-    buffer_size=200,
-    batch_size=4,
-    horizon=2,
-    num_samples=8,
-    num_elites=4,
-    num_pi_trajs=2,
-    iterations=1,
-    latent_dim=8,
-    mlp_dim=8,
-    num_q=2,
-    num_bins=11,
-    eval_freq=0,
-)
+_TINY_KWARGS = {
+    "device": "cpu",
+    "buffer_device": "cpu",
+    "buffer_size": 200,
+    "batch_size": 4,
+    "horizon": 2,
+    "num_samples": 8,
+    "num_elites": 4,
+    "num_pi_trajs": 2,
+    "iterations": 1,
+    "latent_dim": 8,
+    "mlp_dim": 8,
+    "num_q": 2,
+    "num_bins": 11,
+    "eval_freq": 0,
+}
 
 
 def _agent(env=None, **kwargs) -> TDMPC2:

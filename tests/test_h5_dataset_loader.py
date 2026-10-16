@@ -11,7 +11,10 @@ from rl_garden.buffers import (
     load_h5_dataset_to_replay_buffer,
 )
 from rl_garden.buffers.h5_dataset import infer_specs_from_h5
-from rl_garden.observations.schema import ObservationContractError, validate_observation_space
+from rl_garden.observations.schema import (
+    ObservationContractError,
+    validate_observation_space,
+)
 
 
 def test_load_state_h5_to_dict_replay_buffer(tmp_path):

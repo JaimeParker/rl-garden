@@ -9,10 +9,9 @@ build_observation_encoder's dispatch.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
-
-import pytest
 
 from rl_garden.encoders import (
     CombinedExtractor,

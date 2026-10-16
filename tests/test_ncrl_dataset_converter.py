@@ -12,8 +12,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from _ncrl_synthetic import obs_value, write_benchmark, write_episode  # noqa: E402
-from convert_ncrl_dataset import convert_dataset  # noqa: E402
+from _ncrl_synthetic import obs_value, write_benchmark, write_episode
+from convert_ncrl_dataset import convert_dataset
 
 EMBODIMENTS = {"cheetah": (6, (4, 6, 5)), "quadruped": (12, (5, 3, 7))}
 

@@ -10,7 +10,6 @@ import types
 
 import numpy as np
 import torch
-from gymnasium import spaces
 
 from rl_garden.envs.backend_registry import EnvRequest
 from rl_garden.envs.backends.rlbench import RLBenchBackend

@@ -15,7 +15,7 @@ from rl_garden.world_models.rssm import RSSM, RSSMSize, kl_loss
 
 
 def _tiny_size(**overrides) -> RSSMSize:
-    base = dict(deter=32, hidden=16, discrete=4, units=16, cnn_depth=4)
+    base = {"deter": 32, "hidden": 16, "discrete": 4, "units": 16, "cnn_depth": 4}
     base.update(overrides)
     return RSSMSize(**base)
 

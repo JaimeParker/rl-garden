@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import torch
 
+from rl_garden.common.env_args import DMControlConfig
 from rl_garden.envs.backend_registry import EnvRequest
 from rl_garden.envs.backends.dm_control import DMControlBackend
 from rl_garden.envs.dm_control.env import (
@@ -23,24 +24,27 @@ from rl_garden.envs.dm_control.env import (
     hard_reward_threshold,
     hard_task_reward,
 )
-from rl_garden.envs.dm_control.tasks import NCRL_CUSTOM_DMC_TASKS, NCRL_DMC_TASKS, parse_task_id
-from rl_garden.common.env_args import DMControlConfig
+from rl_garden.envs.dm_control.tasks import (
+    NCRL_CUSTOM_DMC_TASKS,
+    NCRL_DMC_TASKS,
+    parse_task_id,
+)
 from rl_garden.observations.config import ObservationConfig
 from rl_garden.observations.schema import ObservationContractError
 
 
 def _make_req(**overrides):
-    defaults = dict(
-        env_id="walker-walk",
-        num_envs=2,
-        control_mode="n/a",
-        render_mode="rgb_array",
-        seed=1,
-        observation=ObservationConfig(),
-        num_eval_envs=1,
-        create_eval_env=False,
-        backend_config=DMControlConfig(),
-    )
+    defaults = {
+        "env_id": "walker-walk",
+        "num_envs": 2,
+        "control_mode": "n/a",
+        "render_mode": "rgb_array",
+        "seed": 1,
+        "observation": ObservationConfig(),
+        "num_eval_envs": 1,
+        "create_eval_env": False,
+        "backend_config": DMControlConfig(),
+    }
     defaults.update(overrides)
     return EnvRequest(**defaults)
 

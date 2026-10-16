@@ -43,18 +43,18 @@ def _dict_image_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> BPPO:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=256,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        critic_warmup_steps=3,
-        value_hidden_dims=(16,),
-        q_hidden_dims=(16,),
-        actor_hidden_dims=(16,),
-        target_update_freq=1,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 256,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "critic_warmup_steps": 3,
+        "value_hidden_dims": (16,),
+        "q_hidden_dims": (16,),
+        "actor_hidden_dims": (16,),
+        "target_update_freq": 1,
+    }
     defaults.update(kwargs)
     return BPPO(**defaults)
 

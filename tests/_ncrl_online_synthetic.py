@@ -14,12 +14,12 @@ from gymnasium import spaces
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from _ncrl_synthetic import write_benchmark  # noqa: E402
-from build_ncrl_retrieval_db import build_retrieval_db  # noqa: E402
-from convert_ncrl_dataset import convert_dataset  # noqa: E402
+from _ncrl_synthetic import write_benchmark
+from build_ncrl_retrieval_db import build_retrieval_db
+from convert_ncrl_dataset import convert_dataset
 
-from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec  # noqa: E402
-from rl_garden.world_models.rssm import RSSMSize  # noqa: E402
+from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec
+from rl_garden.world_models.rssm import RSSMSize
 
 EMBODIMENTS = {"walker": (6, (14, 16, 12, 15)), "quadruped": (12, (15, 13))}
 IMAGE_SIZE = 64
@@ -112,28 +112,28 @@ class PixelVecEnv:
 
 
 def tiny_ncrl_kwargs(artifacts: dict[str, Path], **overrides) -> dict:
-    kwargs = dict(
-        pretrained_world_model=str(artifacts["checkpoint"]),
-        retrieval_db=str(artifacts["retrieval_db"]),
-        num_retrieve_episodes=3,
-        bc_train_steps=20,
-        bc_batch_size=8,
-        episode_frames=10,
-        action_repeat=1,
-        warmup_frames=20,  # -> warmup_steps = max(20, 5 * 10) = 50
-        learning_starts=60,
-        batch_size=4,
-        batch_length=6,
-        train_ratio=24.0,  # utd = 1
-        imag_horizon=3,
-        ac_units=32,
-        buffer_size=400,
-        buffer_device="cpu",
-        device="cpu",
-        compute_dtype="float32",
-        eval_freq=0,
-        log_freq=0,
-        std_log=False,
-    )
+    kwargs = {
+        "pretrained_world_model": str(artifacts["checkpoint"]),
+        "retrieval_db": str(artifacts["retrieval_db"]),
+        "num_retrieve_episodes": 3,
+        "bc_train_steps": 20,
+        "bc_batch_size": 8,
+        "episode_frames": 10,
+        "action_repeat": 1,
+        "warmup_frames": 20,  # -> warmup_steps = max(20, 5 * 10) = 50
+        "learning_starts": 60,
+        "batch_size": 4,
+        "batch_length": 6,
+        "train_ratio": 24.0,  # utd = 1
+        "imag_horizon": 3,
+        "ac_units": 32,
+        "buffer_size": 400,
+        "buffer_device": "cpu",
+        "device": "cpu",
+        "compute_dtype": "float32",
+        "eval_freq": 0,
+        "log_freq": 0,
+        "std_log": False,
+    }
     kwargs.update(overrides)
     return kwargs

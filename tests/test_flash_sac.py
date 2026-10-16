@@ -1,12 +1,11 @@
 """Unit tests for FlashSAC components (CPU, no ManiSkill dependency)."""
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 import torch
-import torch.nn as nn
 from gymnasium import spaces
-from unittest.mock import MagicMock, patch
+from torch import nn
 
 from rl_garden.algorithms.flash_sac import (
     FlashSAC,
@@ -16,10 +15,8 @@ from rl_garden.algorithms.flash_sac import (
     _select_min_q_log_probs,
 )
 from rl_garden.common.distributions import safe_tanh_log_det_jacobian
-from rl_garden.networks.flash_sac_layers import UnitLinear
 from rl_garden.observations import ObservationContractError
 from rl_garden.policies.flash_sac_policy import FlashSACPolicy
-
 
 OBS_DIM = 20
 ACT_DIM = 7
@@ -289,7 +286,6 @@ def test_temperature_gradient_direction():
     H > H_target → gradient positive → alpha decreases (policy too entropic).
     H < H_target → gradient negative → alpha increases (policy too deterministic).
     """
-    import torch.nn as nn
 
     target_entropy = -float(ACT_DIM)
 

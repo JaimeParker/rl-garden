@@ -5,11 +5,12 @@ specific to AWAC: no actor target at all (critic backup samples next_action
 from the current actor), Box-obs-only enforcement, and no online-regularizer
 override (matching IQL, unlike Cal-QL).
 """
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
-from unittest.mock import MagicMock
 
 from rl_garden.algorithms.off2on_awac import Off2OnAWAC
 from rl_garden.observations import ObservationContractError

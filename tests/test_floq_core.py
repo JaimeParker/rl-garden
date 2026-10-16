@@ -59,18 +59,18 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> FloQ:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=16,
-        device="cpu",
-        net_arch=[16, 16],
-        flow_steps=4,
-        noise_samples=3,
-        critic_flow_steps=3,
-        num_bins=11,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 16,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "flow_steps": 4,
+        "noise_samples": 3,
+        "critic_flow_steps": 3,
+        "num_bins": 11,
+    }
     defaults.update(kwargs)
     return FloQ(**defaults)
 
@@ -272,7 +272,7 @@ def test_ebr_shapes_with_small_ensembles():
     # Every floq() forward call operates on the noise-repeated batch B*R
     # (target unroll, current-returns unroll, flow-matching loss) -- none
     # of them run on the raw, un-repeated B.
-    assert set(shape[1] for shape in seen_shapes) == {4 * 3}
+    assert {shape[1] for shape in seen_shapes} == {4 * 3}
 
 
 def test_next_action_sampled_per_noise_repeat_not_broadcast():

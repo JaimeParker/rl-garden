@@ -8,7 +8,7 @@ algorithms see zero behavior change from Part 0's infrastructure.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from rl_garden.common.obs_normalization import ObsNormalizingMixin
 
@@ -58,9 +58,10 @@ def test_round_trips_through_state_dict():
 def test_run_offline_hook_is_noop_for_algorithms_without_normalizer():
     """IQL/BC/CQL/CalQL have no ``fit_obs_normalizer`` method, so the
     ``hasattr``-gated hook added to ``run_offline`` never fires for them."""
-    from rl_garden.algorithms import BC, OfflineEnvSpec
-    from gymnasium import spaces
     import numpy as np
+    from gymnasium import spaces
+
+    from rl_garden.algorithms import BC, OfflineEnvSpec
 
     env = OfflineEnvSpec(
         spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32),

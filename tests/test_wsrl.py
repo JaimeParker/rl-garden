@@ -1,9 +1,10 @@
 """Unit tests for WSRL algorithm with CQL/Cal-QL support."""
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
-from unittest.mock import MagicMock
 
 from rl_garden.algorithms.wsrl import WSRL
 from rl_garden.common.logger import Logger
@@ -470,7 +471,7 @@ class TestCQLLossComputation:
             mc_returns=torch.ones(8) * 5.0,
         )
         q_pred = wsrl_agent._critic_forward(data.obs, data.actions, target=False)
-        loss, info = wsrl_agent._cql_loss(data, q_pred)
+        loss, _info = wsrl_agent._cql_loss(data, q_pred)
         # Loss should be a finite scalar.
         assert torch.isfinite(loss)
         # n_critics=4, critic_subsample_size=2 (from fixture)
@@ -500,7 +501,7 @@ class TestCQLLossComputation:
         )
 
         q_pred = agent._critic_forward(data.obs, data.actions, target=False)
-        cql_loss, info = agent._cql_loss(data, q_pred)
+        _cql_loss, info = agent._cql_loss(data, q_pred)
 
         assert "calql_bound_rate" not in info  # Cal-QL disabled
 
@@ -933,6 +934,7 @@ class TestLossHookComposition:
         assert bound_rate == 0.0
 
 
+@pytest.mark.slow
 class TestCompilePath:
     """torch.compile wrapping of the hot loss methods.
 

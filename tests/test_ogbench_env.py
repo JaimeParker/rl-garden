@@ -354,16 +354,16 @@ def test_backend_resolve_config_parses_env_kwargs_json_and_vectorization():
 
 
 def _base_req(**overrides):
-    defaults = dict(
-        env_id="cube-single-singletask-v0",
-        num_envs=4,
-        control_mode="",
-        render_mode="rgb_array",
-        seed=1,
-        observation=ObservationConfig(),
-        num_eval_envs=2,
-        backend_config=None,
-    )
+    defaults = {
+        "env_id": "cube-single-singletask-v0",
+        "num_envs": 4,
+        "control_mode": "",
+        "render_mode": "rgb_array",
+        "seed": 1,
+        "observation": ObservationConfig(),
+        "num_eval_envs": 2,
+        "backend_config": None,
+    }
     defaults.update(overrides)
     return EnvRequest(**defaults)
 

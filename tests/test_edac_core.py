@@ -18,15 +18,15 @@ def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> EDAC:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        net_arch=[16, 16],
-        n_critics=4,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "n_critics": 4,
+    }
     defaults.update(kwargs)
     return EDAC(**defaults)
 
@@ -105,7 +105,6 @@ def test_diversity_loss_is_lower_for_a_diverse_ensemble_than_a_collapsed_one():
     # critic, so every g_i is identical -> maximal pairwise cosine similarity.
     import copy
 
-    from rl_garden.networks.actor_critic import EnsembleQCritic
 
     collapsed_agent = _make_agent(n_critics=4)
     collapsed_agent.replay_buffer = agent.replay_buffer

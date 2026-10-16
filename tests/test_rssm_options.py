@@ -13,7 +13,12 @@ from rl_garden.encoders.dreamer_conv import DreamerConvEncoder
 from rl_garden.observations import ObservationSchema
 from rl_garden.policies.action_mask import action_mask, masked_bounded_normal
 from rl_garden.world_models.batch import SequenceBatch
-from rl_garden.world_models.rssm import RSSM, RSSMSize, _categorical_kl, kl_loss_mean_free
+from rl_garden.world_models.rssm import (
+    RSSM,
+    RSSMSize,
+    _categorical_kl,
+    kl_loss_mean_free,
+)
 
 _SIZE = RSSMSize(deter=32, hidden=16, discrete=4, units=16, cnn_depth=4)
 T, B, A = 5, 3, 3
@@ -38,17 +43,17 @@ def _rssm(seed: int = 0, **kwargs) -> RSSM:
 
 def _batch(**overrides) -> SequenceBatch:
     g = torch.Generator().manual_seed(1)
-    fields = dict(
-        obs={
+    fields = {
+        "obs": {
             "state": torch.randn(T + 1, B, 6, generator=g),
             "rgb_cam": torch.randint(0, 256, (T + 1, B, 16, 16, 3), generator=g, dtype=torch.uint8),
         },
-        action=torch.randn(T, B, A, generator=g),
-        reward=torch.randn(T, B, generator=g),
-        is_first=torch.zeros(T, B, dtype=torch.bool),
-        terminated=torch.zeros(T, B, dtype=torch.bool),
-        carry={"deter": torch.randn(B, 32, generator=g), "stoch": torch.rand(B, 16, generator=g)},
-    )
+        "action": torch.randn(T, B, A, generator=g),
+        "reward": torch.randn(T, B, generator=g),
+        "is_first": torch.zeros(T, B, dtype=torch.bool),
+        "terminated": torch.zeros(T, B, dtype=torch.bool),
+        "carry": {"deter": torch.randn(B, 32, generator=g), "stoch": torch.rand(B, 16, generator=g)},
+    }
     fields.update(overrides)
     return SequenceBatch(**fields)
 

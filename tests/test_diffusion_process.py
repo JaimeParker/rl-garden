@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
-from rl_garden.policies._diffusion_process import DiffusionProcess, _cosine_beta_schedule
+from rl_garden.policies._diffusion_process import (
+    DiffusionProcess,
+    _cosine_beta_schedule,
+)
 
 
 class _Harness(DiffusionProcess, nn.Module):

@@ -31,16 +31,16 @@ def _make_agent(path, **overrides) -> HILP:
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=1,
     )
-    kwargs = dict(
-        env=env,
-        dataset_path=str(path),
-        device="cpu",
-        batch_size=32,
-        skill_dim=4,
-        value_hidden_dims=(16, 16),
-        actor_hidden_dims=(16, 16),
-        std_log=False,
-    )
+    kwargs = {
+        "env": env,
+        "dataset_path": str(path),
+        "device": "cpu",
+        "batch_size": 32,
+        "skill_dim": 4,
+        "value_hidden_dims": (16, 16),
+        "actor_hidden_dims": (16, 16),
+        "std_log": False,
+    }
     kwargs.update(overrides)
     return HILP(**kwargs)
 
@@ -67,7 +67,7 @@ def test_value_loss_is_double_expectile_iql(tmp_path):
         w2 = torch.where(adv > 0, agent.expectile, 1.0 - agent.expectile)
         expected = (w1 * (q1 - v1).pow(2)).mean() + (w2 * (q2 - v2).pow(2)).mean()
 
-    loss, metrics = agent._compute_value_loss(batch)
+    _loss, metrics = agent._compute_value_loss(batch)
     assert torch.isclose(torch.tensor(metrics["value_loss"]), expected, atol=1e-5)
 
 
@@ -105,7 +105,6 @@ def test_skill_critic_has_no_mask_term(tmp_path):
         next_phis = agent.policy.value.phi(batch.next_obs)
         skills = agent._sample_skills(batch.obs.shape[0])
         skill_rewards = ((next_phis - phis) * skills).sum(dim=-1)
-        obs_skill = torch.cat([batch.obs, skills], dim=-1)
         next_obs_skill = torch.cat([batch.next_obs, skills], dim=-1)
         next_v = agent.policy.skill_value(next_obs_skill).squeeze(-1)
         expected_target = skill_rewards + agent.skill_discount * next_v

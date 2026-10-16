@@ -85,15 +85,15 @@ def _fill_vision_extra_state(agent: FQL, steps: int = 64) -> None:
 
 
 def _make_agent(**kwargs) -> FQL:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        net_arch=[16, 16],
-        flow_steps=4,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "flow_steps": 4,
+    }
     defaults.update(kwargs)
     return FQL(**defaults)
 

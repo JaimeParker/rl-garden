@@ -4,9 +4,9 @@ Mirrors the fixture style of test_wsrl.py, but targets Off2OnCalQL and
 focuses on what actually differs from WSRL's defaults: no warmup, mixed
 replay retained by default, adaptive mixing ratio, CQL retained online.
 """
-import numpy as np
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
@@ -92,29 +92,29 @@ class TestOff2OnCalQLDefaults:
 
 
 def _sarsa_agent(simple_env, **overrides):
-    kwargs = dict(
-        env=simple_env,
-        buffer_size=100,
-        buffer_device="cpu",
-        learning_starts=10,
-        batch_size=8,
-        gamma=0.99,
-        tau=0.005,
-        training_freq=4,
-        utd=1.0,
-        net_arch={"pi": [32, 32], "qf": [32, 32]},
-        n_critics=4,
-        critic_subsample_size=2,
-        use_cql_loss=True,
-        cql_n_actions=4,
-        cql_alpha=1.0,
-        cql_autotune_alpha=False,
-        use_calql=True,
-        calql_bound_random_actions=False,
-        sarsa_hidden_dims=(16,),
-        device="cpu",
-        seed=42,
-    )
+    kwargs = {
+        "env": simple_env,
+        "buffer_size": 100,
+        "buffer_device": "cpu",
+        "learning_starts": 10,
+        "batch_size": 8,
+        "gamma": 0.99,
+        "tau": 0.005,
+        "training_freq": 4,
+        "utd": 1.0,
+        "net_arch": {"pi": [32, 32], "qf": [32, 32]},
+        "n_critics": 4,
+        "critic_subsample_size": 2,
+        "use_cql_loss": True,
+        "cql_n_actions": 4,
+        "cql_alpha": 1.0,
+        "cql_autotune_alpha": False,
+        "use_calql": True,
+        "calql_bound_random_actions": False,
+        "sarsa_hidden_dims": (16,),
+        "device": "cpu",
+        "seed": 42,
+    }
     kwargs.update(overrides)
     return Off2OnCalQL(**kwargs)
 
@@ -389,25 +389,25 @@ class TestOff2OnCalQLEvalDispatch:
     `None` (default) keeps OffPolicyAlgorithm's step-capped default."""
 
     def _agent(self, simple_env, **overrides):
-        kwargs = dict(
-            env=simple_env,
-            buffer_size=100,
-            buffer_device="cpu",
-            learning_starts=10,
-            batch_size=8,
-            gamma=0.99,
-            tau=0.005,
-            training_freq=4,
-            utd=1.0,
-            net_arch={"pi": [8], "qf": [8]},
-            n_critics=2,
-            critic_subsample_size=2,
-            use_cql_loss=False,
-            use_calql=False,
-            device="cpu",
-            seed=0,
-            num_eval_steps=50,
-        )
+        kwargs = {
+            "env": simple_env,
+            "buffer_size": 100,
+            "buffer_device": "cpu",
+            "learning_starts": 10,
+            "batch_size": 8,
+            "gamma": 0.99,
+            "tau": 0.005,
+            "training_freq": 4,
+            "utd": 1.0,
+            "net_arch": {"pi": [8], "qf": [8]},
+            "n_critics": 2,
+            "critic_subsample_size": 2,
+            "use_cql_loss": False,
+            "use_calql": False,
+            "device": "cpu",
+            "seed": 0,
+            "num_eval_steps": 50,
+        }
         kwargs.update(overrides)
         return Off2OnCalQL(**kwargs)
 

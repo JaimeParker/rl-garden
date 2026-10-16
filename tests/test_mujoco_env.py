@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from rl_garden.envs.backend_registry import EnvRequest, discover_env_backends, _REGISTRY
+from rl_garden.envs.backend_registry import _REGISTRY, EnvRequest, discover_env_backends
 from rl_garden.envs.backends.mujoco import MujocoBackend
 from rl_garden.envs.mujoco import make_mujoco_env
 from rl_garden.envs.mujoco.config import MujocoEnvConfig
@@ -22,16 +22,16 @@ def test_backend_registers_with_api_version_2():
 
 
 def _make_req(**overrides):
-    defaults = dict(
-        env_id="InvertedPendulum-v4",
-        num_envs=2,
-        control_mode="n/a",
-        render_mode="rgb_array",
-        seed=0,
-        observation=ObservationConfig(),
-        num_eval_envs=2,
-        backend_config=None,
-    )
+    defaults = {
+        "env_id": "InvertedPendulum-v4",
+        "num_envs": 2,
+        "control_mode": "n/a",
+        "render_mode": "rgb_array",
+        "seed": 0,
+        "observation": ObservationConfig(),
+        "num_eval_envs": 2,
+        "backend_config": None,
+    }
     defaults.update(overrides)
     return EnvRequest(**defaults)
 
@@ -85,7 +85,7 @@ def test_gymnasium_benchmark_task_observation_is_dict_with_state_key():
         assert obs["state"].shape[0] == 2
 
         actions = torch.as_tensor(env.action_space.sample())
-        next_obs, rewards, terminations, truncations, infos = env.step(actions)
+        next_obs, rewards, _terminations, _truncations, _infos = env.step(actions)
         assert set(next_obs) == {"state"}
         assert isinstance(rewards, torch.Tensor) and rewards.dtype == torch.float32
     finally:

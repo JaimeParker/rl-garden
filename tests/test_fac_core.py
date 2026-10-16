@@ -57,17 +57,17 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> FAC:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=8,
-        device="cpu",
-        net_arch=[16, 16],
-        flow_steps=2,
-        bc_pretrain_steps=3,
-        bc_batch_size=8,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 8,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "flow_steps": 2,
+        "bc_pretrain_steps": 3,
+        "bc_batch_size": 8,
+    }
     defaults.update(kwargs)
     return FAC(**defaults)
 

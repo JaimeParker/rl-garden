@@ -9,6 +9,7 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.algorithms.gail import GAIL
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.envs.wrappers.gail_reward import GAILRewardWrapper
 from rl_garden.networks.discriminator import GAILDiscriminator
@@ -110,7 +111,7 @@ def test_gail_reward_wrapper_substitutes_reward():
     wrapped = GAILRewardWrapper(env, reward_fn=reward_fn)
     obs0, _ = wrapped.reset()
     action = torch.zeros(env.num_envs, 2)
-    obs1, reward, terminated, truncated, info = wrapped.step(action)
+    _obs1, reward, _terminated, _truncated, _info = wrapped.step(action)
 
     assert torch.equal(reward, torch.full((env.num_envs,), 42.0))
     # reward_fn must have been called with the PRE-step obs, not obs1.
@@ -372,8 +373,7 @@ def test_gail_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not(monke
     concern is the encoder-sharing/gradient-isolation wiring downstream of
     an already-built demo buffer, not the demo-loading contract."""
 
-    def _fake_build_demo_buffer(self) -> "ReplayBuffer":
-        from rl_garden.buffers.replay_buffer import ReplayBuffer
+    def _fake_build_demo_buffer(self) -> ReplayBuffer:
 
         buffer = ReplayBuffer(
             observation_space=self.env.single_observation_space,

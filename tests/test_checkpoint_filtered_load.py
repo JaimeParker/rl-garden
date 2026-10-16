@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 import torch
-import torch.nn as nn
+from torch import nn
 
 from rl_garden.common.checkpoint import load_filtered_state_dict
 

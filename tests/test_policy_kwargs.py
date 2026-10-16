@@ -9,7 +9,11 @@ from rl_garden.algorithms import SAC, WSRL, OfflineEnvSpec
 from rl_garden.algorithms.bc import BC
 from rl_garden.buffers import ReplayBuffer
 from rl_garden.buffers.mc_buffer import MCReplayBuffer
-from rl_garden.encoders import BaseFeaturesExtractor, CombinedExtractor, FlattenExtractor
+from rl_garden.encoders import (
+    BaseFeaturesExtractor,
+    CombinedExtractor,
+    FlattenExtractor,
+)
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationContractError, ObsGroups
 

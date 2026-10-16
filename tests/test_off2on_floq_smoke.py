@@ -79,21 +79,21 @@ class _FakeEnv:
 
 
 def _make_agent(**overrides) -> Off2OnFloQ:
-    kwargs = dict(
-        env=_FakeEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=300,
-        batch_size=8,
-        learning_starts=9,
-        training_freq=3,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-        noise_samples=2,
-        critic_flow_steps=2,
-        num_bins=9,
-    )
+    kwargs = {
+        "env": _FakeEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 300,
+        "batch_size": 8,
+        "learning_starts": 9,
+        "training_freq": 3,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+        "noise_samples": 2,
+        "critic_flow_steps": 2,
+        "num_bins": 9,
+    }
     kwargs.update(overrides)
     return Off2OnFloQ(**kwargs)
 

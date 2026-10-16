@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
-import numpy as np
-from pathlib import Path
 import sys
+from pathlib import Path
+
+import numpy as np
 import torch
 
 

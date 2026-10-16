@@ -6,7 +6,7 @@ from __future__ import annotations
 
 
 def test_models_reward_package_imports_cleanly():
-    import rl_garden.models.reward as reward
+    from rl_garden.models import reward
 
     assert reward.SuccessClassifier is not None
 

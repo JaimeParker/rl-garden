@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import types
+from typing import ClassVar
 
 import gymnasium as gym
 import numpy as np
@@ -247,7 +248,7 @@ class _FakeStateEnvForVision(gym.Env):
 
 
 class _FakeRenderer:
-    instances: list["_FakeRenderer"] = []
+    instances: ClassVar[list[_FakeRenderer]] = []
 
     def __init__(self, model, data, *, width, height, camera_name):
         self.model = model

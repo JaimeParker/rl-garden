@@ -30,7 +30,7 @@ def test_plain_callable_satisfies_protocol_structurally():
 
 
 def test_lambda_also_satisfies_protocol():
-    expert = lambda obs: torch.zeros(obs.shape[0], 2)  # noqa: E731
+    expert = lambda obs: torch.zeros(obs.shape[0], 2)
     obs = torch.randn(4, 6)
     action = _accepts_expert(expert, obs)
     assert action.shape == (4, 2)

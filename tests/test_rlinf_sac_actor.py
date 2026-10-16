@@ -18,8 +18,8 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import RLPD, SAC
-from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
 from rl_garden.algorithms.sac_core import SACCore
+from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
 from rl_garden.integrations.rlinf.sac_actor import (
     _ALGORITHMS,
     _TrajectoryReplayBufferShim,
@@ -133,18 +133,18 @@ class _DummyVecEnv:
 
 
 def _rlpd_agent(**overrides) -> RLPD:
-    kwargs = dict(
-        env=_DummyVecEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        learning_starts=1,
-        training_freq=4,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-    )
+    kwargs = {
+        "env": _DummyVecEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "learning_starts": 1,
+        "training_freq": 4,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+    }
     kwargs.update(overrides)
     return RLPD(**kwargs)
 

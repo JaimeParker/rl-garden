@@ -40,19 +40,19 @@ class DummyVecEnv:
 
 
 def _agent(**kwargs) -> RLPD:
-    params = dict(
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=32,
-        batch_size=8,
-        learning_starts=100,
-        training_freq=2,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-        n_critics=2,
-        critic_subsample_size=None,
-    )
+    params = {
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 32,
+        "batch_size": 8,
+        "learning_starts": 100,
+        "training_freq": 2,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+        "n_critics": 2,
+        "critic_subsample_size": None,
+    }
     params.update(kwargs)
     return RLPD(env=DummyVecEnv(), **params)
 

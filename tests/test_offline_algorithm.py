@@ -6,8 +6,8 @@ import h5py
 import numpy as np
 import pytest
 import torch
-import torch.nn as nn
 from gymnasium import spaces
+from torch import nn
 
 from rl_garden.algorithms import (
     OfflineEnvSpec,
@@ -306,7 +306,7 @@ def test_run_offline_pretraining_can_skip_final_checkpoint(tmp_path):
 
 
 def test_offline_registry_builders_create_wsrl_and_iql():
-    from rl_garden.algorithms import IQL, OfflineEnvSpec, WSRL
+    from rl_garden.algorithms import IQL, WSRL, OfflineEnvSpec
     from rl_garden.training.offline.iql import IQLArgs, build_iql
     from rl_garden.training.offline.wsrl import WSRLOfflineArgs, build_wsrl
 
@@ -314,19 +314,19 @@ def test_offline_registry_builders_create_wsrl_and_iql():
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
     env_spec = OfflineEnvSpec(obs_space, action_space, num_envs=1)
 
-    base_kwargs = dict(
-        offline_dataset="/tmp/unused.h5",
-        num_offline_steps=1,
-        buffer_size=64,
-        buffer_device="cpu",
-        batch_size=4,
-        n_critics=4,
-        critic_subsample_size=2,
-        cql_n_actions=4,
-        cql_alpha=1.0,
-        log_type="none",
-        use_compile=False,
-    )
+    base_kwargs = {
+        "offline_dataset": "/tmp/unused.h5",
+        "num_offline_steps": 1,
+        "buffer_size": 64,
+        "buffer_device": "cpu",
+        "batch_size": 4,
+        "n_critics": 4,
+        "critic_subsample_size": 2,
+        "cql_n_actions": 4,
+        "cql_alpha": 1.0,
+        "log_type": "none",
+        "use_compile": False,
+    }
 
     class _NoopLogger:
         def add_scalar(self, *a, **k):

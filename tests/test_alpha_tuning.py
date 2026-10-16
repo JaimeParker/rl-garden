@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import warnings
 
-import pytest
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import SAC
-from rl_garden.common.alpha_tuning import AlphaTuner, parse_auto_alpha_init, softplus_inverse
+from rl_garden.common.alpha_tuning import (
+    AlphaTuner,
+    parse_auto_alpha_init,
+    softplus_inverse,
+)
 from rl_garden.common.checkpoint import load_checkpoint_file, save_checkpoint_file
 
 

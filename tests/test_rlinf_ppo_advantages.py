@@ -93,7 +93,7 @@ def test_compute_advantages_from_rollout_batch_zero_termination_case_matches_no_
     def value_head_forward(states: torch.Tensor) -> torch.Tensor:
         return torch.zeros(states.shape[0], 1)
 
-    advantages, returns = compute_advantages_from_rollout_batch(
+    _advantages, returns = compute_advantages_from_rollout_batch(
         rollout_batch, value_head_forward, gamma, gae_lambda
     )
 

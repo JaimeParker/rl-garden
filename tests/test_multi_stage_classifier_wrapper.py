@@ -83,7 +83,7 @@ def test_reset_clears_received_state():
     wrapped.reset()
     wrapped.step(torch.zeros(1, 7))  # fires the only stage
 
-    obs, info = wrapped.reset()
+    _obs, info = wrapped.reset()
     assert not bool(info["succeed"][0])
     _, reward, terminated, _, _ = wrapped.step(torch.zeros(1, 7))
     assert reward.item() == 1.0  # fires again after reset

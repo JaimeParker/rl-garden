@@ -23,7 +23,11 @@ from rl_garden.algorithms._observation import (
 from rl_garden.encoders.combined import CombinedExtractor
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.flatten import FlattenExtractor
-from rl_garden.observations import ObservationContractError, ObsGroups, resolve_encoder_sharing
+from rl_garden.observations import (
+    ObservationContractError,
+    ObsGroups,
+    resolve_encoder_sharing,
+)
 from rl_garden.policies.base import BasePolicy
 
 

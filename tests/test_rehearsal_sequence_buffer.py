@@ -9,7 +9,10 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.rehearsal_sequence_buffer import RehearsalSequenceBuffer, SequenceEpisode
+from rl_garden.buffers.rehearsal_sequence_buffer import (
+    RehearsalSequenceBuffer,
+    SequenceEpisode,
+)
 from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 
 HORIZON = 4

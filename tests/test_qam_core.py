@@ -40,15 +40,15 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> QAM:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        net_arch=[16, 16],
-        flow_steps=4,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "flow_steps": 4,
+    }
     defaults.update(kwargs)
     return QAM(**defaults)
 
@@ -290,17 +290,17 @@ def test_rho_pessimism_changes_ddpg_target():
 @pytest.mark.parametrize("critic_loss_type", ["ddpg", "iql"])
 @pytest.mark.parametrize("bolt_on", ["none", "fql_alpha", "edit_scale"])
 def test_cuda_smoke_all_modes_and_horizons(horizon_length, critic_loss_type, bolt_on):
-    kwargs = dict(
-        env=_state_env(),
-        buffer_device="cuda",
-        device="cuda",
-        horizon_length=horizon_length,
-        critic_loss_type=critic_loss_type,
-        net_arch=[16, 16],
-        flow_steps=4,
-        buffer_size=1000,
-        batch_size=32,
-    )
+    kwargs = {
+        "env": _state_env(),
+        "buffer_device": "cuda",
+        "device": "cuda",
+        "horizon_length": horizon_length,
+        "critic_loss_type": critic_loss_type,
+        "net_arch": [16, 16],
+        "flow_steps": 4,
+        "buffer_size": 1000,
+        "batch_size": 32,
+    }
     if bolt_on == "fql_alpha":
         kwargs["fql_alpha"] = 1.0
     elif bolt_on == "edit_scale":

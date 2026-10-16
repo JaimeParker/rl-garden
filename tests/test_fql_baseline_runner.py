@@ -7,7 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from baselines.fql import run_ogbench
-from baselines.fql.run_ogbench import DEFAULT_FQL_SOURCE, FQL_REFERENCE_REVISION, PRESETS, build_command, inspect_source
+from baselines.fql.run_ogbench import (
+    DEFAULT_FQL_SOURCE,
+    FQL_REFERENCE_REVISION,
+    PRESETS,
+    build_command,
+    inspect_source,
+)
 
 
 def test_presets_cover_trained_task_phase_recipes_with_explicit_task_parameters():

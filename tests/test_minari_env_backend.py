@@ -66,7 +66,7 @@ def test_reset_and_step_return_torch_tensors_on_configured_device(monkeypatch):
     assert obs["state"].device.type == "cpu"
 
     actions = torch.zeros(3, 1)
-    next_obs, rewards, terminations, truncations, infos = env.step(actions)
+    next_obs, rewards, terminations, truncations, _infos = env.step(actions)
     assert isinstance(next_obs["state"], torch.Tensor) and next_obs["state"].shape == (3, 1)
     assert isinstance(rewards, torch.Tensor) and rewards.dtype == torch.float32
     assert isinstance(terminations, torch.Tensor) and terminations.dtype == torch.bool
@@ -82,7 +82,7 @@ def test_same_step_autoreset_final_observation_matches_pre_reset_obs(monkeypatch
 
     actions = torch.zeros(2, 1)
     env.step(actions)  # step 1: not terminal yet
-    next_obs, rewards, terminations, truncations, infos = env.step(actions)  # step 2: both terminate
+    next_obs, _rewards, terminations, _truncations, infos = env.step(actions)  # step 2: both terminate
 
     # Both envs terminate in lockstep (deterministic terminate_at=2).
     assert torch.equal(terminations, torch.tensor([True, True]))

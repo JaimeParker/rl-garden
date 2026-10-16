@@ -59,21 +59,21 @@ def _env_spec(state_dim: int, action_dim: int) -> OfflineEnvSpec:
 
 
 def _make_agent(path, state_dim=4, action_dim=2, **kwargs) -> A2ABC:
-    defaults = dict(
-        env=_env_spec(state_dim, action_dim),
-        dataset_path=str(path),
-        horizon_steps=4,
-        cond_steps=2,
-        latent_dim=16,
-        cnn_num_layers=1,
-        cnn_hidden_channels=8,
-        decoder_net_arch=[32, 32],
-        flow_hidden_dims=[32, 32],
-        batch_size=16,
-        actor_lr=1e-3,
-        device="cpu",
-        encoder_config=_test_encoder_config,
-    )
+    defaults = {
+        "env": _env_spec(state_dim, action_dim),
+        "dataset_path": str(path),
+        "horizon_steps": 4,
+        "cond_steps": 2,
+        "latent_dim": 16,
+        "cnn_num_layers": 1,
+        "cnn_hidden_channels": 8,
+        "decoder_net_arch": [32, 32],
+        "flow_hidden_dims": [32, 32],
+        "batch_size": 16,
+        "actor_lr": 1e-3,
+        "device": "cpu",
+        "encoder_config": _test_encoder_config,
+    }
     defaults.update(kwargs)
     return A2ABC(**defaults)
 

@@ -105,7 +105,7 @@ def test_staggered_termination_freezes_final_obs_and_masks_reward():
     )
     env.reset()
     skill = torch.zeros(3, 1)
-    obs, reward, terminated, truncated, infos = env.step(skill)
+    _obs, reward, terminated, truncated, infos = env.step(skill)
 
     # env0 terminates at sub-step 1 (reward=1), env1 at sub-step 3
     # (reward=3), env2 never (reward=4).

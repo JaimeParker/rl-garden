@@ -48,24 +48,24 @@ class _ScriptedVecEnv:
 
 
 def _agent(env, **overrides) -> Off2OnCalQL:
-    kwargs = dict(
-        env=env,
-        buffer_size=1000,
-        buffer_device="cpu",
-        learning_starts=0,
-        batch_size=4,
-        gamma=0.99,
-        tau=0.005,
-        training_freq=4,
-        utd=1.0,
-        net_arch={"pi": [8], "qf": [8]},
-        n_critics=2,
-        critic_subsample_size=2,
-        use_cql_loss=False,
-        use_calql=False,
-        device="cpu",
-        seed=0,
-    )
+    kwargs = {
+        "env": env,
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "learning_starts": 0,
+        "batch_size": 4,
+        "gamma": 0.99,
+        "tau": 0.005,
+        "training_freq": 4,
+        "utd": 1.0,
+        "net_arch": {"pi": [8], "qf": [8]},
+        "n_critics": 2,
+        "critic_subsample_size": 2,
+        "use_cql_loss": False,
+        "use_calql": False,
+        "device": "cpu",
+        "seed": 0,
+    }
     kwargs.update(overrides)
     return Off2OnCalQL(**kwargs)
 

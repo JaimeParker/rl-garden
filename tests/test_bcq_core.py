@@ -20,15 +20,15 @@ def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> BCQ:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        net_arch=[16, 16],
-        vae_hidden_dim=16,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "vae_hidden_dim": 16,
+    }
     defaults.update(kwargs)
     return BCQ(**defaults)
 

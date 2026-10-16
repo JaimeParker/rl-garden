@@ -82,18 +82,18 @@ def _dict_env_spec(state_dim: int, action_dim: int) -> OfflineEnvSpec:
 
 
 def _make_dict_agent(path, state_dim=4, action_dim=2, **kwargs) -> DiffusionBC:
-    defaults = dict(
-        env=_dict_env_spec(state_dim, action_dim),
-        dataset_path=str(path),
-        horizon_steps=2,
-        cond_steps=1,
-        denoising_steps=10,
-        mlp_dims=[32, 32, 32],
-        batch_size=16,
-        actor_lr=1e-3,
-        device="cpu",
-        encoder_config=_TEST_ENCODER_CONFIG,
-    )
+    defaults = {
+        "env": _dict_env_spec(state_dim, action_dim),
+        "dataset_path": str(path),
+        "horizon_steps": 2,
+        "cond_steps": 1,
+        "denoising_steps": 10,
+        "mlp_dims": [32, 32, 32],
+        "batch_size": 16,
+        "actor_lr": 1e-3,
+        "device": "cpu",
+        "encoder_config": _TEST_ENCODER_CONFIG,
+    }
     defaults.update(kwargs)
     return DiffusionBC(**defaults)
 
@@ -212,7 +212,7 @@ def test_unet_backbone_trains_and_checkpoint_roundtrips(tmp_path):
     path = tmp_path / "bc_dataset.h5"
     _write_h5_dataset(path, num_traj=8, steps_per_traj=20, obs_dim=obs_dim, action_dim=action_dim)
 
-    net_kwargs = dict(down_dims=(8, 16), kernel_size=3, n_groups=4)
+    net_kwargs = {"down_dims": (8, 16), "kernel_size": 3, "n_groups": 4}
     agent = DiffusionBC(
         env=_env_spec(obs_dim, action_dim),
         dataset_path=str(path),
@@ -265,7 +265,7 @@ def test_kernel_init_is_forwarded_to_non_default_backbone():
 
     obs_dim, action_dim = 4, 2
     obs_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
-    net_kwargs = dict(down_dims=(8, 16), kernel_size=3, n_groups=4)
+    net_kwargs = {"down_dims": (8, 16), "kernel_size": 3, "n_groups": 4}
 
     def build(kernel_init):
         torch.manual_seed(0)
@@ -339,7 +339,7 @@ def test_dict_obs_unet_backbone_trains_and_checkpoint_roundtrips(tmp_path):
     VisionDiffusionPolicy)."""
     path = tmp_path / "vision_bc_dataset.h5"
     _write_vision_h5_dataset(path, num_traj=8, steps_per_traj=16, state_dim=4, action_dim=2)
-    net_kwargs = dict(down_dims=(8, 16), kernel_size=3, n_groups=4)
+    net_kwargs = {"down_dims": (8, 16), "kernel_size": 3, "n_groups": 4}
     agent = _make_dict_agent(path, net_cls=DiffusionUNet1D, net_kwargs=net_kwargs)
     assert isinstance(agent.policy.net, DiffusionUNet1D)
 

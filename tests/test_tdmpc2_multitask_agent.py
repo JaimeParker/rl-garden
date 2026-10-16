@@ -23,18 +23,18 @@ def _make_env_spec() -> OfflineEnvSpec:
 
 
 def _make_agent(tmp_path, mmap_name="buf", **kwargs) -> TDMPC2Multitask:
-    params = dict(
-        buffer_size=500,
-        batch_size=8,
-        horizon=2,
-        task_dim=8,
-        latent_dim=16,
-        enc_dim=8,
-        mlp_dim=16,
-        num_q=2,
-        num_bins=11,
-        device="cpu",
-    )
+    params = {
+        "buffer_size": 500,
+        "batch_size": 8,
+        "horizon": 2,
+        "task_dim": 8,
+        "latent_dim": 16,
+        "enc_dim": 8,
+        "mlp_dim": 16,
+        "num_q": 2,
+        "num_bins": 11,
+        "device": "cpu",
+    }
     params.update(kwargs)
     return TDMPC2Multitask(
         env=_make_env_spec(),

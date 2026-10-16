@@ -129,8 +129,8 @@ def _add_rgbd_transitions(agent, steps: int = 4) -> None:
 
 def _assert_state_dict_equal(left: dict[str, torch.Tensor], right: dict[str, torch.Tensor]) -> None:
     assert left.keys() == right.keys()
-    for key in left:
-        assert torch.equal(left[key], right[key]), key
+    for key, left_value in left.items():
+        assert torch.equal(left_value, right[key]), key
 
 
 def test_global_update_property_mirrors_internal_counter():
@@ -348,7 +348,10 @@ def test_dict_and_mc_replay_buffer_file_roundtrip(tmp_path):
         )
     mc_source.sample(2)
 
-    from rl_garden.common.checkpoint import load_replay_buffer_file, save_replay_buffer_file
+    from rl_garden.common.checkpoint import (
+        load_replay_buffer_file,
+        save_replay_buffer_file,
+    )
 
     dict_path = tmp_path / "replay_buffer.pt"
     save_replay_buffer_file(dict_path, dict_source)

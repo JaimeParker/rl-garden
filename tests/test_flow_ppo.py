@@ -124,18 +124,18 @@ def _make_vision_env(num_envs: int, horizon_length: int) -> ActionChunkWrapper:
 
 def _make_agent(**overrides):
     env = _make_env(num_envs=4, horizon_length=2)
-    kwargs = dict(
-        env=env,
-        num_steps=3,
-        horizon_length=2,
-        flow_steps=4,
-        actor_mlp_dims=[16, 16, 16],
-        critic_mlp_dims=[16, 16, 16],
-        update_epochs=2,
-        update_batch_size=8,
-        eval_freq=0,
-        device="cpu",
-    )
+    kwargs = {
+        "env": env,
+        "num_steps": 3,
+        "horizon_length": 2,
+        "flow_steps": 4,
+        "actor_mlp_dims": [16, 16, 16],
+        "critic_mlp_dims": [16, 16, 16],
+        "update_epochs": 2,
+        "update_batch_size": 8,
+        "eval_freq": 0,
+        "device": "cpu",
+    }
     kwargs.update(overrides)
     return FlowPPO(**kwargs)
 
@@ -231,7 +231,7 @@ def test_old_logprobs_match_recomputed_logprobs_immediately_after_rollout():
     isolate a pure rollout collection."""
     torch.manual_seed(0)
     agent = _make_agent()
-    agent.train = lambda: {}
+    agent.train = dict
     agent.learn(total_timesteps=3 * 4 * 2)
 
     num_steps, num_envs, k = agent.num_steps, agent.num_envs, agent.flow_steps

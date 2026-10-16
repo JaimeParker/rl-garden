@@ -14,7 +14,7 @@ ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
 def _make_policy(**kwargs) -> QAMPolicy:
     fe = FlattenExtractor(observation_space=OBS_SPACE)
-    defaults = dict(net_arch=[16, 16], flow_steps=4)
+    defaults = {"net_arch": [16, 16], "flow_steps": 4}
     defaults.update(kwargs)
     return QAMPolicy(OBS_SPACE, ACT_SPACE, fe, **defaults)
 

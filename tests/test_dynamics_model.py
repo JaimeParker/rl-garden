@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import torch
 
-from rl_garden.models.dynamics import EnsembleDynamicsModel, get_termination_fn, rollout_q_mean, train_ensemble
+from rl_garden.models.dynamics import (
+    EnsembleDynamicsModel,
+    get_termination_fn,
+    rollout_q_mean,
+    train_ensemble,
+)
 from rl_garden.models.dynamics.network import EnsembleLinear
 from rl_garden.models.dynamics.termination_fns import (
     termination_fn_halfcheetah,

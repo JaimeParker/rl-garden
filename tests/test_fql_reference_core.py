@@ -56,10 +56,10 @@ def _agent(**overrides) -> FQL:
         spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
         spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32),
     )
-    defaults = dict(
-        env=env, buffer_size=64, buffer_device="cpu", batch_size=8, device="cpu",
-        net_arch=[8, 8], flow_steps=3, tau=0.5, reference_compatible=True,
-    )
+    defaults = {
+        "env": env, "buffer_size": 64, "buffer_device": "cpu", "batch_size": 8, "device": "cpu",
+        "net_arch": [8, 8], "flow_steps": 3, "tau": 0.5, "reference_compatible": True,
+    }
     defaults.update(overrides)
     agent = FQL(**defaults)
     for _ in range(16):

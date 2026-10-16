@@ -12,6 +12,8 @@ from rl_garden.encoders.drqv2_conv import DrQv2Encoder
 from rl_garden.networks.ddpg_critic import DrQv2Critic
 from rl_garden.observations import ObsGroups
 
+_EMPTY_SAMPLE_SHAPE = torch.Size()
+
 
 def _no_aug_encoder_config(**overrides) -> EncoderConfig:
     """DDPG's own default backbone (drqv2_conv), augmentation disabled so
@@ -269,7 +271,7 @@ def test_ddpg_policy_actor_action_applies_requested_noise_clip(monkeypatch):
         dist = original_forward(features, std)
         original_sample = dist.sample
 
-        def wrapped_sample(clip=None, sample_shape=torch.Size()):
+        def wrapped_sample(clip=None, sample_shape=_EMPTY_SAMPLE_SHAPE):
             observed["clip"] = clip
             return original_sample(clip=clip, sample_shape=sample_shape)
 
@@ -307,7 +309,7 @@ def test_ddpg_rollout_does_not_clip_exploration_noise(monkeypatch):
         dist = original_forward(features, std)
         original_sample = dist.sample
 
-        def wrapped_sample(clip=None, sample_shape=torch.Size()):
+        def wrapped_sample(clip=None, sample_shape=_EMPTY_SAMPLE_SHAPE):
             observed["clip"] = clip
             return original_sample(clip=clip, sample_shape=sample_shape)
 
@@ -392,7 +394,7 @@ def test_ddpg_update_role_based_extraction_and_clips_training_noise(
         dist = original_forward(features, std)
         original_sample = dist.sample
 
-        def wrapped_sample(clip=None, sample_shape=torch.Size()):
+        def wrapped_sample(clip=None, sample_shape=_EMPTY_SAMPLE_SHAPE):
             clips.append(clip)
             return original_sample(clip=clip, sample_shape=sample_shape)
 
@@ -629,7 +631,7 @@ def _drqv2_build_args(encoder: str):
     from types import SimpleNamespace
 
     from rl_garden.encoders.config import EncoderConfig
-    from rl_garden.observations import ObsGroups, ObservationConfig
+    from rl_garden.observations import ObservationConfig, ObsGroups
 
     return SimpleNamespace(
         obs=ObservationConfig(rgb=("base_camera",), depth=("base_camera",)),

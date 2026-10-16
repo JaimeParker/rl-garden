@@ -56,15 +56,15 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> FINO:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=16,
-        device="cpu",
-        net_arch=[16, 16],
-        flow_steps=4,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 16,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "flow_steps": 4,
+    }
     defaults.update(kwargs)
     return FINO(**defaults)
 

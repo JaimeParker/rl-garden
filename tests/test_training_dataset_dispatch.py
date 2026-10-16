@@ -21,20 +21,23 @@ from gymnasium import spaces
 from rl_garden.buffers import dataset_backend_registry
 from rl_garden.buffers.dataset_backend_registry import DatasetBackend, DatasetRequest
 from rl_garden.observations import ObservationConfig
-from rl_garden.training._dataset import infer_offline_dataset_specs, load_offline_dataset
+from rl_garden.training._dataset import (
+    infer_offline_dataset_specs,
+    load_offline_dataset,
+)
 
 
 def _args(**overrides):
-    defaults = dict(
-        dataset_backend="h5",
-        offline_dataset="demos/pickcube.h5",
-        offline_num_traj=None,
-        action_low=-1.0,
-        action_high=1.0,
-        reward_scale=1.0,
-        reward_bias=0.0,
-        success_key=None,
-    )
+    defaults = {
+        "dataset_backend": "h5",
+        "offline_dataset": "demos/pickcube.h5",
+        "offline_num_traj": None,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "reward_scale": 1.0,
+        "reward_bias": 0.0,
+        "success_key": None,
+    }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 

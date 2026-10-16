@@ -12,35 +12,38 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from _ncrl_online_synthetic import (
+    PixelVecEnv,
+    make_pretrain_artifacts,
+    tiny_ncrl_kwargs,
+)
 from gymnasium import spaces
-
-from _ncrl_online_synthetic import PixelVecEnv, make_pretrain_artifacts, tiny_ncrl_kwargs
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from _ncrl_synthetic import write_benchmark  # noqa: E402
-from convert_ncrl_dataset import convert_dataset  # noqa: E402
+from _ncrl_synthetic import write_benchmark
+from convert_ncrl_dataset import convert_dataset
 
-from rl_garden.algorithms.ncrl import (  # noqa: E402
+from rl_garden.algorithms.ncrl import (
     NCRL,
     MaskedTruncatedNormalHead,
     load_rssm_pretrain_checkpoint,
     rssm_from_pretrain_checkpoint,
 )
-from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec  # noqa: E402
-from rl_garden.networks.dreamer_nets import RMSNorm  # noqa: E402
-from rl_garden.networks.ncrl_nets import (  # noqa: E402
+from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec
+from rl_garden.networks.dreamer_nets import RMSNorm
+from rl_garden.networks.ncrl_nets import (
     NCRLBlockGRU,
     NCRLBlockLinear,
     NCRLConvDecoder,
     NCRLConvEncoder,
     NCRLHead,
 )
-from rl_garden.observations import ObservationSchema  # noqa: E402
-from rl_garden.observations.schema import ObservationContractError  # noqa: E402
-from rl_garden.policies.action_mask import MaskedTruncatedNormal, action_mask  # noqa: E402
-from rl_garden.world_models.batch import SequenceBatch  # noqa: E402
-from rl_garden.world_models.rssm import RSSM, RSSMSize, build_rssm_encoder  # noqa: E402
+from rl_garden.observations import ObservationSchema
+from rl_garden.observations.schema import ObservationContractError
+from rl_garden.policies.action_mask import MaskedTruncatedNormal, action_mask
+from rl_garden.world_models.batch import SequenceBatch
+from rl_garden.world_models.rssm import RSSM, RSSMSize, build_rssm_encoder
 
 SIZE = RSSMSize(deter=32, hidden=16, discrete=4, units=16, cnn_depth=4)
 STOCH, A, T, B = 4, 3, 4, 2

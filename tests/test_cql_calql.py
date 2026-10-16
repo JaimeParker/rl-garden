@@ -8,14 +8,15 @@ import h5py
 import numpy as np
 import pytest
 import torch
+from _cli import run_entry
 from gymnasium import spaces
 
 from rl_garden.algorithms import CQL, WSRL, CalQL, OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms import __all__ as algorithm_exports
 from rl_garden.algorithms.calql import _CalQLRolloutTrainingShell
 from rl_garden.algorithms.cql import CQLAlphaLagrange
-from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.mc_buffer import MCReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common import Logger
 from rl_garden.encoders.combined import CombinedExtractor
 from rl_garden.encoders.config import EncoderConfig
@@ -692,6 +693,7 @@ def _write_demo_h5(path):
         group.create_dataset("dones", data=dones)
 
 
+@pytest.mark.slow
 def test_pretrain_offline_cli_algorithm_selection(tmp_path):
     dataset = tmp_path / "demo.h5"
     _write_demo_h5(dataset)
@@ -761,26 +763,14 @@ def test_pretrain_offline_cli_algorithm_selection(tmp_path):
 
 
 def test_pretrain_offline_cli_rejects_legacy_algorithm_flag():
-    cmd = [
-        sys.executable,
-        "examples/pretrain_offline.py",
-        "--algorithm",
-        "cql",
-    ]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    result = run_entry("pretrain_offline", ["--algorithm", "cql"])
     assert result.returncode != 0
 
 
 def test_pretrain_cql_offline_cli_requires_dataset():
-    cmd = [
-        sys.executable,
-        "examples/pretrain_offline.py",
-        "cql",
-        "--num_offline_steps",
-        "1",
-        "--log_type",
-        "none",
-    ]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    result = run_entry(
+        "pretrain_offline",
+        ["cql", "--num_offline_steps", "1", "--log_type", "none"],
+    )
     assert result.returncode != 0
     assert "--offline_dataset is required" in result.stderr

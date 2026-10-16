@@ -1,6 +1,6 @@
+import json
 from collections import OrderedDict
 from io import BytesIO
-import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,18 +8,18 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from tools.conversion.export_calql_minari_dataset import (
-    array_sha256,
-    flatten_buffer_observations,
-)
-from baselines.core.wire_protocol import read_status, write_error
-from baselines.core.env_server import flatten_observation
-from baselines.core.dataset import load_npz_dataset
-from baselines.core.evaluation import summarize_episodes
 from baselines.cal_ql.run_offline import (
     DATASET_KEYS,
     _load_dataset,
     flatten_legacy_observation,
+)
+from baselines.core.dataset import load_npz_dataset
+from baselines.core.env_server import flatten_observation
+from baselines.core.evaluation import summarize_episodes
+from baselines.core.wire_protocol import read_status, write_error
+from tools.conversion.export_calql_minari_dataset import (
+    array_sha256,
+    flatten_buffer_observations,
 )
 
 

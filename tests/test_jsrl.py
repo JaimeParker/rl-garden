@@ -6,7 +6,7 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import AWAC, CalQL, IQL, JSRL, OfflineEnvSpec
+from rl_garden.algorithms import AWAC, IQL, JSRL, CalQL, OfflineEnvSpec
 from rl_garden.algorithms.jsrl import _load_guide_policy
 
 _OBS_DIM = 6
@@ -22,7 +22,7 @@ def _offline_env_spec() -> OfflineEnvSpec:
 
 
 def _make_iql_checkpoint(tmp_path, **overrides) -> str:
-    kwargs = dict(env=_offline_env_spec(), device="cpu", net_arch=[8])
+    kwargs = {"env": _offline_env_spec(), "device": "cpu", "net_arch": [8]}
     kwargs.update(overrides)
     agent = IQL(**kwargs)
     path = str(tmp_path / "iql.pt")
@@ -31,7 +31,7 @@ def _make_iql_checkpoint(tmp_path, **overrides) -> str:
 
 
 def _make_awac_checkpoint(tmp_path, **overrides) -> str:
-    kwargs = dict(env=_offline_env_spec(), device="cpu", net_arch=[8])
+    kwargs = {"env": _offline_env_spec(), "device": "cpu", "net_arch": [8]}
     kwargs.update(overrides)
     agent = AWAC(**kwargs)
     agent.policy.fit_obs_normalizer(torch.randn(100, _OBS_DIM) * 3 + 1)
@@ -41,7 +41,7 @@ def _make_awac_checkpoint(tmp_path, **overrides) -> str:
 
 
 def _make_calql_checkpoint(tmp_path, **overrides) -> str:
-    kwargs = dict(env=_offline_env_spec(), device="cpu", net_arch={"pi": [8], "qf": [8]})
+    kwargs = {"env": _offline_env_spec(), "device": "cpu", "net_arch": {"pi": [8], "qf": [8]}}
     kwargs.update(overrides)
     agent = CalQL(**kwargs)
     path = str(tmp_path / "calql.pt")
@@ -101,21 +101,21 @@ class _ScriptedVecEnv(gym.Env):
 
 def _make_jsrl_agent(guide_checkpoint, guide_algorithm="iql", *, max_horizon=2, num_envs=2, episode_len=None, **overrides) -> JSRL:
     env = _ScriptedVecEnv(episode_len=episode_len or ([1_000] * num_envs))
-    kwargs = dict(
-        env=env,
-        guide_checkpoint=guide_checkpoint,
-        guide_algorithm=guide_algorithm,
-        max_horizon=max_horizon,
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        learning_starts=0,
-        training_freq=4,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-    )
+    kwargs = {
+        "env": env,
+        "guide_checkpoint": guide_checkpoint,
+        "guide_algorithm": guide_algorithm,
+        "max_horizon": max_horizon,
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "learning_starts": 0,
+        "training_freq": 4,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+    }
     kwargs.update(overrides)
     return JSRL(**kwargs)
 

@@ -13,7 +13,7 @@ ACT_SPACE = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
 def _make_policy(**kwargs) -> PLASPolicy:
     fe = FlattenExtractor(observation_space=OBS_SPACE)
-    defaults = dict(actor_extractor=fe, net_arch=[16, 16], vae_hidden_dim=16)
+    defaults = {"actor_extractor": fe, "net_arch": [16, 16], "vae_hidden_dim": 16}
     defaults.update(kwargs)
     return PLASPolicy(OBS_SPACE, ACT_SPACE, **defaults)
 

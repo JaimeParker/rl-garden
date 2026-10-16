@@ -9,16 +9,16 @@ from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisode
 
 
 def _make_buffer(tmp_path, **kwargs):
-    params = dict(
-        obs_dim=6,
-        action_dim=3,
-        buffer_size=100,
-        horizon=2,
-        mmap_dir=str(tmp_path / "buf"),
-        mmap_mode="create",
-        storage_device="cpu",
-        sample_device="cpu",
-    )
+    params = {
+        "obs_dim": 6,
+        "action_dim": 3,
+        "buffer_size": 100,
+        "horizon": 2,
+        "mmap_dir": str(tmp_path / "buf"),
+        "mmap_mode": "create",
+        "storage_device": "cpu",
+        "sample_device": "cpu",
+    }
     params.update(kwargs)
     return MmapMultitaskEpisodeBuffer(**params)
 

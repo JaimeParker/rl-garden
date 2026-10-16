@@ -1,9 +1,10 @@
 """Unit tests for WSRL with Dict vision observations."""
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
-from unittest.mock import MagicMock
 
 from rl_garden.algorithms import WSRL
 from rl_garden.encoders.config import EncoderConfig
@@ -143,7 +144,7 @@ class TestWSRLDictObservations:
             "state": torch.randn(4, 4),
         }
 
-        action, log_prob, features = wsrlrgbd_agent.policy.actor_action_log_prob(obs)
+        action, log_prob, _features = wsrlrgbd_agent.policy.actor_action_log_prob(obs)
         assert action.shape == (4, 2)
         assert log_prob.shape == (4, 1)
 

@@ -95,7 +95,7 @@ def test_staggered_termination_and_truncation_within_one_chunk():
 def test_act_steps_one_matches_single_inner_step():
     env = ActionChunkWrapper(_FakeStaggeredEnv([None, None], [None, None]), act_steps=1)
     action = torch.zeros(2, 1, 1)
-    obs, reward, terminated, truncated, infos = env.step(action)
+    _obs, reward, terminated, truncated, infos = env.step(action)
     assert torch.equal(reward, torch.tensor([1.0, 1.0]))
     assert not terminated.any() and not truncated.any()
     assert "final_observation" not in infos

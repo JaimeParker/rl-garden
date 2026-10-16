@@ -15,26 +15,26 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from _ncrl_synthetic import write_benchmark  # noqa: E402
-from convert_ncrl_dataset import convert_dataset  # noqa: E402
+from _ncrl_synthetic import write_benchmark
+from convert_ncrl_dataset import convert_dataset
 
-from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec  # noqa: E402
-from rl_garden.world_models.rssm import RSSMSize  # noqa: E402
+from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec
+from rl_garden.world_models.rssm import RSSMSize
 
 EMBODIMENTS = {"cheetah": (6, (14, 16, 12)), "quadruped": (12, (15, 13, 16))}
 TINY_SIZE = RSSMSize(deter=32, hidden=16, discrete=4, units=32, cnn_depth=4)
-TINY_KWARGS = dict(
-    rssm_size=TINY_SIZE,
-    stoch=4,
-    batch_size=8,
-    batch_length=8,
-    lr=1e-3,
-    compute_dtype="float32",
-    device="cpu",
-    buffer_device="cpu",
-    log_freq=0,
-    std_log=False,
-)
+TINY_KWARGS = {
+    "rssm_size": TINY_SIZE,
+    "stoch": 4,
+    "batch_size": 8,
+    "batch_length": 8,
+    "lr": 1e-3,
+    "compute_dtype": "float32",
+    "device": "cpu",
+    "buffer_device": "cpu",
+    "log_freq": 0,
+    "std_log": False,
+}
 
 
 @pytest.fixture(scope="module")

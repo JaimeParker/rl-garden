@@ -18,31 +18,31 @@ def _state_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> UniO4OPE:
-    defaults = dict(
-        env=_state_env(),
-        task="halfcheetah-medium-v2",
-        buffer_size=256,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        critic_warmup_steps=2,
-        bc_ensemble_steps=2,
-        num_policies=2,
-        value_hidden_dims=(16,),
-        q_hidden_dims=(16,),
-        actor_hidden_dims=(16,),
-        target_update_freq=1,
-        dynamics_hidden_dims=(8, 8),
-        dynamics_weight_decay=(1e-5, 1e-5, 1e-5),
-        dynamics_n_ensemble=2,
-        dynamics_n_elites=1,
-        dynamics_max_epochs=2,
-        dynamics_max_epochs_since_update=1,
-        dynamics_batch_size=32,
-        ope_rollout_length=5,
-        ope_rollout_batch_size=8,
-        ope_gating_freq=1,
-    )
+    defaults = {
+        "env": _state_env(),
+        "task": "halfcheetah-medium-v2",
+        "buffer_size": 256,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "critic_warmup_steps": 2,
+        "bc_ensemble_steps": 2,
+        "num_policies": 2,
+        "value_hidden_dims": (16,),
+        "q_hidden_dims": (16,),
+        "actor_hidden_dims": (16,),
+        "target_update_freq": 1,
+        "dynamics_hidden_dims": (8, 8),
+        "dynamics_weight_decay": (1e-5, 1e-5, 1e-5),
+        "dynamics_n_ensemble": 2,
+        "dynamics_n_elites": 1,
+        "dynamics_max_epochs": 2,
+        "dynamics_max_epochs_since_update": 1,
+        "dynamics_batch_size": 32,
+        "ope_rollout_length": 5,
+        "ope_rollout_batch_size": 8,
+        "ope_gating_freq": 1,
+    }
     defaults.update(kwargs)
     return UniO4OPE(**defaults)
 

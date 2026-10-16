@@ -20,6 +20,7 @@ from rl_garden.policies.recurrent_sac_policy import RecurrentSACPolicy
 from rl_garden.policies.rlpd_hybrid_policy import RLPDHybridPolicy
 from rl_garden.policies.sac_policy import SACPolicy
 
+
 class DummyVecEnv:
     def __init__(self, observation_space: spaces.Space, action_space: spaces.Box) -> None:
         self.num_envs = 1

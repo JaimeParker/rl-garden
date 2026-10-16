@@ -28,7 +28,7 @@ class _FakeEnv(gym.Env):
 def test_success_yields_reward_one_and_terminates():
     classifier = lambda obs: torch.tensor([0.9])
     wrapped = RewardClassifierWrapper(_FakeEnv(), classifier, threshold=0.5)
-    obs, reward, terminated, truncated, info = wrapped.step(torch.zeros(1, 7))
+    _obs, reward, terminated, _truncated, info = wrapped.step(torch.zeros(1, 7))
     assert reward.item() == 1.0
     assert bool(terminated[0])
     assert info["raw"] is True

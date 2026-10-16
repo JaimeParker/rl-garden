@@ -71,7 +71,7 @@ class _Algo(BaseAlgorithm):
     def _setup_model(self) -> None:
         pass
 
-    def learn(self, total_timesteps: int) -> "BaseAlgorithm":
+    def learn(self, total_timesteps: int) -> BaseAlgorithm:
         del total_timesteps
         return self
 

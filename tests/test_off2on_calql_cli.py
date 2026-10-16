@@ -1,22 +1,18 @@
 """CLI-level smoke test for the Cal-QL off2on entrypoint."""
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
+
+from _cli import run_entry
 
 from rl_garden.common.effective_config import apply_strict_mapping, load_preset
 from rl_garden.training.off2on.calql import CalQLOff2OnArgs
 
 
 def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
-    result = subprocess.run(
+    result = run_entry(
+        "train_off2on",
         [
-            sys.executable,
-            "examples/train_off2on.py",
             "calql",
             "--print-config",
             "--log-type",
@@ -26,12 +22,8 @@ def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):
             "--env-backend",
             "robotwin",
         ],
-        cwd=repo_root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
     )
+    assert result.returncode == 0, result.stderr
 
     config = json.loads(result.stdout)
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "calql"}
@@ -44,12 +36,9 @@ def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):
 
 
 def test_wsrl_print_config_unaffected_by_calql_defaults(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
-    result = subprocess.run(
+    result = run_entry(
+        "train_off2on",
         [
-            sys.executable,
-            "examples/train_off2on.py",
             "wsrl",
             "--print-config",
             "--log-type",
@@ -59,12 +48,8 @@ def test_wsrl_print_config_unaffected_by_calql_defaults(tmp_path):
             "--env-backend",
             "robotwin",
         ],
-        cwd=repo_root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
     )
+    assert result.returncode == 0, result.stderr
 
     config = json.loads(result.stdout)
     assert config["selection"]["algorithm"] == "wsrl"

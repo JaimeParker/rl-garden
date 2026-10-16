@@ -6,8 +6,8 @@ import types
 import numpy as np
 import pytest
 import torch
-import torch.nn as nn
 from gymnasium import spaces
+from torch import nn
 
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
 from rl_garden.buffers.replay_buffer import ReplayBuffer
@@ -56,19 +56,19 @@ class DummyVecEnv:
 
 
 def _agent(**overrides) -> RLPDHybrid:
-    kwargs = dict(
-        env=DummyVecEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        learning_starts=1,
-        training_freq=4,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-        discrete_hidden_dim=8,
-    )
+    kwargs = {
+        "env": DummyVecEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "learning_starts": 1,
+        "training_freq": 4,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+        "discrete_hidden_dim": 8,
+    }
     kwargs.update(overrides)
     return RLPDHybrid(**kwargs)
 
@@ -325,7 +325,7 @@ def test_checkpoint_round_trips_discrete_critic_and_dqn_optimizer():
     state = torch.load(buf, weights_only=False)
 
     assert "dqn_optimizer" in state["optimizers"]
-    assert any("discrete_critic" in k for k in state["policy"].keys())
+    assert any("discrete_critic" in k for k in state["policy"])
 
     fresh = _agent()
     fresh.policy.load_state_dict(state["policy"])

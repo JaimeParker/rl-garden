@@ -18,7 +18,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from convert_tdmpc2_multitask_dataset import (  # noqa: E402
+from convert_tdmpc2_multitask_dataset import (
     MT30_TASKS,
     convert_dataset,
     infer_unpadded_dim,
@@ -182,7 +182,9 @@ def test_convert_dataset_merges_chunks_crops_padding_and_loads(tmp_path, monkeyp
     assert torch.equal(loaded["obs"], expected_obs)
     assert torch.equal(loaded["action"], expected_action)
 
-    from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
+    from rl_garden.buffers.mmap_multitask_episode_buffer import (
+        MmapMultitaskEpisodeBuffer,
+    )
     from rl_garden.buffers.tdmpc2_multitask_dataset import (
         infer_multitask_dataset_specs,
         load_multitask_dataset,
@@ -200,7 +202,9 @@ def test_convert_dataset_merges_chunks_crops_padding_and_loads(tmp_path, monkeyp
 def test_load_multitask_dataset_task_subset_and_episode_cap_keep_manifest_indices(tmp_path):
     import json
 
-    from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
+    from rl_garden.buffers.mmap_multitask_episode_buffer import (
+        MmapMultitaskEpisodeBuffer,
+    )
     from rl_garden.buffers.tdmpc2_multitask_dataset import load_multitask_dataset
 
     tasks, obs_dims, action_dims, num_episodes, episode_length = ["a", "b", "c"], [3, 2, 4], [1, 2, 2], [3, 2, 4], 5

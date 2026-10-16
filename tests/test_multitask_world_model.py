@@ -20,23 +20,23 @@ _ACTION_DIMS = [2, 3, 2]
 
 
 def _make_world_model(**kwargs) -> MultitaskWorldModel:
-    params = dict(
-        num_tasks=3,
-        obs_dims=_OBS_DIMS,
-        action_dims=_ACTION_DIMS,
-        task_dim=8,
-        latent_dim=16,
-        enc_dim=8,
-        mlp_dim=16,
-        num_bins=11,
-    )
+    params = {
+        "num_tasks": 3,
+        "obs_dims": _OBS_DIMS,
+        "action_dims": _ACTION_DIMS,
+        "task_dim": 8,
+        "latent_dim": 16,
+        "enc_dim": 8,
+        "mlp_dim": 16,
+        "num_bins": 11,
+    }
     params.update(kwargs)
     return MultitaskWorldModel(**params)
 
 
 def _make_policy(world_model: MultitaskWorldModel = None, **kwargs) -> MultitaskTDMPC2Policy:
     world_model = world_model if world_model is not None else _make_world_model()
-    params = dict(mlp_dim=16, num_q=2, dropout=0.0)
+    params = {"mlp_dim": 16, "num_q": 2, "dropout": 0.0}
     params.update(kwargs)
     return MultitaskTDMPC2Policy(world_model, **params)
 
@@ -67,7 +67,7 @@ def test_pi_does_not_zero_full_action_dim_task():
     policy = _make_policy()
     z = torch.randn(10, policy.world_model.latent_dim)
     task = torch.full((10,), 1, dtype=torch.long)  # action_dim=3 == max
-    action, _ = policy.pi(z, task)
+    _action, _ = policy.pi(z, task)
     # Not asserting nonzero (could coincidentally be ~0), just that the mask
     # wasn't applied to this column -- verified via the mask tensor itself.
     assert torch.all(policy.world_model._action_masks[1] == 1.0)

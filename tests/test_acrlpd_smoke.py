@@ -56,19 +56,19 @@ def _make_agent(**overrides) -> ACRLPD:
     # learn() iteration, so learning_starts must be >= horizon_length *
     # num_envs for the per-env buffer to hold a full window by the time
     # training (and, via the same gate, chunked rollout) first activates.
-    kwargs = dict(
-        env=_FakeEnv(),
-        horizon_length=3,
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=90,
-        batch_size=8,
-        learning_starts=9,
-        training_freq=3,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-    )
+    kwargs = {
+        "env": _FakeEnv(),
+        "horizon_length": 3,
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 90,
+        "batch_size": 8,
+        "learning_starts": 9,
+        "training_freq": 3,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+    }
     kwargs.update(overrides)
     return ACRLPD(**kwargs)
 

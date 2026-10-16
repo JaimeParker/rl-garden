@@ -15,9 +15,9 @@ from gymnasium import spaces
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
 from rl_garden.algorithms.sac import SAC
-from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
 from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 
 
 class DummyDictVecEnv:
@@ -46,17 +46,17 @@ class DummyBoxVecEnv:
 
 
 def _sac_kwargs(**overrides):
-    kwargs = dict(
-        env=DummyDictVecEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=16,
-        batch_size=4,
-        learning_starts=0,
-        training_freq=1,
-        eval_freq=0,
-        net_arch={"pi": [16], "qf": [16]},
-    )
+    kwargs = {
+        "env": DummyDictVecEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 16,
+        "batch_size": 4,
+        "learning_starts": 0,
+        "training_freq": 1,
+        "eval_freq": 0,
+        "net_arch": {"pi": [16], "qf": [16]},
+    }
     kwargs.update(overrides)
     return kwargs
 

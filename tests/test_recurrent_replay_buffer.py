@@ -148,7 +148,6 @@ def test_episode_starts_reset_within_sampled_window():
     sample = buf.sample(batch_size=64, generator=torch.Generator().manual_seed(0))
     # window_len = burn_in(1)+learning(2)+forward(1) = 4. t0 must always be a
     # checkpoint position; pos=1 is one such checkpoint (episode 1's start).
-    ep_rel = buf._ep_relative_step
     for b in range(sample.episode_starts.shape[1]):
         pass  # existence check only -- correctness is validated structurally below
 

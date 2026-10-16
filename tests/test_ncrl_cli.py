@@ -9,7 +9,6 @@ import json
 from contextlib import redirect_stdout
 
 import pytest
-
 from _ncrl_online_synthetic import make_pretrain_artifacts
 
 

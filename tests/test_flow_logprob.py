@@ -2,7 +2,7 @@ import math
 
 import pytest
 import torch
-import torch.nn as nn
+from torch import nn
 
 from rl_garden.networks.actor_vector_field import ActorVectorField
 from rl_garden.networks.flow_logprob import flow_log_prob

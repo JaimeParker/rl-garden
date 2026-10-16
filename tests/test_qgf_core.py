@@ -40,15 +40,15 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> QGF:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        net_arch=[16, 16],
-        denoise_steps=4,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "denoise_steps": 4,
+    }
     defaults.update(kwargs)
     return QGF(**defaults)
 
@@ -472,5 +472,5 @@ def test_robust_q_critic_loss_does_not_route_through_grid_gated_t_sampling(monke
         raise AssertionError("_robust_critic_loss must not call _sample_flow_time")
 
     monkeypatch.setattr(agent, "_sample_flow_time", _boom)
-    loss, info = agent._robust_critic_loss(data)
+    loss, _info = agent._robust_critic_loss(data)
     assert np.isfinite(float(loss.item()))

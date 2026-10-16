@@ -60,17 +60,17 @@ class _ConstantExpert:
 
 
 def _make_agent(**kwargs) -> DAgger:
-    defaults = dict(
-        env=_FakeEnv(num_envs=3),
-        expert=_ConstantExpert(),
-        demo_buffer_size=1000,
-        rollout_steps_per_round=10,
-        gradient_steps_per_round=2,
-        batch_size=8,
-        buffer_device="cpu",
-        device="cpu",
-        net_arch=[16, 16],
-    )
+    defaults = {
+        "env": _FakeEnv(num_envs=3),
+        "expert": _ConstantExpert(),
+        "demo_buffer_size": 1000,
+        "rollout_steps_per_round": 10,
+        "gradient_steps_per_round": 2,
+        "batch_size": 8,
+        "buffer_device": "cpu",
+        "device": "cpu",
+        "net_arch": [16, 16],
+    }
     defaults.update(kwargs)
     return DAgger(**defaults)
 

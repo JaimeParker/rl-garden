@@ -64,15 +64,15 @@ def _vision_env(num_envs: int = 1) -> OfflineEnvSpec:
 
 
 def _make_agent(**kwargs) -> MeanFlowBC:
-    defaults = dict(
-        env=_state_env(),
-        buffer_size=1000,
-        buffer_device="cpu",
-        batch_size=32,
-        device="cpu",
-        net_arch=[16, 16],
-        num_sample_steps=2,
-    )
+    defaults = {
+        "env": _state_env(),
+        "buffer_size": 1000,
+        "buffer_device": "cpu",
+        "batch_size": 32,
+        "device": "cpu",
+        "net_arch": [16, 16],
+        "num_sample_steps": 2,
+    }
     defaults.update(kwargs)
     return MeanFlowBC(**defaults)
 
@@ -291,7 +291,10 @@ def test_loss_matches_upstream_meanflow_golden_value(mode):
         sys.path.remove(_MEAN_FLOW_3RD_PARTY_DIR)
 
     torch.manual_seed(0)
-    from rl_garden.networks.mean_flow_field import MeanFlowActorField, mean_flow_loss_from_samples
+    from rl_garden.networks.mean_flow_field import (
+        MeanFlowActorField,
+        mean_flow_loss_from_samples,
+    )
 
     batch_size, features_dim, action_dim = 8, 5, 3
     net = MeanFlowActorField(features_dim, action_dim, [16, 16])

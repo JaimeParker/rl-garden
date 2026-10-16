@@ -7,9 +7,12 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.encoders import RandomShiftsAug, ViTTokenAndPropExtractor, ViTImageEncoder
+from rl_garden.encoders import (
+    RandomShiftsAug,
+    ViTImageEncoder,
+    ViTTokenAndPropExtractor,
+)
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.encoders.base import TokenAndPropFeatureConfig
 from rl_garden.observations import ObservationSchema
 from rl_garden.policies import SACPolicy
 
@@ -205,7 +208,7 @@ def test_sac_policy_flat_path_unaffected():
     assert isinstance(policy.critic, EnsembleQCritic)
     assert policy._actor_adapter is None
     obs = torch.randn(2, 8)
-    action, log_prob, features = policy.actor_action_log_prob(obs)
+    action, _log_prob, _features = policy.actor_action_log_prob(obs)
     assert action.shape == (2, 3)
 
 
@@ -246,7 +249,7 @@ def test_vit_sac_kwargs_from_args_defaults_to_per_key():
 
 
 def test_vit_token_and_prop_extractor_has_no_legacy_alias():
-    import rl_garden.encoders as encoders
+    from rl_garden import encoders
 
     assert hasattr(encoders, "ViTTokenAndPropExtractor")
     assert not hasattr(encoders, "ViT" + "CombinedExtractor")

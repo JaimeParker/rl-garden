@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import tempfile
-
 import gymnasium as gym
 import h5py
 import numpy as np
@@ -126,22 +123,22 @@ def _make_vision_env(num_envs: int, act_steps: int) -> ActionChunkWrapper:
 
 def _make_agent(**overrides):
     env = _make_env(num_envs=4, act_steps=2)
-    kwargs = dict(
-        env=env,
-        num_steps=3,
-        horizon_steps=2,
-        act_steps=2,
-        denoising_steps=5,
-        ft_denoising_steps=3,
-        actor_mlp_dims=[16, 16, 16],
-        critic_mlp_dims=[16, 16, 16],
-        cm_mlp_dims=[16, 16, 16],
-        update_epochs=2,
-        update_batch_size=8,
-        eval_freq=0,
-        device="cpu",
-        cm_lr=1e-3,
-    )
+    kwargs = {
+        "env": env,
+        "num_steps": 3,
+        "horizon_steps": 2,
+        "act_steps": 2,
+        "denoising_steps": 5,
+        "ft_denoising_steps": 3,
+        "actor_mlp_dims": [16, 16, 16],
+        "critic_mlp_dims": [16, 16, 16],
+        "cm_mlp_dims": [16, 16, 16],
+        "update_epochs": 2,
+        "update_batch_size": 8,
+        "eval_freq": 0,
+        "device": "cpu",
+        "cm_lr": 1e-3,
+    }
     kwargs.update(overrides)
     return DiffusionCMDistillOnline(**kwargs)
 

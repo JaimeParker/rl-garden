@@ -167,7 +167,7 @@ def test_recurrent_rollout_buffer_preserves_time_order_and_env_axis():
         assert mb.initial_hidden.shape == (1, 2, 3)
         for col in range(mb.obs.shape[1]):
             marker = mb.obs[0, col, 0].item()
-            env_id = int(round(marker)) % 100
+            env_id = round(marker) % 100
             seen_envs.add(env_id)
             for t in range(4):
                 assert mb.obs[t, col, 0].item() == pytest.approx(t * 100.0 + env_id)

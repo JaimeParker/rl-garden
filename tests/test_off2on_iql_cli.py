@@ -1,19 +1,15 @@
 """CLI-level smoke test for the IQL off2on entrypoint."""
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
+
+from _cli import run_entry
 
 
 def test_iql_print_config_matches_paper_aligned_defaults(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
-    result = subprocess.run(
+    result = run_entry(
+        "train_off2on",
         [
-            sys.executable,
-            "examples/train_off2on.py",
             "iql",
             "--print-config",
             "--log-type",
@@ -23,12 +19,8 @@ def test_iql_print_config_matches_paper_aligned_defaults(tmp_path):
             "--env-backend",
             "robotwin",
         ],
-        cwd=repo_root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
     )
+    assert result.returncode == 0, result.stderr
 
     config = json.loads(result.stdout)
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "iql"}
@@ -40,12 +32,9 @@ def test_iql_print_config_matches_paper_aligned_defaults(tmp_path):
 
 
 def test_iql_antmaze_paper_preset_resolves_key_values(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {"MPLCONFIGDIR": "/tmp"}
-    result = subprocess.run(
+    result = run_entry(
+        "train_off2on",
         [
-            sys.executable,
-            "examples/train_off2on.py",
             "iql",
             "--config",
             "configs/off2on/iql_antmaze_medium_play_v2_paper.yaml",
@@ -53,12 +42,9 @@ def test_iql_antmaze_paper_preset_resolves_key_values(tmp_path):
             "--log-dir",
             str(tmp_path),
         ],
-        cwd=repo_root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
+        cwd=Path(__file__).resolve().parents[1],
     )
+    assert result.returncode == 0, result.stderr
 
     config = json.loads(result.stdout)
     inputs = config["inputs"]

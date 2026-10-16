@@ -11,10 +11,10 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "conversion"))
 
-from convert_tdmpc2_checkpoint import convert_state_dict, infer_architecture, main  # noqa: E402
-from test_pwm_smoke import ACTION_DIMS, OBS_DIMS, TASKS, WM_ARCH, make_world_model  # noqa: E402
+from convert_tdmpc2_checkpoint import convert_state_dict, infer_architecture, main
+from test_pwm_smoke import ACTION_DIMS, OBS_DIMS, TASKS, WM_ARCH, make_world_model
 
-from rl_garden.algorithms.pwm import load_pwm_world_model  # noqa: E402
+from rl_garden.algorithms.pwm import load_pwm_world_model
 
 _DROPPED = [
     "_Qs.params.0.weight",
@@ -83,7 +83,7 @@ def test_requires_action_dims_without_action_masks():
     upstream, _ = _upstream_state_dict(with_action_masks=False)
     with pytest.raises(ValueError, match="action dims are unknown"):
         convert_state_dict(upstream)
-    converted, manifest, _ = convert_state_dict(upstream, action_dims=ACTION_DIMS)
+    _converted, manifest, _ = convert_state_dict(upstream, action_dims=ACTION_DIMS)
     assert manifest["action_dims"] == ACTION_DIMS
 
 

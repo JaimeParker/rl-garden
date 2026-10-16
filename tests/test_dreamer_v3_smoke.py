@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -77,22 +78,22 @@ def _action_space() -> spaces.Box:
     return spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
 
-_TINY_KWARGS = dict(
-    device="cpu",
-    buffer_device="cpu",
-    buffer_size=400,
-    batch_size=4,
-    batch_length=6,
-    train_ratio=24.0,  # utd == 1 with batch_size*batch_length == 24 -- small, fast local run
-    imag_horizon=3,
-    learning_starts=40,
-    stoch=4,
-    rssm_size=_TINY_SIZE,
-    compute_dtype="float32",
-    discount_horizon=20.0,
-    eval_freq=0,
-    log_freq=0,
-)
+_TINY_KWARGS = {
+    "device": "cpu",
+    "buffer_device": "cpu",
+    "buffer_size": 400,
+    "batch_size": 4,
+    "batch_length": 6,
+    "train_ratio": 24.0,  # utd == 1 with batch_size*batch_length == 24 -- small, fast local run
+    "imag_horizon": 3,
+    "learning_starts": 40,
+    "stoch": 4,
+    "rssm_size": _TINY_SIZE,
+    "compute_dtype": "float32",
+    "discount_horizon": 20.0,
+    "eval_freq": 0,
+    "log_freq": 0,
+}
 
 
 def _agent(num_envs: int = 4, rgb: bool = False, **overrides) -> DreamerV3:
@@ -102,6 +103,7 @@ def _agent(num_envs: int = 4, rgb: bool = False, **overrides) -> DreamerV3:
     return DreamerV3(env=env, **kwargs)
 
 
+@pytest.mark.slow
 def test_learn_past_learning_starts_state_finite_losses():
     agent = _agent()
     agent.learn(total_timesteps=200)  # well past learning_starts=40
@@ -109,6 +111,7 @@ def test_learn_past_learning_starts_state_finite_losses():
     assert agent._global_update > 0
 
 
+@pytest.mark.slow
 def test_learn_past_learning_starts_rgb_finite_losses():
     agent = _agent(rgb=True)
     agent.learn(total_timesteps=120)
@@ -230,8 +233,8 @@ def test_rollout_reset_zeros_only_the_terminated_envs_carry():
     agent._on_env_reset(obs)
 
     for _ in range(5):  # DummyVecEnv terminates env 0 on every 5th step()
-        action, env_action, action_context = agent._rollout_action(obs, learning_has_started=True)
-        next_obs, rewards, terminations, truncations, infos = agent.env.step(env_action)
+        _action, env_action, action_context = agent._rollout_action(obs, learning_has_started=True)
+        next_obs, _rewards, terminations, truncations, infos = agent.env.step(env_action)
         agent._post_rollout_step(action_context, terminations, truncations, infos)
         obs = next_obs
 
@@ -240,7 +243,7 @@ def test_rollout_reset_zeros_only_the_terminated_envs_carry():
     carry_before = agent._rollout_state["deter"].clone()
     assert float(carry_before[0].abs().sum()) > 0.0  # env 0 has real history before the reset
 
-    action, env_action, action_context = agent._rollout_action(obs, learning_has_started=True)
+    _action, env_action, action_context = agent._rollout_action(obs, learning_has_started=True)
     new_state = action_context["new_state"]
 
     obs_device = agent._obs_to_policy_device(obs)

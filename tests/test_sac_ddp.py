@@ -8,10 +8,12 @@ worker body is a top-level function, not a nested one.
 """
 from __future__ import annotations
 
-import socket
-from contextlib import closing
+import shutil
+import tempfile
+import time
 
 import numpy as np
+import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -22,24 +24,34 @@ from rl_garden.algorithms.sac_ddp import SACDDP
 from rl_garden.common.ddp import allreduce_param_grads, broadcast_module_state
 
 
-def _free_port() -> int:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("ddp")]
 
 
-def _init_gloo(rank: int, world_size: int, port: int) -> None:
+def _init_gloo(rank: int, world_size: int, init_method: str) -> None:
     dist.init_process_group(
         backend="gloo",
-        init_method=f"tcp://127.0.0.1:{port}",
+        init_method=init_method,
         world_size=world_size,
         rank=rank,
     )
 
 
+def _destroy_gloo() -> None:
+    # torch 2.6 gloo: destroy_process_group can deadlock while a gloo worker thread is
+    # still releasing the last collective's tensors; a GIL-free pause lets it finish.
+    time.sleep(0.2)
+    dist.destroy_process_group()
+
+
 def _spawn(worker, world_size: int, extra_args: tuple = ()) -> None:
-    port = _free_port()
-    mp.spawn(worker, args=(world_size, port, *extra_args), nprocs=world_size, join=True)
+    # File-based rendezvous: a pre-picked TCP port can be taken by any process on
+    # a shared (host-network) machine before rank 0 binds it.
+    store_dir = tempfile.mkdtemp(prefix="rl_garden_ddp_")
+    init_method = f"file://{store_dir}/store"
+    try:
+        mp.spawn(worker, args=(world_size, init_method, *extra_args), nprocs=world_size, join=True)
+    finally:
+        shutil.rmtree(store_dir, ignore_errors=True)
 
 
 class _DummyVecEnv:
@@ -91,8 +103,8 @@ def _make_agent(cls, seed: int = 0, **overrides):
 # ---------------------------------------------------------------------------
 
 
-def _allreduce_param_grads_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _allreduce_param_grads_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     p1 = torch.nn.Parameter(torch.zeros(3))
     p2 = torch.nn.Parameter(torch.zeros(2))
     p1.grad = torch.full((3,), float(rank + 1))  # 1.0, 2.0 -> mean 1.5
@@ -100,7 +112,7 @@ def _allreduce_param_grads_worker(rank: int, world_size: int, port: int) -> None
     allreduce_param_grads([p1, p2])
     assert torch.allclose(p1.grad, torch.full((3,), 1.5))
     assert torch.allclose(p2.grad, torch.full((2,), 15.0))
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_allreduce_param_grads_two_processes():
@@ -130,8 +142,8 @@ def test_plain_sac_extra_broadcast_modules_is_empty():
     assert agent._ddp_extra_broadcast_modules() == []
 
 
-def _alpha_broadcast_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _alpha_broadcast_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     agent = _make_agent(SACDDP, seed=7 + rank)
     # log_alpha's init value is a deterministic constant (log(init_value)),
     # not seed-dependent -- mutate it per-rank first to simulate the
@@ -141,7 +153,7 @@ def _alpha_broadcast_worker(rank: int, world_size: int, port: int) -> None:
     for module in agent._ddp_extra_broadcast_modules():
         broadcast_module_state(module, src=0)
     assert torch.equal(agent.alpha_tuner.log_alpha, torch.full((1,), 1.0))
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_alpha_tuner_broadcast_syncs_log_alpha_across_ranks():
@@ -202,8 +214,8 @@ def _gather_flat_params(module: torch.nn.Module, rank: int, world_size: int):
     return gathered
 
 
-def _sac_ddp_e2e_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _sac_ddp_e2e_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     agent = _make_agent(SACDDP, seed=7 + rank, utd=0.5)
     broadcast_module_state(agent.policy, src=0)
     for module in agent._ddp_extra_broadcast_modules():
@@ -221,15 +233,15 @@ def _sac_ddp_e2e_worker(rank: int, world_size: int, port: int) -> None:
             )
         for other in alpha_gathered[1:]:
             assert torch.allclose(alpha_gathered[0], other, atol=1e-5)
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_sac_ddp_end_to_end_weights_converge_across_ranks():
     _spawn(_sac_ddp_e2e_worker, world_size=2)
 
 
-def _plain_sac_contrast_worker(rank: int, world_size: int, port: int) -> None:
-    _init_gloo(rank, world_size, port)
+def _plain_sac_contrast_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     agent = _make_agent(SAC, seed=7 + rank, utd=0.5)
     # Broadcast policy weights the same way the SACDDP arm does, so the only
     # variable between this test and the SACDDP one is whether gradients get
@@ -249,7 +261,7 @@ def _plain_sac_contrast_worker(rank: int, world_size: int, port: int) -> None:
             "an active DDP group -- _sync_ddp_grads's no-op default is not "
             "actually inert."
         )
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_plain_sac_does_not_converge_across_ranks_under_ddp():
@@ -261,8 +273,8 @@ def test_plain_sac_does_not_converge_across_ranks_under_ddp():
 # ---------------------------------------------------------------------------
 
 
-def _build_sac_worker(rank: int, world_size: int, port: int, tmp_dir: str) -> None:
-    _init_gloo(rank, world_size, port)
+def _build_sac_worker(rank: int, world_size: int, init_method: str, tmp_dir: str) -> None:
+    _init_gloo(rank, world_size, init_method)
     import os
     from unittest.mock import patch
 
@@ -306,7 +318,7 @@ def _build_sac_worker(rank: int, world_size: int, port: int, tmp_dir: str) -> No
     except SystemExit:
         raised = True
     assert raised
-    dist.destroy_process_group()
+    _destroy_gloo()
 
 
 def test_build_sac_selects_ddp_class_and_rank_salts_mmap_dir(tmp_path):

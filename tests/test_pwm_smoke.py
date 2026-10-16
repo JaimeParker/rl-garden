@@ -21,7 +21,7 @@ TASKS = ["task_a", "task_b", "task_c"]
 OBS_DIMS = [4, 6, 5]
 ACTION_DIMS = [2, 3, 2]
 EPISODE_LENGTHS = [10, 8, 12]
-WM_ARCH = dict(task_dim=8, latent_dim=16, enc_dim=8, num_enc_layers=2, mlp_dim=16, simnorm_dim=8, num_bins=11)
+WM_ARCH = {"task_dim": 8, "latent_dim": 16, "enc_dim": 8, "num_enc_layers": 2, "mlp_dim": 16, "simnorm_dim": 8, "num_bins": 11}
 
 
 def make_world_model(seed: int = 0) -> MultitaskWorldModel:
@@ -97,19 +97,19 @@ def env_spec() -> OfflineEnvSpec:
 
 def make_agent(tmp_path: Path, *, task_idx: int = 0, mmap_name: str = "buf", world_model=None, **kwargs) -> PWM:
     world_model_path = world_model or write_converted_world_model(tmp_path / "wm")
-    params = dict(
-        buffer_size=200,
-        batch_size=16,
-        horizon=3,
-        actor_units=(32, 32),
-        critic_units=(32, 32),
-        critic_iterations=2,
-        critic_batches=2,
-        lr_decay_steps=200,
-        device="cpu",
-        seed=0,
-        std_log=False,
-    )
+    params = {
+        "buffer_size": 200,
+        "batch_size": 16,
+        "horizon": 3,
+        "actor_units": (32, 32),
+        "critic_units": (32, 32),
+        "critic_iterations": 2,
+        "critic_batches": 2,
+        "lr_decay_steps": 200,
+        "device": "cpu",
+        "seed": 0,
+        "std_log": False,
+    }
     params.update(kwargs)
     return PWM(
         env=env_spec(),

@@ -7,11 +7,19 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers.rehearsal_sequence_buffer import RehearsalSequenceBuffer, SequenceEpisode
+from rl_garden.buffers.rehearsal_sequence_buffer import (
+    RehearsalSequenceBuffer,
+    SequenceEpisode,
+)
 from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.policies.action_mask import action_mask
-from rl_garden.policies.bc_guide import BCGuide, bc_window_starts, sample_bc_batch, train_bc_guide
+from rl_garden.policies.bc_guide import (
+    BCGuide,
+    bc_window_starts,
+    sample_bc_batch,
+    train_bc_guide,
+)
 
 IMAGE = (64, 64, 3)
 PADDED = 5

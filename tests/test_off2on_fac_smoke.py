@@ -86,21 +86,21 @@ class _FakeEnv:
 
 
 def _make_agent(**overrides) -> Off2OnFAC:
-    kwargs = dict(
-        env=_FakeEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=300,
-        batch_size=8,
-        learning_starts=9,
-        training_freq=3,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-        flow_steps=2,
-        bc_pretrain_steps=1,
-        bc_batch_size=8,
-    )
+    kwargs = {
+        "env": _FakeEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 300,
+        "batch_size": 8,
+        "learning_starts": 9,
+        "training_freq": 3,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+        "flow_steps": 2,
+        "bc_pretrain_steps": 1,
+        "bc_batch_size": 8,
+    }
     kwargs.update(overrides)
     return Off2OnFAC(**kwargs)
 

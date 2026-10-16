@@ -36,18 +36,18 @@ class DummyVecEnv:
 
 
 def _agent(**overrides) -> RLPD:
-    kwargs = dict(
-        env=DummyVecEnv(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        learning_starts=1,
-        training_freq=4,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-    )
+    kwargs = {
+        "env": DummyVecEnv(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "learning_starts": 1,
+        "training_freq": 4,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+    }
     kwargs.update(overrides)
     return RLPD(**kwargs)
 

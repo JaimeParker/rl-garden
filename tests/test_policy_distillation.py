@@ -10,9 +10,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
-import torch.nn as nn
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
+from torch import nn
 
 from rl_garden.algorithms.policy_distillation import PolicyDistillation
 from rl_garden.buffers.distillation_rollout_buffer import DistillationRolloutBuffer
@@ -132,20 +132,20 @@ def _make_bc_teacher() -> BCPolicy:
 
 
 def _make_agent(**kwargs) -> PolicyDistillation:
-    defaults = dict(
-        env=_FakeDualObsEnv(num_envs=3),
-        teacher_policy=_ConstantTeacherPolicy(ACTION_DIM),
-        teacher_obs_keys=["privileged"],
-        student_obs_keys=["student_vec"],
-        num_steps=8,
-        num_learning_epochs=2,
-        num_minibatches=2,
-        actor_lr=1e-2,
-        net_arch=[16, 16],
-        device="cpu",
-        eval_freq=0,
-        log_freq=0,
-    )
+    defaults = {
+        "env": _FakeDualObsEnv(num_envs=3),
+        "teacher_policy": _ConstantTeacherPolicy(ACTION_DIM),
+        "teacher_obs_keys": ["privileged"],
+        "student_obs_keys": ["student_vec"],
+        "num_steps": 8,
+        "num_learning_epochs": 2,
+        "num_minibatches": 2,
+        "actor_lr": 1e-2,
+        "net_arch": [16, 16],
+        "device": "cpu",
+        "eval_freq": 0,
+        "log_freq": 0,
+    }
     defaults.update(kwargs)
     return PolicyDistillation(**defaults)
 

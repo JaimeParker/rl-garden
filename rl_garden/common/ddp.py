@@ -64,6 +64,12 @@ def shutdown_ddp() -> None:
     on every DDP run -- confirmed via a real 2-GPU ``torchrun`` smoke test,
     not caught by any single-process or ``gloo`` test (those call
     ``dist.destroy_process_group()`` explicitly in the test body itself).
+
+    ``init_ddp`` only uses the NCCL backend, which has its own shutdown path. On
+    torch 2.6 with gloo, ``destroy_process_group()`` can deadlock against gloo
+    worker threads still releasing tensors after the last collective; the DDP
+    tests (``tests/test_ddp.py::_destroy_gloo``) pause briefly before destroying.
+    If a gloo backend is ever added to ``init_ddp``, apply the same workaround here.
     """
     if is_ddp_active():
         dist.destroy_process_group()

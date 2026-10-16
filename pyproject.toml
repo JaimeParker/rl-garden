@@ -66,7 +66,19 @@ ogbench = ["ogbench"]
 metaworld = ["metaworld"]
 dm_control = ["dm_control>=1.0.15", "mujoco>=3.0"]
 wandb = ["wandb"]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-xdist", "pytest-timeout", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# pytest-randomly stays off unless requested with `-p randomly`.
+addopts = "--strict-markers -p no:randomly"
+markers = [
+    "gpu: requires a CUDA device; run serially on one card",
+    "sim: requires a simulator or optional environment dependency",
+    "smoke: end-to-end training-entrypoint smoke test",
+    "slow: multi-process, torch.compile or long-running test; excluded from the fast lane",
+    "xdist_group: pytest-xdist group (kept registered so --strict-markers works without xdist)",
+]
 
 [tool.setuptools.packages.find]
 include = ["rl_garden*"]

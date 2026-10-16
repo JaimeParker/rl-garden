@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from rl_garden.envs.backend_registry import EnvRequest, discover_env_backends, _REGISTRY
+from rl_garden.envs.backend_registry import _REGISTRY, EnvRequest, discover_env_backends
 from rl_garden.envs.backends.maniskill import ManiSkillBackend
 from rl_garden.envs.maniskill import make_maniskill_env
 from rl_garden.envs.maniskill.config import ManiSkillEnvConfig
@@ -26,16 +26,16 @@ def test_backend_registers_with_api_version_2():
 
 
 def _make_req(**overrides):
-    defaults = dict(
-        env_id="PickCube-v1",
-        num_envs=2,
-        control_mode="pd_joint_delta_pos",
-        render_mode="rgb_array",
-        seed=0,
-        observation=ObservationConfig(),
-        num_eval_envs=2,
-        backend_config=None,
-    )
+    defaults = {
+        "env_id": "PickCube-v1",
+        "num_envs": 2,
+        "control_mode": "pd_joint_delta_pos",
+        "render_mode": "rgb_array",
+        "seed": 0,
+        "observation": ObservationConfig(),
+        "num_eval_envs": 2,
+        "backend_config": None,
+    }
     defaults.update(overrides)
     return EnvRequest(**defaults)
 

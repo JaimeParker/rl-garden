@@ -41,19 +41,19 @@ def _vision_env(num_envs: int = 2) -> OfflineEnvSpec:
 
 
 def _make_agent(**overrides) -> IDQL:
-    kwargs = dict(
-        env=_state_env(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        critic_hidden_dims=(16, 16),
-        value_hidden_dims=(16, 16),
-        diffusion_mlp_dims=(16, 16),
-        denoising_steps=3,
-        n_action_samples=4,
-        std_log=False,
-    )
+    kwargs = {
+        "env": _state_env(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "critic_hidden_dims": (16, 16),
+        "value_hidden_dims": (16, 16),
+        "diffusion_mlp_dims": (16, 16),
+        "denoising_steps": 3,
+        "n_action_samples": 4,
+        "std_log": False,
+    }
     kwargs.update(overrides)
     return IDQL(**kwargs)
 

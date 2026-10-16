@@ -95,19 +95,19 @@ def _make_supe_agent(opal_checkpoint, *, horizon=_CHUNK_SIZE, num_envs=2, **over
     wrapped_env = SkillActionWrapper(
         raw_env, opal_vae.decoder, horizon=horizon, skill_dim=_SKILL_DIM, deterministic=False,
     )
-    kwargs = dict(
-        env=wrapped_env,
-        opal_checkpoint=opal_checkpoint,
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        learning_starts=1,
-        training_freq=4,
-        eval_freq=0,
-        log_freq=0,
-        net_arch=[8],
-    )
+    kwargs = {
+        "env": wrapped_env,
+        "opal_checkpoint": opal_checkpoint,
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "learning_starts": 1,
+        "training_freq": 4,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "net_arch": [8],
+    }
     kwargs.update(overrides)
     return SUPE(**kwargs)
 

@@ -3,12 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
-import torch.nn as nn
 from gymnasium import spaces
+from torch import nn
 
-from rl_garden.encoders.config import EncoderConfig
-from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders import CombinedExtractor, PlainConv, RandomShiftsAug
+from rl_garden.encoders.base import BaseFeaturesExtractor
+from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationSchema
 
 

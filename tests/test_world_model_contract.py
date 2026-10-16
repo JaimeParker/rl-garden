@@ -176,14 +176,14 @@ def test_rssm_reward_loss_only_depends_on_valid_columns():
     action = torch.rand(horizon, batch, action_dim) * 2 - 1
     reward = torch.randn(horizon, batch)
     valid = torch.tensor([True, True, False, False])
-    common = dict(
-        obs=obs,
-        action=action,
-        is_first=torch.zeros(horizon, batch, dtype=torch.bool),
-        terminated=torch.zeros(horizon, batch, dtype=torch.bool),
-        carry={"deter": torch.zeros(batch, 32), "stoch": torch.zeros(batch, rssm.flat_stoch)},
-        reward_valid=valid,
-    )
+    common = {
+        "obs": obs,
+        "action": action,
+        "is_first": torch.zeros(horizon, batch, dtype=torch.bool),
+        "terminated": torch.zeros(horizon, batch, dtype=torch.bool),
+        "carry": {"deter": torch.zeros(batch, 32), "stoch": torch.zeros(batch, rssm.flat_stoch)},
+        "reward_valid": valid,
+    }
 
     scrambled = _scramble_invalid_columns(reward, valid)
     torch.manual_seed(1)  # observe() samples the stochastic state

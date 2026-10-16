@@ -9,7 +9,6 @@ from rl_garden.envs.backend_registry import EnvRequest
 from rl_garden.envs.backends.robomimic import RobomimicBackend
 from rl_garden.envs.robomimic.config import RobomimicEnvConfig
 from rl_garden.envs.robomimic.env import make_robomimic_env
-from rl_garden.buffers.robomimic_dataset import ROBOMIMIC_LOW_DIM_OBS_KEYS
 from rl_garden.observations.config import ObservationConfig
 from rl_garden.observations.schema import ObservationContractError
 
@@ -80,7 +79,7 @@ class _FakeRobosuiteEnv:
 
 
 def _cfg(**kwargs) -> RobomimicEnvConfig:
-    params = dict(env_id="Lift", num_envs=1, device="cpu", horizon=3)
+    params = {"env_id": "Lift", "num_envs": 1, "device": "cpu", "horizon": 3}
     params.update(kwargs)
     return RobomimicEnvConfig(**params)
 

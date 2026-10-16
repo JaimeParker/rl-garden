@@ -120,7 +120,7 @@ def test_chunk_truncation_keeps_bootstrap_discount_but_stops_reward():
     _add_state(rb, 1.0, 20.0, 2.0, done=False, episode_end=True)
     _add_state(rb, 2.0, 30.0, 100.0)
 
-    rewards, discounts, next_inds, action_chunk, valid = rb._accumulate_chunk(
+    rewards, discounts, next_inds, _action_chunk, valid = rb._accumulate_chunk(
         torch.tensor([0]), torch.tensor([0])
     )
 

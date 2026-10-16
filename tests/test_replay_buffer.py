@@ -348,16 +348,16 @@ def _add_nstep_transition(
 
 def _make_nstep_buffer_pair(buffer_size: int = 8):
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-    common = dict(
-        observation_space=_nstep_state_space(),
-        action_space=action_space,
-        num_envs=1,
-        buffer_size=buffer_size,
-        nstep=3,
-        gamma=0.9,
-        storage_device="cpu",
-        sample_device="cpu",
-    )
+    common = {
+        "observation_space": _nstep_state_space(),
+        "action_space": action_space,
+        "num_envs": 1,
+        "buffer_size": buffer_size,
+        "nstep": 3,
+        "gamma": 0.9,
+        "storage_device": "cpu",
+        "sample_device": "cpu",
+    }
     return NStepReplayBuffer(**common), LazyNextNStepReplayBuffer(**common)
 
 
@@ -743,7 +743,7 @@ def test_sample_without_repeat_invalidates_after_pos_change():
         storage_device="cpu", sample_device="cpu",
     )
     _fill_buffer(rb, num_steps=5)  # 10 transitions
-    sample1 = rb.sample_without_repeat(2)
+    rb.sample_without_repeat(2)
     pos_before = rb.pos
     # Add more data → pos changes → permutation should rebuild on next call
     _fill_buffer(rb, num_steps=2)

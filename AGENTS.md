@@ -12,6 +12,8 @@ for user-facing installation, features, and quick-start documentation.
   [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
 - Before adding a new algorithm or training entrypoint, read
   [`.agents/rules/adding-algorithm.md`](.agents/rules/adding-algorithm.md).
+- Before running or adding tests (lanes, markers, `scripts/test.sh`), read
+  [`.agents/runbooks/testing.md`](.agents/runbooks/testing.md).
 - Before launching training or evaluation, read
   [`.agents/runbooks/training.md`](.agents/runbooks/training.md).
 - Before saving, loading, or resuming checkpoints, read
@@ -71,7 +73,9 @@ entrypoints to a specific simulator.
 
 Before finishing code changes:
 
-1. Run the smallest relevant test set first, prefer to run pytest on remote.
+1. Run the smallest relevant test files first; before submitting, run
+   `scripts/test.sh all` on remote. See
+   [`.agents/runbooks/testing.md`](.agents/runbooks/testing.md).
 2. For environment or training changes, run a tiny smoke test where dependencies
    and hardware permit it.
 3. Report exact commands and results.

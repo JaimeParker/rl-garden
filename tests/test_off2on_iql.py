@@ -4,11 +4,12 @@ Mirrors the fixture style of test_off2on_calql.py, but targets Off2OnIQL and
 focuses on what's specific to it: no online-regularizer-override concept at
 all (unlike Cal-QL), no warmup by default, mixed replay with adaptive ratio.
 """
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
-from unittest.mock import MagicMock
 
 from rl_garden.algorithms.off2on_iql import Off2OnIQL
 
@@ -103,23 +104,23 @@ class TestOff2OnIQLDefaults:
 
 class TestOff2OnIQLEvalDispatch:
     def _agent(self, simple_env, **overrides):
-        kwargs = dict(
-            env=simple_env,
-            buffer_size=100,
-            buffer_device="cpu",
-            learning_starts=10,
-            batch_size=8,
-            gamma=0.99,
-            tau=0.005,
-            training_freq=4,
-            utd=1.0,
-            net_arch={"pi": [8], "qf": [8], "vf": [8]},
-            n_critics=2,
-            critic_subsample_size=2,
-            device="cpu",
-            seed=0,
-            num_eval_steps=50,
-        )
+        kwargs = {
+            "env": simple_env,
+            "buffer_size": 100,
+            "buffer_device": "cpu",
+            "learning_starts": 10,
+            "batch_size": 8,
+            "gamma": 0.99,
+            "tau": 0.005,
+            "training_freq": 4,
+            "utd": 1.0,
+            "net_arch": {"pi": [8], "qf": [8], "vf": [8]},
+            "n_critics": 2,
+            "critic_subsample_size": 2,
+            "device": "cpu",
+            "seed": 0,
+            "num_eval_steps": 50,
+        }
         kwargs.update(overrides)
         return Off2OnIQL(**kwargs)
 
@@ -209,21 +210,21 @@ def test_off2on_iql_one_update_smoke(off2on_iql_agent):
 
 def test_off2on_iql_checkpoint_roundtrip_restores_weights(tmp_path):
     def _make(**overrides):
-        kwargs = dict(
-            env=MagicMock(
+        kwargs = {
+            "env": MagicMock(
                 num_envs=2,
                 single_observation_space=spaces.Box(-1, 1, shape=(4,), dtype=np.float32),
                 single_action_space=spaces.Box(-1, 1, shape=(2,), dtype=np.float32),
             ),
-            buffer_size=64,
-            buffer_device="cpu",
-            batch_size=8,
-            net_arch={"pi": [16], "qf": [16], "vf": [16]},
-            n_critics=3,
-            critic_subsample_size=2,
-            device="cpu",
-            seed=42,
-        )
+            "buffer_size": 64,
+            "buffer_device": "cpu",
+            "batch_size": 8,
+            "net_arch": {"pi": [16], "qf": [16], "vf": [16]},
+            "n_critics": 3,
+            "critic_subsample_size": 2,
+            "device": "cpu",
+            "seed": 42,
+        }
         kwargs.update(overrides)
         return Off2OnIQL(**kwargs)
 

@@ -3,25 +3,30 @@ from __future__ import annotations
 
 import json
 import warnings
-from dataclasses import dataclass
 
 import numpy as np
 import pytest
 import tyro
 
-from rl_garden.common.cli_args import resolve_num_eval_steps, warn_if_eval_budget_undersized
-from rl_garden.common.effective_config import apply_strict_mapping, inactive_config_paths
+from rl_garden.common.cli_args import (
+    resolve_num_eval_steps,
+    warn_if_eval_budget_undersized,
+)
+from rl_garden.common.effective_config import (
+    apply_strict_mapping,
+    inactive_config_paths,
+)
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationConfig
-from rl_garden.training.offline._args import TDMPC2MultitaskTrainingArgs
-from rl_garden.training.offline.awac import AWACArgs
-from rl_garden.training.offline.td3_bc import TD3BCArgs
 from rl_garden.training.off2on._args import (
     WSRLTrainingArgs,
     initial_training_phase_from_args,
     warn_if_off2on_warmup_uses_uninitialized_policy,
 )
 from rl_garden.training.off2on.awac import AWACOff2OnArgs
+from rl_garden.training.offline._args import TDMPC2MultitaskTrainingArgs
+from rl_garden.training.offline.awac import AWACArgs
+from rl_garden.training.offline.td3_bc import TD3BCArgs
 from rl_garden.training.online._args import (
     FlashSACTrainingArgs,
     SACTrainingArgs,
@@ -218,7 +223,7 @@ def test_flash_sac_args_keep_existing_defaults() -> None:
 
 
 def test_algorithm_args_are_not_exported_from_common_cli_args() -> None:
-    import rl_garden.common.cli_args as cli_args
+    from rl_garden.common import cli_args
 
     for name in (
         "SACTrainingArgs",

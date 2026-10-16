@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pytest
 import torch
 
-from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 import rl_garden.envs.robotwin.adapter as robotwin_adapter
+from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 from rl_garden.envs.robotwin.adapter import RoboTwinTaskAdapter, StepResult
 from rl_garden.envs.robotwin.rewards import build_task_reward, supported_reward_tasks
 from rl_garden.observations.config import ObservationConfig
@@ -164,8 +166,8 @@ class UnStableError(Exception):
 
 
 class _RetryTask:
-    setup_seeds = []
-    close_calls = []
+    setup_seeds: ClassVar[list] = []
+    close_calls: ClassVar[list] = []
 
     def setup_demo(self, *, now_ep_num, seed, **kwargs):
         del now_ep_num, kwargs
@@ -380,16 +382,16 @@ def test_robotwin_adapter_starts_and_stops_eval_video(monkeypatch, tmp_path):
 def _base_req(**overrides):
     from rl_garden.envs.backend_registry import EnvRequest
 
-    defaults = dict(
-        env_id="place_shoe",
-        num_envs=1,
-        num_eval_envs=1,
-        observation=ObservationConfig(),
-        control_mode="delta_joint_pos",
-        render_mode="rgb_array",
-        seed=1,
-        backend_config=None,
-    )
+    defaults = {
+        "env_id": "place_shoe",
+        "num_envs": 1,
+        "num_eval_envs": 1,
+        "observation": ObservationConfig(),
+        "control_mode": "delta_joint_pos",
+        "render_mode": "rgb_array",
+        "seed": 1,
+        "backend_config": None,
+    }
     defaults.update(overrides)
     return EnvRequest(**defaults)
 

@@ -88,10 +88,6 @@ class TestMCReturnValues:
 
             mc_state_buffer.add(obs, next_obs, actions, rewards, dones)
 
-        # Manually compute expected MC return for first transition
-        # G_0 = r_0 + γ*r_1 + γ²*r_2 = 1 + 0.9*1 + 0.81*1 = 2.71
-        expected_return = 1.0 + 0.9 * 1.0 + 0.81 * 1.0
-
         # Sample and check (need to ensure we sample from env 0, step 0)
         # This is probabilistic, so we'll just check the computation logic
         sample = mc_state_buffer.sample(16)
@@ -715,32 +711,32 @@ def _oracle_build_mc_table(
 def _randomized_mc_configs():
     random.seed(42)
     configs = [
-        dict(T=200, N=8, external_frac=0.0, ep_len=20, pos=0, full=True, sparse=False, success_rate=0.0),
-        dict(T=200, N=8, external_frac=0.3, ep_len=20, pos=50, full=True, sparse=False, success_rate=0.0),
-        dict(T=200, N=8, external_frac=0.9, ep_len=5, pos=30, full=True, sparse=False, success_rate=0.0),
-        dict(T=120, N=4, external_frac=0.0, ep_len=97, pos=60, full=False, sparse=False, success_rate=0.0),
-        dict(T=80, N=16, external_frac=0.5, ep_len=1, pos=0, full=True, sparse=False, success_rate=0.0),
-        dict(T=80, N=2, external_frac=0.0, ep_len=79, pos=0, full=True, sparse=False, success_rate=0.0),
-        dict(T=80, N=2, external_frac=1.0, ep_len=5, pos=0, full=True, sparse=False, success_rate=0.0),
-        dict(T=64, N=1, external_frac=0.0, ep_len=7, pos=13, full=True, sparse=False, success_rate=0.0),
+        {"T": 200, "N": 8, "external_frac": 0.0, "ep_len": 20, "pos": 0, "full": True, "sparse": False, "success_rate": 0.0},
+        {"T": 200, "N": 8, "external_frac": 0.3, "ep_len": 20, "pos": 50, "full": True, "sparse": False, "success_rate": 0.0},
+        {"T": 200, "N": 8, "external_frac": 0.9, "ep_len": 5, "pos": 30, "full": True, "sparse": False, "success_rate": 0.0},
+        {"T": 120, "N": 4, "external_frac": 0.0, "ep_len": 97, "pos": 60, "full": False, "sparse": False, "success_rate": 0.0},
+        {"T": 80, "N": 16, "external_frac": 0.5, "ep_len": 1, "pos": 0, "full": True, "sparse": False, "success_rate": 0.0},
+        {"T": 80, "N": 2, "external_frac": 0.0, "ep_len": 79, "pos": 0, "full": True, "sparse": False, "success_rate": 0.0},
+        {"T": 80, "N": 2, "external_frac": 1.0, "ep_len": 5, "pos": 0, "full": True, "sparse": False, "success_rate": 0.0},
+        {"T": 64, "N": 1, "external_frac": 0.0, "ep_len": 7, "pos": 13, "full": True, "sparse": False, "success_rate": 0.0},
         # sparse_reward_mc branch, including the coupling-bug config that
         # caught the "running carries the overridden value" mistake.
-        dict(T=80, N=8, external_frac=0.0, ep_len=1, pos=0, full=True, sparse=True, success_rate=0.5),
-        dict(T=80, N=8, external_frac=0.0, ep_len=20, pos=13, full=True, sparse=True, success_rate=0.5),
-        dict(T=200, N=4, external_frac=0.3, ep_len=50, pos=0, full=True, sparse=True, success_rate=0.1),
-        dict(T=200, N=4, external_frac=0.7, ep_len=3, pos=47, full=False, sparse=True, success_rate=0.02),
+        {"T": 80, "N": 8, "external_frac": 0.0, "ep_len": 1, "pos": 0, "full": True, "sparse": True, "success_rate": 0.5},
+        {"T": 80, "N": 8, "external_frac": 0.0, "ep_len": 20, "pos": 13, "full": True, "sparse": True, "success_rate": 0.5},
+        {"T": 200, "N": 4, "external_frac": 0.3, "ep_len": 50, "pos": 0, "full": True, "sparse": True, "success_rate": 0.1},
+        {"T": 200, "N": 4, "external_frac": 0.7, "ep_len": 3, "pos": 47, "full": False, "sparse": True, "success_rate": 0.02},
     ]
     for i in range(15):
-        configs.append(dict(
-            T=random.choice([50, 200, 333]),
-            N=random.choice([1, 3, 8]),
-            external_frac=random.choice([0.0, 0.2, 0.5, 0.8]),
-            ep_len=random.choice([1, 5, 20, 60]),
-            pos=random.randint(0, 40),
-            full=random.choice([True, False]),
-            sparse=random.choice([True, False]),
-            success_rate=random.choice([0.0, 0.02, 0.1, 0.5]),
-        ))
+        configs.append({
+            "T": random.choice([50, 200, 333]),
+            "N": random.choice([1, 3, 8]),
+            "external_frac": random.choice([0.0, 0.2, 0.5, 0.8]),
+            "ep_len": random.choice([1, 5, 20, 60]),
+            "pos": random.randint(0, 40),
+            "full": random.choice([True, False]),
+            "sparse": random.choice([True, False]),
+            "success_rate": random.choice([0.0, 0.02, 0.1, 0.5]),
+        })
     return configs
 
 

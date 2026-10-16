@@ -8,16 +8,15 @@ from gymnasium import spaces
 
 from rl_garden.observations import (
     Modality,
-    ObsGroups,
     ObservationConfig,
     ObservationContractError,
     ObservationSchema,
+    ObsGroups,
     key_modality,
     normalize_observation_space,
     resolve_obs_groups,
     validate_observation_space,
 )
-
 
 # ---------------------------------------------------------------------------
 # ObservationConfig

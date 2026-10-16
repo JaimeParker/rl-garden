@@ -5,7 +5,10 @@ import pickle
 
 import torch
 
-from rl_garden.models.reward.success.data import SuccessClassifierDataset, collate_obs_label
+from rl_garden.models.reward.success.data import (
+    SuccessClassifierDataset,
+    collate_obs_label,
+)
 
 
 def _write_pkl(path: str, entries: list[dict]) -> None:

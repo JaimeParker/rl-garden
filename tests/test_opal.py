@@ -32,16 +32,16 @@ def _make_agent(path, **overrides) -> OPAL:
         spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
         num_envs=1,
     )
-    kwargs = dict(
-        env=env,
-        dataset_path=str(path),
-        device="cpu",
-        batch_size=16,
-        skill_dim=4,
-        chunk_size=4,
-        hidden_size=8,
-        vae_hidden_dims=(8, 8),
-    )
+    kwargs = {
+        "env": env,
+        "dataset_path": str(path),
+        "device": "cpu",
+        "batch_size": 16,
+        "skill_dim": 4,
+        "chunk_size": 4,
+        "hidden_size": 8,
+        "vae_hidden_dims": (8, 8),
+    }
     kwargs.update(overrides)
     return OPAL(**kwargs)
 

@@ -8,12 +8,12 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import SAC
-from rl_garden.encoders.config import EncoderConfig
-from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.checkpoint import checkpoint_dict, save_checkpoint_file
-from rl_garden.common.types import NStepReplayBufferSample
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.common.types import NStepReplayBufferSample
+from rl_garden.encoders.config import EncoderConfig
 
 
 class DummyVecEnv:

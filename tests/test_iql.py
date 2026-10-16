@@ -209,17 +209,17 @@ def test_iql_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
 
 
 def _make_state_agent(**overrides) -> IQL:
-    kwargs = dict(
-        env=_state_env(),
-        device="cpu",
-        buffer_device="cpu",
-        buffer_size=64,
-        batch_size=8,
-        net_arch={"pi": [16], "qf": [16], "vf": [16]},
-        n_critics=3,
-        critic_subsample_size=2,
-        std_log=False,
-    )
+    kwargs = {
+        "env": _state_env(),
+        "device": "cpu",
+        "buffer_device": "cpu",
+        "buffer_size": 64,
+        "batch_size": 8,
+        "net_arch": {"pi": [16], "qf": [16], "vf": [16]},
+        "n_critics": 3,
+        "critic_subsample_size": 2,
+        "std_log": False,
+    }
     kwargs.update(overrides)
     return IQL(**kwargs)
 
