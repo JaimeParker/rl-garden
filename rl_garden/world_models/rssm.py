@@ -134,6 +134,13 @@ def kl_loss_mean_free(
     return torch.clamp(dyn_loss, min=free), torch.clamp(rep_loss, min=free)
 
 
+def _masked_mean(values: torch.Tensor, row_mask: torch.Tensor) -> torch.Tensor:
+    """Mean of ``values`` ``(horizon, B, ...)`` over the ``(horizon, B)`` rows ``row_mask`` keeps."""
+    mask = row_mask.to(values.dtype).reshape(row_mask.shape + (1,) * (values.dim() - row_mask.dim()))
+    mask = mask.expand_as(values)
+    return (values * mask).sum() / mask.sum().clamp(min=1)
+
+
 class _Deter(nn.Module):
     """Block-GRU dynamics core (r2dreamer ``Deter``, ``rssm.py:10-75``):
     ``deter``/``stoch``/``action`` each project (independent ``Linear ->
@@ -588,13 +595,22 @@ class RSSM(WorldModel):
                 target = target.float() / 255.0
             losses[key] = -dist.log_prob(target).mean()
 
+        # A loss row whose arriving transition ended the episode is a reset
+        # observation; its reward/terminated belong to the previous episode.
+        is_last = getattr(batch, "is_last", None)
+        row_valid = None if is_last is None else ~is_last.bool()
+
         if self.reward_head is not None:
             reward = batch.reward if batch.reward.dim() == batch.action.dim() else batch.reward.unsqueeze(-1)
             reward_dist = self.reward_head(feat.detach() if self.reward_detached else feat)
-            if batch.reward_valid is None:
-                losses["rew"] = -reward_dist.log_prob(reward).mean()
+            reward_nll = -reward_dist.log_prob(reward)
+            if row_valid is not None:
+                reward_mask = row_valid if batch.reward_valid is None else row_valid & batch.reward_valid
+                losses["rew"] = _masked_mean(reward_nll, reward_mask)
+            elif batch.reward_valid is None:
+                losses["rew"] = reward_nll.mean()
             else:
-                losses["rew"] = -reward_dist.log_prob(reward)[:, batch.reward_valid].mean()
+                losses["rew"] = reward_nll[:, batch.reward_valid].mean()
 
         if self.cont_head is not None:
             terminated = batch.terminated.float()
@@ -605,6 +621,7 @@ class RSSM(WorldModel):
             else:
                 cont_target = 1.0 - terminated
             cont_dist = self.cont_head(feat)
-            losses["con"] = -cont_dist.log_prob(cont_target.unsqueeze(-1)).mean()
+            cont_nll = -cont_dist.log_prob(cont_target.unsqueeze(-1))
+            losses["con"] = cont_nll.mean() if row_valid is None else _masked_mean(cont_nll, row_valid)
 
         return losses, {"deter": post_deter, "stoch": post_stoch, "logits": post_logits}

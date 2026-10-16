@@ -2,6 +2,8 @@
 """
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -223,6 +225,39 @@ def test_model_loss_gradients_flow_to_encoder_and_dynamics():
     dyn_grad = next(p for p in rssm._deter_net.parameters()).grad
     assert encoder_grad is not None and torch.isfinite(encoder_grad).all()
     assert dyn_grad is not None and torch.isfinite(dyn_grad).all()
+
+
+def test_model_loss_masks_reward_and_continue_on_is_last_rows():
+    action_dim = 3
+    rssm, obs_space, _ = _build_rssm(action_dim=action_dim)
+    with torch.no_grad():  # the reward head starts at zero output, which ignores its target
+        for param in rssm.reward_head.parameters():
+            param.normal_(0.0, 0.5)
+    action_space = spaces.Box(-1, 1, shape=(action_dim,), dtype=np.float32)
+    torch.manual_seed(0)
+    batch = _fill_buffer_and_sample(rssm, obs_space, action_space, horizon=4)
+    batch.is_last = torch.zeros_like(batch.is_last)
+    batch.is_last[1, 0] = True
+
+    def _losses(reward_value: float, terminated_value: bool):
+        reward = batch.reward.clone()
+        terminated = batch.terminated.clone()
+        reward[1, 0] = reward_value
+        terminated[1, 0] = terminated_value
+        trial = dataclasses.replace(batch, reward=reward, terminated=terminated)
+        torch.manual_seed(1)
+        losses, _ = rssm.model_loss(trial)
+        return losses
+
+    base = _losses(0.0, False)
+    swapped = _losses(7.5, True)
+    torch.testing.assert_close(swapped["rew"], base["rew"])
+    torch.testing.assert_close(swapped["con"], base["con"])
+
+    # Same swap on an unmasked row does change both losses.
+    batch.is_last = torch.zeros_like(batch.is_last)
+    assert not torch.allclose(_losses(7.5, True)["rew"], _losses(0.0, False)["rew"])
+    assert not torch.allclose(_losses(7.5, True)["con"], _losses(0.0, False)["con"])
 
 
 def test_contdisc_flag_changes_continue_target():

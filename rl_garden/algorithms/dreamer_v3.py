@@ -167,16 +167,16 @@ class DreamerV3(ModelBasedAlgorithm):
         # Train-ratio -> (training_freq, utd) derivation:
         # train_ratio is upstream's own definition -- "1 gradient update per
         # batch_steps/train_ratio env steps collected", batch_steps =
-        # batch_size*batch_length (dreamer-code-survey.md section 6). Setting
-        # utd = train_ratio / batch_steps directly reproduces that ratio
-        # through OffPolicyAlgorithm's own grad_steps_per_iteration =
-        # max(1, int(training_freq * utd)) formula for ANY training_freq;
-        # training_freq = env.num_envs (one rollout step per env per
-        # iteration, steps_per_env == 1) is chosen only for the smallest,
-        # most frequent update granularity a vectorized rollout can offer,
-        # not because it changes the ratio itself.
+        # batch_size*batch_length, so utd = train_ratio / batch_steps.
+        # OffPolicyAlgorithm runs
+        # max(1, int(training_freq * utd)) updates per iteration, which
+        # rounds training_freq * utd < 1 up to one update. Collect
+        # ~1 / (num_envs * utd) steps per env per iteration so every
+        # iteration owes at least one update; the ratio is exact when
+        # num_envs * utd or its inverse is an integer.
         utd = train_ratio / (batch_size * batch_length)
-        training_freq = env.num_envs
+        steps_per_env = max(1, round(1.0 / (env.num_envs * utd)))
+        training_freq = env.num_envs * steps_per_env
 
         if learning_starts // env.num_envs <= batch_length:
             raise ValueError(
@@ -211,6 +211,8 @@ class DreamerV3(ModelBasedAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        # round, not int: training_freq * utd may land at 0.999... for integer ratios.
+        self.grad_steps_per_iteration = max(1, round(self.training_freq * self.utd))
 
         self.size = size
         self._rssm_size = rssm_size if rssm_size is not None else RSSM_SIZES.get(size) or RSSM_SIZES[f"size{size}"]

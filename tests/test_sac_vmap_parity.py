@@ -208,9 +208,11 @@ def _run_matched_train_step(
     vmap_rng_after = torch.get_rng_state().clone()
     vmap_cuda_rng_after = _get_cuda_rng(device)
 
+    # Batched (vmap) and per-critic CUDA matmuls take different cuBLAS paths.
+    tol = 1e-5 if device.startswith("cuda") else 1e-6
     assert legacy_info.keys() == vmap_info.keys()
     for key in legacy_info:
-        assert legacy_info[key] == pytest.approx(vmap_info[key], abs=1e-6, rel=1e-6)
+        assert legacy_info[key] == pytest.approx(vmap_info[key], abs=tol, rel=tol)
     assert torch.equal(legacy_rng_after, vmap_rng_after)
     if legacy_cuda_rng_after is not None:
         assert vmap_cuda_rng_after is not None
@@ -260,7 +262,13 @@ def test_sac_update_vmap_matches_legacy_on_fixed_batch(env_factory, extractor_cl
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_sac_update_vmap_matches_legacy_on_fixed_batch_cuda():
+def test_sac_update_vmap_matches_legacy_on_fixed_batch_cuda(monkeypatch, request):
+    # Other tests in the same process may enable TF32 via enable_fast_math().
+    previous_precision = torch.get_float32_matmul_precision()
+    request.addfinalizer(lambda: torch.set_float32_matmul_precision(previous_precision))
+    torch.set_float32_matmul_precision("highest")
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", False)
     legacy = _make_agent(_box_env(), "legacy", TrainableBoxExtractor, device="cuda")
     vmap = _make_agent(_box_env(), "vmap", TrainableBoxExtractor, device="cuda")
     _install_fixed_sampler(legacy, _box_batch("cuda"))

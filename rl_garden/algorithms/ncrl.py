@@ -49,7 +49,9 @@ Differences from ``DreamerV3`` (all implemented here, none in the parent):
    (:func:`dv2_lambda_return`); no return normalisation and no repval loss.
 6. **Update cadence.** ``utd = train_ratio / (batch_size * batch_length)``
    gradient steps per env step, starting after ``learning_starts`` (default 10
-   episodes); deviation from the official code, which runs a burst after each episode.
+   episodes); when ``num_envs * utd < 1`` the inherited DreamerV3 pacing collects
+   ``~1 / (num_envs * utd)`` steps per env per iteration. Deviation from the
+   official code, which runs a burst after each episode.
 
 Steps vs frames: ``self._global_step`` counts policy steps (env steps after
 action repeat). ``episode_frames``, ``warmup_frames`` and eval cadence in the
@@ -586,16 +588,6 @@ class NCRL(DreamerV3):
         )
         self.size = str(hyper["size"])
         del self._pretrained_checkpoint
-
-        # DreamerV3 sets training_freq = num_envs, so the base loop's
-        # max(1, int(training_freq * utd)) rounds utd < 1/num_envs up to one
-        # update per env step (4x too many for 256 / (16 * 64) with one env).
-        # Collect ~1 / (num_envs * utd) env steps per iteration instead; the
-        # ratio is exact when num_envs * utd or its inverse is an integer.
-        steps_per_env = max(1, round(1.0 / (self.num_envs * self.utd)))
-        self.steps_per_env = steps_per_env
-        self.training_freq = self.num_envs * steps_per_env
-        self.grad_steps_per_iteration = max(1, round(self.training_freq * self.utd))
 
     # ------------------------------------------------------------------
     # Construction

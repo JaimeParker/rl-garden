@@ -520,6 +520,8 @@ def test_mujoco_backend_rejects_visual_observation() -> None:
 
 
 def _make_mujoco_warp_req(mjw, *, num_envs: int = 2, num_eval_envs: int = 3, observation=None):
+    # _make_cfg imports rl_garden.envs.mujoco_warp, which imports mujoco_warp eagerly.
+    pytest.importorskip("mujoco_warp")
     from rl_garden.envs.backend_registry import EnvRequest
 
     return EnvRequest(
@@ -888,10 +890,11 @@ def test_wsrl_off2on_args_defaults_match_existing_cli() -> None:
 
 
 def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
-    """Regression for the codex review's claim #6: these 8 fields were added
-    to the shared CQLOff2OnArgs, so WSRLOff2OnArgs exposed CLI flags that
-    build_wsrl() silently never consumes. They must live only on
-    CalQLOff2OnArgs. offline_eval_freq/online_eval_freq stay shared since
+    """These fields were added to the shared CQLOff2OnArgs, so WSRLOff2OnArgs
+    exposed CLI flags that build_wsrl() silently never consumed. Six of the
+    original nine are now defined directly on WSRLOff2OnArgs and consumed in
+    build_wsrl() (the AntMaze/Kitchen recipe); the remaining three stay
+    Cal-QL-only. offline_eval_freq/online_eval_freq stay shared since
     _runner.py applies those generically regardless of algorithm.
     """
     from dataclasses import fields as dataclass_fields
@@ -899,13 +902,15 @@ def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
     from rl_garden.training.off2on.calql import CalQLOff2OnArgs
     from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
-    calql_only_fields = {
+    wsrl_consumed_fields = {
         "hidden_dim",
         "actor_hidden_layers",
         "critic_hidden_layers",
         "policy_log_std_multiplier",
         "policy_log_std_offset",
         "bootstrap_at_done",
+    }
+    calql_only_fields = {
         "online_episodes_per_iteration",
         "stats_window_size",
         "num_eval_episodes",
@@ -913,6 +918,7 @@ def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
     wsrl_fields = {f.name for f in dataclass_fields(WSRLOff2OnArgs)}
     calql_fields = {f.name for f in dataclass_fields(CalQLOff2OnArgs)}
 
+    assert wsrl_consumed_fields <= wsrl_fields
     assert calql_only_fields.isdisjoint(wsrl_fields)
     assert calql_only_fields <= calql_fields
     assert {"offline_eval_freq", "online_eval_freq"} <= wsrl_fields

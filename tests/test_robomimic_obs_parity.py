@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+from gymnasium import spaces
 
 from rl_garden.buffers.robomimic_dataset import (
     ROBOMIMIC_LOW_DIM_OBS_KEYS,
@@ -92,4 +93,6 @@ def test_env_and_dataset_flatten_agree_on_key_order_and_values(tmp_path):
     assert np.allclose(online_obs.astype(np.float64), offline_obs, atol=1e-6)
 
     obs_space, _ = infer_specs_from_robomimic(path)
-    assert obs_space.shape == (_OBS_DIM,)
+    assert isinstance(obs_space, spaces.Dict)
+    assert set(obs_space.spaces) == {"state"}
+    assert obs_space["state"].shape == (_OBS_DIM,)

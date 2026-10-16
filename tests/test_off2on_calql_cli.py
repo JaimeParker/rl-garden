@@ -77,13 +77,14 @@ def test_d4rl_expansion_presets_are_strict_and_complete():
     repo_root = Path(__file__).resolve().parents[1]
     paths = sorted((repo_root / "configs" / "off2on").glob("calql_*_v*_*.yaml"))
 
-    assert len(paths) == 19
+    assert len(paths) == 22
     configs = {}
     for path in paths:
         args = CalQLOff2OnArgs()
         apply_strict_mapping(args, load_preset(path).values)
         configs[args.env_id] = args
 
+    assert "hopper-medium-v2" in configs
     assert configs["pen-binary-v0"].offline_dataset is None
     assert configs["pen-binary-v0"].num_online_steps == 300_000
     assert configs["door-binary-v0"].sparse_negative_reward == -5.0

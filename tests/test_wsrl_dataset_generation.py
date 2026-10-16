@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -97,20 +98,25 @@ def test_discover_checkpoints_and_select_sources(tmp_path):
         "checkpoint_400.pt",
         "final.pt",
     ]
-    assert normalize_mix((3, 3, 4)) == (0.3, 0.3, 0.4)
+    assert normalize_mix((3, 3, 3, 1)) == pytest.approx((0.3, 0.3, 0.3, 0.1))
 
+    # Default thresholds (0.2, 0.6, 0.8): 0.55 is middle, 0.7 is near_success.
     scores = [
         CheckpointScore(tmp_path / "failure.pt", 0.05, 1.0, 10.0, 5),
         CheckpointScore(tmp_path / "near.pt", 0.55, 2.0, 10.0, 5),
+        CheckpointScore(tmp_path / "near_success.pt", 0.7, 2.5, 10.0, 5),
         CheckpointScore(tmp_path / "success.pt", 0.95, 3.0, 10.0, 5),
     ]
     sources = select_policy_sources(scores, total_transitions=100)
+    assert [s.tier for s in sources] == ["failure", "middle", "near_success", "success"]
     assert [s.path.name for s in sources if s.path is not None] == [
         "failure.pt",
         "near.pt",
+        "near_success.pt",
         "success.pt",
     ]
-    assert [s.target_transitions for s in sources] == [30, 30, 40]
+    assert all(s.fallback_reason is None for s in sources)
+    assert [s.target_transitions for s in sources] == [30, 30, 30, 10]
 
 
 def test_select_sources_can_use_random_failure_fallback(tmp_path):

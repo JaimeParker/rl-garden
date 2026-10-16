@@ -281,3 +281,12 @@ def test_contdisc_flag_changes_imagination_disc():
     assert math.isclose(imag_off["disc"], 1.0 - 1.0 / agent_off.discount_horizon)
     assert math.isclose(imag_on["disc"], 1.0)
     assert not math.isclose(imag_off["disc"], imag_on["disc"])
+
+
+def test_replay_ratio_matches_train_ratio():
+    agent = _agent(num_envs=1, train_ratio=6.0)  # utd = 6 / (4 * 6) = 0.25
+    assert (agent.steps_per_env, agent.training_freq, agent.grad_steps_per_iteration) == (4, 4, 1)
+    agent = _agent(num_envs=2, train_ratio=6.0)
+    assert (agent.steps_per_env, agent.training_freq, agent.grad_steps_per_iteration) == (2, 4, 1)
+    agent = _agent(num_envs=2, train_ratio=48.0)  # utd = 2
+    assert (agent.steps_per_env, agent.training_freq, agent.grad_steps_per_iteration) == (1, 2, 4)

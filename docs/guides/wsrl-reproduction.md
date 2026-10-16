@@ -119,7 +119,7 @@ ssh 6017 "tail -f /data0/liuzhaohong/Projects/rl-garden/logs/rlg_pickcube_sac_st
 ## Stage 2: Select Checkpoints for Dataset Generation
 
 Use checkpoint selection to score candidate policies before collection. The
-dataset generator groups policies into failure, near-success, and success
+dataset generator groups policies into failure, middle, near-success, and success
 sources using success-rate thresholds. If no failure policy exists, random
 actions are used as the failure fallback.
 
@@ -158,8 +158,8 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
     --total_transitions 200000 \
     --num_envs 16 \
     --eval_episodes 50 \
-    --policy_mix 0.3 0.3 0.4 \
-    --tier_thresholds 0.2 0.8 \
+    --policy_mix 0.3 0.3 0.3 0.1 \
+    --tier_thresholds 0.2 0.6 0.8 \
     --selection_only \
     --report_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.selection.json
 '"
@@ -190,8 +190,8 @@ ssh 6017 "docker exec -e CUDA_VISIBLE_DEVICES=1 liuzhaohong_maniskill_rlgarden b
     --total_transitions 200000 \
     --num_envs 16 \
     --eval_episodes 50 \
-    --policy_mix 0.3 0.3 0.4 \
-    --tier_thresholds 0.2 0.8 \
+    --policy_mix 0.3 0.3 0.3 0.1 \
+    --tier_thresholds 0.2 0.6 0.8 \
     --source_report_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.selection.json \
     --report_path /workspace/rl-garden/runs/pickcube_sac_state_2m_seed1/wsrl_datasets/pickcube_state_wsrl_200k_mix_30_30_40_200k_1m.collection.json
 '"
