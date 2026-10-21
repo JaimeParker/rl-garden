@@ -183,9 +183,12 @@ def _make_env_fn():
         # must run fresh in whichever process calls gym.make().
         import gymnasium as gym
 
+        # Training/eval read infos["final_info"]["episode"] unconditionally.
+        from gymnasium.wrappers import RecordEpisodeStatistics
+
         import rl_garden.envs.my_backend.my_task_env  # noqa: F401
 
-        return gym.make("MyTask-v0")
+        return RecordEpisodeStatistics(gym.make("MyTask-v0"))
 
     return _env_fn
 

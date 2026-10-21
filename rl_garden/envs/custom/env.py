@@ -29,9 +29,13 @@ def _make_env_fn():
         # for the same reasoning.
         import gymnasium as gym
 
+        # The training loop and evaluation read infos["final_info"]["episode"]
+        # unconditionally, so every backend must record episode statistics.
+        from gymnasium.wrappers import RecordEpisodeStatistics
+
         import rl_garden.envs.custom.point_reach_env  # noqa: F401
 
-        return gym.make("PointReach-v0")
+        return RecordEpisodeStatistics(gym.make("PointReach-v0"))
 
     return _env_fn
 

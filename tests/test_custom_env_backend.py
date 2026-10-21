@@ -154,3 +154,21 @@ def test_registry_rejects_backend_returning_non_contract_space():
 
     with pytest.raises(ObservationContractError):
         make_training_envs(name, req)
+
+
+def test_make_custom_env_records_episode_statistics_in_final_info():
+    cfg = CustomEnvConfig(env_id="PointReach-v0", num_envs=2, seed=0, device="cpu")
+    env = make_custom_env(cfg)
+    env.reset(seed=0)
+
+    final_infos = None
+    for _ in range(400):
+        actions = torch.as_tensor(env.action_space.sample())
+        _obs, _rewards, _terminations, _truncations, infos = env.step(actions)
+        if "final_info" in infos:
+            final_infos = infos
+            break
+
+    assert final_infos is not None, "no episode ended within 400 steps"
+    assert final_infos["_final_info"].any()
+    assert "episode" in final_infos["final_info"]
