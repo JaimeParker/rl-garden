@@ -11,6 +11,7 @@ import torch
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.buffers.rollout_buffer import RolloutBuffer
+from rl_garden.common.eval_metrics import canonical_episode_metric_key
 from rl_garden.common.logger import Logger
 
 
@@ -233,7 +234,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 if "final_info" in infos:
                     fi = infos["final_info"]
                     done_mask = infos["_final_info"]
-                    for k, v in fi["episode"].items():
+                    for raw_key, v in fi["episode"].items():
+                        k = canonical_episode_metric_key(raw_key)
+                        if k is None:
+                            continue
                         done_values = v[done_mask]
                         if done_values.numel() == 0:
                             continue

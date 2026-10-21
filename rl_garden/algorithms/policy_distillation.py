@@ -66,6 +66,7 @@ from gymnasium import spaces
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.distillation_rollout_buffer import DistillationRolloutBuffer
+from rl_garden.common.eval_metrics import canonical_episode_metric_key
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.types import Obs
@@ -402,7 +403,10 @@ class PolicyDistillation(OnPolicyAlgorithm):
                 if "final_info" in infos:
                     fi = infos["final_info"]
                     done_mask = infos["_final_info"]
-                    for key, value in fi["episode"].items():
+                    for raw_key, value in fi["episode"].items():
+                        key = canonical_episode_metric_key(raw_key)
+                        if key is None:
+                            continue
                         done_values = value[done_mask]
                         if done_values.numel() == 0:
                             continue
