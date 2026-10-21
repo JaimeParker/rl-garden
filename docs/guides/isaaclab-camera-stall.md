@@ -1,25 +1,33 @@
-# IsaacLab Camera-Observation Training Stall — Resolved on Isaac Lab 3.0
+# IsaacLab Camera-Observation Training Stall — Resolved
 
-**Status: resolved (2026-10-21) by the Isaac Lab 3.0 / Isaac Sim 6.2 port.**
-The stall described below was observed on Isaac Lab 2.x / Isaac Sim 5.1 with
-NVIDIA driver 570.133.07. On 3.0 the same reproduction command completes
-every time on both renderer routes (see
-[2026-10-21 resolution](#2026-10-21-resolution-isaac-lab-30) at the end):
+**Status: resolved (2026-10-21).** The stall described below was observed on
+Isaac Lab 2.x / Isaac Sim 5.1 on host 6017 with `--isaaclab.sim_device cuda:2`.
+The backend now runs on Isaac Lab 3.0 (recommended) and 2.3.x, and the
+reproduction command completes every time on every supported route (see
+[2026-10-21 resolution](#2026-10-21-resolution) at the end):
 
-- **Newton Warp renderer** (`--isaaclab.renderer newton_renderer`, the
-  default for rl-garden camera tasks): bypasses Kit's render pipeline
-  entirely. Works on any driver Isaac Sim's CUDA build accepts, including
-  570.133.07.
-- **Kit RTX renderer** (`--isaaclab.renderer isaacsim_rtx`): works on a driver
-  Kit accepts (tested on 570.195.03); on 570.133.07 Kit refuses the driver
-  (`unsupported driver range: [570.00, 570.158.01)`) and the adapter raises
-  `RuntimeError` ("produced only zero frames") instead of training on black
-  frames.
+- **Isaac Lab 3.0, Newton Warp renderer** (default for rl-garden camera
+  tasks): bypasses Kit's render pipeline entirely; works on any driver Isaac
+  Sim's CUDA build accepts, including 570.133.07.
+- **Isaac Lab 3.0, Kit RTX renderer** (`--isaaclab.renderer isaacsim_rtx`):
+  works on a driver Isaac Sim 6.2's Kit accepts (tested on 570.195.03). On
+  570.133.07 that Kit refuses the driver (`unsupported driver range:
+  [570.00, 570.158.01)`) and the adapter raises `RuntimeError` ("produced only
+  zero frames") instead of training on black frames.
+- **Isaac Lab 2.3.x, Kit RTX (TiledCamera)**: works on `cuda:0`; on any other
+  GPU Isaac Sim 5.1's usdrt refuses the camera (`GPUs other than cuda:0 are not
+  currently supported`) and the process spins at simulation start, so the
+  backend rejects `--isaaclab.sim_device` other than `cuda:0` for camera tasks
+  before Kit boots. Isaac Sim 5.1's Kit accepts the 570 drivers (its rejected
+  range is `[0.0, 535.129)`), so the driver was never the issue on 2.x.
 
-Whether the 2.x stall was caused by the rejected driver, by the Isaac Sim 5.1
-Kit build, or both cannot be separated after the fact: 2.x was never run on
-an accepted driver. The `post_update_sync()` mitigation is kept (it is
-harmless) but is no longer known to be necessary.
+Most likely cause of the original stall, in hindsight: the reproduction ran the
+camera task on `cuda:2`, which Isaac Sim 5.1 does not support for rendering.
+That is not proven (the old symptom appeared after the first PPO update, the
+new one at simulation start, and the old environment was a standalone Isaac
+Sim 5.1 directory with torch 2.6 rather than the pip stack), but it is the only
+remaining difference that reproduces a hang today. The `post_update_sync()`
+mitigation is kept (harmless) but no longer known to be necessary.
 
 Everything from here to the resolution section is the original 2.x
 investigation, kept as a record so the diagnostic ground does not need to be
@@ -94,7 +102,8 @@ docker exec -d liuzhaohong_maniskill_isaaclab bash -lc '
 ```
 
 `RlGarden-Cartpole-Direct-Camera-Plain-v0` is a diagnostic task
-(`rl_garden/envs/isaaclab/tasks/cartpole_direct_camera_plain.py`) using
+(formerly `rl_garden/envs/isaaclab/tasks/cartpole_direct_camera_plain.py`,
+deleted in the 3.0 port) using
 IsaacLab's plain `Camera` sensor instead of `TiledCamera`, kept in the repo
 specifically to reproduce and test this issue in isolation from the
 `RlGarden-Cartpole-Direct-Camera-v0` task (which uses `TiledCamera`, the
@@ -332,13 +341,10 @@ launch unattended.
    contexts/streams never directly compete within one process. This is a
    significant redesign, not something to do without discussing scope first.
 
-## 2026-10-21 resolution (Isaac Lab 3.0)
+## 2026-10-21 resolution
 
-Setup: Isaac Lab 3.0.0, Isaac Sim 6.2.0.0, Python 3.12, torch 2.11.0+cu128,
-rl-garden backend ported to 3.0 (`launch_simulation`, declarative scene cfg,
-`CameraCfg` with `MultiBackendRendererCfg`, see
-[`isaaclab-custom-tasks.md`](isaaclab-custom-tasks.md)). `post_update_sync()`
-unchanged. The reproduction command, in its 3.0 form:
+Reproduction command, current form (6 rollout+update cycles, the shape that
+stalled in 2.x after the first update):
 
 ```bash
 python -u examples/train_online.py ppo --env_backend isaaclab \
@@ -348,9 +354,9 @@ python -u examples/train_online.py ppo --env_backend isaaclab \
   [--isaaclab.renderer isaacsim_rtx] [--isaaclab.physics newton_mjwarp]
 ```
 
-Each run is 6 rollout+update cycles, the shape that stalled in 2.x after the
-first update. Results (all `rc=0`, no timeout, no traceback, no Kit
-`[Error]` lines unless noted):
+### Isaac Lab 3.0.0 / Isaac Sim 6.2 (Python 3.12, torch 2.11.0+cu128)
+
+All runs `rc=0`, no timeout, no traceback, no Kit `[Error]` lines unless noted.
 
 | Host / driver | Renderer | Physics | Runs | Cycles completed |
 |---|---|---|---|---|
@@ -362,27 +368,43 @@ first update. Results (all `rc=0`, no timeout, no traceback, no Kit
 | 9981, 570.195.03 | Kit RTX | PhysX | 1 × 32 envs, 6400 steps | 7/7 |
 | 9981, 570.195.03 | Newton Warp | PhysX | 1 × repro | 6/6 |
 
-The official `Isaac-Cartpole-Camera-Direct` task with `rsl_rl` showed the
-same picture (Newton renderer on 6017: 4/4 runs; Kit RTX on 9981: 3/3 runs).
+The official `Isaac-Cartpole-Camera-Direct` task with `rsl_rl` showed the same
+picture (Newton renderer on 6017: 4/4 runs; Kit RTX on 9981: 3/3 runs).
 
-Facts worth keeping:
+### Isaac Lab 2.3.2 / Isaac Sim 5.1.0 (Python 3.11, torch 2.7.0+cu128, pip install)
 
-- Kit RTX hard-rejects drivers in `[570.00, 570.158.01)` (6017 is 570.133.07)
-  and recommends 580.95.05; Isaac Lab's own install page asks for >= 580.65.06.
-  On such a driver Kit still boots, PhysX works, and the camera returns
-  all-zero frames without any Python exception. The adapter's zero-frame
-  check (`_check_frames_nonzero`, `rl_garden/envs/isaaclab/env.py`) exists
-  so this fails loudly.
+Host 6017, driver 570.133.07, Kit RTX through `TiledCamera` (the only 2.x
+camera route):
+
+| Device | Runs | Result |
+|---|---|---|
+| `cuda:0` | 3 × repro | 6/6 cycles each, then the process spun forever in Kit's plugin unload (`USD stage detach not called` / `Failed to acquire interface ... while unloading all plugins`, the same lines the 2.x investigation above recorded). Fixed by closing the Kit app explicitly after `env.close()` (`v2.runtime._CloseAppOnClose`); after that 2 × repro exited in 35 s with 6/6 cycles. |
+| `cuda:2` | 1 × repro | 0 cycles: `[Error] [usdrt.scenegraph.plugin] ... GPU 2 requested. GPUs other than cuda:0 are not currently supported` right after "Starting the simulation", then a 100 % CPU spin until killed. The backend now raises `ValueError` for this configuration before Kit boots. |
+| `cuda:2`, state-only | 2 × 20 000 steps | clean, rewards identical to the official 2.x cartpole task |
+
+The official `Isaac-Cartpole-RGB-Camera-Direct-v0` task behaves the same way
+(hangs at start on `cuda:1`/`cuda:2`, completes on `cuda:0`) on both 6017 and
+9981.
+
+### Facts worth keeping
+
+- Isaac Sim 6.2's Kit RTX hard-rejects drivers in `[570.00, 570.158.01)`
+  (6017 is 570.133.07) and recommends 580.95.05; Isaac Lab 3.0's install page
+  asks for >= 580.65.06. On such a driver Kit still boots, PhysX works, and the
+  camera returns all-zero frames without any Python exception; the adapter's
+  zero-frame check (`_check_frames_nonzero`, `rl_garden/envs/isaaclab/env.py`)
+  turns that into an error. Isaac Sim 5.1's Kit has a different policy
+  (rejects only `< 535.129`).
+- Isaac Sim 5.1 renders cameras only on `cuda:0` (usdrt); Isaac Sim 6.2 has no
+  such restriction for the Newton renderer, and its RTX renderer picks physical
+  GPU 0 as Kit's "Active GPU" regardless of `--isaaclab.sim_device` on both hosts.
 - Isaac Lab GitHub issue #4951 (Isaac Sim 5.1, `TiledCamera`, process at
   100% CPU inside the tiled render) was answered by the maintainers as a
-  driver-version problem. That is the closest public match to the 2.x
-  symptom above.
-- Kit's "Active GPU" for RTX rendering was physical GPU 0 on both hosts
-  regardless of `--isaaclab.sim_device`; only the Newton renderer follows the
-  requested device.
-- Isaac Lab 3.0's own CHANGELOG (27.1.0) mentions a fix for "explicit
-  rendering deadlocking while a visualizer had paused training"; it is not
-  known whether that is related.
+  driver-version problem; given the 5.1 driver policy above, the device
+  restriction is the better match for what we saw.
+- Isaac Lab 3.0's CHANGELOG (27.1.0) mentions a fix for "explicit rendering
+  deadlocking while a visualizer had paused training"; relation unknown.
 
-If the stall ever reappears: check the Kit log for the driver lines first,
-then try the other renderer route before anything in the 2.x timeline above.
+If a stall reappears: check the Kit log for the driver lines and the usdrt
+device line first, then try the other renderer route (3.0) or `cuda:0` (2.x)
+before anything in the 2.x timeline above.

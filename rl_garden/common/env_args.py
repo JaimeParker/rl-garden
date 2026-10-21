@@ -132,11 +132,12 @@ class IsaacLabConfig:
     # ``physics=<name>``): isaacsim_physx, newton_mjwarp, newton_kamino,
     # ovphysx, physx -- whichever the task declares. None keeps the task
     # default (PhysX for RlGarden-* tasks, Newton for native 3.0 tasks).
+    # Isaac Lab 3.0 only; rejected on 2.x.
     physics: Optional[str] = None
     # Camera renderer preset (Isaac Lab ``renderer=<name>``): newton_renderer,
     # isaacsim_rtx, ovrtx, rtx -- whichever the task declares. Only valid for
     # camera tasks. None keeps the task default (newton_renderer for
-    # RlGarden-* camera tasks).
+    # RlGarden-* camera tasks). Isaac Lab 3.0 only; rejected on 2.x.
     renderer: Optional[str] = None
 
 

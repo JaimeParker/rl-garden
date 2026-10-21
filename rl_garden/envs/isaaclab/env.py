@@ -6,6 +6,8 @@ Wraps a raw IsaacLab env (``ManagerBasedRLEnv`` or ``DirectRLEnv``, native
 ``rl_garden`` targets: ``num_envs`` / ``single_observation_space`` /
 ``single_action_space``, and ``step``/``reset`` returning GPU tensors plus
 the standard Gymnasium ``(obs, reward, terminated, truncated, info)`` tuple.
+The raw env comes from ``v3.runtime`` (Isaac Lab 3.0) or ``v2.runtime``
+(2.3.x), chosen by ``detect.generation()``; everything here is shared.
 
 Observation extraction:
 - state-only (``ObservationConfig`` requests no cameras): looks for a
@@ -30,6 +32,7 @@ import numpy as np
 import torch
 
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
+from rl_garden.envs.isaaclab.detect import generation
 from rl_garden.observations.schema import ObservationContractError
 
 
@@ -49,9 +52,8 @@ def _check_frames_nonzero(obs: dict) -> None:
         if key.startswith(("rgb_", "depth_")) and tensor.max() == 0:
             raise RuntimeError(
                 f"IsaacLab camera renderer produced only zero frames for key {key!r}. On Kit RTX this "
-                "means the renderer was not created (e.g. driver rejected; see the Kit log under "
-                "site-packages/isaacsim/kit/logs/Kit/IsaacLab/3.0/). Use --isaaclab.renderer "
-                "newton_renderer or a supported driver."
+                "means the renderer was not created (e.g. driver rejected; see the Kit log). Use a "
+                "driver Kit RTX accepts, or on Isaac Lab 3.0 --isaaclab.renderer newton_renderer."
             )
 
 
@@ -174,23 +176,17 @@ class _IsaacLabVecEnvAdapter(gym.Env):
 def make_isaaclab_env(cfg: IsaacLabEnvConfig):
     """Build an IsaacLab env according to ``cfg``.
 
-    Isaac Lab 3.0 order: parse the env cfg (presets resolved), then launch
-    the runtime that cfg requires, then instantiate the env.
+    Detects the installed Isaac Lab generation and lets that package's
+    ``runtime.build`` create the raw env in its own launch/import order
+    (``v3``: parse -> launch_simulation -> make; ``v2``: AppLauncher ->
+    import -> parse -> make).
     """
-    import isaaclab_tasks  # noqa: F401  (registers native gym ids)
+    if generation() == "v3":
+        from rl_garden.envs.isaaclab.v3.runtime import build
+    else:
+        from rl_garden.envs.isaaclab.v2.runtime import build
 
-    import rl_garden.envs.isaaclab.tasks  # noqa: F401  (registers RlGarden-* ids)
-    from isaaclab_tasks.utils import parse_env_cfg
-    from rl_garden.envs.isaaclab.app import get_or_launch_app
-
-    env_cfg = parse_env_cfg(
-        cfg.env_id, device=cfg.sim_device, num_envs=cfg.num_envs, overrides=list(cfg.overrides)
-    )
-    for key, value in cfg.env_kwargs.items():
-        setattr(env_cfg, key, value)
-
-    get_or_launch_app(env_cfg, {"headless": cfg.headless, "device": cfg.sim_device})
-    env = gym.make(cfg.env_id, cfg=env_cfg)
+    env = build(cfg)
     adapter = _IsaacLabVecEnvAdapter(
         env, seed=cfg.seed, is_visual=cfg.is_visual, state=cfg.state
     )

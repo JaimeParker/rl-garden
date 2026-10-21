@@ -1,37 +1,92 @@
 # Writing Custom IsaacLab Tasks
 
-This guide is for adding a new IsaacLab task to rl-garden (Isaac Lab 3.0). It
-covers the `RLGardenDirectRLEnv` scaffold, which is the recommended way to
-write new tasks: you declare the scene in a cfg, implement four methods, and
-reset is generic.
+This guide is for adding a new IsaacLab task to rl-garden. It covers the
+`RLGardenDirectRLEnv` scaffold, which is the recommended way to write new
+tasks: you declare the scene in a cfg, implement four methods, and reset is
+generic. One backend (`--env_backend isaaclab`) serves Isaac Lab 3.0 and
+2.3.x; see [Supported Isaac Lab versions](#supported-isaac-lab-versions).
 
 If you only want to train PPO on a task that already exists in
-`isaaclab_tasks` (official IsaacLab tasks, e.g. `Isaac-Cartpole-Direct`,
-`Isaac-Ant-Direct` — 3.0 ids have no `-v0` suffix), you don't need any of this:
-those run directly through `--env_backend isaaclab --env_id <task-id>`. See
+`isaaclab_tasks` (official IsaacLab tasks, e.g. `Isaac-Cartpole-Direct` on
+3.0, `Isaac-Cartpole-Direct-v0` on 2.x), you don't need any of this: those
+run directly through `--env_backend isaaclab --env_id <task-id>`. See
 [Training an existing task](#training-an-existing-task) below.
+
+## Supported Isaac Lab versions
+
+| Isaac Lab | Status | Isaac Sim | Python | torch | numpy |
+|---|---|---|---|---|---|
+| 3.0.x | recommended | 6.2 (or none, Kit-less) | 3.12 | 2.11 | >= 2 |
+| 2.3.x | supported | 5.x | 3.11 | >= 2.7 | < 2 |
+
+The two generations cannot share a Python environment. At env construction
+the backend detects the installed generation (`rl_garden.envs.isaaclab.detect`):
+if the `isaaclab_physx` package is importable it is 3.0, otherwise if
+`isaaclab` is importable it is 2.x, otherwise it raises `ImportError`. It then
+builds the env with `rl_garden.envs.isaaclab.v3` or `rl_garden.envs.isaaclab.v2`.
+The adapter, the zero-frame guard, frame stacking, `IsaacLabEnvConfig` and
+the CLI are shared.
+
+3.0-only features: Newton physics, the Newton Warp camera renderer, the
+`--isaaclab.physics`/`--isaaclab.renderer` presets, and Kit-less runs. On 2.x
+those two flags raise `ValueError` ("presets need Isaac Lab 3.0"), and every
+run uses Kit + Isaac Sim PhysX, with cameras rendered by Kit RTX through
+`TiledCamera`.
+
+The `RlGarden-*` task ids are the same on both generations. Native ids are
+each generation's own (2.x `Isaac-Cartpole-Direct-v0`, 3.0
+`Isaac-Cartpole-Direct`).
+
+## Package layout
+
+```
+rl_garden/envs/isaaclab/
+  env.py, config.py, detect.py   # shared factory/adapter, config, generation detection
+  tasks_common/                  # task logic mixins, written once (torch only)
+  v3/{app,direct_env,runtime}.py, v3/tasks/   # Isaac Lab 3.0 scaffold + task cfgs
+  v2/{app,direct_env,runtime}.py, v2/tasks/   # Isaac Lab 2.3.x scaffold + task cfgs
+```
+
+A task is a logic mixin in `tasks_common/` plus one cfg module per
+generation (`v3/tasks/<task>.py`, `v2/tasks/<task>.py`). A task that only
+needs one generation may skip the other cfg.
 
 ## The four methods you write
 
-`RLGardenDirectRLEnv` (`rl_garden/envs/isaaclab/direct_env.py`) is a subclass
-of IsaacLab's `DirectRLEnv` that provides generic implementations of
-`_setup_scene`, `_reset_idx`, and `_pre_physics_step` for the common case: one
-primary robot (an `Articulation`) plus an optional single camera. You only
-implement the task-specific logic:
+`RLGardenDirectRLEnv` (`v3/direct_env.py` and `v2/direct_env.py`, same class
+name) is a subclass of IsaacLab's `DirectRLEnv` that provides generic
+implementations of `_setup_scene`, `_reset_idx`, and `_pre_physics_step` for
+the common case: one primary robot (an `Articulation`) plus an optional
+single camera. You only implement the task-specific logic:
 
 | Method | What it does |
 |---|---|
-| `_apply_action(self) -> None` | Send `self.actions` (already scaled by `cfg.action_scale`) to the robot, e.g. `self.robot.set_joint_effort_target_index(target=self.actions, joint_ids=...)`. |
+| `_apply_action(self) -> None` | Send `self.actions` (already scaled by `cfg.action_scale`) to the robot, e.g. `self._apply_joint_effort(self.actions, joint_ids)`. |
 | `_get_observations(self) -> dict` | Return the observation dict. See [Observation key convention](#observation-key-convention). |
 | `_get_rewards(self) -> torch.Tensor` | Return a `(num_envs,)` reward tensor. |
 | `_get_dones(self) -> tuple[torch.Tensor, torch.Tensor]` | Return `(terminated, time_out)`, each `(num_envs,)` bool tensors. |
 
+Write them in a mixin that uses only the scaffold accessors below, so the
+same code runs on both generations:
+
+| Accessor | 3.0 implementation | 2.x implementation |
+|---|---|---|
+| `_joint_pos() -> Tensor` / `_joint_vel() -> Tensor` | `robot.data.joint_pos.torch` / `joint_vel.torch` | `robot.data.joint_pos` / `joint_vel` |
+| `_apply_joint_effort(target, joint_ids) -> None` | `robot.set_joint_effort_target_index(target=, joint_ids=)` | `robot.set_joint_effort_target(target, joint_ids=)` |
+| `_camera_rgb() -> Tensor` | `camera.data.output["rgb"].torch.clone()` | `camera.data.output["rgb"]` |
+| `_sample_reset_state(env_ids, joint_pos, joint_vel)` | reset-randomization hook, see below | same |
+
+`self.robot.find_joints(...)`, `self.actions`, `self.reset_terminated`,
+`self.episode_length_buf` and `self.max_episode_length` exist on both
+generations and can be used directly. Mixin modules must not import
+`isaaclab`.
+
 ## The scene is declared, not built
 
-In Isaac Lab 3.0, `InteractiveScene` builds the whole scene from the scene
+On both generations `InteractiveScene` builds the whole scene from the scene
 cfg: every asset declared as an attribute of `cfg.scene` is spawned,
 replicated across `num_envs`, and collision-filtered before `_setup_scene()`
-runs. There is no `clone_environments()` step any more.
+runs.
 
 `RLGardenSceneCfg` (an `InteractiveSceneCfg`) declares the scaffold's shape:
 
@@ -39,42 +94,76 @@ runs. There is no `clone_environments()` step any more.
 |---|---|
 | `ground` | `/World/ground` ground plane |
 | `robot` | `MISSING` — your `ArticulationCfg` |
-| `camera` | `None` — set a `CameraCfg` for camera tasks |
+| `camera` | `None` — set a `CameraCfg` (3.0) or `TiledCameraCfg` (2.x) for camera tasks |
 | `light` | `/World/Light` dome light |
 
 Per-env prim paths use the `{ENV_REGEX_NS}` macro (e.g.
 `"{ENV_REGEX_NS}/Robot"`). `RLGardenDirectRLEnv._setup_scene` only binds
 handles: `self.robot = self.scene["robot"]` and `self.camera`
 (`None` for state-only tasks). `_reset_idx` restores default joint pos/vel
-and the default root pose offset by the env origin, through the
-`write_*_to_sim_index` API.
+and the default root pose offset by the env origin, through each
+generation's own writer API.
 
-## 3.0 data conventions
+## Version differences you must know
 
-- Asset and sensor data (`self.robot.data.joint_pos`, `default_joint_pos`,
-  `camera.data.output["rgb"]`, ...) are `ProxyArray` objects. Read them
-  through `.torch`, which is a zero-copy torch view of the simulation
-  buffer. Without `.torch`, the adapter's observation-space inference sees a
-  warp dtype and builds the wrong space.
-- Quaternions are `(x, y, z, w)` everywhere (`CameraCfg.OffsetCfg.rot`,
-  `InitialStateCfg.rot`, root poses). The identity is
-  `(0.0, 0.0, 0.0, 1.0)`. An old `(1, 0, 0, 0)` literal is a 180° rotation
-  about X and fails silently (for example, an upside-down camera).
+| | Isaac Lab 3.0 | Isaac Lab 2.x |
+|---|---|---|
+| Asset/sensor data | `ProxyArray`; read through `.torch` (zero-copy view). Without `.torch` the adapter sees a warp dtype and builds the wrong space. | plain `torch.Tensor` |
+| Quaternions | `(x, y, z, w)`, identity `(0.0, 0.0, 0.0, 1.0)` | `(w, x, y, z)`, identity `(1.0, 0.0, 0.0, 0.0)` |
+| Camera cfg | `CameraCfg` (tiled) + `renderer_cfg` | `TiledCameraCfg` (`CameraCfg` is the slow per-camera path); no `renderer_cfg` |
+| Physics cfg | `SimulationCfg(physics=...)`, presets | `SimulationCfg(dt, render_interval)`, always PhysX |
+| Launch | `launch_simulation(env_cfg)` after parsing; Kit only if needed | `AppLauncher` before any `isaaclab_tasks` import |
+| Camera device | any `--isaaclab.sim_device` (Newton); Kit RTX renders on physical GPU 0 regardless | `cuda:0` only (Isaac Sim 5.1 usdrt refuses other GPUs and hangs); the backend rejects other devices for camera tasks before Kit boots |
+| Shutdown | `launch_simulation` context closes at process exit | the backend closes the Kit app explicitly after `env.close()` (camera runs otherwise hang in plugin unload); this ends the process, so nothing after `env.close()` runs |
+
+A quaternion literal from the other generation is not an error: it is a
+silent 180° rotation (for example, a camera facing away from the robot).
+Always write the literal with a comment naming the order.
 
 ## Minimal example
 
+Logic, written once:
+
 ```python
-# rl_garden/envs/isaaclab/tasks/my_task.py
+# rl_garden/envs/isaaclab/tasks_common/my_task.py
+from __future__ import annotations
+
+import torch
+
+
+class MyTaskLogic:
+    def __init__(self, cfg, render_mode: str | None = None, **kwargs):
+        super().__init__(cfg, render_mode, **kwargs)
+        self._actuated_joint_ids, _ = self.robot.find_joints(".*")
+
+    def _apply_action(self) -> None:
+        self._apply_joint_effort(self.actions, self._actuated_joint_ids)
+
+    def _get_observations(self) -> dict:
+        return {"state": torch.cat([self._joint_pos(), self._joint_vel()], dim=-1)}
+
+    def _get_rewards(self) -> torch.Tensor:
+        return -torch.abs(self._joint_pos()).sum(dim=-1)
+
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        time_out = self.episode_length_buf >= self.max_episode_length - 1
+        return torch.zeros_like(time_out), time_out
+```
+
+3.0 cfg:
+
+```python
+# rl_garden/envs/isaaclab/v3/tasks/my_task.py
 from __future__ import annotations
 
 import gymnasium as gym
-import torch
 
 from isaaclab.assets import ArticulationCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 
-from rl_garden.envs.isaaclab.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv, RLGardenSceneCfg
+from rl_garden.envs.isaaclab.tasks_common.my_task import MyTaskLogic
+from rl_garden.envs.isaaclab.v3.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv, RLGardenSceneCfg
 
 MY_ROBOT_CFG: ArticulationCfg = ...  # from isaaclab_assets, or your own
 
@@ -97,23 +186,8 @@ class MyTaskEnvCfg(RLGardenDirectEnvCfg):
     scene: MyTaskSceneCfg = MyTaskSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
 
 
-class MyTaskEnv(RLGardenDirectRLEnv):
+class MyTaskEnv(MyTaskLogic, RLGardenDirectRLEnv):
     cfg: MyTaskEnvCfg
-
-    def _apply_action(self) -> None:
-        self.robot.set_joint_effort_target_index(target=self.actions)
-
-    def _get_observations(self) -> dict:
-        data = self.robot.data
-        return {"state": torch.cat([data.joint_pos.torch, data.joint_vel.torch], dim=-1)}
-
-    def _get_rewards(self) -> torch.Tensor:
-        return -torch.abs(self.robot.data.joint_pos.torch).sum(dim=-1)
-
-    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        time_out = self.episode_length_buf >= self.max_episode_length - 1
-        terminated = torch.zeros_like(time_out)
-        return terminated, time_out
 
 
 gym.register(
@@ -128,24 +202,35 @@ gym.register(
 )
 ```
 
-`SimulationCfg(physics=None)` (as above) means Isaac Sim PhysX. To make the
-physics backend selectable from the CLI, declare a `PresetCfg`. See
-[Physics and renderer presets](#physics-and-renderer-presets).
-
-Then register the module so its `gym.register(...)` call actually runs:
+2.x cfg, the same module under `v2/tasks/` with the 2.x scaffold:
 
 ```python
-# rl_garden/envs/isaaclab/tasks/__init__.py
-from rl_garden.envs.isaaclab.tasks.my_task import MyTaskEnv
+# rl_garden/envs/isaaclab/v2/tasks/my_task.py
+from rl_garden.envs.isaaclab.v2.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv, RLGardenSceneCfg
+
+# MyTaskSceneCfg / MyTaskEnvCfg / MyTaskEnv / gym.register(...): same bodies as above.
+```
+
+The cfg body is identical for this state-only task; it differs once you add
+presets (3.0 only), a camera (`TiledCameraCfg`, wxyz) or any quaternion.
+Keep the task id the same.
+
+`SimulationCfg(physics=None)` (as above) means Isaac Sim PhysX on 3.0. To
+make the physics backend selectable from the CLI on 3.0, declare a
+`PresetCfg`. See [Physics and renderer presets](#physics-and-renderer-presets).
+
+Then register each cfg module so its `gym.register(...)` call actually runs:
+
+```python
+# rl_garden/envs/isaaclab/v3/tasks/__init__.py (and v2/tasks/__init__.py)
+from rl_garden.envs.isaaclab.v3.tasks.my_task import MyTaskEnv
 __all__ = [..., "MyTaskEnv"]
 ```
 
-`make_isaaclab_env()` (`rl_garden/envs/isaaclab/env.py`) imports
-`rl_garden.envs.isaaclab.tasks` lazily, so adding your import there is
-enough. Isaac Lab 3.0 allows importing `isaaclab.*` modules before the
-simulation runtime starts, but keep task imports out of package-import time
-so `rl_garden.envs` stays importable without Isaac Lab installed.
-`make_isaaclab_env()` runs Isaac Lab 3.0's order:
+`make_isaaclab_env()` (`rl_garden/envs/isaaclab/env.py`) detects the
+generation and calls that package's `runtime.build`, which imports the task
+package lazily, so `rl_garden.envs` stays importable without Isaac Lab
+installed. The 3.0 order (`v3/runtime.py`):
 
 1. `parse_env_cfg(env_id, ..., overrides=[...])` resolves presets.
 2. `isaaclab.app.launch_simulation(env_cfg, ...)` boots Kit only if the
@@ -153,25 +238,34 @@ so `rl_garden.envs` stays importable without Isaac Lab installed.
    Newton physics with the Newton renderer runs Kit-less.
 3. `gym.make(env_id, cfg=env_cfg)`.
 
-Full worked reference: `rl_garden/envs/isaaclab/tasks/cartpole_direct.py`
+The 2.x order (`v2/runtime.py`): `AppLauncher(headless, device,
+enable_cameras=<vision requested>)` (after a `torch.compile` warm-up, followed
+by removing Kit's bundled-torch `pip_prebundle` dirs from `sys.path`), then
+import `isaaclab_tasks` and the task package, then `parse_env_cfg`, then
+`gym.make`. 2.x cannot import `isaaclab_tasks` or the task modules before Kit
+runs.
+
+Full worked reference: `tasks_common/cartpole.py` (logic) with
+`v3/tasks/cartpole_direct.py` and `v2/tasks/cartpole_direct.py` (cfgs)
 reimplements IsaacLab 2.x's official Cartpole task end-to-end: action scaling,
 reward terms, termination, and reset-time pole-angle randomization via the
 `_sample_reset_state` hook (see below).
 
 ## Physics and renderer presets
 
-Isaac Lab 3.0 selects backends through `PresetCfg` fields in the task cfg.
-A `PresetCfg` lists named alternatives plus a `default`. rl-garden exposes the
-two typed selectors:
+Isaac Lab 3.0 only. Isaac Lab 3.0 selects backends through `PresetCfg`
+fields in the task cfg. A `PresetCfg` lists named alternatives plus a
+`default`. rl-garden exposes the two typed selectors:
 
 - `--isaaclab.physics <name>` becomes `physics=<name>`.
 - `--isaaclab.renderer <name>` becomes `renderer=<name>`.
 
 Both are passed to `parse_env_cfg(..., overrides=...)`. A name must exist in
 the task's presets, or `parse_env_cfg` raises. A `renderer=` selector on a
-task without a camera also raises.
+task without a camera also raises. On 2.x either flag raises `ValueError`
+before Kit starts.
 
-rl-garden's own tasks:
+rl-garden's own tasks (3.0 cfgs):
 
 - `RlGarden-Cartpole-Direct-v0` uses `CartpoleDirectPhysicsCfg`, which is the
   official cartpole physics presets with `default` set to Isaac Sim PhysX.
@@ -205,17 +299,17 @@ the `_sample_reset_state` hook instead of `_reset_idx` itself:
 
 ```python
 def _sample_reset_state(self, env_ids, joint_pos, joint_vel):
-    joint_pos[:, self._some_joint_idx] += sample_uniform(-0.1, 0.1, ..., joint_pos.device)
+    joint_pos[:, self._some_joint_idx] += torch.rand(..., device=joint_pos.device) * 0.2 - 0.1
     return joint_pos, joint_vel
 ```
 
 If your `_get_observations()`/`_get_rewards()`/`_get_dones()` read a *cached*
-`.torch` view of joint state (as `cartpole_direct.py` does) rather than
-reading `self.robot.data.joint_pos.torch` fresh each time, update that cache
-inside `_sample_reset_state` too. See the comment in
-`cartpole_direct.py::_sample_reset_state` for why: `_get_observations` runs
-after `_reset_idx` within the same `step()` call, so the cache must reflect
-the just-written reset state, not the pre-reset one.
+`_joint_pos()`/`_joint_vel()` tensor (as `tasks_common/cartpole.py` does)
+rather than calling the accessor fresh each time, update that cache inside
+`_sample_reset_state` too. See the comment in
+`CartpoleLogic._sample_reset_state` for why: `_get_observations` runs after
+`_reset_idx` within the same `step()` call, so the cache must reflect the
+just-written reset state, not the pre-reset one.
 
 ## Observation key convention
 
@@ -235,18 +329,16 @@ This is what lets the resulting env plug directly into rl-garden's existing
 `ImageFrameStackWrapper` (`rl_garden/envs/wrappers`) with zero extra code —
 no ManiSkill-specific translation layer is needed for IsaacLab tasks.
 
-**Image tensors must be raw pixel values**, e.g.
-`self.camera.data.output["rgb"].torch.clone()`, `uint8` in `[0, 255]`. Do
-**not** apply the mean-subtraction/`/255` normalization that IsaacLab's own
-cartpole camera task does for "better training results." rl-garden's image
-encoders (`rl_garden/encoders/base.py:
+**Image tensors must be raw pixel values**, e.g. `self._camera_rgb()`,
+`uint8` in `[0, 255]`. Do **not** apply the mean-subtraction/`/255`
+normalization that IsaacLab's own cartpole camera task does for "better
+training results." rl-garden's image encoders (`rl_garden/encoders/base.py:
 image_needs_normalization`) decide whether to apply `/255` normalization
 based on the declared space's dtype/range, which is inferred from your
 tensor's actual dtype. Pre-normalized input is **silently handled wrong**
 (double-normalized), not rejected with an error. This is a training-quality
 bug, not a crash, so test suites won't catch it. See
-`rl_garden/envs/isaaclab/tasks/cartpole_direct_camera.py` for a correct
-example.
+`CartpoleCameraLogic` in `tasks_common/cartpole.py` for a correct example.
 
 `cfg.observation_space` can't express a `{"rgb": ..., "state": ...}` dict
 shape — for image tasks just set it to a placeholder int (e.g. `1`).
@@ -257,10 +349,11 @@ returned obs. rl-garden's adapter (`_IsaacLabVecEnvAdapter`) builds its real
 
 ## Adding a camera
 
-Set the `camera` attribute of your scene cfg to a `CameraCfg`.
-(`TiledCameraCfg` is a deprecated alias in 3.0, because `Camera` already
-renders all envs tiled.) Then read `self.camera.data.output["rgb"].torch`
-in `_get_observations()`:
+Set the `camera` attribute of your scene cfg and read `self._camera_rgb()` in
+`_get_observations()`. The cfg differs per generation.
+
+3.0 (`CameraCfg`; `TiledCameraCfg` is a deprecated alias there, because
+`Camera` already renders all envs tiled):
 
 ```python
 import isaaclab.sim as sim_utils
@@ -272,6 +365,7 @@ from isaaclab_tasks.utils.presets import MultiBackendRendererCfg
 class MyCameraTaskSceneCfg(MyTaskSceneCfg):
     camera: CameraCfg = CameraCfg(
         prim_path="{ENV_REGEX_NS}/Camera",
+        # (x, y, z, w) identity
         offset=CameraCfg.OffsetCfg(pos=(-5.0, 0.0, 2.0), rot=(0.0, 0.0, 0.0, 1.0), convention="world"),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
@@ -289,11 +383,37 @@ class MyCameraTaskEnvCfg(MyTaskEnvCfg):
     scene: MyCameraTaskSceneCfg = MyCameraTaskSceneCfg(num_envs=32, env_spacing=4.0, replicate_physics=True)
 ```
 
-The `.torch` view of `output["rgb"]` is non-contiguous: it strides into an
-RGBA buffer, and the next render overwrites it. `.clone()` it before
-returning it as an observation.
+2.x (`TiledCameraCfg`, wxyz, no `renderer_cfg`):
 
-**Always set `renderer_cfg` explicitly.** Leaving it at the default
+```python
+import isaaclab.sim as sim_utils
+from isaaclab.sensors import TiledCameraCfg
+
+
+@configclass
+class MyCameraTaskSceneCfg(MyTaskSceneCfg):
+    camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Camera",
+        # (w, x, y, z) identity
+        offset=TiledCameraCfg.OffsetCfg(pos=(-5.0, 0.0, 2.0), rot=(1.0, 0.0, 0.0, 0.0), convention="world"),
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
+        ),
+        width=64,
+        height=64,
+    )
+```
+
+On 2.x do not set `clone_in_fabric=True` on a camera task's scene cfg: it
+mis-sizes the camera sensor's per-env buffers.
+
+On 3.0 the `.torch` view of `output["rgb"]` is non-contiguous: it strides
+into an RGBA buffer, and the next render overwrites it. The 3.0
+`_camera_rgb()` therefore returns a `.clone()`. The 2.x accessor returns
+Isaac Lab's tensor as-is.
+
+**On 3.0, always set `renderer_cfg` explicitly.** Leaving it at the default
 `RendererCfg()` resolves to Kit RTX.
 
 **Camera resolution: use 64×64 or 128×128.** rl-garden's default `PlainConv`
@@ -302,7 +422,7 @@ stride schedule that only produces a valid feature map for those two sizes.
 Any other resolution silently builds a mis-sized `Linear` layer and crashes
 at the first forward pass (`RuntimeError: mat1 and mat2 shapes cannot be
 multiplied`). This backend doesn't consult `--obs.image_size`: the camera's
-pixel resolution is baked into `CameraCfg.width`/`.height` in the task
+pixel resolution is baked into the camera cfg's `width`/`height` in the task
 registration, so keep it at one of the two supported sizes.
 
 **⚠️ Kit RTX needs a driver Kit accepts.** On a rejected driver (e.g.
@@ -310,10 +430,10 @@ registration, so keep it at one of the two supported sizes.
 boots but creates no RTX scene renderer and the camera returns all-zero
 frames. The adapter checks the first observation and raises `RuntimeError`
 ("produced only zero frames") instead of training on black images; the
-default Newton renderer is unaffected. See
-[`isaaclab-camera-stall.md`](isaaclab-camera-stall.md) for the history of
-the 2.x stall and the 3.0 measurements. State-only tasks (no camera) are
-unaffected.
+3.0 default Newton renderer is unaffected. 2.x has no non-RTX camera
+renderer. See [`isaaclab-camera-stall.md`](isaaclab-camera-stall.md) for the
+history of the 2.x stall and the 3.0 measurements. State-only tasks (no
+camera) are unaffected.
 
 ## Training your new task
 
@@ -341,18 +461,18 @@ Relevant IsaacLab-specific CLI flags (`--isaaclab.<field>`, see
 
 - `--isaaclab.headless` (default `True`)
 - `--isaaclab.sim_device` (default `cuda:0`)
-- `--isaaclab.physics` (default: the task's preset default) — see
+- `--isaaclab.physics` (default: the task's preset default; 3.0 only) — see
   [Physics and renderer presets](#physics-and-renderer-presets)
-- `--isaaclab.renderer` (default: the task's preset default, camera tasks only)
+- `--isaaclab.renderer` (default: the task's preset default, camera tasks
+  only; 3.0 only)
 - `--isaaclab.env_kwargs_json` — a JSON dict applied as
-  `setattr(env_cfg, key, value)` overrides on the parsed cfg, before launch.
-  It's an escape hatch for task-specific cfg fields you want to override from
-  the CLI without adding a dedicated flag.
+  `setattr(env_cfg, key, value)` overrides on the parsed cfg, before
+  `gym.make`. It's an escape hatch for task-specific cfg fields you want to
+  override from the CLI without adding a dedicated flag.
 
 `--eval_freq 0` is required. If you leave it out, the run is rejected at
 eval-env construction time: the IsaacLab backend does not support a separate
-live eval env, because `launch_simulation` hosts at most one Isaac Sim/Kit
-app per process.
+live eval env, because a process hosts at most one Isaac Sim/Kit app.
 
 ## Training an existing task
 
@@ -365,10 +485,10 @@ python examples/train_online.py ppo --env_backend isaaclab \
   --num_envs 4096 --eval_freq 0 --total_timesteps 200000
 ```
 
-Native 3.0 tasks default to Newton physics (for cartpole, `default =
-newton_mjwarp`), so the command above runs Kit-less. Add
-`--isaaclab.physics isaacsim_physx` to run them on Isaac Sim PhysX, the 2.x
-backend.
+(`Isaac-Cartpole-Direct-v0` on 2.x.) Native 3.0 tasks default to Newton
+physics (for cartpole, `default = newton_mjwarp`), so the command above runs
+Kit-less on 3.0. Add `--isaaclab.physics isaacsim_physx` to run them on Isaac
+Sim PhysX, the 2.x backend.
 
 This works for both `ManagerBasedRLEnv` and `DirectRLEnv` native tasks
 because both use the `"policy"` observation-group key by convention, which
@@ -387,4 +507,6 @@ and add the extra assets as attributes. Then override `_setup_scene` (to bind
 the extra handles via `self.scene["<name>"]`) and/or `_reset_idx`. These are
 ordinary methods on a `DirectRLEnv` subclass, and nothing about the scaffold
 prevents this. Start from `RLGardenDirectRLEnv`'s own implementation in
-`rl_garden/envs/isaaclab/direct_env.py`.
+`rl_garden/envs/isaaclab/v3/direct_env.py` (or `v2/direct_env.py`); such an
+override is generation-specific, so write it once per generation you
+support.

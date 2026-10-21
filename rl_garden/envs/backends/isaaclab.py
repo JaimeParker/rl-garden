@@ -5,6 +5,11 @@ Supports both ``ManagerBasedRLEnv`` and ``DirectRLEnv`` tasks (native
 tasks), state or image observations. No live eval env (see
 ``rl_garden.envs.isaaclab.env`` module docstring and
 ``.agents/rules/adding-env-backend.md``).
+
+One backend for Isaac Lab 3.0 (recommended) and 2.3.x: the generation is
+detected at env construction (``rl_garden.envs.isaaclab.detect``); the
+``physics``/``renderer`` preset overrides forwarded here are 3.0-only and
+rejected on 2.x.
 """
 from __future__ import annotations
 
@@ -70,7 +75,7 @@ class IsaacLabBackend(EnvBackend):
     def make_eval_env(cls, req: EnvRequest):
         raise NotImplementedError(
             "IsaacLab backend does not support a separate live eval env in v1 "
-            "(launch_simulation hosts at most one Isaac Sim/Kit app per process). "
+            "(the IsaacLab backend hosts at most one Isaac Sim/Kit app per process). "
             "Pass --eval_freq 0 to skip eval env creation."
         )
 

@@ -26,6 +26,13 @@ as needed, same as any ``DirectRLEnv`` subclass.
 ``.torch`` (a zero-copy torch view). Quaternions are ``(x, y, z, w)``
 everywhere (e.g. an identity camera offset is ``rot=(0.0, 0.0, 0.0, 1.0)``).
 
+Version-neutral accessors (same signatures as the 2.x scaffold in
+``rl_garden.envs.isaaclab.v2.direct_env``; the only interface the
+``tasks_common`` logic mixins use): ``_joint_pos()``/``_joint_vel()`` return
+``(num_envs, num_joints)`` torch views, ``_apply_joint_effort(target,
+joint_ids)`` sets joint effort targets, ``_camera_rgb()`` returns an owned
+contiguous ``uint8`` ``(num_envs, H, W, 3)`` tensor.
+
 Observation key convention: unlike IsaacLab's native tasks (which return
 ``{"policy": obs}``), ``_get_observations()`` here should return rl-garden's
 own cross-backend keys -- ``"state"`` for the flat proprioceptive tensor,
@@ -133,6 +140,20 @@ class RLGardenDirectRLEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.actions = self.cfg.action_scale * actions.clone()
+
+    def _joint_pos(self) -> torch.Tensor:
+        return self.robot.data.joint_pos.torch
+
+    def _joint_vel(self) -> torch.Tensor:
+        return self.robot.data.joint_vel.torch
+
+    def _apply_joint_effort(self, target: torch.Tensor, joint_ids: list[int]) -> None:
+        self.robot.set_joint_effort_target_index(target=target, joint_ids=joint_ids)
+
+    def _camera_rgb(self) -> torch.Tensor:
+        # .torch is a non-contiguous view of the camera's RGBA buffer, which
+        # the next render overwrites; clone to own a contiguous copy.
+        return self.camera.data.output["rgb"].torch.clone()
 
     # _apply_action / _get_observations / _get_rewards / _get_dones stay
     # abstract (inherited from DirectRLEnv) -- task authors implement these.

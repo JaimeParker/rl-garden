@@ -46,7 +46,7 @@ platforms can be integrated without creating platform-specific training entrypoi
   Dreamer fine-tuning with rehearsal and guidance;
   see [`docs/guides/ncrl.md`](docs/guides/ncrl.md)).
 - **Environment backends:** a registry-based interface with ManiSkill, RoboTwin,
-  IsaacLab, MuJoCo, MuJoCo Warp (GPU), dm_control (see
+  IsaacLab (Isaac Lab 3.0 and 2.3.x, auto-detected), MuJoCo, MuJoCo Warp (GPU), dm_control (see
   [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)), Minari, legacy D4RL/Adroit/Kitchen, a
   real-robot Franka backend, and a template for adding further platforms.
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration

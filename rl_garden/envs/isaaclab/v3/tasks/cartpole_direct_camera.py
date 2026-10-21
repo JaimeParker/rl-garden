@@ -1,13 +1,9 @@
-"""Camera variant of ``CartpoleDirectEnv``, registered as
-``RlGarden-Cartpole-Direct-Camera-v0``.
+"""Isaac Lab 3.0 cfg for the camera variant of the Cartpole Direct task,
+registered as ``RlGarden-Cartpole-Direct-Camera-v0``.
 
-Verifies the image-observation path: unlike IsaacLab's own cartpole camera
-task (which mean-subtracts the RGB tensor for "better training results"),
-``_get_observations()`` here returns the camera output untouched -- raw
-``uint8`` ``[0, 255]`` -- per ``RLGardenDirectRLEnv``'s documented image
-convention. It also returns a ``"state"`` key alongside ``"rgb_front"`` (the
-same 4-value state ``CartpoleDirectEnv`` uses), demonstrating the
-state+image case for backends other than ManiSkill.
+Verifies the image-observation path: ``"rgb_front"`` is the raw camera
+output (``uint8`` ``[0, 255]``, no mean subtraction) next to the 4-value
+``"state"`` (logic in ``tasks_common.cartpole.CartpoleCameraLogic``).
 
 The camera renderer is a ``PresetCfg`` (``--isaaclab.renderer``): the Kit-less
 Newton Warp renderer by default, ``isaacsim_rtx`` (Kit RTX) etc. selectable.
@@ -22,11 +18,9 @@ from isaaclab.sensors import CameraCfg
 from isaaclab.utils import configclass
 from isaaclab_tasks.utils.presets import MultiBackendRendererCfg
 
-from rl_garden.envs.isaaclab.tasks.cartpole_direct import (
-    CartpoleDirectEnv,
-    CartpoleDirectEnvCfg,
-    CartpoleDirectSceneCfg,
-)
+from rl_garden.envs.isaaclab.tasks_common.cartpole import CartpoleCameraLogic
+from rl_garden.envs.isaaclab.v3.direct_env import RLGardenDirectRLEnv
+from rl_garden.envs.isaaclab.v3.tasks.cartpole_direct import CartpoleDirectEnvCfg, CartpoleDirectSceneCfg
 
 
 @configclass
@@ -62,15 +56,8 @@ class CartpoleDirectCameraEnvCfg(CartpoleDirectEnvCfg):
     )
 
 
-class CartpoleDirectCameraEnv(CartpoleDirectEnv):
+class CartpoleDirectCameraEnv(CartpoleCameraLogic, RLGardenDirectRLEnv):
     cfg: CartpoleDirectCameraEnvCfg
-
-    def _get_observations(self) -> dict:
-        state = super()._get_observations()["state"]
-        # .torch is a non-contiguous view of the camera's RGBA buffer, which
-        # the next render overwrites; clone to own a contiguous copy.
-        rgb = self.camera.data.output["rgb"].torch.clone()
-        return {"rgb_front": rgb, "state": state}
 
 
 gym.register(

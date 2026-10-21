@@ -127,7 +127,7 @@ does `getattr(args, cls.config_field)` — what `resolve_backend_config()` on
 
 **Escape hatch:** `make_eval_env` may raise `NotImplementedError` when the
 backend cannot run two live instances at once — `isaaclab.py` does this because
-`isaaclab.app.launch_simulation` hosts at most one Isaac Sim/Kit app per process, telling the user to pass
+a process hosts at most one Isaac Sim/Kit app (`launch_simulation` on Isaac Lab 3.0, `AppLauncher` on 2.x), telling the user to pass
 `--eval_freq 0`. Document the requirement in the module docstring like isaaclab
 does.
 
