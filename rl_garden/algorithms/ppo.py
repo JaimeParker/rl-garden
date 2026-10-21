@@ -592,7 +592,9 @@ class PPO(OnPolicyAlgorithm):
         b_returns = self.rollout_buffer.returns.reshape(-1)
         y_var = torch.var(b_returns)
         explained_var = (
-            torch.nan if y_var == 0 else 1 - torch.var(b_returns - b_values) / y_var
+            float("nan")
+            if y_var == 0
+            else float((1 - torch.var(b_returns - b_values) / y_var).item())
         )
         return {
             "loss": float(np.mean(losses)) if losses else 0.0,
@@ -602,7 +604,7 @@ class PPO(OnPolicyAlgorithm):
             "old_approx_kl": float(np.mean(old_approx_kls)) if old_approx_kls else 0.0,
             "approx_kl": float(np.mean(approx_kls)) if approx_kls else 0.0,
             "clipfrac": float(np.mean(clipfracs)) if clipfracs else 0.0,
-            "explained_variance": float(explained_var.detach().item()),
+            "explained_variance": explained_var,
             "clip_coef": clip_coef,
             "learning_rate": float(self.policy_optimizer.param_groups[0]["lr"]),
         }

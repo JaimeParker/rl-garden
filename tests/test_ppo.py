@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -212,6 +214,39 @@ def test_ppo_dict_obs_constructs_and_trains_one_update():
     assert agent.policy.encoder_sharing == "shared_critic_grad"
     assert agent.policy.critic_extractor is None
     assert agent._global_step == 4
+
+
+class _ConstantObsVecEnv(DummyVecEnv):
+    """Identical zero observations for every env and step, plus DummyVecEnv's
+    unit rewards, so with ``num_steps=1`` every env gets the same value
+    estimate and the same GAE return."""
+
+    def _obs(self):
+        return torch.zeros(self.num_envs, *self.single_observation_space.shape)
+
+
+def test_ppo_explained_variance_is_nan_for_zero_variance_returns(monkeypatch):
+    agent = PPO(
+        env=_ConstantObsVecEnv(_state_space(), _action_space()),
+        **{**_ppo_kwargs(), "num_steps": 1},
+    )
+    recorded_metrics: list[dict[str, float]] = []
+    original_train = agent.train
+
+    def recording_train() -> dict[str, float]:
+        metrics = original_train()
+        recorded_metrics.append(metrics)
+        return metrics
+
+    monkeypatch.setattr(agent, "train", recording_train)
+
+    agent.learn(total_timesteps=2)
+
+    assert torch.var(agent.rollout_buffer.returns.reshape(-1)) == 0
+    assert len(recorded_metrics) == 1
+    explained_variance = recorded_metrics[0]["explained_variance"]
+    assert isinstance(explained_variance, float)
+    assert math.isnan(explained_variance)
 
 
 def test_ppo_checkpoint_roundtrip(tmp_path):
