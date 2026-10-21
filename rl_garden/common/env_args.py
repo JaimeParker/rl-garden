@@ -241,6 +241,15 @@ class GymnasiumConfig:
     env_kwargs_json: str = "{}"
     # "sync" (single process) or "async" (one OS process per env).
     vectorization: str = "sync"
+    # "src=dst" entries renaming the env's Dict observation keys to rl-garden
+    # contract keys (e.g. "pixels=rgb_front").
+    obs_key_map: tuple[str, ...] = ()
+    # "pkg.module:function" building the whole vector env instead of
+    # gym.make + Sync/AsyncVectorEnv; called as fn(num_envs, seed, device,
+    # **env_kwargs).
+    vector_env_factory: str = ""
+    # The factory's vector env already returns torch tensors on `device`.
+    vector_env_returns_torch: bool = False
 
 
 @dataclass

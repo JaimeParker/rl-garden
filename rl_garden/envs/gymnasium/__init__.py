@@ -3,8 +3,10 @@
 
 ``--gymnasium.import_modules`` names the module(s) whose import calls
 ``gymnasium.register`` for ``--env_id``; the env must emit rl-garden
-observation keys itself (or a bare 1-D float ``Box``, auto-wrapped as
-``state``). See ``docs/guides/gymnasium-custom-envs.md``.
+observation keys itself, via ``--gymnasium.obs_key_map`` renames, or as a
+bare 1-D float ``Box`` (auto-wrapped as ``state``). A whole vector env can
+be supplied with ``--gymnasium.vector_env_factory``. See
+``docs/guides/gymnasium-custom-envs.md``.
 """
 from rl_garden.envs.gymnasium.config import GymnasiumEnvConfig
 from rl_garden.envs.gymnasium.env import make_gymnasium_env

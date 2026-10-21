@@ -63,6 +63,9 @@ SAC(env=env, buffer_device="cuda").learn(total_timesteps=100_000)
 | `env_kwargs_json` | `"{}"` | JSON object forwarded verbatim to `gym.make(env_id, **kwargs)` |
 | `vectorization` | `"sync"` | `sync` (`SyncVectorEnv`, one process) or `async` (`AsyncVectorEnv`, one process per env) |
 | `device` | `"cpu"` | Device of the observation/reward tensors the env returns |
+| `obs_key_map` | `()` | `src=dst` entries renaming the env's Dict observation keys to rl-garden keys (see [Renaming observation keys](#renaming-observation-keys)) |
+| `vector_env_factory` | `""` | `pkg.module:function` that builds the whole vector env instead of `gym.make` (see [Bringing your own vector env](#bringing-your-own-vector-env)) |
+| `vector_env_returns_torch` | `false` | The factory's vector env already returns torch tensors on `device`; requires `vector_env_factory` |
 
 Reward scaling uses the shared `--reward_scale`/`--reward_bias` flags, and
 `--num_envs`/`--num_eval_envs`/`--seed` work as for every backend. A
@@ -115,10 +118,54 @@ python examples/train_online.py drqv2 \
   --obs.rgb front --gymnasium.vectorization async
 ```
 
-The backend never renames keys and never resizes images. `--obs.image_size`
-must stay unset, because the env's own resolution is used.
+The backend renames keys only when `obs_key_map` asks it to (next section),
+and it never resizes images. `--obs.image_size` must stay unset, because the
+env's own resolution is used.
 `--obs.frame_stack N` stacks every requested image key to
 `(N_envs, N, H, W, C)` and requires `--obs.rgb` or `--obs.depth`.
+
+## Renaming observation keys
+
+If your env emits a Dict observation with its own key names, map them to
+rl-garden keys with `obs_key_map` instead of editing the env. Each entry is
+`src=dst`. Keys not in the map pass through unchanged. For an env that emits
+`{"pixels": ..., "proprio": ...}`:
+
+```bash
+python examples/train_online.py drqv2 \
+  --env_backend gymnasium --env_id MyPixelReach-v0 \
+  --gymnasium.import_modules my_pkg.envs \
+  --gymnasium.obs_key_map pixels=rgb_front proprio=state \
+  --obs.rgb front
+```
+
+```yaml
+env_backend: gymnasium
+env_id: MyPixelReach-v0
+obs:
+  rgb: [front]
+gymnasium:
+  import_modules: [my_pkg.envs]
+  obs_key_map: [pixels=rgb_front, proprio=state]
+```
+
+The rename applies once to the vectorized env, after the numpy-to-torch
+conversion. It covers the observation spaces, every `reset`/`step`
+observation and `infos["final_observation"]`, on both the `gym.make` path
+and the `vector_env_factory` path. Frame stacking runs after the rename, so
+`--obs.frame_stack` works on the renamed `rgb_front`. A bare 1-D float `Box`
+is still auto-wrapped as `state` before the rename.
+
+Checks:
+
+- When the backend resolves its config (before any env is built, without
+  importing anything), every entry is checked. Each entry needs exactly one
+  `=` with non-empty sides. Sources and
+  destinations must be unique. Every destination must be one of the keys
+  `--obs.*` asks for.
+- At construction, every source must be a key of the env's Dict observation
+  space. A destination must not collide with a key the env already emits and
+  that is not itself renamed. A non-Dict observation space is rejected.
 
 ## Episode boundaries and statistics
 
@@ -143,7 +190,87 @@ to leave the wrapper to rl-garden.
   env renders: each worker owns its own renderer or GL context.
 
 Both paths return CPU torch tensors (`--gymnasium.device cpu`). The
-algorithm's `--buffer_device` and update device stay independent.
+algorithm's `--buffer_device` and update device stay independent. Only a
+torch-native `vector_env_factory` (next section) returns tensors on another
+device.
+
+## Bringing your own vector env
+
+When your env is already batched, or you want to control vectorization
+yourself, point `vector_env_factory` at a function that builds the whole
+vector env. The backend then calls it instead of `gym.make` +
+`SyncVectorEnv`/`AsyncVectorEnv`:
+
+```python
+# my_pkg/vec.py
+import gymnasium as gym
+from gymnasium.vector import AutoresetMode, SyncVectorEnv
+from gymnasium.wrappers import RecordEpisodeStatistics
+
+
+def make_vec(num_envs: int, seed: int, device: str, **env_kwargs) -> gym.vector.VectorEnv:
+    return SyncVectorEnv(
+        [lambda: RecordEpisodeStatistics(gym.make("MyReach-v0", **env_kwargs))] * num_envs,
+        autoreset_mode=AutoresetMode.SAME_STEP,
+    )
+```
+
+```bash
+python examples/train_online.py sac \
+  --env_backend gymnasium --env_id MyReach-v0 \
+  --gymnasium.import_modules my_pkg.envs \
+  --gymnasium.vector_env_factory my_pkg.vec:make_vec
+```
+
+```yaml
+env_backend: gymnasium
+env_id: MyReach-v0
+gymnasium:
+  import_modules: [my_pkg.envs]
+  vector_env_factory: my_pkg.vec:make_vec
+  vector_env_returns_torch: false
+```
+
+The factory contract is
+`fn(num_envs: int, seed: int, device: str, **env_kwargs) -> gymnasium.vector.VectorEnv`,
+where `env_kwargs` comes from `env_kwargs_json`. The backend imports
+`import_modules` first, in the training process, then the factory's module.
+Neither is imported before an env is built. `--env_id` is used only for naming
+(run name, log and checkpoint paths); the factory chooses what to build.
+`vectorization` must stay `sync`, because the factory does its own
+vectorization.
+
+The returned vector env must meet three requirements, checked at
+construction:
+
+- `metadata["autoreset_mode"]` is `AutoresetMode.SAME_STEP`. Any other mode
+  is rejected, because bootstrapping relies on `final_observation` arriving
+  on the step the episode ends.
+- Its observation space is a `Dict`. A bare `Box` is rejected; it is not
+  auto-wrapped as `state` on this path. Use `obs_key_map` to rename
+  non-contract keys.
+- It reports `final_info["episode"]` (`r`, `l`) itself. The backend does not
+  add `RecordEpisodeStatistics` on this path. For a numpy vector env, wrap
+  each single env in `RecordEpisodeStatistics` as above; the vector-level
+  `gymnasium.wrappers.vector.RecordEpisodeStatistics` writes
+  `infos["episode"]` instead and does not satisfy this.
+
+With `vector_env_returns_torch: false` (default), the result is a numpy
+vector env. The backend converts it to torch tensors on `device` and
+translates Gymnasium's `final_obs` into `final_observation`, as on the
+`gym.make` path.
+
+With `vector_env_returns_torch: true`, the result must already return torch
+tensors on `device` and follow rl-garden's env contract itself:
+`reset(seed=...)`, Dict observations of tensors, and on episode end dense
+`infos["final_observation"]`/`"_final_observation"`/`"final_info"`/
+`"_final_info"`. The backend uses it without conversion and only wraps it so
+that `reset()` without a seed replays the configured seed. The adapter's
+float32 space canonicalization is skipped too, so declare `float32` `Box`
+spaces for float observations.
+
+Frame stacking, `--reward_scale`/`--reward_bias` and `obs_key_map` apply to
+the factory path exactly as to the `gym.make` path.
 
 ## Offline and off2on
 

@@ -366,3 +366,322 @@ def test_print_config_accepts_cli_and_yaml_and_rejects_bad_overrides(tmp_path):
     assert inactive.returncode != 0
     assert "'gymnasium.vectorization' is inactive" in inactive.stderr
     assert list(tmp_path.iterdir()) == [preset]
+
+
+ODD_KEY_MAP = {"pixels": "rgb_front", "proprio": "state"}
+
+
+def test_obs_key_map_renames_spaces_observations_and_final_observation():
+    env = make_gymnasium_env(_pixels_cfg(env_id="RlgTestOddKeys-v0", obs_key_map=ODD_KEY_MAP))
+
+    assert list(env.single_observation_space.spaces) == ["rgb_front", "state"]
+    assert list(env.observation_space.spaces) == ["rgb_front", "state"]
+    assert env.observation_space["rgb_front"].shape == (2, 16, 16, 3)
+    obs, _ = env.reset()
+    assert set(obs) == {"rgb_front", "state"}
+    for _ in range(3):
+        obs, _, _, truncated, infos = env.step(torch.zeros((2, 1)))
+
+    assert set(obs) == {"rgb_front", "state"}
+    assert bool(truncated.all())
+    assert bool(infos["_final_observation"].all())
+    final_obs = infos["final_observation"]
+    assert set(final_obs) == {"rgb_front", "state"}
+    assert final_obs["rgb_front"].shape == (2, 16, 16, 3)
+    assert final_obs["rgb_front"].dtype == torch.uint8
+    assert final_obs["state"].shape == (2, 2)
+    env.close()
+
+
+def test_obs_key_map_from_cli_config_passes_registry_validation():
+    req = _make_req(
+        env_id="RlgTestOddKeys-v0",
+        num_envs=2,
+        observation=ObservationConfig(rgb=("front",)),
+        backend_config=GymnasiumConfig(
+            import_modules=USER_ENVS, obs_key_map=("pixels=rgb_front", "proprio=state")
+        ),
+        create_eval_env=False,
+    )
+
+    train_env, _ = make_training_envs("gymnasium", req)
+
+    obs, _ = train_env.reset()
+    assert obs["rgb_front"].shape == (2, 16, 16, 3)
+    assert obs["state"].shape == (2, 2)
+    train_env.close()
+
+
+def test_obs_key_map_then_frame_stack_stacks_renamed_image_key():
+    env = make_gymnasium_env(
+        _pixels_cfg(
+            env_id="RlgTestOddKeys-v0",
+            obs_key_map=ODD_KEY_MAP,
+            image_keys=("rgb_front",),
+            frame_stack=3,
+        )
+    )
+
+    obs, _ = env.reset()
+    assert obs["rgb_front"].shape == (2, 3, 16, 16, 3)
+    assert obs["state"].shape == (2, 2)
+    obs, _, _, _, _ = env.step(torch.zeros((2, 1)))
+    assert obs["rgb_front"].shape == (2, 3, 16, 16, 3)
+    env.close()
+
+
+@pytest.mark.parametrize(
+    ("backend_config", "error", "message"),
+    [
+        (GymnasiumConfig(obs_key_map=("pixels",)), ValueError, "entry 'pixels' must be 'src=dst'"),
+        (GymnasiumConfig(obs_key_map=("=state",)), ValueError, "entry '=state' must be 'src=dst'"),
+        (GymnasiumConfig(obs_key_map=("a=b=c",)), ValueError, "entry 'a=b=c' must be 'src=dst'"),
+        (
+            GymnasiumConfig(obs_key_map=("pixels=rgb_front", "pixels=state")),
+            ValueError,
+            "duplicate source/destination key 'pixels'",
+        ),
+        (
+            GymnasiumConfig(obs_key_map=("pixels=state", "proprio=state")),
+            ValueError,
+            "duplicate source/destination key 'state'",
+        ),
+        (
+            GymnasiumConfig(obs_key_map=("pixels=rgb_side",)),
+            ObservationContractError,
+            r"destination 'rgb_side' is not an expected observation key \['rgb_front', 'state'\]",
+        ),
+        (
+            GymnasiumConfig(vector_env_factory="my_pkg.vec"),
+            ValueError,
+            "vector_env_factory 'my_pkg.vec' must be 'pkg.module:function'",
+        ),
+        (
+            GymnasiumConfig(vector_env_factory="my-pkg.vec:make"),
+            ValueError,
+            "must be 'pkg.module:function'",
+        ),
+        (
+            GymnasiumConfig(vector_env_factory="my_pkg.vec:make:extra"),
+            ValueError,
+            "must be 'pkg.module:function'",
+        ),
+        (
+            GymnasiumConfig(vector_env_factory="my_pkg.vec:make", vectorization="async"),
+            ValueError,
+            "vectorization is not used with vector_env_factory",
+        ),
+        (
+            GymnasiumConfig(vector_env_returns_torch=True),
+            ValueError,
+            "vector_env_returns_torch requires vector_env_factory",
+        ),
+    ],
+)
+def test_resolve_config_rejects_invalid_key_map_and_factory_settings(
+    backend_config, error, message
+):
+    req = _make_req(observation=ObservationConfig(rgb=("front",)), backend_config=backend_config)
+
+    with pytest.raises(error, match=message):
+        GymnasiumBackend.resolve_config(req, is_eval=False)
+
+
+def test_resolve_config_parses_key_map_and_factory_fields():
+    backend_config = GymnasiumConfig(
+        obs_key_map=("pixels=rgb_front", "proprio=state"),
+        vector_env_factory="my_pkg.vec:make",
+        vector_env_returns_torch=True,
+    )
+    req = _make_req(observation=ObservationConfig(rgb=("front",)), backend_config=backend_config)
+
+    cfg = GymnasiumBackend.resolve_config(req, is_eval=False)
+
+    assert cfg.obs_key_map == ODD_KEY_MAP
+    assert cfg.vector_env_factory == "my_pkg.vec:make"
+    assert cfg.vector_env_returns_torch is True
+
+
+def test_obs_key_map_source_missing_from_env_raises():
+    with pytest.raises(
+        ObservationContractError,
+        match=r"source 'pixels' not in env observation keys \['rgb_front', 'state'\]",
+    ):
+        make_gymnasium_env(_pixels_cfg(obs_key_map={"pixels": "rgb_front"}))
+
+
+def test_obs_key_map_onto_existing_env_key_raises():
+    with pytest.raises(ObservationContractError, match="renames a key onto another"):
+        make_gymnasium_env(_pixels_cfg(obs_key_map={"rgb_front": "state"}))
+
+
+def test_obs_key_map_requires_dict_observation_space():
+    from gymnasium.vector import AutoresetMode, SyncVectorEnv
+
+    from rl_garden.envs.gymnasium.env import _RenameObservationKeys
+    from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+
+    box_env = TorchVectorEnvAdapter(
+        SyncVectorEnv([lambda: gym.make("Pendulum-v1")], autoreset_mode=AutoresetMode.SAME_STEP),
+        device="cpu",
+    )
+    with pytest.raises(
+        ObservationContractError, match="obs_key_map requires a Dict observation space"
+    ):
+        _RenameObservationKeys(box_env, {"obs": "state"})
+    box_env.close()
+
+
+def _factory_cfg(function: str, **overrides) -> GymnasiumEnvConfig:
+    return _pixels_cfg(vector_env_factory=f"_gymnasium_user_envs:{function}", **overrides)
+
+
+def test_numpy_factory_goes_through_torch_adapter():
+    env = make_gymnasium_env(_factory_cfg("make_numpy_vec"))
+
+    obs, _ = env.reset()
+    assert obs["rgb_front"].dtype == torch.uint8
+    assert obs["rgb_front"].device.type == "cpu"
+    assert obs["state"].dtype == torch.float32
+    for _ in range(3):
+        _, rewards, terminated, truncated, infos = env.step(torch.zeros((2, 1)))
+    assert rewards.dtype == torch.float32
+    assert terminated.dtype == torch.bool and bool(truncated.all())
+    assert torch.equal(infos["final_info"]["episode"]["r"].float(), torch.full((2,), 3.0))
+    env.close()
+
+
+def test_numpy_factory_forwards_env_kwargs_and_applies_key_map_via_registry():
+    req = _make_req(
+        env_id="RlgTestOddKeys-v0",
+        num_envs=2,
+        observation=ObservationConfig(rgb=("front",)),
+        backend_config=GymnasiumConfig(
+            import_modules=USER_ENVS,
+            vector_env_factory="_gymnasium_user_envs:make_numpy_vec",
+            env_kwargs_json='{"env_id": "RlgTestOddKeys-v0"}',
+            obs_key_map=("pixels=rgb_front", "proprio=state"),
+        ),
+    )
+
+    train_env, eval_env = make_training_envs("gymnasium", req)
+
+    obs, _ = train_env.reset()
+    assert obs["rgb_front"].shape == (2, 16, 16, 3)
+    assert eval_env.num_envs == 2
+    train_env.close()
+    eval_env.close()
+
+
+def test_torch_factory_is_used_without_adapter_and_replays_seed():
+    from _gymnasium_user_envs import TorchCountingVecEnv
+
+    from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+
+    env = make_gymnasium_env(
+        _factory_cfg("make_torch_vec", seed=5, vector_env_returns_torch=True, reward_scale=2.0)
+    )
+    inner = env
+    while not isinstance(inner, TorchCountingVecEnv):
+        assert not isinstance(inner, TorchVectorEnvAdapter)
+        inner = inner.env
+
+    first, _ = env.reset()
+    for _ in range(3):
+        _, rewards, _, truncated, infos = env.step(torch.zeros((2, 1)))
+    second, _ = env.reset()
+
+    assert inner.reset_seeds == [5, 5]
+    assert torch.equal(first["state"], second["state"])
+    assert bool(truncated.all())
+    assert torch.allclose(rewards, torch.full((2,), 2.0))
+    assert torch.equal(infos["final_info"]["episode"]["r"], torch.full((2,), 3.0))
+    env.close()
+
+
+@pytest.mark.parametrize(
+    ("function", "error", "message"),
+    [
+        (
+            "make_next_step_vec",
+            ValueError,
+            "vector env must use AutoresetMode.SAME_STEP, got metadata",
+        ),
+        (
+            "make_box_vec",
+            ObservationContractError,
+            "vector_env_factory must return a Dict observation space .*got Box",
+        ),
+        ("make_missing_vec", AttributeError, "has no attribute 'make_missing_vec'"),
+    ],
+)
+def test_factory_result_is_rejected(function, error, message):
+    with pytest.raises(error, match=message):
+        make_gymnasium_env(_factory_cfg(function))
+
+
+def test_resolve_config_does_not_import_vector_env_factory_module():
+    _run_fresh_interpreter(
+        """
+import sys
+from rl_garden.common.env_args import GymnasiumConfig
+from rl_garden.envs.backend_registry import _REGISTRY, EnvRequest, discover_env_backends
+from rl_garden.observations.config import ObservationConfig
+
+discover_env_backends()
+req = EnvRequest(
+    env_id="RlgTestPixels-v0", num_envs=2, control_mode="n/a", render_mode="rgb_array",
+    seed=0, observation=ObservationConfig(),
+    backend_config=GymnasiumConfig(
+        vector_env_factory="_gymnasium_user_envs:make_torch_vec",
+        vector_env_returns_torch=True,
+    ),
+)
+cfg = _REGISTRY["gymnasium"].resolve_config(req, is_eval=False)
+assert cfg.vector_env_factory == "_gymnasium_user_envs:make_torch_vec"
+assert "_gymnasium_user_envs" not in sys.modules
+"""
+    )
+
+
+def test_print_config_accepts_key_map_and_factory_fields(tmp_path):
+    common = ["--print-config", "--log-type", "none", "--log-dir", str(tmp_path)]
+
+    cli = run_entry(
+        "train_online",
+        [
+            "sac",
+            "--env-backend",
+            "gymnasium",
+            "--env-id",
+            "MyReach-v0",
+            "--gymnasium.obs-key-map",
+            "proprio=state",
+            "pixels=rgb_front",
+            "--gymnasium.vector-env-factory",
+            "rlg_not_installed.vec:make",
+            *common,
+        ],
+    )
+    assert cli.returncode == 0, cli.stderr
+    config = json.loads(cli.stdout)["active_environment"]["config"]
+    assert config["obs_key_map"] == ["proprio=state", "pixels=rgb_front"]
+    assert config["vector_env_factory"] == "rlg_not_installed.vec:make"
+    assert config["vector_env_returns_torch"] is False
+
+    preset = tmp_path / "gymnasium_factory.yaml"
+    preset.write_text(
+        "env_backend: gymnasium\n"
+        "env_id: MyReach-v0\n"
+        "gymnasium:\n"
+        "  obs_key_map: [proprio=state]\n"
+        "  vector_env_factory: rlg_not_installed.vec:make\n"
+        "  vector_env_returns_torch: true\n",
+        encoding="utf-8",
+    )
+    yaml = run_entry("train_online", ["sac", "--config", str(preset), *common])
+    assert yaml.returncode == 0, yaml.stderr
+    config = json.loads(yaml.stdout)["active_environment"]["config"]
+    assert config["obs_key_map"] == ["proprio=state"]
+    assert config["vector_env_returns_torch"] is True
+    assert "rlg_not_installed" not in sys.modules

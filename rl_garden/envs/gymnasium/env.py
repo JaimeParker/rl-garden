@@ -12,14 +12,26 @@ Registration: the env thunk imports every ``cfg.import_modules`` entry
 effects also run in ``AsyncVectorEnv`` workers under a spawn/forkserver
 start method, which don't inherit the parent's imports.
 
-Observations: the env must emit rl-garden contract keys itself (``state``,
+Observations: the env must emit rl-garden contract keys (``state``,
 ``state_<name>``, ``rgb_<cam>``, ``depth_<cam>``; checked by the registry
-after construction). A bare 1-D float ``Box`` is the one shape auto-wrapped,
-into ``Dict({"state": Box})``; any other bare ``Box`` is rejected.
+after construction), itself or through ``obs_key_map``. A bare 1-D float
+``Box`` is the one shape auto-wrapped, into ``Dict({"state": Box})``; any
+other bare ``Box`` is rejected.
 
 Episode statistics: ``RecordEpisodeStatistics`` is applied unless the env's
 wrapper chain already has one (a second instance asserts on its own info
 key), since training/eval logging reads ``final_info["episode"]``.
+
+``obs_key_map`` renames the env's Dict observation keys to contract keys
+once, at the vector level after the numpy-to-torch adapter, so it applies to
+both the ``gym.make`` path and the ``vector_env_factory`` path.
+
+``vector_env_factory`` (``"pkg.module:function"``) replaces ``gym.make`` +
+``Sync/AsyncVectorEnv``: it is called as ``fn(num_envs, seed, device,
+**env_kwargs)`` and must return a ``SAME_STEP`` vector env with a Dict
+observation space that already reports ``final_info["episode"]``. A numpy
+result goes through the adapter; a torch-native one
+(``vector_env_returns_torch``) is used as is, only seeded.
 """
 from __future__ import annotations
 
@@ -29,6 +41,7 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.gymnasium.config import GymnasiumEnvConfig
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
@@ -47,6 +60,64 @@ class _SeededGymnasiumVecEnv(TorchVectorEnvAdapter):
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         return super().reset(seed=seed if seed is not None else self._seed, options=options)
+
+
+class _SeededTorchVecEnv(gym.vector.VectorWrapper):
+    """``reset()`` without a seed replays the configured seed, for a
+    torch-native factory env that bypasses ``_SeededGymnasiumVecEnv``."""
+
+    def __init__(self, vec_env: gym.vector.VectorEnv, seed: int) -> None:
+        super().__init__(vec_env)
+        self._seed = seed
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        return self.env.reset(seed=seed if seed is not None else self._seed, options=options)
+
+
+class _RenameObservationKeys(gym.vector.VectorWrapper):
+    """Renames Dict observation keys (``key_map``: env key -> contract key)
+    in the observation spaces, every ``reset``/``step`` observation, and
+    ``infos["final_observation"]``; unmapped keys pass through."""
+
+    def __init__(self, vec_env: gym.vector.VectorEnv, key_map: dict[str, str]) -> None:
+        from rl_garden.observations.schema import ObservationContractError
+
+        super().__init__(vec_env)
+        single_space = vec_env.single_observation_space
+        if not isinstance(single_space, spaces.Dict):
+            raise ObservationContractError(
+                "gymnasium backend: obs_key_map requires a Dict observation space, "
+                f"got {type(single_space).__name__}"
+            )
+        keys = list(single_space.spaces)
+        for src in key_map:
+            if src not in single_space.spaces:
+                raise ObservationContractError(
+                    f"gymnasium backend: obs_key_map source {src!r} not in env "
+                    f"observation keys {keys!r}"
+                )
+        renamed_keys = [key_map.get(key, key) for key in keys]
+        if len(set(renamed_keys)) != len(renamed_keys):
+            raise ObservationContractError(
+                f"gymnasium backend: obs_key_map {key_map!r} renames a key onto another "
+                f"env observation key {keys!r}"
+            )
+        self._key_map = key_map
+        self.single_observation_space = spaces.Dict(self._rename(single_space.spaces))
+        self.observation_space = batch_space(self.single_observation_space, vec_env.num_envs)
+
+    def _rename(self, mapping: dict[str, Any]) -> dict[str, Any]:
+        return {self._key_map.get(key, key): value for key, value in mapping.items()}
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        obs, info = self.env.reset(seed=seed, options=options)
+        return self._rename(obs), info
+
+    def step(self, actions):
+        obs, reward, terminated, truncated, infos = self.env.step(actions)
+        if isinstance(infos.get("final_observation"), dict):
+            infos = {**infos, "final_observation": self._rename(infos["final_observation"])}
+        return self._rename(obs), reward, terminated, truncated, infos
 
 
 def _import_user_modules(names: tuple[str, ...]) -> None:
@@ -108,18 +179,71 @@ def _make_env_fn(env_id: str, env_kwargs: dict[str, Any], import_modules: tuple[
     return _env_fn
 
 
+def _load_vector_env_factory(spec: str):
+    module_name, _, function_name = spec.partition(":")
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            f"gymnasium backend: cannot import module {module_name!r} of "
+            f"--gymnasium.vector_env_factory {spec!r}: {exc}"
+        ) from exc
+    try:
+        return getattr(module, function_name)
+    except AttributeError as exc:
+        raise AttributeError(
+            f"gymnasium backend: vector_env_factory {spec!r}: module {module_name!r} "
+            f"has no attribute {function_name!r}"
+        ) from exc
+
+
+def _make_factory_vec_env(cfg: GymnasiumEnvConfig) -> gym.vector.VectorEnv:
+    from gymnasium.vector import AutoresetMode
+
+    from rl_garden.observations.schema import ObservationContractError
+
+    _import_user_modules(tuple(cfg.import_modules))
+    factory = _load_vector_env_factory(cfg.vector_env_factory)
+    vec_env = factory(cfg.num_envs, cfg.seed, cfg.device, **cfg.env_kwargs)
+    if not isinstance(vec_env, gym.vector.VectorEnv):
+        raise TypeError(
+            f"gymnasium backend: vector_env_factory {cfg.vector_env_factory!r} must "
+            f"return a gymnasium.vector.VectorEnv, got {type(vec_env).__name__}"
+        )
+    # Checked before any wrapping: the adapter forces this metadata entry.
+    mode = vec_env.metadata.get("autoreset_mode")
+    if mode != AutoresetMode.SAME_STEP:
+        raise ValueError(
+            "gymnasium backend: vector env must use AutoresetMode.SAME_STEP, "
+            f"got metadata['autoreset_mode']={mode!r}"
+        )
+    space = vec_env.single_observation_space
+    if not isinstance(space, spaces.Dict):
+        raise ObservationContractError(
+            "gymnasium backend: vector_env_factory must return a Dict observation "
+            f"space (or use obs_key_map); got {space!r}"
+        )
+    if cfg.vector_env_returns_torch:
+        return _SeededTorchVecEnv(vec_env, seed=cfg.seed)
+    return _SeededGymnasiumVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+
+
 def make_gymnasium_env(cfg: GymnasiumEnvConfig):
     from gymnasium.vector import AsyncVectorEnv, AutoresetMode, SyncVectorEnv
 
-    env_fns = [
-        _make_env_fn(cfg.env_id, cfg.env_kwargs, tuple(cfg.import_modules))
-        for _ in range(cfg.num_envs)
-    ]
-    vec_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
-    vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
-    adapter: gym.vector.VectorEnv = _SeededGymnasiumVecEnv(
-        vec_env, device=cfg.device, seed=cfg.seed
-    )
+    if cfg.vector_env_factory:
+        adapter = _make_factory_vec_env(cfg)
+    else:
+        env_fns = [
+            _make_env_fn(cfg.env_id, cfg.env_kwargs, tuple(cfg.import_modules))
+            for _ in range(cfg.num_envs)
+        ]
+        vec_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
+        vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
+        adapter = _SeededGymnasiumVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+
+    if cfg.obs_key_map:
+        adapter = _RenameObservationKeys(adapter, cfg.obs_key_map)
 
     if cfg.frame_stack > 1:
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
