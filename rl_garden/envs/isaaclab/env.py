@@ -15,8 +15,9 @@ Observation extraction:
 - vision requested: requires rl-garden's own cross-backend key convention
   directly (``"rgb_<cam>"``/``"depth_<cam>"``, plus ``"state"`` if the task
   returns one and it's kept) -- only ``RLGardenDirectRLEnv``-scaffold tasks
-  are expected to satisfy this; native single-``"policy"``-image tasks (e.g.
-  ``Isaac-Cartpole-RGB-Camera-Direct-v0``) aren't supported by this backend.
+  are expected to satisfy this; native image tasks (e.g.
+  ``Isaac-Cartpole-Camera-Direct``, which returns a stacked channel-first
+  ``"policy"`` image plus a ``"critic"`` state) aren't supported by this backend.
   Camera set/resolution are baked into the task registration, not
   runtime-selectable through ``ObservationConfig.rgb``/``.image_size``.
 """
@@ -43,6 +44,17 @@ def _box_from_tensor(tensor: torch.Tensor) -> gym.spaces.Box:
     )
 
 
+def _check_frames_nonzero(obs: dict) -> None:
+    for key, tensor in obs.items():
+        if key.startswith(("rgb_", "depth_")) and tensor.max() == 0:
+            raise RuntimeError(
+                f"IsaacLab camera renderer produced only zero frames for key {key!r}. On Kit RTX this "
+                "means the renderer was not created (e.g. driver rejected; see the Kit log under "
+                "site-packages/isaacsim/kit/logs/Kit/IsaacLab/3.0/). Use --isaaclab.renderer "
+                "newton_renderer or a supported driver."
+            )
+
+
 class _IsaacLabVecEnvAdapter(gym.Env):
     """Adapts an IsaacLab env to the rl-garden env shape (see module docstring)."""
 
@@ -65,6 +77,7 @@ class _IsaacLabVecEnvAdapter(gym.Env):
 
         obs_dict, _ = env.reset(seed=seed)
         self._last_obs = self._extract_obs(obs_dict)
+        _check_frames_nonzero(self._last_obs)
         # Duck-typed attribute expected by wrappers like ImageFrameStackWrapper
         # on env.unwrapped (mirrors mani_skill.envs.sapien_env.BaseEnv).
         self._init_raw_obs = self._last_obs
@@ -159,24 +172,24 @@ class _IsaacLabVecEnvAdapter(gym.Env):
 
 
 def make_isaaclab_env(cfg: IsaacLabEnvConfig):
-    """Build an IsaacLab env according to ``cfg``."""
-    from rl_garden.envs.isaaclab.app import get_or_launch_app
+    """Build an IsaacLab env according to ``cfg``.
 
-    get_or_launch_app(cfg.headless, cfg.sim_device, enable_cameras=cfg.is_visual)
-
+    Isaac Lab 3.0 order: parse the env cfg (presets resolved), then launch
+    the runtime that cfg requires, then instantiate the env.
+    """
     import isaaclab_tasks  # noqa: F401  (registers native gym ids)
 
-    # Must come after get_or_launch_app(): registering rl-garden's own tasks
-    # imports RLGardenDirectRLEnv, which subclasses isaaclab.envs.DirectRLEnv
-    # -- IsaacLab requires Kit to already be running before any isaaclab.*
-    # subclass can be imported.
-    import rl_garden.envs.isaaclab.tasks  # noqa: F401
+    import rl_garden.envs.isaaclab.tasks  # noqa: F401  (registers RlGarden-* ids)
     from isaaclab_tasks.utils import parse_env_cfg
+    from rl_garden.envs.isaaclab.app import get_or_launch_app
 
-    env_cfg = parse_env_cfg(cfg.env_id, device=cfg.sim_device, num_envs=cfg.num_envs)
+    env_cfg = parse_env_cfg(
+        cfg.env_id, device=cfg.sim_device, num_envs=cfg.num_envs, overrides=list(cfg.overrides)
+    )
     for key, value in cfg.env_kwargs.items():
         setattr(env_cfg, key, value)
 
+    get_or_launch_app(env_cfg, {"headless": cfg.headless, "device": cfg.sim_device})
     env = gym.make(cfg.env_id, cfg=env_cfg)
     adapter = _IsaacLabVecEnvAdapter(
         env, seed=cfg.seed, is_visual=cfg.is_visual, state=cfg.state

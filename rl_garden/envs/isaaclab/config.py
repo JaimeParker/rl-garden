@@ -18,3 +18,7 @@ class IsaacLabEnvConfig:
     state: bool = True
     frame_stack: int = 1
     env_kwargs: dict = field(default_factory=dict)
+    # Hydra-style preset selectors passed to isaaclab_tasks' parse_env_cfg,
+    # e.g. ["physics=newton_mjwarp", "renderer=isaacsim_rtx"]. Must stay a
+    # list: parse_env_cfg falls back to reading sys.argv when given None.
+    overrides: list[str] = field(default_factory=list)

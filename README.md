@@ -229,7 +229,7 @@ mapping, rewards, and performance controls.
 
 Other registered `--env-backend` values: `maniskill` (default for most examples),
 `isaaclab` (see [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md) and the
-[known camera-stall issue](docs/guides/isaaclab-camera-stall.md)), `mujoco`,
+[camera-stall history](docs/guides/isaaclab-camera-stall.md)), `mujoco`,
 `mujoco_warp` (GPU-vectorized MuJoCo), `minari`, and `d4rl_legacy` (legacy
 Gym/D4RL Adroit and Kitchen tasks, see
 [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)).
@@ -402,7 +402,7 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [Checkpoint Save & Load](docs/guides/checkpoint.md)
 - [Configuration System](docs/guides/configuration.md)
 - [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)
-- [IsaacLab Camera Training Stall (known issue)](docs/guides/isaaclab-camera-stall.md)
+- [IsaacLab Camera Training Stall (resolved on Isaac Lab 3.0)](docs/guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)
 - [RoboTwin Integration](docs/guides/robotwin.md)

@@ -669,6 +669,32 @@ def test_isaaclab_backend_make_cfg_forwards_visual_and_frame_stack() -> None:
     assert cfg.frame_stack == 3
 
 
+def test_isaaclab_backend_make_cfg_defaults_to_no_preset_overrides() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    il = IsaacLabConfig()
+    cfg = IsaacLabBackend._make_cfg(_make_isaaclab_req(il), is_eval=False)
+
+    assert il.physics is None and il.renderer is None
+    assert cfg.overrides == []
+
+
+def test_isaaclab_backend_make_cfg_forwards_physics_and_renderer_presets() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    il = IsaacLabConfig(physics="newton_mjwarp", renderer="isaacsim_rtx")
+    cfg = IsaacLabBackend._make_cfg(_make_isaaclab_req(il, is_visual=True), is_eval=False)
+
+    assert cfg.overrides == ["physics=newton_mjwarp", "renderer=isaacsim_rtx"]
+
+    physics_only = IsaacLabBackend._make_cfg(
+        _make_isaaclab_req(IsaacLabConfig(physics="isaacsim_physx")), is_eval=False
+    )
+    assert physics_only.overrides == ["physics=isaacsim_physx"]
+
+
 def test_isaaclab_backend_rejects_explicit_image_size() -> None:
     from rl_garden.common.env_args import IsaacLabConfig
     from rl_garden.envs.backend_registry import EnvRequest

@@ -128,6 +128,16 @@ class IsaacLabConfig:
     # (e.g. task-specific cfg overrides). Escape hatch, same convention as
     # ManiSkillConfig.env_kwargs_json.
     env_kwargs_json: str = "{}"
+    # Physics preset selected from the task's PresetCfg (Isaac Lab
+    # ``physics=<name>``): isaacsim_physx, newton_mjwarp, newton_kamino,
+    # ovphysx, physx -- whichever the task declares. None keeps the task
+    # default (PhysX for RlGarden-* tasks, Newton for native 3.0 tasks).
+    physics: Optional[str] = None
+    # Camera renderer preset (Isaac Lab ``renderer=<name>``): newton_renderer,
+    # isaacsim_rtx, ovrtx, rtx -- whichever the task declares. Only valid for
+    # camera tasks. None keeps the task default (newton_renderer for
+    # RlGarden-* camera tasks).
+    renderer: Optional[str] = None
 
 
 @dataclass

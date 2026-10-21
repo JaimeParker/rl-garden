@@ -48,7 +48,15 @@ class IsaacLabBackend(EnvBackend):
             env_kwargs=(
                 json.loads(il.env_kwargs_json) if il is not None and il.env_kwargs_json else {}
             ),
+            overrides=cls._preset_overrides(il),
         )
+
+    @staticmethod
+    def _preset_overrides(il) -> list[str]:
+        if il is None:
+            return []
+        selectors = (("physics", il.physics), ("renderer", il.renderer))
+        return [f"{key}={value}" for key, value in selectors if value is not None]
 
     _make_cfg = resolve_config
 
@@ -62,7 +70,7 @@ class IsaacLabBackend(EnvBackend):
     def make_eval_env(cls, req: EnvRequest):
         raise NotImplementedError(
             "IsaacLab backend does not support a separate live eval env in v1 "
-            "(AppLauncher only supports one Isaac Sim instance per process). "
+            "(launch_simulation hosts at most one Isaac Sim/Kit app per process). "
             "Pass --eval_freq 0 to skip eval env creation."
         )
 

@@ -1,12 +1,11 @@
 """rl-garden's own IsaacLab tasks, built on ``RLGardenDirectRLEnv``.
 
-Import time triggers each task module's ``gym.register(...)`` call. Must
-only be imported *after* ``get_or_launch_app()`` has booted Kit (see
-``rl_garden.envs.isaaclab.env.make_isaaclab_env``) -- IsaacLab requires the
-app to exist before any ``isaaclab.*`` subclass can be imported.
+Import time triggers each task module's ``gym.register(...)`` call. Isaac
+Lab 3.0 allows importing these before the simulation runtime is launched;
+``rl_garden.envs.isaaclab.env.make_isaaclab_env`` imports them lazily so
+``rl_garden.envs`` stays importable without Isaac Lab installed.
 """
 from rl_garden.envs.isaaclab.tasks.cartpole_direct import CartpoleDirectEnv
 from rl_garden.envs.isaaclab.tasks.cartpole_direct_camera import CartpoleDirectCameraEnv
-from rl_garden.envs.isaaclab.tasks.cartpole_direct_camera_plain import CartpoleDirectCameraPlainEnv
 
-__all__ = ["CartpoleDirectEnv", "CartpoleDirectCameraEnv", "CartpoleDirectCameraPlainEnv"]
+__all__ = ["CartpoleDirectEnv", "CartpoleDirectCameraEnv"]

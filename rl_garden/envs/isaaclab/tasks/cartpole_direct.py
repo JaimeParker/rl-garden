@@ -1,12 +1,18 @@
-"""``RLGardenDirectRLEnv`` reimplementation of IsaacLab's official Cartpole
-Direct task, registered as ``RlGarden-Cartpole-Direct-v0``.
+"""``RLGardenDirectRLEnv`` reimplementation of IsaacLab's Cartpole Direct
+task, registered as ``RlGarden-Cartpole-Direct-v0``.
 
 Logic (action scaling, reward terms, termination condition, reset pole-angle
-jitter) is copied from ``isaaclab_tasks.direct.cartpole.cartpole_env``. This
-exists to verify parity: the scaffold's generic ``_setup_scene``/
-``_reset_idx`` should behave identically to the official hand-written
-version, only the observation key (``"state"`` instead of ``"policy"``, per
-rl-garden's cross-backend convention) differs.
+jitter) is copied from Isaac Lab 2.x's ``isaaclab_tasks.direct.cartpole.
+cartpole_env`` and kept unchanged by the 3.0 port (3.0's official task in
+``isaaclab_tasks.core.cartpole`` changed observations, rewards and reset
+randomization). This exists to verify parity: the scaffold's generic
+``_setup_scene``/``_reset_idx`` should behave identically to the official
+hand-written version, only the observation key (``"state"`` instead of
+``"policy"``, per rl-garden's cross-backend convention) differs.
+
+Physics is a ``PresetCfg`` (``--isaaclab.physics``): Isaac Sim PhysX by
+default (the 2.x backend), ``newton_mjwarp`` etc. selectable, with the
+official cartpole's per-backend solver tuning.
 """
 from __future__ import annotations
 
@@ -17,14 +23,27 @@ import gymnasium as gym
 import torch
 
 from isaaclab_assets.robots.cartpole import CARTPOLE_CFG
+from isaaclab_physx.physics import PhysxCfg
+from isaaclab_tasks.core.cartpole.cartpole_common import CartpolePhysicsCfg
 
 from isaaclab.assets import ArticulationCfg
-from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import sample_uniform
 
-from rl_garden.envs.isaaclab.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv
+from rl_garden.envs.isaaclab.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv, RLGardenSceneCfg
+
+
+@configclass
+class CartpoleDirectPhysicsCfg(CartpolePhysicsCfg):
+    """Official cartpole physics presets with Isaac Sim PhysX as the default."""
+
+    default: PhysxCfg = PhysxCfg()
+
+
+@configclass
+class CartpoleDirectSceneCfg(RLGardenSceneCfg):
+    robot: ArticulationCfg = CARTPOLE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
 
 @configclass
@@ -36,15 +55,14 @@ class CartpoleDirectEnvCfg(RLGardenDirectEnvCfg):
     observation_space = 4
     state_space = 0
 
-    sim: SimulationCfg = SimulationCfg(dt=1 / 120, render_interval=decimation)
+    sim: SimulationCfg = SimulationCfg(
+        dt=1 / 120, render_interval=decimation, physics=CartpoleDirectPhysicsCfg()
+    )
 
-    robot_cfg: ArticulationCfg = CARTPOLE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     cart_dof_name = "slider_to_cart"
     pole_dof_name = "cart_to_pole"
 
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=4096, env_spacing=4.0, replicate_physics=True, clone_in_fabric=True
-    )
+    scene: CartpoleDirectSceneCfg = CartpoleDirectSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
 
     max_cart_pos = 3.0
     initial_pole_angle_range = [-0.25, 0.25]
@@ -65,11 +83,11 @@ class CartpoleDirectEnv(RLGardenDirectRLEnv):
         self._cart_dof_idx, _ = self.robot.find_joints(self.cfg.cart_dof_name)
         self._pole_dof_idx, _ = self.robot.find_joints(self.cfg.pole_dof_name)
 
-        self.joint_pos = self.robot.data.joint_pos
-        self.joint_vel = self.robot.data.joint_vel
+        self.joint_pos = self.robot.data.joint_pos.torch
+        self.joint_vel = self.robot.data.joint_vel.torch
 
     def _apply_action(self) -> None:
-        self.robot.set_joint_effort_target(self.actions, joint_ids=self._cart_dof_idx)
+        self.robot.set_joint_effort_target_index(target=self.actions, joint_ids=self._cart_dof_idx)
 
     def _get_observations(self) -> dict:
         obs = torch.cat(
@@ -98,8 +116,8 @@ class CartpoleDirectEnv(RLGardenDirectRLEnv):
         )
 
     def _get_dones(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        self.joint_pos = self.robot.data.joint_pos
-        self.joint_vel = self.robot.data.joint_vel
+        self.joint_pos = self.robot.data.joint_pos.torch
+        self.joint_vel = self.robot.data.joint_vel.torch
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         out_of_bounds = torch.any(
