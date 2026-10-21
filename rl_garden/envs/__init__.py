@@ -13,12 +13,18 @@ def __getattr__(name: str) -> Any:
         from rl_garden.envs import robotwin
 
         return getattr(robotwin, name)
+    if name in {"GymnasiumEnvConfig", "make_gymnasium_env"}:
+        from rl_garden.envs import gymnasium
+
+        return getattr(gymnasium, name)
     raise AttributeError(name)
 
 
 __all__ = [
+    "GymnasiumEnvConfig",
     "ManiSkillEnvConfig",
     "RoboTwinEnvConfig",
+    "make_gymnasium_env",
     "make_maniskill_env",
     "make_robotwin_env",
 ]

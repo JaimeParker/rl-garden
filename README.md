@@ -230,11 +230,18 @@ mapping, rewards, and performance controls.
 Other registered `--env-backend` values: `maniskill` (default for most examples),
 `isaaclab` (see [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md) and the
 [camera-stall history](docs/guides/isaaclab-camera-stall.md)), `mujoco`,
-`mujoco_warp` (GPU-vectorized MuJoCo), `minari`, and `d4rl_legacy` (legacy
+`mujoco_warp` (GPU-vectorized MuJoCo), `minari`, `d4rl_legacy` (legacy
 Gym/D4RL Adroit and Kitchen tasks, see
-[D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)).
+[D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)), and
+`gymnasium` (any registered `gymnasium.Env` from your own package, see
+[Training on Your Own Gymnasium Envs](docs/guides/gymnasium-custom-envs.md)).
 `franka_real` is added by the optional `rlgarden-real-world` submodule for
 real-robot training.
+
+To train on your own `gymnasium.Env` you do not need to fork rl-garden or write a
+backend: register it in your package and pass `--env-backend gymnasium
+--gymnasium.import-modules my_pkg.envs` (see
+[the guide](docs/guides/gymnasium-custom-envs.md)).
 
 `rl_garden/envs/custom/` is a runnable template for authoring a brand-new
 environment that isn't wrapping an existing simulator (`--env-backend custom

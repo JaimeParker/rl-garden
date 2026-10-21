@@ -226,6 +226,24 @@ class DMControlConfig:
 
 
 @dataclass
+class GymnasiumConfig:
+    """Generic ``gymnasium.make`` env settings. CLI prefix: ``--gymnasium.<field>``
+
+    Trains on any registered single-instance ``gymnasium.Env`` (``--env_id``)
+    without a dedicated backend; see ``docs/guides/gymnasium-custom-envs.md``.
+    """
+
+    device: str = "cpu"
+    # Modules imported in every env worker before gym.make (typically the
+    # module whose import calls gymnasium.register for --env_id).
+    import_modules: tuple[str, ...] = ()
+    # JSON-encoded dict forwarded verbatim to gym.make().
+    env_kwargs_json: str = "{}"
+    # "sync" (single process) or "async" (one OS process per env).
+    vectorization: str = "sync"
+
+
+@dataclass
 class EnvBackendArgs:
     """Mixin: adds ``env_backend`` selector and per-backend sub-configs.
 
@@ -247,6 +265,7 @@ class EnvBackendArgs:
     rlbench: RLBenchConfig = field(default_factory=RLBenchConfig)
     metaworld: MetaWorldConfig = field(default_factory=MetaWorldConfig)
     dm_control: DMControlConfig = field(default_factory=DMControlConfig)
+    gymnasium: GymnasiumConfig = field(default_factory=GymnasiumConfig)
 
     def resolve_backend_config(self):
         from rl_garden.envs.backend_registry import resolve_backend_config

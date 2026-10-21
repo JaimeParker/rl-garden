@@ -54,6 +54,11 @@ time, same as an in-tree module does. Use this path only when the backend
 depends on hardware or code that must not live in `rl_garden` itself; otherwise
 add an in-tree module as in Step 1.
 
+An external *env* needs no backend at all: a registered, single-instance
+`gymnasium.Env` from another package trains through the generic `gymnasium`
+backend (`--env_backend gymnasium --gymnasium.import_modules my_pkg.envs`, see
+[`docs/guides/gymnasium-custom-envs.md`](../../docs/guides/gymnasium-custom-envs.md)).
+
 ## 3. Step 1 — Backend adapter (`rl_garden/envs/backends/my_backend.py`)
 
 Create a new file in `rl_garden/envs/backends/`. The file name becomes the
@@ -432,6 +437,7 @@ they enforce the lazy-import invariant across every backend.
 | `custom` | — (this doc's own template, `rl_garden/envs/custom/`) |
 | `d4rl_legacy` | [`docs/guides/d4rl-legacy-expansion.md`](../../docs/guides/d4rl-legacy-expansion.md) |
 | `dm_control` | [`docs/guides/dm-control-integration.md`](../../docs/guides/dm-control-integration.md) |
+| `gymnasium` | [`docs/guides/gymnasium-custom-envs.md`](../../docs/guides/gymnasium-custom-envs.md) |
 | `isaaclab` | [`docs/guides/isaaclab-custom-tasks.md`](../../docs/guides/isaaclab-custom-tasks.md) |
 | `maniskill` | — |
 | `metaworld` | [`docs/guides/metaworld-integration.md`](../../docs/guides/metaworld-integration.md) |
