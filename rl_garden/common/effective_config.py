@@ -374,6 +374,31 @@ def _encoder_config_inactive_subpaths(encoder: Any, prefix: str) -> dict[str, st
     return inactive
 
 
+def _resolve_backend_section(args: Any, backend_name: str) -> tuple[str, Any]:
+    """Return the name and value of the Args section the selected backend reads.
+
+    The backend registry (which also discovers ``rlgarden.env_backends`` entry
+    points) owns the lookup through ``EnvBackend.config_from_args``. For an
+    in-tree backend that is ``args.<backend_name>``; an external backend may
+    read an existing section instead (e.g. reuse ``--isaaclab.*``), so the
+    section is identified by identity rather than by name.
+    """
+    from rl_garden.envs.backend_registry import resolve_backend_config
+
+    try:
+        backend_config = resolve_backend_config(backend_name, args)
+    except KeyError as exc:
+        raise ConfigError(exc.args[0]) from exc
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+    if getattr(args, backend_name, None) is backend_config:
+        return backend_name, backend_config
+    for field_ in fields(args) if is_dataclass(args) else ():
+        if getattr(args, field_.name) is backend_config:
+            return field_.name, backend_config
+    return backend_name, backend_config
+
+
 def inactive_config_paths(args: Any) -> dict[str, str]:
     """Return inactive Args leaf paths and concise reasons."""
     from rl_garden.common.env_args import EnvBackendArgs
@@ -383,9 +408,15 @@ def inactive_config_paths(args: Any) -> dict[str, str]:
         field.name for field in fields(EnvBackendArgs) if field.name != "env_backend"
     }
     selected_backend = getattr(args, "env_backend", None)
+    active_section = selected_backend
+    if selected_backend is not None:
+        try:
+            active_section, _ = _resolve_backend_section(args, selected_backend)
+        except ConfigError:
+            pass  # reported by resolve_active_environment
     for backend_name in backend_names:
         backend = getattr(args, backend_name, None)
-        if backend_name != selected_backend and is_dataclass(backend):
+        if backend_name != active_section and is_dataclass(backend):
             for path in _dataclass_leaf_paths(backend, backend_name):
                 inactive[path] = f"environment backend is {selected_backend!r}"
 
@@ -426,19 +457,7 @@ def resolve_active_environment(args: Any) -> dict[str, Any]:
     backend_name = getattr(args, "env_backend", None)
     if backend_name is None:
         return {}
-    try:
-        backend_config = getattr(args, backend_name)
-    except AttributeError as exc:
-        from rl_garden.common.env_args import EnvBackendArgs
-
-        available = sorted(
-            field.name
-            for field in fields(EnvBackendArgs)
-            if field.name != "env_backend"
-        )
-        raise ConfigError(
-            f"Unknown env backend {backend_name!r}. Available: {available}."
-        ) from exc
+    section_name, backend_config = _resolve_backend_section(args, backend_name)
     backend_values = json_value(backend_config)
     if isinstance(backend_values, dict):
         for key, value in backend_values.items():
@@ -447,11 +466,11 @@ def resolve_active_environment(args: Any) -> dict[str, Any]:
                     parsed_json = json.loads(value)
                 except (TypeError, json.JSONDecodeError) as exc:
                     raise ConfigError(
-                        f"Invalid {backend_name}.{key}: expected a JSON object."
+                        f"Invalid {section_name}.{key}: expected a JSON object."
                     ) from exc
                 if not isinstance(parsed_json, dict):
                     raise ConfigError(
-                        f"Invalid {backend_name}.{key}: expected a JSON object."
+                        f"Invalid {section_name}.{key}: expected a JSON object."
                     )
     return {"backend": backend_name, "config": backend_values}
 

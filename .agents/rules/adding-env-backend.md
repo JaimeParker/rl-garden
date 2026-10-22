@@ -118,7 +118,13 @@ simulator is touched:
 
 `EnvBackend.config_from_args(args)` (base class, not overridden per backend)
 does `getattr(args, cls.config_field)` — what `resolve_backend_config()` on
-`EnvBackendArgs` calls to fetch your backend's CLI config.
+`EnvBackendArgs` calls to fetch your backend's CLI config. Preflight
+(`rl_garden/common/effective_config.py`) resolves the selected backend through
+the same registry call, so an entry-point backend is selectable with
+`--env_backend <name>`. The one sanctioned override is an external backend
+that has no `EnvBackendArgs` section of its own and reads an existing one
+(e.g. `return args.isaaclab`); preflight then treats that section as the
+active one.
 
 **Rules:**
 - `resolve_config` must be side-effect-free: it builds the concrete train/eval

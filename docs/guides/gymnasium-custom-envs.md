@@ -308,3 +308,18 @@ registry.run_cli()  # python my_launcher.py my_sac --env_backend my_backend --my
 
 The field name must equal the backend's `config_field`, because the registry
 reads the config with `getattr(args, config_field)`.
+
+A backend that needs no knobs of its own can instead read an existing section
+of the stock CLI by overriding `config_from_args`. It is then selectable with
+`--env_backend <name>` from the stock entrypoints, configured through that
+section, and the section counts as active for preflight validation:
+
+```python
+class MyIsaacLabTasksBackend(IsaacLabBackend):  # registered as "my_isaaclab_tasks"
+    api_version = 2
+    config_field = "my_isaaclab_tasks"
+
+    @classmethod
+    def config_from_args(cls, args):
+        return args.isaaclab  # python examples/train_online.py ppo --env_backend my_isaaclab_tasks --isaaclab.<field> ...
+```

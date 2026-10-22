@@ -1,8 +1,8 @@
 # expnote Recording SOP
 
 This SOP defines how training runs in this repository get recorded in `expnote`
-(local-first experiment notes, SQLite-backed, Obsidian Markdown as a
-projection only — SQLite is authoritative). Read `AGENTS.md` first for the
+(local-first experiment notes, SQLite-backed; runs are no longer projected
+into the Obsidian vault — view them with `expnote web`). Read `AGENTS.md` first for the
 project-level agent rules, and `.agents/rules/remote-training-sop.md` before
 any remote command referenced here.
 
@@ -157,12 +157,29 @@ is not an analysis. Before writing either field, pull real evidence:
 - Long-form analysis spanning multiple runs (not a single run's `--analysis`):
   `expnote doc add --doc-id <...> --moc-id <...> --title <...> --run-id <run1> --run-id <run2> --body-file -`.
 
-## 6. Sync and validate
+## 6. Validate
+
+Run records live only in the workspace SQLite; view them with `expnote web`.
 
 ```bash
-expnote sync all --json
 expnote validate --json
 ```
 
 Cross-device work uses `expnote workspace pack`/`unpack` since the SQLite
 workspace directory is not part of any git checkout.
+
+## 7. Research layer (plans, decisions, evidence, results)
+
+Plans, evidence pages and RES cards are Markdown in the Obsidian vault project
+folder; decisions live in the expnote decision store (SQLite, backed up to the
+vault's `ops/decisions.jsonl`). Start with `expnote guide research --json`.
+
+- Health: `expnote check --project off2on` must end with `FAIL 0` after every
+  vault task. It replaces the retired `templates/vault.py check .`.
+- Everything about one plan: `expnote plan bundle <PLAN-ID> --project off2on --json`.
+- Decisions: `expnote decision new ... --apply` proposes one (the user approves
+  it in the GUI); a decision the user already gave in chat is recorded with
+  `--status confirmed --authorization "<user's words>"`. Decision text is never
+  edited; supersede it with a new decision instead.
+- Write commands are dry runs unless `--apply`; read the planned diff first.
+- GUI: `expnote web` → `/research/`.

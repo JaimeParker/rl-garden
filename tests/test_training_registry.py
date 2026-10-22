@@ -368,6 +368,69 @@ def test_preflight_rejects_unknown_backend_and_invalid_backend_json():
         registry._preflight_config(non_object_json)
 
 
+@pytest.fixture
+def external_isaaclab_backend():
+    """An external (entry-point style) backend that reuses the stock --isaaclab.* section."""
+    from rl_garden.envs.backend_registry import (
+        _REGISTRY,
+        EnvBackend,
+        discover_env_backends,
+        register_env_backend,
+    )
+
+    class ExternalIsaacLabBackend(EnvBackend):
+        api_version = 2
+        config_field = "external_isaaclab"
+
+        @classmethod
+        def config_from_args(cls, args):
+            return args.isaaclab
+
+        @classmethod
+        def resolve_config(cls, req, *, is_eval):
+            raise NotImplementedError
+
+        @classmethod
+        def make_train_env(cls, req):
+            raise NotImplementedError
+
+        @classmethod
+        def make_eval_env(cls, req):
+            raise NotImplementedError
+
+    discover_env_backends()
+    register_env_backend("external_isaaclab", ExternalIsaacLabBackend)
+    yield "external_isaaclab"
+    _REGISTRY.pop("external_isaaclab")
+
+
+def test_preflight_accepts_registry_backend_without_own_cli_section(external_isaaclab_backend):
+    from rl_garden.common.effective_config import ConfigError
+    from rl_garden.training.online import registry
+
+    command = registry.parse_command(
+        ["sac", "--env-backend", external_isaaclab_backend, "--isaaclab.sim-device", "cuda:1"]
+    )
+    config = registry._preflight_config(command)
+
+    assert config.active_environment["backend"] == external_isaaclab_backend
+    assert config.active_environment["config"]["sim_device"] == "cuda:1"
+
+    # The reused section is the active one, so every other backend section stays inactive.
+    other_section = registry.parse_command(
+        ["sac", "--env-backend", external_isaaclab_backend, "--maniskill.sim-backend", "cpu"]
+    )
+    with pytest.raises(ConfigError, match="maniskill.sim_backend.*inactive"):
+        registry._preflight_config(other_section)
+
+    # Validation messages name the section the user typed.
+    invalid_json = registry.parse_command(
+        ["sac", "--env-backend", external_isaaclab_backend, "--isaaclab.env-kwargs-json", "[]"]
+    )
+    with pytest.raises(ConfigError, match="Invalid isaaclab.env_kwargs_json"):
+        registry._preflight_config(invalid_json)
+
+
 def test_preflight_rejects_explicit_inactive_backend_field():
     from rl_garden.common.effective_config import ConfigError
     from rl_garden.training.online import registry
