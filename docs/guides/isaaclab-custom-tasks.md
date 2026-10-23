@@ -157,6 +157,7 @@ class MyTaskLogic:
 from __future__ import annotations
 
 import gymnasium as gym
+import numpy as np
 
 from isaaclab.assets import ArticulationCfg
 from isaaclab.sim import SimulationCfg
@@ -179,7 +180,8 @@ class MyTaskEnvCfg(RLGardenDirectEnvCfg):
     episode_length_s = 5.0
     action_scale = 1.0
     action_space = 1          # dim of the action your _apply_action expects
-    observation_space = 4     # dim of your flat state vector (state-only tasks)
+    # One per-env Box per key _get_observations() returns (see "Observation key convention").
+    observation_space = gym.spaces.Dict({"state": gym.spaces.Box(-np.inf, np.inf, (4,), np.float32)})
     state_space = 0
 
     sim: SimulationCfg = SimulationCfg(dt=1 / 120, render_interval=decimation)
@@ -334,23 +336,40 @@ no ManiSkill-specific translation layer is needed for IsaacLab tasks.
 normalization that IsaacLab's own cartpole camera task does for "better
 training results." rl-garden's image encoders (`rl_garden/encoders/base.py:
 image_needs_normalization`) decide whether to apply `/255` normalization
-based on the declared space's dtype/range, which is inferred from your
-tensor's actual dtype. Pre-normalized input is **silently handled wrong**
-(double-normalized), not rejected with an error. This is a training-quality
-bug, not a crash, so test suites won't catch it. See
-`CartpoleCameraLogic` in `tasks_common/cartpole.py` for a correct example.
+based on the declared space's dtype/range (your `cfg.observation_space`
+entry, or inferred from your tensor's actual dtype). Pre-normalized input
+is **silently handled wrong** (double-normalized), not rejected with an
+error. This is a training-quality bug, not a crash, so test suites won't
+catch it. See `CartpoleCameraLogic` in `tasks_common/cartpole.py` for a
+correct example.
 
 The `/255` rule is RGB-only. `"depth_<camera_name>"` keys are passed to the
 network unscaled, in whatever unit your task emits (metres, or your own
 `[0, 1]` normalization), so emit finite float32 values: clip Isaac Lab's
 `inf` for no-hit to a max range.
 
-`cfg.observation_space` can't express a `{"rgb": ..., "state": ...}` dict
-shape — for image tasks just set it to a placeholder int (e.g. `1`).
-IsaacLab's `DirectRLEnvCfg.validate()` only checks it's not `MISSING`;
-nothing else in IsaacLab or rl-garden reads this field against your actual
-returned obs. rl-garden's adapter (`_IsaacLabVecEnvAdapter`) builds its real
-`gym.spaces.Dict`/`Box` from the runtime obs tensors instead.
+Declare `cfg.observation_space` as a `gym.spaces.Dict` keyed by exactly the
+keys `_get_observations()` returns, with one per-env `Box` each:
+
+```python
+observation_space = gym.spaces.Dict(
+    {
+        "rgb_front": gym.spaces.Box(0, 255, (64, 64, 3), np.uint8),
+        "depth_front": gym.spaces.Box(0.0, 1.0, (64, 64, 1), np.float32),  # your [0, 1] depth range
+        "state": gym.spaces.Box(-np.inf, np.inf, (4,), np.float32),
+    }
+)
+```
+
+IsaacLab never checks your returned obs against it. rl-garden's adapter
+(`_IsaacLabVecEnvAdapter`) does, once, on the first observation: the key set
+must match exactly (every returned key declared, nothing extra declared), and
+each entry must be a `Box` with the tensor's per-env shape and dtype;
+otherwise it raises `ObservationContractError`. It then uses your `Box`es,
+bounds included, as the env's observation space (frame stacking broadcasts
+them over the frame dim). An int placeholder (e.g. `1`) still passes
+`DirectRLEnvCfg.validate()` and falls back to inferring the spaces from the
+runtime tensors (`uint8` -> `[0, 255]`, anything else -> unbounded `float32`).
 
 ## Adding a camera
 
@@ -384,7 +403,12 @@ class MyCameraTaskSceneCfg(MyTaskSceneCfg):
 
 @configclass
 class MyCameraTaskEnvCfg(MyTaskEnvCfg):
-    observation_space = 1
+    observation_space = gym.spaces.Dict(
+        {
+            "rgb_front": gym.spaces.Box(0, 255, (64, 64, 3), np.uint8),
+            "state": gym.spaces.Box(-np.inf, np.inf, (4,), np.float32),
+        }
+    )
     scene: MyCameraTaskSceneCfg = MyCameraTaskSceneCfg(num_envs=32, env_spacing=4.0, replicate_physics=True)
 ```
 

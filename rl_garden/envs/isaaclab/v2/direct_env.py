@@ -2,12 +2,14 @@
 
 Same shape and contract as the 3.0 scaffold (``rl_garden.envs.isaaclab.v3.
 direct_env``, whose module docstring documents the observation-key and
-raw-pixel conventions; depth keys are passed to the network unscaled, in
-whatever unit the task emits, so emit finite float32 values and clip Isaac
-Lab's ``inf`` for no-hit to a max range): ``RLGardenSceneCfg`` declares one
-robot, an optional camera, a ground plane and a light; ``InteractiveScene``
-spawns and clones them from the cfg (with ``{ENV_REGEX_NS}`` prim paths) before
-``_setup_scene()`` runs, which only binds ``self.robot``/``self.camera``.
+raw-pixel conventions and the ``gym.spaces.Dict`` ``cfg.observation_space``
+declaration the adapter validates and uses; depth keys are passed to the
+network unscaled, in whatever unit the task emits, so emit finite float32
+values and clip Isaac Lab's ``inf`` for no-hit to a max range):
+``RLGardenSceneCfg`` declares one robot, an optional camera, a ground plane
+and a light; ``InteractiveScene`` spawns and clones them from the cfg (with
+``{ENV_REGEX_NS}`` prim paths) before ``_setup_scene()`` runs, which only binds
+``self.robot``/``self.camera``.
 
 2.x data conventions: asset/sensor ``.data.*`` fields and
 ``camera.data.output[...]`` are plain torch tensors; quaternions are

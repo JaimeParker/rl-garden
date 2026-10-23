@@ -51,11 +51,18 @@ RGB-only: ``depth_<camera>`` keys are passed to the network unscaled, in
 whatever unit the task emits, so the task must emit finite float32 values
 (clip Isaac Lab's ``inf`` for no-hit to a max range).
 
-``cfg.observation_space``/``cfg.action_space`` still need placeholder values
-(any int is fine, e.g. ``1``) to satisfy ``DirectRLEnvCfg.validate()`` --
-IsaacLab never checks the runtime obs dict against them, and rl-garden's own
-adapter builds its ``gym.spaces.Dict``/``Box`` from the runtime obs/action
-tensors instead.
+Declare ``cfg.observation_space`` as a ``gym.spaces.Dict`` keyed by exactly
+the keys ``_get_observations()`` returns, one per-env ``Box`` each (e.g.
+``Box(0, 255, (H, W, 3), np.uint8)`` for ``"rgb_<camera>"``,
+``Box(0.0, 1.0, (H, W, 1), np.float32)`` for a ``[0, 1]`` depth range).
+IsaacLab never checks the runtime obs dict against it; rl-garden's adapter
+validates it against the first observation (key set, shape, dtype; raises
+``ObservationContractError``) and uses its bounds as the env's observation
+space. An int placeholder (e.g. ``1``) still satisfies
+``DirectRLEnvCfg.validate()`` and falls back to inferring the spaces from the
+runtime tensors. ``cfg.action_space`` is the action dimension (an int, not a
+placeholder: IsaacLab sizes its action buffers from it); the adapter slices
+the per-env ``Box`` off IsaacLab's batched action space.
 """
 from __future__ import annotations
 

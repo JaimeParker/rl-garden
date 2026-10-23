@@ -9,6 +9,7 @@ official cartpole's per-backend solver tuning.
 from __future__ import annotations
 
 import gymnasium as gym
+import numpy as np
 
 from isaaclab_assets.robots.cartpole import CARTPOLE_CFG
 from isaaclab_physx.physics import PhysxCfg
@@ -20,6 +21,9 @@ from isaaclab.utils import configclass
 
 from rl_garden.envs.isaaclab.tasks_common.cartpole import CartpoleLogic
 from rl_garden.envs.isaaclab.v3.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv, RLGardenSceneCfg
+
+# CartpoleLogic's "state": pole pos/vel, cart pos/vel.
+CARTPOLE_STATE_SPACE = gym.spaces.Box(-np.inf, np.inf, (4,), np.float32)
 
 
 @configclass
@@ -40,7 +44,7 @@ class CartpoleDirectEnvCfg(RLGardenDirectEnvCfg):
     episode_length_s = 5.0
     action_scale = 100.0  # [N]
     action_space = 1
-    observation_space = 4
+    observation_space = gym.spaces.Dict({"state": CARTPOLE_STATE_SPACE})
     state_space = 0
 
     sim: SimulationCfg = SimulationCfg(

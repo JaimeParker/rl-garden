@@ -22,6 +22,15 @@ Observation extraction:
   ``"policy"`` image plus a ``"critic"`` state) aren't supported by this backend.
   Camera set/resolution are baked into the task registration, not
   runtime-selectable through ``ObservationConfig.rgb``/``.image_size``.
+
+Observation spaces: a task that declares ``cfg.observation_space`` as a
+``gym.spaces.Dict`` keyed by the keys it returns gets that declaration
+validated against its first observation (same key set; every entry a
+``Box`` with the tensor's per-env shape and dtype; ``ObservationContractError``
+otherwise) and used as the adapter's per-key space, so its bounds (e.g. a
+``[0, 1]`` depth range) reach the encoders. Isaac Lab itself never checks
+the declaration. Without a declared ``Dict`` (int placeholders, native
+tasks) the spaces are inferred from the runtime tensors.
 """
 from __future__ import annotations
 
@@ -45,6 +54,56 @@ def _box_from_tensor(tensor: torch.Tensor) -> gym.spaces.Box:
         shape=tuple(tensor.shape[1:]),
         dtype=np.float32,
     )
+
+
+def _declared_observation_spaces(unwrapped: Any) -> dict | None:
+    """Per-key spaces a task declared as a ``gym.spaces.Dict``
+    ``cfg.observation_space`` (published by ``DirectRLEnv`` under the
+    ``"policy"`` group), or ``None`` when it declared none (int placeholder
+    -> ``Box``)."""
+    groups = getattr(unwrapped, "single_observation_space", None)
+    if not isinstance(groups, gym.spaces.Dict) or "policy" not in groups.spaces:
+        return None
+    policy = groups["policy"]
+    return dict(policy.spaces) if isinstance(policy, gym.spaces.Dict) else None
+
+
+def _dtype_name(tensor: torch.Tensor) -> str:
+    return str(tensor.dtype).removeprefix("torch.")
+
+
+def _tensor_spec(value: Any) -> str:
+    if isinstance(value, torch.Tensor):
+        return f"per-env shape={tuple(value.shape[1:])} dtype={_dtype_name(value)}"
+    return type(value).__name__
+
+
+def _validate_declared_spaces(declared: dict, raw_obs: dict) -> None:
+    emitted = {key: _tensor_spec(value) for key, value in raw_obs.items()}
+    undeclared = sorted(set(raw_obs) - set(declared))
+    not_emitted = sorted(set(declared) - set(raw_obs))
+    if undeclared or not_emitted:
+        raise ObservationContractError(
+            "IsaacLab task's declared cfg.observation_space keys differ from its observation keys: "
+            f"emitted but not declared {undeclared!r}, declared but not emitted {not_emitted!r} "
+            f"(declared {declared!r}, emitted {emitted!r})."
+        )
+    for key, space in declared.items():
+        value = raw_obs[key]
+        if not isinstance(space, gym.spaces.Box):
+            raise ObservationContractError(
+                f"IsaacLab task's declared cfg.observation_space[{key!r}] must be a gym.spaces.Box, "
+                f"got {space!r} (emitted {emitted[key]})."
+            )
+        if (
+            not isinstance(value, torch.Tensor)
+            or tuple(value.shape[1:]) != space.shape
+            or _dtype_name(value) != space.dtype.name
+        ):
+            raise ObservationContractError(
+                f"IsaacLab task's observation {key!r} does not match its declared space: "
+                f"declared {space!r}, emitted {emitted[key]}."
+            )
 
 
 def _check_frames_nonzero(obs: dict) -> None:
@@ -76,9 +135,15 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         unwrapped = env.unwrapped
         self.num_envs = unwrapped.num_envs
         self.device = unwrapped.device
+        # Read once, before anything else: Isaac Lab 3.0's env.close() sets
+        # single_observation_space to None.
+        declared = _declared_observation_spaces(unwrapped)
 
         obs_dict, _ = env.reset(seed=seed)
+        if declared is not None:
+            _validate_declared_spaces(declared, obs_dict)
         self._last_obs = self._extract_obs(obs_dict)
+        self._declared_spaces = self._declared_output_spaces(declared, obs_dict)
         _check_frames_nonzero(self._last_obs)
         # Duck-typed attribute expected by wrappers like ImageFrameStackWrapper
         # on env.unwrapped (mirrors mani_skill.envs.sapien_env.BaseEnv).
@@ -127,8 +192,40 @@ class _IsaacLabVecEnvAdapter(gym.Env):
             out["state"] = obs_dict["state"]
         return out
 
+    def _declared_output_spaces(self, declared: dict | None, raw_obs: dict) -> dict:
+        """Declared ``Box`` per output key of ``_extract_obs`` (empty when the
+        task declared no ``Dict``); state-only mode renames the raw
+        ``"state"``/``"policy"`` key to ``"state"``."""
+        if declared is None:
+            return {}
+        if self.is_visual:
+            return declared
+        return {"state": declared["state" if "state" in raw_obs else "policy"]}
+
     def _build_observation_space(self, obs: dict):
-        return gym.spaces.Dict({key: _box_from_tensor(value) for key, value in obs.items()})
+        return gym.spaces.Dict(
+            {key: self._observation_key_space(key, value) for key, value in obs.items()}
+        )
+
+    def _observation_key_space(self, key: str, tensor: torch.Tensor) -> gym.spaces.Box:
+        declared = self._declared_spaces.get(key)
+        if declared is None:
+            return _box_from_tensor(tensor)
+        shape = tuple(tensor.shape[1:])
+        if shape == declared.shape:
+            return declared
+        if shape[1:] == declared.shape:
+            # ImageFrameStackWrapper's (T, *declared.shape) stacked frames.
+            return gym.spaces.Box(
+                low=np.broadcast_to(declared.low, shape),
+                high=np.broadcast_to(declared.high, shape),
+                shape=shape,
+                dtype=declared.dtype,
+            )
+        raise ObservationContractError(
+            f"IsaacLab observation {key!r} has per-env shape {shape}, which is neither its declared "
+            f"space {declared!r} nor that space with a leading frame-stack dim."
+        )
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         obs_dict, info = self._env.reset(seed=seed if seed is not None else self._seed)
