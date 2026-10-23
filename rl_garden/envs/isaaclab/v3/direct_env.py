@@ -46,7 +46,10 @@ IsaacLab's own camera examples do for RGB. rl-garden's
 image encoders decide whether to apply ``/255`` normalization from the
 declared space's dtype/range (see
 ``rl_garden.encoders.base.image_needs_normalization``), so pre-normalized
-input is silently handled wrong rather than raising an error.
+input is silently handled wrong rather than raising an error. That rule is
+RGB-only: ``depth_<camera>`` keys are passed to the network unscaled, in
+whatever unit the task emits, so the task must emit finite float32 values
+(clip Isaac Lab's ``inf`` for no-hit to a max range).
 
 ``cfg.observation_space``/``cfg.action_space`` still need placeholder values
 (any int is fine, e.g. ``1``) to satisfy ``DirectRLEnvCfg.validate()`` --

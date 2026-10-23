@@ -163,12 +163,14 @@ class _FakeMultiCameraEnv(gym.Env):
 
     num_envs = 1
 
-    def __init__(self) -> None:
+    def __init__(self, depth_space: spaces.Box | None = None) -> None:
+        if depth_space is None:
+            depth_space = spaces.Box(0, np.inf, (2, 2, 1), np.float32)
         self.single_observation_space = spaces.Dict(
             {
                 "state": spaces.Box(-np.inf, np.inf, (4,), np.float32),
                 "rgb_main": spaces.Box(0, 255, (2, 2, 3), np.uint8),
-                "depth_main": spaces.Box(0, np.inf, (2, 2, 1), np.float32),
+                "depth_main": depth_space,
             }
         )
         self.single_action_space = spaces.Box(-1, 1, (2,), np.float32)
@@ -212,6 +214,29 @@ def test_generic_image_keys_path_stacks_multiple_image_keys_together():
     assert torch.all(current["depth_main"][:, 2] == 1)
     # state is never stacked, even with multiple image keys present.
     assert current["state"].shape == (1, 4)
+
+
+@pytest.mark.parametrize("depth_high", [1.0, np.inf])
+def test_generic_image_keys_path_keeps_each_key_bounds(depth_high):
+    depth_space = spaces.Box(0.0, depth_high, (2, 2, 1), np.float32)
+    wrapped = ImageFrameStackWrapper(
+        _FakeMultiCameraEnv(depth_space=depth_space),
+        frame_stack=3,
+        image_keys=("rgb_main", "depth_main"),
+    )
+
+    depth = wrapped.single_observation_space["depth_main"]
+    assert depth.shape == (3, 2, 2, 1)
+    assert depth.dtype == np.float32
+    assert np.all(depth.low == 0.0)
+    assert np.all(depth.high == depth_high)
+
+    rgb = wrapped.single_observation_space["rgb_main"]
+    assert rgb.shape == (3, 2, 2, 3)
+    assert rgb.dtype == np.uint8
+    assert np.all(rgb.low == 0)
+    assert np.all(rgb.high == 255)
+    assert np.all(wrapped.observation_space["depth_main"].high == depth_high)
 
 
 def test_image_frame_stack_partial_reset_only_replaces_selected_history():

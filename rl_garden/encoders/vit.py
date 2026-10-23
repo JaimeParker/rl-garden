@@ -18,7 +18,7 @@ from torch.nn.init import trunc_normal_
 
 from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.encoders.base import BaseFeaturesExtractor, TokenAndPropFeatureConfig, image_needs_normalization
-from rl_garden.observations import ObservationSchema
+from rl_garden.observations import Modality, ObservationSchema
 
 ViTFusionMode = Literal["per_key", "stack_channels"]
 ViTAugmentationMode = Literal["random_shift", "none"]
@@ -255,9 +255,11 @@ class ViTTokenAndPropExtractor(BaseFeaturesExtractor):
         self.image_keys = schema.image_keys
         if not self.image_keys:
             raise ValueError("ViTTokenAndPropExtractor requires at least one image key.")
+        # Depth keys always go through unscaled: env backends own depth units.
         self._needs_norm: frozenset[str] = frozenset(
             k for k in self.image_keys
-            if image_needs_normalization(observation_space.spaces[k])
+            if schema.entries[k].modality == Modality.RGB
+            and image_needs_normalization(observation_space.spaces[k])
         )
         self.state_keys = schema.state_keys
         self.has_state = schema.has_state

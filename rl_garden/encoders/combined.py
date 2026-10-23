@@ -40,7 +40,7 @@ from rl_garden.common.obs_normalization import RunningObsNormalizer
 from rl_garden.encoders.base import BaseFeaturesExtractor, image_needs_normalization
 from rl_garden.encoders.augment import RandomShiftsAug
 from rl_garden.encoders.plain_conv import PlainConv
-from rl_garden.observations import ObservationSchema
+from rl_garden.observations import Modality, ObservationSchema
 
 if TYPE_CHECKING:
     from rl_garden.encoders.config import EncoderConfig
@@ -218,9 +218,11 @@ class CombinedExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
 
         self.image_keys: tuple[str, ...] = tuple(image_keys)
+        # Depth keys always go through unscaled: env backends own depth units.
         self._needs_norm: frozenset[str] = frozenset(
             k for k in self.image_keys
-            if image_needs_normalization(observation_space.spaces[k])
+            if schema.entries[k].modality == Modality.RGB
+            and image_needs_normalization(observation_space.spaces[k])
         )
         self.state_keys: tuple[str, ...] = state_keys
         self.has_state = has_state

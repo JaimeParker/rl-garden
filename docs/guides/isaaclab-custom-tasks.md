@@ -340,6 +340,11 @@ tensor's actual dtype. Pre-normalized input is **silently handled wrong**
 bug, not a crash, so test suites won't catch it. See
 `CartpoleCameraLogic` in `tasks_common/cartpole.py` for a correct example.
 
+The `/255` rule is RGB-only. `"depth_<camera_name>"` keys are passed to the
+network unscaled, in whatever unit your task emits (metres, or your own
+`[0, 1]` normalization), so emit finite float32 values: clip Isaac Lab's
+`inf` for no-hit to a max range.
+
 `cfg.observation_space` can't express a `{"rgb": ..., "state": ...}` dict
 shape — for image tasks just set it to a placeholder int (e.g. `1`).
 IsaacLab's `DirectRLEnvCfg.validate()` only checks it's not `MISSING`;

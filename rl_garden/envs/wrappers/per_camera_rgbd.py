@@ -35,7 +35,9 @@ class PerCameraRGBDWrapper(gym.ObservationWrapper):
 
     Output observation dict keys:
         * ``rgb_<camera_name>``: ``Box(shape=(H, W, 3), dtype=uint8)`` per requested camera
-        * ``depth_<camera_name>``: ``Box(shape=(H, W, 1), dtype=float32)`` per requested camera
+        * ``depth_<camera_name>``: ``Box(shape=(H, W, 1), dtype=float32)`` per requested
+          camera, in metres (ManiSkill's int16 millimetres / 1000); the encoder
+          passes it through unscaled
         * ``state``: flat agent/extra state, when ``state=True``
     """
 
@@ -76,7 +78,8 @@ class PerCameraRGBDWrapper(gym.ObservationWrapper):
         for cam_name in self.rgb_cameras:
             ret[f"rgb_{cam_name}"] = sensor_data[cam_name]["rgb"]
         for cam_name in self.depth_cameras:
-            ret[f"depth_{cam_name}"] = sensor_data[cam_name]["depth"].float()
+            # ManiSkill renders int16 millimetres; emit float32 metres.
+            ret[f"depth_{cam_name}"] = sensor_data[cam_name]["depth"].float() / 1000.0
 
         if self.state:
             ret["state"] = common.flatten_state_dict(

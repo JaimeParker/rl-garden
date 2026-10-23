@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 import gymnasium as gym
+import numpy as np
 import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
@@ -107,10 +108,11 @@ class ImageFrameStackWrapper(gym.Wrapper):
         new_spaces = dict(base_space.spaces)
         for key in self.image_keys:
             key_space = new_spaces[key]
+            stacked_shape = (self.frame_stack, *key_space.shape)
             new_spaces[key] = spaces.Box(
-                low=0,
-                high=255,
-                shape=(self.frame_stack, *key_space.shape),
+                low=np.broadcast_to(key_space.low, stacked_shape),
+                high=np.broadcast_to(key_space.high, stacked_shape),
+                shape=stacked_shape,
                 dtype=key_space.dtype,
             )
         self.single_observation_space = spaces.Dict(new_spaces)

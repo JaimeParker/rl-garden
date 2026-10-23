@@ -97,6 +97,11 @@ def test_vision_env_produces_named_per_camera_keys_no_channel_stacking():
         assert set(obs) == keys
         assert obs[f"depth_{_CAMERA}"].dtype == torch.float32
         assert obs[f"depth_{_CAMERA}"].device == obs[f"rgb_{_CAMERA}"].device
+        # Depth is metres (ManiSkill renders int16 millimetres).
+        depth = obs[f"depth_{_CAMERA}"]
+        assert torch.isfinite(depth).all()
+        assert 0.0 <= float(depth.min())
+        assert 0.0 < float(depth.max()) < 100.0
     finally:
         env.close()
 
