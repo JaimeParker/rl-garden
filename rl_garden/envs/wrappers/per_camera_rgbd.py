@@ -76,7 +76,7 @@ class PerCameraRGBDWrapper(gym.ObservationWrapper):
         for cam_name in self.rgb_cameras:
             ret[f"rgb_{cam_name}"] = sensor_data[cam_name]["rgb"]
         for cam_name in self.depth_cameras:
-            ret[f"depth_{cam_name}"] = sensor_data[cam_name]["depth"]
+            ret[f"depth_{cam_name}"] = sensor_data[cam_name]["depth"].float()
 
         if self.state:
             ret["state"] = common.flatten_state_dict(

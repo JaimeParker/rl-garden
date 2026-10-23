@@ -64,13 +64,14 @@ class DictStateObservationWrapper(gym.ObservationWrapper):
         self.observation_space = spaces.Dict({"state": base_space})
         # Already-vectorized envs (e.g. ManiSkill's GPU sim) expose a
         # separate `single_observation_space` (per-env) distinct from
-        # `observation_space` (batched); gymnasium's Wrapper otherwise
-        # proxies unset attributes straight through to the wrapped env via
-        # __getattr__, leaving it stale (still the un-wrapped Box) since
-        # only `observation_space` is overridden above. Mirror it here so
-        # `env.single_observation_space` matches what `observation()` (and
-        # therefore every rollout step) actually returns.
-        base_single_space = getattr(env, "single_observation_space", None)
+        # `observation_space` (batched). Resolve through the wrapper stack
+        # explicitly: Gymnasium 1.x no longer proxies arbitrary attributes.
+        # Mirror the per-env space so it matches observation().
+        base_single_space = (
+            env.get_wrapper_attr("single_observation_space")
+            if env.has_wrapper_attr("single_observation_space")
+            else None
+        )
         if base_single_space is not None:
             if not isinstance(base_single_space, spaces.Box):
                 raise TypeError(

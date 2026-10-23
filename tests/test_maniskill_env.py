@@ -92,8 +92,11 @@ def test_vision_env_produces_named_per_camera_keys_no_channel_stacking():
         keys = set(env.single_observation_space.spaces)
         assert keys == {"state", f"rgb_{_CAMERA}", f"depth_{_CAMERA}"}
         assert env.single_observation_space[f"rgb_{_CAMERA}"].dtype.name == "uint8"
+        assert env.single_observation_space[f"depth_{_CAMERA}"].dtype.name == "float32"
         obs, _ = env.reset(seed=0)
         assert set(obs) == keys
+        assert obs[f"depth_{_CAMERA}"].dtype == torch.float32
+        assert obs[f"depth_{_CAMERA}"].device == obs[f"rgb_{_CAMERA}"].device
     finally:
         env.close()
 
