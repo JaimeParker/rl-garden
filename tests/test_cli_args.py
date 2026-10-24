@@ -716,6 +716,35 @@ def test_isaaclab_backend_rejects_explicit_image_size() -> None:
         IsaacLabBackend._make_cfg(req, is_eval=False)
 
 
+@pytest.mark.parametrize("final_obs", [None, True, False])
+def test_isaaclab_backend_make_cfg_forwards_unresolved_final_obs(final_obs) -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    cfg = IsaacLabBackend._make_cfg(
+        _make_isaaclab_req(IsaacLabConfig(final_obs=final_obs)), is_eval=False
+    )
+
+    assert IsaacLabConfig().final_obs is None
+    assert cfg.final_obs is final_obs
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        ([], None),
+        (["--isaaclab.final_obs", "False"], False),
+        (["--isaaclab.final-obs", "True"], True),
+    ],
+)
+def test_isaaclab_final_obs_cli_flag(argv, expected) -> None:
+    from rl_garden.training.online import registry
+
+    args = registry.parse_args(["sac", "--env-backend", "isaaclab", *argv])
+
+    assert args.isaaclab.final_obs is expected
+
+
 def test_isaaclab_backend_make_eval_env_not_supported_in_v1() -> None:
     from rl_garden.common.env_args import IsaacLabConfig
     from rl_garden.envs.backends.isaaclab import IsaacLabBackend

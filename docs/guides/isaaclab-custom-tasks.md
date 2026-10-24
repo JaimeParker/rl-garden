@@ -28,8 +28,10 @@ The adapter, the zero-frame guard, frame stacking, `IsaacLabEnvConfig` and
 the CLI are shared.
 
 3.0-only features: Newton physics, the Newton Warp camera renderer, the
-`--isaaclab.physics`/`--isaaclab.renderer` presets, and Kit-less runs. On 2.x
-those two flags raise `ValueError` ("presets need Isaac Lab 3.0"), and every
+`--isaaclab.physics`/`--isaaclab.renderer` presets, terminal observations
+(`--isaaclab.final_obs`, see [Terminal observations](#terminal-observations)),
+and Kit-less runs. On 2.x the two preset flags raise `ValueError` ("presets
+need Isaac Lab 3.0"), and every
 run uses Kit + Isaac Sim PhysX, with cameras rendered by Kit RTX through
 `TiledCamera`.
 
@@ -507,6 +509,40 @@ as `env/<key>`. The backend forwards `log` only when the task assigns a new
 dict object; Isaac Lab leaves the previous `log` in place on steps where no
 env resets, and that unchanged object is treated as stale.
 
+## Terminal observations
+
+Isaac Lab resets a done env inside `step()`, so the observation it returns
+for that env already belongs to the next episode. On 3.0 the backend turns on
+the env cfg's `compute_final_obs` by default: Isaac Lab then computes the
+observation once more before the reset, and the backend reports it as
+`infos["final_observation"]` (masked by `infos["_final_observation"]`). PPO
+bootstraps ended episodes from it, and off-policy algorithms bootstrap
+truncated transitions from it.
+
+- `--isaaclab.final_obs False` turns it off to save the cost: one extra
+  observation computation on every step where some env resets. With
+  thousands of envs that is nearly every step, so camera tasks can pay up to
+  about twice the observation compute.
+- 2.x has no terminal observation, so the default is off there and
+  `--isaaclab.final_obs True` raises `ValueError` before Kit boots. Without
+  it, PPO treats time-outs as terminal (bootstrap value 0) and off-policy
+  algorithms bootstrap truncations from the reset observation.
+- Set it only with `--isaaclab.final_obs`. A `compute_final_obs` key in
+  `--isaaclab.env_kwargs_json` raises `ValueError`.
+
+Two task-side requirements on 3.0:
+
+- `_get_observations()` must return fresh tensors (e.g. `torch.cat(...)`,
+  `.clone()`), not persistent buffers written in place. The terminal
+  observation is not copied, so a reused buffer would be overwritten by the
+  post-reset observation of the same step.
+- A custom reset path must keep `compute_final_obs` working. Isaac Lab
+  computes the terminal observation in `_reset_envs_from_buffer()` just
+  before `_reset_idx()`. Overriding `_reset_envs_from_buffer()` with a
+  mask-native reset that returns `None` raises `RuntimeError` while the flag
+  is on, and an override that skips the base implementation drops the
+  terminal observation.
+
 ## Training your new task
 
 ```bash
@@ -515,14 +551,15 @@ python examples/train_online.py ppo --env_backend isaaclab \
   --num_envs 4096 --eval_freq 0 --total_timesteps 200000
 ```
 
-For a camera task, pass any non-empty camera name to `--obs.rgb`. IsaacLab
-ignores the name itself (the real camera set/resolution is baked into the
-task registration, see "Camera resolution" above); it only uses it to tell
-"some vision requested" apart from state-only:
+For a camera task, pass the camera name your task emits to `--obs.rgb`
+(`--obs.rgb front` for an `"rgb_front"` key). The camera set/resolution is
+baked into the task registration (see "Camera resolution" above), but the
+observation contract still checks that the requested `rgb_<name>` key
+exists:
 
 ```bash
 python examples/train_online.py ppo --env_backend isaaclab \
-  --env_id RlGarden-MyTask-Camera-v0 --obs.rgb camera \
+  --env_id RlGarden-MyTask-Camera-v0 --obs.rgb front \
   --num_envs 32 --eval_freq 0 \
   --total_timesteps 200000 \
   --isaaclab.sim_device cuda:0
@@ -537,6 +574,8 @@ Relevant IsaacLab-specific CLI flags (`--isaaclab.<field>`, see
   [Physics and renderer presets](#physics-and-renderer-presets)
 - `--isaaclab.renderer` (default: the task's preset default, camera tasks
   only; 3.0 only)
+- `--isaaclab.final_obs` (default: on for 3.0, off for 2.x; `True` is
+  rejected on 2.x) — see [Terminal observations](#terminal-observations)
 - `--isaaclab.env_kwargs_json` — a JSON dict applied as
   `setattr(env_cfg, key, value)` overrides on the parsed cfg, before
   `gym.make`. It's an escape hatch for task-specific cfg fields you want to

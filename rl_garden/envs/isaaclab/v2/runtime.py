@@ -23,6 +23,16 @@ def _reject_presets(overrides: Sequence[str], version: str) -> None:
         )
 
 
+def _reject_final_obs(final_obs: bool | None, version: str) -> None:
+    if final_obs:
+        raise ValueError(
+            f"--isaaclab.final_obs True needs Isaac Lab 3.0, detected 2.x {version}. Isaac Lab 2.x has "
+            "no compute_final_obs (no terminal observation), so PPO treats time-outs as terminal and "
+            "off-policy bootstraps truncations from the reset observation; drop the flag or install "
+            "Isaac Lab 3.0."
+        )
+
+
 def _reject_camera_off_primary_gpu(is_visual: bool, sim_device: str) -> None:
     if is_visual and sim_device not in ("cuda:0", "cuda"):
         raise ValueError(
@@ -47,6 +57,7 @@ def build(cfg: IsaacLabEnvConfig) -> Any:
     from rl_garden.envs.isaaclab.v2.app import get_or_launch_app
 
     _reject_presets(cfg.overrides, isaaclab_version())
+    _reject_final_obs(cfg.final_obs, isaaclab_version())
     _reject_camera_off_primary_gpu(cfg.is_visual, cfg.sim_device)
     get_or_launch_app(cfg.headless, cfg.sim_device, enable_cameras=cfg.is_visual)
 

@@ -139,6 +139,15 @@ class IsaacLabConfig:
     # camera tasks. None keeps the task default (newton_renderer for
     # RlGarden-* camera tasks). Isaac Lab 3.0 only; rejected on 2.x.
     renderer: Optional[str] = None
+    # Terminal observations (Isaac Lab 3.0 ``compute_final_obs``), reported
+    # as infos["final_observation"] so PPO and off-policy truncations
+    # bootstrap from the true last state instead of the auto-reset one.
+    # None = on for 3.0, off for 2.x; True on 2.x is rejected (2.x has no
+    # terminal observation); False = off. Cost: one extra observation
+    # computation on every step where some env resets -- with thousands of
+    # envs that is nearly every step, i.e. up to ~2x observation compute
+    # (renders/copies) for camera tasks.
+    final_obs: bool | None = None
 
 
 @dataclass

@@ -22,3 +22,7 @@ class IsaacLabEnvConfig:
     # e.g. ["physics=newton_mjwarp", "renderer=isaacsim_rtx"]. Must stay a
     # list: parse_env_cfg falls back to reading sys.argv when given None.
     overrides: list[str] = field(default_factory=list)
+    # IsaacLabConfig.final_obs, unresolved: the generation-dependent default
+    # (None = on for 3.0, off for 2.x) is applied by v3/v2 ``runtime.build``,
+    # so resolving this config never needs Isaac Lab installed.
+    final_obs: bool | None = None

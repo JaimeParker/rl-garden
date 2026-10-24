@@ -46,6 +46,18 @@ conventions: per-env metrics in ``extras["episode_metrics"]`` (a dict of
 ``extras["log"]`` are forwarded as ``info["log"]`` only when ``log`` is a
 new dict object (Isaac Lab leaves the previous one in place on steps where
 no env resets, so an unchanged object is stale and dropped).
+
+Terminal observations: Isaac Lab 3.0 with ``cfg.compute_final_obs`` (set by
+``v3.runtime`` from ``IsaacLabEnvConfig.final_obs``, on by default) writes
+``extras["final_obs"]`` -- the full-batch observation computed before the
+same-step reset -- on steps where some env resets. The adapter pops it and
+reports it as ``info["final_observation"]`` (same key extraction as the
+step obs, not cloned) with ``info["_final_observation"] = terminated |
+truncated``. Isaac Lab leaves the last value in ``extras`` on steps without
+resets; ``done`` is all False there, so consumers indexing by the mask never
+read it. Isaac Lab 2.x has no terminal observation: no
+``final_observation`` is reported, so PPO bootstraps every ended episode
+with 0 and off-policy truncations bootstrap from the reset observation.
 """
 from __future__ import annotations
 
@@ -264,7 +276,9 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         return self._last_obs, reward, terminated, truncated, info
 
     def _step_info(self, extras: dict, reward: torch.Tensor, done: torch.Tensor) -> dict:
-        """``extras`` plus ``final_info``/``_final_info`` (see module docstring)."""
+        """``extras`` plus ``final_info``/``_final_info`` and, when the env
+        reports terminal observations, ``final_observation``/
+        ``_final_observation`` (see module docstring)."""
         info = dict(extras)
         episode = self._episode_stats.step(reward, done)
         for key, value in info.pop("episode_metrics", {}).items():
@@ -282,6 +296,12 @@ class _IsaacLabVecEnvAdapter(gym.Env):
             episode[key] = value
         info["final_info"] = {"episode": episode}
         info["_final_info"] = done
+        final_obs = info.pop("final_obs", None)
+        if final_obs is not None:
+            info["final_observation"] = self._extract_obs(final_obs)
+            # Masks stale values too: Isaac Lab keeps the last final_obs in
+            # extras on steps without resets, where done is all False.
+            info["_final_observation"] = done
         log = info.pop("log", None)
         if log is not None and log is not self._last_forwarded_log:
             info["log"] = log

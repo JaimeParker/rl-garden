@@ -237,8 +237,10 @@ class _ScriptedExtrasEnv(_FakeIsaacLabEnv):
     """Steps through scripted ``(reward, terminated, truncated)`` rows and
     returns one persistent ``extras`` dict, like Isaac Lab's envs."""
 
-    def __init__(self, script: list[tuple[list[float], list[bool], list[bool]]]) -> None:
-        super().__init__({"policy": torch.zeros(NUM_ENVS, 4)})
+    def __init__(
+        self, script: list[tuple[list[float], list[bool], list[bool]]], obs: dict | None = None
+    ) -> None:
+        super().__init__(obs if obs is not None else {"policy": torch.zeros(NUM_ENVS, 4)})
         self._script = iter(script)
         self.extras: dict = {}
 
@@ -374,3 +376,74 @@ def test_reset_restarts_episode_statistics() -> None:
 
     assert episode["return"].tolist() == [2.0, 2.0]
     assert episode["episode_len"].tolist() == [1, 1]
+
+
+_RESET_ENV0 = ([1.0, 1.0], [True, False], [False, False])
+
+
+def _visual_obs() -> dict:
+    return {"rgb_front": torch.randint(1, 255, (NUM_ENVS, 8, 8, 3), dtype=torch.uint8), "state": _state()}
+
+
+def test_final_obs_is_reported_as_state_final_observation_masked_by_done() -> None:
+    adapter, env = _scripted_adapter([_RESET_ENV0])
+    terminal = torch.randn(NUM_ENVS, 4)
+    env.extras["final_obs"] = {"policy": terminal}
+
+    info = _step(adapter)
+
+    assert "final_obs" not in info
+    assert set(info["final_observation"]) == {"state"}
+    assert info["final_observation"]["state"] is terminal
+    assert info["_final_observation"].tolist() == [True, False]
+    assert set(env.extras) == {"final_obs"}
+
+
+def test_stale_final_obs_is_masked_out_on_a_step_without_resets() -> None:
+    adapter, env = _scripted_adapter([_NO_DONE])
+    env.extras["final_obs"] = {"policy": torch.randn(NUM_ENVS, 4)}
+
+    info = _step(adapter)
+
+    assert info["_final_observation"].tolist() == [False, False]
+
+
+def test_without_final_obs_no_final_observation_is_reported() -> None:
+    adapter, _ = _scripted_adapter([_RESET_ENV0])
+
+    info = _step(adapter)
+
+    assert "final_observation" not in info and "_final_observation" not in info
+
+
+def test_visual_final_obs_keeps_image_and_state_keys() -> None:
+    env = _ScriptedExtrasEnv([_RESET_ENV0], obs=_visual_obs())
+    adapter = _IsaacLabVecEnvAdapter(env, seed=0, is_visual=True)
+    terminal = _visual_obs()
+    env.extras["final_obs"] = terminal
+
+    info = _step(adapter)
+
+    assert set(info["final_observation"]) == {"rgb_front", "state"}
+    assert info["final_observation"]["rgb_front"] is terminal["rgb_front"]
+    assert info["final_observation"]["state"] is terminal["state"]
+    assert info["_final_observation"].tolist() == [True, False]
+
+
+def test_frame_stack_wrapper_stacks_final_observation_over_the_previous_history() -> None:
+    obs = _visual_obs()
+    env = _ScriptedExtrasEnv([_RESET_ENV0], obs=obs)
+    adapter = _IsaacLabVecEnvAdapter(env, seed=0, is_visual=True)
+    wrapped = ImageFrameStackWrapper(adapter, frame_stack=3, autoreset_in_step=True)
+    wrapped.reset()
+    terminal = _visual_obs()
+    env.extras["final_obs"] = terminal
+
+    info = wrapped.step(torch.zeros(NUM_ENVS, 1))[4]
+
+    stacked = info["final_observation"]["rgb_front"]
+    assert stacked.shape == (NUM_ENVS, 3, 8, 8, 3)
+    assert torch.equal(stacked[:, -1], terminal["rgb_front"])
+    assert torch.equal(stacked[:, 0], obs["rgb_front"]) and torch.equal(stacked[:, 1], obs["rgb_front"])
+    assert info["final_observation"]["state"] is terminal["state"]
+    assert info["_final_observation"].tolist() == [True, False]

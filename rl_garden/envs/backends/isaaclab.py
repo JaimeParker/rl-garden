@@ -9,7 +9,8 @@ tasks), state or image observations. No live eval env (see
 One backend for Isaac Lab 3.0 (recommended) and 2.3.x: the generation is
 detected at env construction (``rl_garden.envs.isaaclab.detect``); the
 ``physics``/``renderer`` preset overrides forwarded here are 3.0-only and
-rejected on 2.x.
+rejected on 2.x, as is ``final_obs=True`` (its ``None`` default is resolved
+per generation by the runtime, not here).
 """
 from __future__ import annotations
 
@@ -54,6 +55,7 @@ class IsaacLabBackend(EnvBackend):
                 json.loads(il.env_kwargs_json) if il is not None and il.env_kwargs_json else {}
             ),
             overrides=cls._preset_overrides(il),
+            final_obs=il.final_obs if il is not None else None,
         )
 
     @staticmethod
