@@ -18,10 +18,15 @@ class EpisodeStatistics:
         self._return = torch.zeros(num_envs, dtype=torch.float32, device=device)
         self._length = torch.zeros(num_envs, dtype=torch.int64, device=device)
 
-    def reset(self) -> None:
-        """Zero every env (a full reset)."""
-        self._return.zero_()
-        self._length.zero_()
+    def reset(self, env_idx: torch.Tensor | None = None) -> None:
+        """Zero every env (a full reset), or only the rows in ``env_idx``, an
+        index tensor (the ``options["env_idx"]`` partial-reset convention)."""
+        if env_idx is None:
+            self._return.zero_()
+            self._length.zero_()
+        else:
+            self._return[env_idx] = 0.0
+            self._length[env_idx] = 0
 
     def step(self, reward: torch.Tensor, done: torch.Tensor) -> dict[str, torch.Tensor]:
         """Add one step, return ``{"return", "episode_len"}`` copies (valid on

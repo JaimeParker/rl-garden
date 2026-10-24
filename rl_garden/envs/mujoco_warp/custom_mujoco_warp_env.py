@@ -19,6 +19,10 @@ terminates/truncates, this class clones the true terminal observation into
 ``infos["final_observation"]``, resets that env's state in place, and
 returns the *post-reset* observation from ``step()`` -- written directly in
 rl-garden's own convention from the start, no key-name translation needed.
+On the same step it sets ``infos["final_info"] = {"episode": {"return",
+"episode_len"}}`` (``EpisodeStatistics`` over the task's raw reward; full-width,
+valid on the ``infos["_final_info"]`` rows); ``reset()`` restarts the
+statistics of the envs it resets.
 
 **Required initialization order (verified empirically, not obvious from the
 API surface):** ``mjw.make_data()`` only allocates GPU buffers -- it does
@@ -70,6 +74,8 @@ import torch
 import warp as wp
 from gymnasium.vector import AutoresetMode, VectorEnv
 from gymnasium.vector.utils import batch_space
+
+from rl_garden.envs.episode_statistics import EpisodeStatistics
 
 
 def _unpack_rgb(packed: torch.Tensor) -> torch.Tensor:
@@ -126,6 +132,7 @@ class CustomMujocoWarpEnv(VectorEnv):
         low = np.tile(self.single_action_space.low, (nworld, 1))
         high = np.tile(self.single_action_space.high, (nworld, 1))
         self.action_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
+        self._episode_stats = EpisodeStatistics(nworld, self.device)
 
         self._has_camera = render_width is not None
         self._render_width = render_width
@@ -153,6 +160,7 @@ class CustomMujocoWarpEnv(VectorEnv):
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         env_ids = options.get("env_idx") if options else None
         self._reset_idx(env_ids)
+        self._episode_stats.reset(env_ids)
         return self._get_obs(), {}
 
     def step(self, actions: torch.Tensor):
@@ -164,11 +172,13 @@ class CustomMujocoWarpEnv(VectorEnv):
         terminated = self._get_terminated()
         truncated = self._get_truncated()
         done_mask = terminated | truncated
+        episode = self._episode_stats.step(reward, done_mask)
 
         infos: dict[str, Any] = {}
         if done_mask.any():
             infos["final_observation"] = _clone_obs(obs)
             infos["_final_observation"] = done_mask
+            infos["final_info"] = {"episode": episode}
             infos["_final_info"] = done_mask
             env_ids = torch.nonzero(done_mask, as_tuple=True)[0]
             self._reset_idx(env_ids)

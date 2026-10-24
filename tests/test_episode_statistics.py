@@ -53,3 +53,14 @@ def test_reset_zeroes_every_env() -> None:
 
     assert episode["return"].tolist() == [3.0, 4.0]
     assert episode["episode_len"].tolist() == [1, 1]
+
+
+def test_partial_reset_zeroes_only_the_given_envs() -> None:
+    stats = EpisodeStatistics(num_envs=3, device="cpu")
+    stats.step(torch.tensor([1.0, 2.0, 3.0]), _done(False, False, False))
+
+    stats.reset(torch.tensor([0, 2]))
+    episode = stats.step(torch.tensor([10.0, 10.0, 10.0]), _done(True, True, True))
+
+    assert episode["return"].tolist() == [10.0, 12.0, 10.0]
+    assert episode["episode_len"].tolist() == [1, 2, 1]
