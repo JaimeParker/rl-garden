@@ -8,11 +8,29 @@ Phase 2.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from rl_garden.buffers.gae import compute_gae
+
+
+def rlinf_rewards_include_truncation_bootstrap(cfg: Any) -> bool:
+    """Whether RLinf already added ``gamma * V(final_obs)`` to truncated rewards.
+
+    RLinf's collector (``EnvTransition.compute_rewards`` in
+    ``rlinf/data/schema/embodied_types.py``) adds the truncation bootstrap to
+    the reward of every auto-reset truncation whenever the rollout produced
+    terminal values, i.e. ``env.train.auto_reset`` is on and
+    ``rollout.collect_final_values`` is left at its default ``True``. Under
+    ``algorithm.bootstrap_type: always`` it adds it at terminations too.
+    ``collect_final_values: False`` also drops the trailing ``prev_values``
+    entry, which ``compute_advantages_from_rollout_batch`` rejects.
+    """
+    auto_reset = bool(cfg["env"]["train"]["auto_reset"])
+    collect_final_values = bool(cfg["rollout"].get("collect_final_values", True))
+    return auto_reset and collect_final_values
 
 
 def compute_advantages_from_rollout_batch(
@@ -20,75 +38,84 @@ def compute_advantages_from_rollout_batch(
     value_head_forward: Callable[[torch.Tensor], torch.Tensor],
     gamma: float,
     gae_lambda: float,
+    *,
+    rewards_include_truncation_bootstrap: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Convert RLinf's rollout batch into auto-reset-correct advantages/returns.
 
-    Batch shapes, verified directly against ``EmbodiedFSDPActor
-    ._process_received_rollout_batch``/``process_nested_dict_for_train``
-    (``RLinf/rlinf/workers/actor/fsdp_actor_worker.py``): after
-    ``recv_rollout_trajectories``, ``rollout_batch["rewards"]`` is
-    ``[T, B, num_action_chunks]``, while ``["terminations"]``/
-    ``["prev_values"]`` carry one extra *trailing* bootstrap-step entry,
-    ``[T+1, B, num_action_chunks]`` (confirmed by
-    ``process_nested_dict_for_train``'s own ``value[:-1]`` stripping of
-    exactly these fields before training). ``dones`` is sourced from
-    ``terminations`` specifically, not the combined
-    ``terminations|truncations`` field, mirroring the established
-    convention in ``sac_actor.trajectory_batch_to_sample``.
+    RLinf batch layout (``num_action_chunks == 1``, after
+    ``process_nested_dict_for_adv``), as built by ``Trajectory.from_steps``
+    (``rlinf/data/schema/embodied_types.py``) and consumed by RLinf's own
+    GAE (``rlinf/algorithms/advantages.py``, ``dones[step + 1]`` /
+    ``values[step + 1]`` for step ``t``):
 
-    RLinf's stock ``"gae"`` registry entry
-    (``rlinf/algorithms/advantages.py``) does not support auto-reset by its
-    own docstring's admission -- it bootstraps every non-terminal step from
-    ``values[step + 1]``, which under ``env.train.auto_reset: True`` is the
-    value of the *post-reset* observation, wrongly bootstrapping a
-    just-ended episode's last transition into the next episode. This fixes
-    it via a separate ``final_values`` array, computed by forwarding
-    ``value_head_forward`` over ``next_obs`` (populated only when
-    ``rollout.collect_transitions: True`` -- the pre-reset terminal
-    observation, not the post-reset one).
+    - ``rewards``: ``[T, B, 1]``, ``rewards[t]`` is step ``t``'s reward.
+    - ``terminations``/``truncations``/``dones``: ``[T + 1, B, 1]`` with a
+      LEADING entry -- index 0 is the epoch-start boundary (always zero,
+      ``EnvWorker.bootstrap_step``), index ``t + 1`` is step ``t``'s
+      post-action flag. This is exactly ``compute_gae``'s episode-start
+      convention, so the flags are passed through unshifted.
+    - ``prev_values``: ``[T + 1, B, 1]`` with a TRAILING entry --
+      ``prev_values[t] = V(obs_t)``, ``prev_values[T]`` is the value of the
+      observation after the last step.
+    - ``next_obs``: ``[T, B, ...]`` (``rollout.collect_transitions: True``),
+      the pre-reset observation after step ``t``.
 
-    ``value_head_forward`` takes a flat ``[N, obs_dim]`` tensor and returns
-    ``[N, 1]`` values -- a thin closure over the model's value head,
-    injected so this function stays RLinf/model-independent and directly
-    testable (see ``tests/test_rlinf_ppo_advantages.py``).
+    Every termination or truncation cuts the GAE recursion. The truncation
+    bootstrap ``gamma * V(next_obs[t])`` (bootstrap at truncation only, 0 at
+    termination) comes from exactly one place: RLinf's rewards when
+    ``rewards_include_truncation_bootstrap`` (see
+    ``rlinf_rewards_include_truncation_bootstrap``), otherwise
+    ``final_values`` computed here from ``next_obs`` via
+    ``value_head_forward`` (flat ``[N, obs_dim]`` -> ``[N, 1]``).
 
-    Returns ``(advantages, returns)``, each ``[T, B, 1]`` -- matching
-    ``rollout_batch``'s own layout, ready to write back for
-    ``train_micro_batch``'s downstream reads.
+    Returns ``(advantages, returns)``, each ``[T, B, 1]``.
     """
     rewards = rollout_batch["rewards"].squeeze(-1)  # [T, B]
-    terminations_full = rollout_batch["terminations"].squeeze(-1)  # [T+1, B]
+    terminations_full = rollout_batch["terminations"].squeeze(-1).bool()  # [T+1, B]
+    truncations_full = rollout_batch["truncations"].squeeze(-1).bool()  # [T+1, B]
     values_full = rollout_batch["prev_values"].squeeze(-1)  # [T+1, B]
-    next_states = rollout_batch["next_obs"]["states"]  # [T, B, obs_dim]
+    t_steps = rewards.shape[0]
+    for name, tensor in (
+        ("terminations", terminations_full),
+        ("truncations", truncations_full),
+        ("prev_values", values_full),
+    ):
+        if tensor.shape[0] != t_steps + 1:
+            raise ValueError(
+                f"rollout_batch[{name!r}] must have T + 1 = {t_steps + 1} steps "
+                f"(rewards has T = {t_steps}), got {tensor.shape[0]}."
+            )
 
-    dones = terminations_full[:-1].float()
-    last_dones = terminations_full[-1]
+    episode_starts_full = terminations_full | truncations_full
+    dones = episode_starts_full[:-1].float()
+    last_dones = episode_starts_full[-1]
     values = values_full[:-1]
     last_values = values_full[-1]
+    truncated_steps = truncations_full[1:] & ~terminations_full[1:]  # [T, B]
 
-    t_steps, batch_size, obs_dim = next_states.shape
-    with torch.no_grad():
-        next_values = value_head_forward(
-            next_states.reshape(t_steps * batch_size, obs_dim)
-        ).reshape(t_steps, batch_size)
-
-    # value_head_forward runs the model's own forward pass, which moves its
-    # inputs to the model's device internally (RLGardenPPOModel.
-    # default_forward) -- rollout_batch's tensors (received over Ray
-    # channels from the rollout/env workers) are not guaranteed to already
-    # be on that same device. Normalize onto next_values' device rather
-    # than moving the model's output back to CPU, since GAE's per-step
-    # reverse loop (compute_gae) is cheaper to run once on whichever device
-    # the value forward already used. Confirmed a real, not hypothetical,
-    # mismatch by a live launch on 6017 (RuntimeError: found at least two
-    # devices, cuda:0 and cpu).
-    device = next_values.device
-    rewards = rewards.to(device)
-    dones = dones.to(device)
-    values = values.to(device)
-    last_values = last_values.to(device)
-    last_dones = last_dones.to(device)
-    final_values = dones * next_values
+    if rewards_include_truncation_bootstrap or not truncated_steps.any():
+        final_values = torch.zeros_like(values)
+    else:
+        next_states = rollout_batch["next_obs"]["states"]  # [T, B, obs_dim]
+        _, batch_size, obs_dim = next_states.shape
+        with torch.no_grad():
+            next_values = value_head_forward(
+                next_states.reshape(t_steps * batch_size, obs_dim)
+            ).reshape(t_steps, batch_size)
+        # value_head_forward runs the model's own forward pass, which moves
+        # its inputs to the model's device -- rollout_batch's tensors
+        # (received over Ray channels) are not guaranteed to be on that
+        # device (a live 6017 launch hit "found at least two devices").
+        # compute_gae runs on rewards' device, so move the per-step inputs
+        # to next_values' device once.
+        device = next_values.device
+        rewards = rewards.to(device)
+        dones = dones.to(device)
+        values = values.to(device)
+        last_values = last_values.to(device)
+        last_dones = last_dones.to(device)
+        final_values = truncated_steps.to(device) * next_values
 
     advantages, returns = compute_gae(
         rewards, dones, values, final_values, last_values, last_dones, gamma, gae_lambda

@@ -57,6 +57,7 @@ from rl_garden.integrations.rlinf import require_rlinf
 from rl_garden.integrations.rlinf import ppo_model  # noqa: F401
 from rl_garden.integrations.rlinf.ppo_advantages import (
     compute_advantages_from_rollout_batch,
+    rlinf_rewards_include_truncation_bootstrap,
 )
 
 try:
@@ -127,6 +128,9 @@ class RLGardenPPOFSDPActor(EmbodiedFSDPActor):
             value_head_forward,
             self.cfg.algorithm.get("gamma", 1.0),
             self.cfg.algorithm.get("gae_lambda", 1.0),
+            rewards_include_truncation_bootstrap=(
+                rlinf_rewards_include_truncation_bootstrap(self.cfg)
+            ),
         )
 
         if self.cfg.algorithm.get("normalize_advantages", True):

@@ -85,12 +85,13 @@ algorithm:
   entropy_type: action_level
   entropy_bonus: 0
 
-  # [standard, always]. "standard" only bootstraps on truncation; "always"
-  # bootstraps on truncation or termination too. rl-garden's own GAE
-  # (compute_gae) always distinguishes true termination (via `dones`,
-  # sourced from `terminations` below) from truncation for the value
-  # target, matching "always" semantics.
-  bootstrap_type: always
+  # [standard, always]. With env.train.auto_reset, RLinf's collector adds
+  # gamma * V(final_obs) to the reward of every truncation ("standard") or
+  # of every done ("always"). RLGardenPPOFSDPActor's GAE cuts at every done
+  # and then takes that reward bootstrap as is, so "standard" gives
+  # rl-garden's bootstrap_at_done="truncated" semantics; "always" would
+  # also bootstrap at true terminations.
+  bootstrap_type: standard
   clip_ratio_high: 0.2
   clip_ratio_low: 0.2
   clip_ratio_c: 3.0
@@ -126,9 +127,9 @@ rollout:
   enable_torch_compile: False
   enable_cuda_graph: False
 
-  # Required for RLGardenPPOFSDPActor.compute_advantages_and_returns'
-  # auto-reset bootstrap fix: populates Trajectory.next_obs (default False,
-  # env_worker.py:77).
+  # Populates Trajectory.next_obs (default False). RLGardenPPOFSDPActor
+  # reads it for the truncation bootstrap only when RLinf did not already
+  # add it to the rewards (env.train.auto_reset off).
   collect_transitions: True
 
   model:
