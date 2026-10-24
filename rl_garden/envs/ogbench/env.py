@@ -130,7 +130,10 @@ def make_ogbench_env(cfg: OGBenchEnvConfig):
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
         adapter = ImageFrameStackWrapper(
-            adapter, frame_stack=cfg.frame_stack, image_keys=(f"rgb_{cfg.pixel_camera}",)
+            adapter,
+            frame_stack=cfg.frame_stack,
+            image_keys=(f"rgb_{cfg.pixel_camera}",),
+            autoreset_in_step=True,
         )
 
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:

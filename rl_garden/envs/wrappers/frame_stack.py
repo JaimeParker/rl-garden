@@ -20,6 +20,19 @@ image observations with vector state left single-frame:
   them -- purely additive relative to the ManiSkill path, which never relied
   on ``__getattr__`` (it already worked through ``get_wrapper_attr()``/base
   ``gym.Wrapper``'s own ``action_space``/``observation_space`` properties).
+
+Episode boundaries: ``reset()`` (full or partial ``options={"env_idx": ...}``)
+fills the selected histories with ``frame_stack`` copies of the reset frame.
+That covers ManiSkill, where this wrapper sits inside ``ManiSkillVectorEnv``,
+which calls ``reset(env_idx)`` on done envs. Envs that auto-reset done envs
+inside ``step()`` (gymnasium ``AutoresetMode.SAME_STEP``: the returned obs is
+the new episode's first frame, the terminal frame is in
+``infos["final_observation"]``) never call ``reset()`` per env, so pass
+``autoreset_in_step=True``: ``step()`` then restarts each done env's history
+from its new first frame and returns ``final_observation`` stacked as
+``previous_history[1:] + terminal_frame`` (SB3 ``VecFrameStack``'s terminal
+convention). ``final_observation`` is stacked for every env; consumers select
+done envs with ``_final_observation``.
 """
 
 from __future__ import annotations
@@ -39,6 +52,10 @@ class ImageFrameStackWrapper(gym.Wrapper):
     The wrapped environment is already batched, so image tensors use
     ``(N, H, W, C)`` and this wrapper returns ``(N, T, H, W, C)``. Partial
     resets replace history only for the selected environment indices.
+
+    Set ``autoreset_in_step=True`` when the wrapped env auto-resets done envs
+    inside ``step()`` and returns the post-reset obs plus
+    ``infos["final_observation"]`` (see module docstring).
     """
 
     def __init__(
@@ -46,6 +63,7 @@ class ImageFrameStackWrapper(gym.Wrapper):
         env: gym.Env,
         frame_stack: int = 3,
         image_keys: Optional[Sequence[str]] = None,
+        autoreset_in_step: bool = False,
     ) -> None:
         if frame_stack < 2:
             raise ValueError("frame_stack must be at least 2")
@@ -66,6 +84,7 @@ class ImageFrameStackWrapper(gym.Wrapper):
         self._metadata = None
         self._cached_spec = None
         self.frame_stack = int(frame_stack)
+        self.autoreset_in_step = bool(autoreset_in_step)
         self._frames: dict[str, torch.Tensor] = {}
 
         if image_keys is not None:
@@ -148,10 +167,34 @@ class ImageFrameStackWrapper(gym.Wrapper):
         env_idx = None if options is None else options.get("env_idx")
         return self._reset_frames(obs, env_idx=env_idx), info
 
+    def _stacked_final_observation(self, info: dict[str, Any]) -> dict[str, Any]:
+        """Shallow copy of ``info`` whose ``final_observation`` image keys are
+        ``previous_history[1:] + terminal_frame``; the inner env's dict is
+        left untouched."""
+        final_obs = info.get("final_observation")
+        if not isinstance(final_obs, dict):
+            return info
+        stacked = dict(final_obs)
+        for key in self.image_keys:
+            stacked[key] = torch.cat(
+                (self._frames[key][:, 1:], final_obs[key].unsqueeze(1)), dim=1
+            )
+        return {**info, "final_observation": stacked}
+
     def step(self, action: Any):
         obs, reward, terminated, truncated, info = self.env.step(action)
-        self._frames = {
+        frames = {
             key: torch.cat((self._frames[key][:, 1:], obs[key].unsqueeze(1)), dim=1)
             for key in self.image_keys
         }
+        if self.autoreset_in_step:
+            info = self._stacked_final_observation(info)
+            # A fresh tensor: some envs (Isaac Lab) return persistent buffers.
+            done = torch.logical_or(terminated, truncated)
+            for key, rolled in frames.items():
+                done_mask = done.to(device=rolled.device, dtype=torch.bool).view(
+                    -1, *([1] * (rolled.dim() - 1))
+                )
+                frames[key] = torch.where(done_mask, obs[key].unsqueeze(1), rolled)
+        self._frames = frames
         return self._output(obs), reward, terminated, truncated, info

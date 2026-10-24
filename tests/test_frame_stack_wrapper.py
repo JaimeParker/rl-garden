@@ -250,3 +250,135 @@ def test_image_frame_stack_partial_reset_only_replaces_selected_history():
     assert torch.equal(terminal["rgb_base_camera"], terminal_rgb)
     assert torch.all(reset_obs["rgb_base_camera"][0] == 100)
     assert torch.equal(reset_obs["rgb_base_camera"][1], terminal_rgb[1])
+
+
+class _FakeSameStepAutoresetEnv(gym.Env):
+    """Batched env that auto-resets done envs inside ``step()`` (gymnasium
+    SAME_STEP): frame value = steps since episode start, env ``i`` ends every
+    ``episode_lengths[i]`` steps, and the terminal frame goes to
+    ``infos["final_observation"]`` (full width, like the torch adapter)."""
+
+    def __init__(self, episode_lengths=(2, 4)) -> None:
+        self.num_envs = len(episode_lengths)
+        self._episode_lengths = torch.tensor(episode_lengths)
+        self._value = torch.zeros(self.num_envs, dtype=torch.uint8)
+        self.single_observation_space = spaces.Dict(
+            {
+                "state": spaces.Box(-np.inf, np.inf, (1,), np.float32),
+                "rgb_main": spaces.Box(0, 255, (2, 2, 3), np.uint8),
+            }
+        )
+        self.single_action_space = spaces.Box(-1, 1, (1,), np.float32)
+        self.observation_space = batch_space(self.single_observation_space, self.num_envs)
+        self.action_space = batch_space(self.single_action_space, self.num_envs)
+        self.last_info: dict = {}
+
+    def _obs(self):
+        rgb = self._value[:, None, None, None].expand(-1, 2, 2, 3).clone()
+        return {"rgb_main": rgb, "state": self._value[:, None].float()}
+
+    def reset(self, *, seed=None, options=None):
+        self._value.zero_()
+        return self._obs(), {}
+
+    def step(self, action):
+        del action
+        self._value += 1
+        terminated = self._value.long() >= self._episode_lengths
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool)
+        info: dict = {}
+        if terminated.any():
+            info["final_observation"] = self._obs()
+            info["_final_observation"] = terminated.clone()
+            self._value[terminated] = 0
+        self.last_info = info
+        return self._obs(), self._value.float(), terminated, truncated, info
+
+
+def _autoreset_stack(autoreset_in_step: bool, episode_lengths=(2, 4)):
+    return ImageFrameStackWrapper(
+        _FakeSameStepAutoresetEnv(episode_lengths),
+        frame_stack=3,
+        image_keys=("rgb_main",),
+        autoreset_in_step=autoreset_in_step,
+    )
+
+
+def _frame_values(stacked: torch.Tensor) -> torch.Tensor:
+    """(N, T, H, W, C) constant frames -> (N, T) frame values."""
+    return stacked[:, :, 0, 0, 0].long()
+
+
+def test_autoreset_in_step_restarts_done_history_and_rolls_others():
+    env = _autoreset_stack(autoreset_in_step=True)
+    env.reset()
+    env.step(torch.zeros(2, 1))
+    obs, _, terminated, _, _ = env.step(torch.zeros(2, 1))
+
+    assert terminated.tolist() == [True, False]
+    # env 0 just auto-reset: T copies of its new first frame (value 0);
+    # env 1 keeps rolling: [0, 1, 2].
+    assert _frame_values(obs["rgb_main"]).tolist() == [[0, 0, 0], [0, 1, 2]]
+    assert obs["state"].shape == (2, 1)
+
+    obs, *_ = env.step(torch.zeros(2, 1))
+    assert _frame_values(obs["rgb_main"]).tolist() == [[0, 0, 1], [1, 2, 3]]
+
+
+def test_autoreset_in_step_stacks_final_observation_from_previous_history():
+    env = _autoreset_stack(autoreset_in_step=True)
+    env.reset()
+    previous, *_ = env.step(torch.zeros(2, 1))
+    previous_rgb = previous["rgb_main"].clone()
+    _, _, _, _, info = env.step(torch.zeros(2, 1))
+
+    final_rgb = info["final_observation"]["rgb_main"]
+    assert final_rgb.shape == (2, 3, 2, 2, 3)
+    terminal_frame = torch.full((2, 2, 3), 2, dtype=torch.uint8)
+    expected_env0 = torch.cat((previous_rgb[0, 1:], terminal_frame.unsqueeze(0)))
+    assert torch.equal(final_rgb[0], expected_env0)
+    assert _frame_values(final_rgb).tolist() == [[0, 1, 2], [0, 1, 2]]
+    # Non-image keys stay single-frame.
+    assert info["final_observation"]["state"].shape == (2, 1)
+    assert info["_final_observation"].tolist() == [True, False]
+
+
+def test_autoreset_in_step_does_not_mutate_inner_info():
+    env = _autoreset_stack(autoreset_in_step=True)
+    env.reset()
+    env.step(torch.zeros(2, 1))
+    _, _, _, _, info = env.step(torch.zeros(2, 1))
+
+    inner_info = env.env.last_info
+    assert info is not inner_info
+    assert info["final_observation"] is not inner_info["final_observation"]
+    assert inner_info["final_observation"]["rgb_main"].shape == (2, 2, 2, 3)
+
+
+def test_autoreset_in_step_restarts_on_truncation():
+    class _TruncatingEnv(_FakeSameStepAutoresetEnv):
+        def step(self, action):
+            obs, reward, terminated, truncated, info = super().step(action)
+            return obs, reward, truncated, terminated, info
+
+    env = ImageFrameStackWrapper(
+        _TruncatingEnv((2, 4)), frame_stack=3, image_keys=("rgb_main",), autoreset_in_step=True
+    )
+    env.reset()
+    env.step(torch.zeros(2, 1))
+    obs, _, terminated, truncated, _ = env.step(torch.zeros(2, 1))
+
+    assert truncated.tolist() == [True, False] and not terminated.any()
+    assert _frame_values(obs["rgb_main"]).tolist() == [[0, 0, 0], [0, 1, 2]]
+
+
+def test_autoreset_in_step_false_keeps_rolling_history_and_raw_final_observation():
+    env = _autoreset_stack(autoreset_in_step=False)
+    env.reset()
+    env.step(torch.zeros(2, 1))
+    obs, _, _, _, info = env.step(torch.zeros(2, 1))
+
+    # Previous behavior: the done env's history keeps the old episode's frames.
+    assert _frame_values(obs["rgb_main"]).tolist() == [[0, 1, 0], [0, 1, 2]]
+    assert info is env.env.last_info
+    assert info["final_observation"]["rgb_main"].shape == (2, 2, 2, 3)

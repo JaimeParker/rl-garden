@@ -271,6 +271,7 @@ def make_robotwin_env(cfg: RoboTwinEnvConfig):
             env,
             frame_stack=cfg.frame_stack,
             image_keys=tuple(f"rgb_{camera}" for camera in cfg.rgb_cameras),
+            autoreset_in_step=cfg.auto_reset,
         )
     return env
 

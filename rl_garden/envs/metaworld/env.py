@@ -308,7 +308,9 @@ def make_metaworld_env(cfg: MetaWorldEnvConfig):
         image_keys = tuple(f"rgb_{cam}" for cam in cfg.rgb_cameras) + tuple(
             f"depth_{cam}" for cam in cfg.depth_cameras
         )
-        adapter = ImageFrameStackWrapper(adapter, frame_stack=cfg.frame_stack, image_keys=image_keys)
+        adapter = ImageFrameStackWrapper(
+            adapter, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
+        )
 
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
         from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper

@@ -15,8 +15,9 @@ leading ``frame_stack`` dim) rather than silently mis-shaping/mis-populating
 storage if fed unstacked obs.
 
 Design resolution: **edge-replicate at episode boundaries, do not
-reject-sample them.** ``ImageFrameStackWrapper`` already edge-replicates on
-``reset()`` (all ``frame_stack`` copies = the first frame), so an
+reject-sample them.** ``ImageFrameStackWrapper`` already edge-replicates at
+every episode start (``reset()``, and in-step autoresets with
+``autoreset_in_step=True``: all ``frame_stack`` copies = the first frame), so an
 early-episode transition is fully samplable in ``ReplayBuffer`` today --
 matching that is this buffer's correctness bar. The gather is clamped by a
 per-position ``steps_available`` bound (how many steps have occurred since

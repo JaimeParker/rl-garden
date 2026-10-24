@@ -249,7 +249,10 @@ def make_gymnasium_env(cfg: GymnasiumEnvConfig):
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
         adapter = ImageFrameStackWrapper(
-            adapter, frame_stack=cfg.frame_stack, image_keys=cfg.image_keys
+            adapter,
+            frame_stack=cfg.frame_stack,
+            image_keys=cfg.image_keys,
+            autoreset_in_step=True,
         )
 
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:

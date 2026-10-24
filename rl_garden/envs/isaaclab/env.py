@@ -344,7 +344,9 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
             raise ObservationContractError("frame_stack > 1 requires a visual observation mode")
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
-        wrapped = ImageFrameStackWrapper(adapter, frame_stack=cfg.frame_stack)
+        wrapped = ImageFrameStackWrapper(
+            adapter, frame_stack=cfg.frame_stack, autoreset_in_step=True
+        )
         # ImageFrameStackWrapper doesn't forward arbitrary attributes -- copy
         # the rl-garden env-shape attributes onto the outermost object.
         # single_observation_space is already the post-frame-stack space at

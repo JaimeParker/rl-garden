@@ -233,6 +233,20 @@ def test_pixel_observation_contract():
     train_env.close()
 
 
+def test_pixel_frame_stack_enables_autoreset_in_step():
+    _require_dm_control()
+    if "MUJOCO_GL" not in os.environ and "DISPLAY" not in os.environ:
+        pytest.skip("no GL backend: set MUJOCO_GL=egl")
+    from rl_garden.envs.backend_registry import make_training_envs
+
+    obs_cfg = ObservationConfig(state=True, rgb=(DEFAULT_CAMERA_NAME,), frame_stack=3)
+    train_env, _ = make_training_envs("dm_control", _make_req(observation=obs_cfg))
+
+    assert train_env.autoreset_in_step
+    assert train_env.single_observation_space["rgb_default"].shape == (3, 64, 64, 3)
+    train_env.close()
+
+
 def test_action_repeat_gives_500_step_episodes():
     _require_dm_control()
     from rl_garden.envs.dm_control.env import DMControlGymEnv

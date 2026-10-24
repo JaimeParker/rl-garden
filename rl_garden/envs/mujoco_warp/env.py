@@ -56,7 +56,9 @@ def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.vector.VectorEnv:
             for key, on in ((f"rgb_{camera}", cfg.render_rgb), (f"depth_{camera}", cfg.render_depth))
             if on
         )
-        env = ImageFrameStackWrapper(env, frame_stack=cfg.frame_stack, image_keys=image_keys)
+        env = ImageFrameStackWrapper(
+            env, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
+        )
 
     if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
         from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper

@@ -224,6 +224,27 @@ def test_episode_end_exposes_final_info_and_final_observation():
     env.close()
 
 
+def test_frame_stack_restarts_history_at_same_step_autoreset():
+    env = make_gymnasium_env(_pixels_cfg(image_keys=("rgb_front",), frame_stack=3))
+    assert env.autoreset_in_step
+    obs, _ = env.reset()
+    actions = torch.zeros((2, 1))
+    for _ in range(2):
+        obs, *_ = env.step(actions)
+    previous_rgb = obs["rgb_front"].clone()
+
+    obs, _, _, truncated, infos = env.step(actions)
+
+    assert bool(truncated.all())
+    rgb = obs["rgb_front"]
+    assert torch.equal(rgb[:, 0], rgb[:, 2]) and torch.equal(rgb[:, 1], rgb[:, 2])
+    final_rgb = infos["final_observation"]["rgb_front"]
+    assert final_rgb.shape == (2, 3, 16, 16, 3)
+    assert torch.equal(final_rgb[:, :2], previous_rgb[:, 1:])
+    assert infos["final_observation"]["state"].shape == (2, 2)
+    env.close()
+
+
 def test_pre_wrapped_record_episode_statistics_is_not_doubled():
     from gymnasium.wrappers import RecordEpisodeStatistics
 
