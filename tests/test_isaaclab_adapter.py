@@ -121,6 +121,31 @@ def test_frame_stack_wrapper_keeps_declared_bounds() -> None:
     assert np.all(depth_space.low == 0.0) and np.all(depth_space.high == 1.0)
 
 
+def test_batched_action_space_has_leading_num_envs_dim_and_env_bounds() -> None:
+    env = _FakeIsaacLabEnv({"state": _state()})
+    low = np.tile(np.array([-2.0, 0.0], dtype=np.float32), (NUM_ENVS, 1))
+    high = np.tile(np.array([2.0, 0.5], dtype=np.float32), (NUM_ENVS, 1))
+    env.unwrapped.action_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
+
+    adapter = _IsaacLabVecEnvAdapter(env, seed=0)
+
+    single = adapter.single_action_space
+    assert single.shape == (2,)
+    assert adapter.action_space.shape == (NUM_ENVS, *single.shape)
+    assert adapter.action_space.dtype == single.dtype
+    np.testing.assert_array_equal(adapter.action_space.low, low)
+    np.testing.assert_array_equal(adapter.action_space.high, high)
+
+
+def test_frame_stack_wrapper_resolves_batched_action_space() -> None:
+    adapter = _declared_depth_adapter()
+
+    wrapped = ImageFrameStackWrapper(adapter, frame_stack=3)
+
+    assert wrapped.action_space == adapter.action_space
+    assert wrapped.action_space.shape == (NUM_ENVS, 1)
+
+
 @pytest.mark.parametrize(
     ("obs", "declared", "match"),
     [

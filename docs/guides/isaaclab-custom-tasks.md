@@ -179,7 +179,8 @@ class MyTaskEnvCfg(RLGardenDirectEnvCfg):
     decimation = 2
     episode_length_s = 5.0
     action_scale = 1.0
-    action_space = 1          # dim of the action your _apply_action expects
+    # Per-env action Box (bounded; see "Action space bounds" below).
+    action_space = gym.spaces.Box(-1.0, 1.0, (1,), np.float32)
     # One per-env Box per key _get_observations() returns (see "Observation key convention").
     observation_space = gym.spaces.Dict({"state": gym.spaces.Box(-np.inf, np.inf, (4,), np.float32)})
     state_space = 0
@@ -370,6 +371,20 @@ bounds included, as the env's observation space (frame stacking broadcasts
 them over the frame dim). An int placeholder (e.g. `1`) still passes
 `DirectRLEnvCfg.validate()` and falls back to inferring the spaces from the
 runtime tensors (`uint8` -> `[0, 255]`, anything else -> unbounded `float32`).
+
+## Action space bounds
+
+Declare `cfg.action_space` as a bounded per-env `gym.spaces.Box`. Isaac Lab
+turns an int placeholder (e.g. `action_space = 1`) into
+`Box(-inf, inf, (1,))`, and the adapter passes those bounds through as
+`single_action_space`. Off-policy algorithms (SAC and the others with a
+tanh-squashed actor) rescale actions to the bounds, so infinite bounds give
+`nan` actions. Neither Isaac Lab nor the scaffold clips the action before
+`_apply_action` (`self.actions = cfg.action_scale * action`), so the bounds
+also set the largest command rl-garden sends: PPO clamps its sampled
+Gaussian actions to them before stepping. Native `isaaclab_tasks` tasks
+declare ints, so they get unbounded spaces. They train with PPO, but not with
+off-policy algorithms.
 
 ## Adding a camera
 

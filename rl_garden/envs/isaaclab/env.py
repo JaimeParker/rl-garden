@@ -4,8 +4,9 @@ Wraps a raw IsaacLab env (``ManagerBasedRLEnv`` or ``DirectRLEnv``, native
 ``isaaclab_tasks`` task or an ``RLGardenDirectRLEnv``-scaffold task) with
 ``_IsaacLabVecEnvAdapter`` so it exposes the same shape the rest of
 ``rl_garden`` targets: ``num_envs`` / ``single_observation_space`` /
-``single_action_space``, and ``step``/``reset`` returning GPU tensors plus
-the standard Gymnasium ``(obs, reward, terminated, truncated, info)`` tuple.
+``single_action_space`` / batched ``action_space``, and ``step``/``reset``
+returning GPU tensors plus the standard Gymnasium ``(obs, reward,
+terminated, truncated, info)`` tuple.
 The raw env comes from ``v3.runtime`` (Isaac Lab 3.0) or ``v2.runtime``
 (2.3.x), chosen by ``detect.generation()``; everything here is shared.
 
@@ -53,6 +54,7 @@ from typing import Any, Optional
 import gymnasium as gym
 import numpy as np
 import torch
+from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.episode_statistics import EpisodeStatistics
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
@@ -178,6 +180,9 @@ class _IsaacLabVecEnvAdapter(gym.Env):
             shape=action_space.shape[1:],
             dtype=action_space.dtype,
         )
+        # off_policy.py's random-exploration phase reads the batched
+        # action_space.shape directly (not single_action_space).
+        self.action_space = batch_space(self.single_action_space, self.num_envs)
 
     def _extract_obs(self, obs_dict: dict) -> dict:
         # TODO(policy-distillation): this collapses to a single obs tensor

@@ -31,7 +31,9 @@ class CartpoleDirectEnvCfg(RLGardenDirectEnvCfg):
     decimation = 2
     episode_length_s = 5.0
     action_scale = 100.0  # [N]
-    action_space = 1
+    # Bounded: off-policy (tanh) policies rescale to these bounds; an int
+    # placeholder gives Box(-inf, inf). Force = action_scale * action.
+    action_space = gym.spaces.Box(-1.0, 1.0, (1,), np.float32)
     observation_space = gym.spaces.Dict({"state": CARTPOLE_STATE_SPACE})
     state_space = 0
 
