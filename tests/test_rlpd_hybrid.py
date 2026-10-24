@@ -315,6 +315,66 @@ def test_memory_efficient_buffer_constructs_the_dedup_buffer_and_learns():
     assert agent._global_step == 8
 
 
+class _TruncatingImageDummyVecEnv(ImageDummyVecEnv):
+    """Truncates (never terminates) env 0 every other step."""
+
+    def __init__(self, frame_stack: int = 3) -> None:
+        super().__init__(frame_stack=frame_stack)
+        self._steps = 0
+
+    def step(self, actions):
+        next_obs, rewards, terminations, truncations, infos = super().step(actions)
+        self._steps += 1
+        truncations[0] = self._steps % 2 == 0
+        return next_obs, rewards, terminations, truncations, infos
+
+
+def test_memory_efficient_buffer_receives_truncations_as_episode_end():
+    from rl_garden.encoders.config import EncoderConfig
+
+    agent = RLPDHybrid(
+        env=_TruncatingImageDummyVecEnv(frame_stack=3),
+        device="cpu",
+        buffer_device="cpu",
+        buffer_size=32,
+        batch_size=4,
+        learning_starts=100,
+        training_freq=4,
+        eval_freq=0,
+        log_freq=0,
+        net_arch=[8],
+        discrete_hidden_dim=8,
+        encoder_config=EncoderConfig(features_dim=16, plain_conv_pooling="gap"),
+        memory_efficient_buffer=True,
+        memory_efficient_frame_stack=3,
+    )
+    recorded = []
+    original_add = agent.replay_buffer.add
+
+    def _recording_add(obs, next_obs, action, reward, done, **kwargs):
+        recorded.append((done.clone(), kwargs.get("episode_end")))
+        original_add(obs, next_obs, action, reward, done, **kwargs)
+
+    agent.replay_buffer.add = _recording_add
+    agent.learn(total_timesteps=8)
+
+    assert len(recorded) == 4
+    for step, (done, episode_end) in enumerate(recorded, start=1):
+        expected = torch.tensor([step % 2 == 0, False])
+        assert torch.equal(episode_end, expected)
+        # Under bootstrap_at_done="truncated" the stored done stays False.
+        assert not bool(done.bool().any())
+    # Env 0 truncated twice, so the buffer opened two new episodes for it.
+    assert agent.replay_buffer._current_ep_id.tolist() == [2, 0]
+
+
+def test_replay_buffer_step_kwargs_omit_episode_end_without_memory_efficient_buffer():
+    agent = _agent()
+    terminations = torch.tensor([True, False])
+    truncations = torch.tensor([False, True])
+    assert agent._replay_buffer_step_kwargs(terminations, truncations) == {}
+
+
 def test_checkpoint_round_trips_discrete_critic_and_dqn_optimizer():
     agent = _agent()
     agent.learn(total_timesteps=8)

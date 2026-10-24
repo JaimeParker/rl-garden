@@ -149,6 +149,77 @@ def test_edge_replication_at_episode_start_matches_wrapper():
     torch.testing.assert_close(sample.obs[IMAGE_KEY], obs[IMAGE_KEY])
 
 
+def _add_with_truncation_only_boundaries(transitions, pass_episode_end):
+    """Feeds _drive's transitions with ``done=False`` everywhere -- the
+    episode boundary (``_drive``'s terminated flag) is carried only by
+    ``episode_end``, as a truncation is under bootstrap_at_done="truncated"."""
+    mem_rb = MemoryEfficientReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu",
+    )
+    for obs, next_obs, action, reward, boundary in transitions:
+        not_done = torch.zeros_like(reward)
+        episode_end = boundary.bool() if pass_episode_end else None
+        mem_rb.add(obs, next_obs, action, reward, not_done, episode_end=episode_end)
+    return mem_rb
+
+
+def test_truncation_only_episode_end_edge_replicates_next_episode_start():
+    transitions = _drive(episode_lengths=[4, 4], num_steps=8)
+    mem_rb = _add_with_truncation_only_boundaries(transitions, pass_episode_end=True)
+
+    # transitions[4] is the second episode's first step: its stack must be
+    # three copies of its own post-reset frame, not reach back into episode 0.
+    first_obs = transitions[4][0][IMAGE_KEY]
+    assert torch.all(first_obs == first_obs[:, -1:])
+    sample = mem_rb._index_batch(torch.tensor([4]), torch.tensor([0]))
+    torch.testing.assert_close(sample.obs[IMAGE_KEY], first_obs)
+
+    batch_inds = torch.arange(len(transitions))
+    env_inds = torch.zeros(len(transitions), dtype=torch.long)
+    full = mem_rb._index_batch(batch_inds, env_inds)
+    expected_obs = torch.cat([t[0][IMAGE_KEY] for t in transitions])
+    expected_next_obs = torch.cat([t[1][IMAGE_KEY] for t in transitions])
+    torch.testing.assert_close(full.obs[IMAGE_KEY], expected_obs)
+    torch.testing.assert_close(full.next_obs[IMAGE_KEY], expected_next_obs)
+    # `done` stays the stored bootstrap flag.
+    assert not bool(full.dones.any())
+
+
+def test_without_episode_end_done_false_boundary_is_invisible():
+    """Control for the test above: with no ``episode_end`` the boundary
+    comes from ``done`` alone, so the second episode's first stack reaches
+    back into the first episode -- the gap ``episode_end`` closes."""
+    transitions = _drive(episode_lengths=[4, 4], num_steps=8)
+    mem_rb = _add_with_truncation_only_boundaries(transitions, pass_episode_end=False)
+
+    sample = mem_rb._index_batch(torch.tensor([4]), torch.tensor([0]))
+    assert not torch.equal(sample.obs[IMAGE_KEY], transitions[4][0][IMAGE_KEY])
+
+
+def test_episode_end_equal_to_done_matches_done_only_bookkeeping():
+    transitions = _drive(episode_lengths=[3, 3, 3], num_steps=9)
+    implicit = MemoryEfficientReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu",
+    )
+    explicit = MemoryEfficientReplayBuffer(
+        _obs_space(), _act_space(), num_envs=1, buffer_size=16,
+        image_keys=(IMAGE_KEY,), frame_stack=FRAME_STACK,
+        storage_device="cpu", sample_device="cpu",
+    )
+    for obs, next_obs, action, reward, done in transitions:
+        implicit.add(obs, next_obs, action, reward, done)
+        explicit.add(obs, next_obs, action, reward, done, episode_end=done.bool())
+
+    torch.testing.assert_close(explicit._ep_id, implicit._ep_id)
+    torch.testing.assert_close(explicit._step_id, implicit._step_id)
+    torch.testing.assert_close(explicit._current_ep_id, implicit._current_ep_id)
+    torch.testing.assert_close(explicit._current_step_id, implicit._current_step_id)
+
+
 def test_wraparound_overwrite_is_detected_invalid():
     # buffer_size=4: episode of length 6 wraps the ring buffer mid-episode,
     # overwriting positions 0-1 with the same episode's later steps 4-5.

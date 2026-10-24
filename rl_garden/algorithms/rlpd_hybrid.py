@@ -133,6 +133,18 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             kwargs["grasp_penalty"] = infos["grasp_penalty"]
         return kwargs
 
+    def _replay_buffer_step_kwargs(
+        self,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+    ) -> dict[str, Any]:
+        kwargs = super()._replay_buffer_step_kwargs(terminations, truncations)
+        if not self.memory_efficient_buffer:
+            return kwargs
+        # The stored `done` is the bootstrap flag (terminations only by
+        # default); the frame-stack window needs every episode boundary.
+        return {**kwargs, "episode_end": terminations | truncations}
+
     def _setup_model(self) -> None:
         super()._setup_model()
         self.dqn_optimizer = make_optimizer(

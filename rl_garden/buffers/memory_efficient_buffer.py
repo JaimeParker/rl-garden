@@ -32,18 +32,24 @@ validate against) -- verified by test to hold across episode boundaries and
 ring-buffer wraparound alike whenever ``per_env_buffer_size >= frame_stack``.
 ``next_obs``'s window is reconstructed as ``obs``'s window shifted by one
 step (drop the oldest frame, append the recorded ``next_obs`` frame as the
-new newest) rather than computed independently -- this mirrors
-``ImageFrameStackWrapper.step()``'s own ``cat(frames[:, 1:], new_obs)``
-exactly, and needs no separate reach/clamp computation.
+new newest) rather than computed independently -- within an episode this
+mirrors ``ImageFrameStackWrapper.step()``'s own ``cat(frames[:, 1:],
+new_obs)``, and at an episode start it edge-replicates the first frame as
+the wrapper's ``reset()`` does; it needs no separate reach/clamp
+computation.
 
 Episode-boundary bookkeeping (``_ep_id``/``_step_id``, own to this class --
 NOT the same semantics as ``NStepReplayBuffer``'s same-named attributes,
 whose ``_step_id`` is a monotonic global counter rather than a
-resets-per-episode one) is derived from ``done`` alone, since that is the
-only boundary signal the real-world transition schema actually carries
-(``ActorLoop.push_transition`` never forwards ``truncated`` -- see its
-module docstring) -- consistent with, not a new gap introduced by, that
-existing constraint.
+resets-per-episode one) is derived from ``add()``'s ``episode_end``
+(terminations | truncations, the same convention ``NStepReplayBuffer``
+uses) when the caller passes it, else from ``done``. ``done`` stays the
+stored bootstrap flag either way, so a truncation (``done=False``,
+``episode_end=True``) still starts a new episode window. Callers whose
+transition schema carries no truncation signal (the real-world
+``ActorLoop.push_transition`` never forwards ``truncated`` -- see its
+module docstring) omit ``episode_end`` and keep the ``done``-only
+boundaries.
 """
 from __future__ import annotations
 
@@ -153,6 +159,7 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
         reward: torch.Tensor,
         done: torch.Tensor,
         grasp_penalty: Optional[torch.Tensor] = None,
+        episode_end: torch.Tensor | None = None,
     ) -> None:
         for key in self.image_keys:
             shape = tuple(obs[key].shape)
@@ -164,7 +171,8 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                 )
 
         pos = self.pos
-        done_bool = done.to(self.storage_device).bool()
+        boundary = done if episode_end is None else episode_end
+        episode_end_bool = boundary.to(self.storage_device).bool()
 
         newest_obs = {k: (v[:, -1] if k in self.image_keys else v) for k, v in obs.items()}
         newest_next_obs = {
@@ -180,9 +188,13 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
         # attribute from the underlying memmap after the first add(), losing
         # persistence with no error. See NStepReplayBuffer.add() for the
         # same pattern.
-        self._current_ep_id += done_bool.long()
+        self._current_ep_id += episode_end_bool.long()
         self._current_step_id.copy_(
-            torch.where(done_bool, torch.zeros_like(self._current_step_id), self._current_step_id + 1)
+            torch.where(
+                episode_end_bool,
+                torch.zeros_like(self._current_step_id),
+                self._current_step_id + 1,
+            )
         )
 
     # ------------------------------------------------------------------
