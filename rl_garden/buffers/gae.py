@@ -30,7 +30,16 @@ def compute_gae(
     All of ``rewards``/``dones``/``values``/``final_values`` are
     ``(num_steps, num_envs)``; ``last_values``/``last_dones`` are
     ``(num_envs,)`` (the bootstrap value/done flag one step past the last
-    stored step). ``final_values[step]`` is nonzero only at steps where an
+    stored step).
+
+    ``dones`` uses the episode-START convention: ``dones[t] = 1`` means
+    ``obs[t]`` begins a new episode, i.e. the episode ended after step
+    ``t - 1``. Step ``t < num_steps - 1`` is therefore cut by
+    ``dones[t + 1]`` and the last step by ``last_dones`` (the episode
+    ended after step ``num_steps - 1``); ``dones[0]`` is never read.
+    Callers storing after-step dones (``RolloutBuffer``) shift them first.
+
+    ``final_values[step]`` is nonzero only at steps where an
     episode ended mid-rollout (auto-reset) -- it substitutes the last
     transition's own terminal-state value estimate in place of the
     post-reset next observation's value, which would otherwise wrongly

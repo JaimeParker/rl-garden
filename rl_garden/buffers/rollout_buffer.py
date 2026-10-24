@@ -27,7 +27,14 @@ class RolloutBufferSample:
 
 
 class RolloutBuffer:
-    """Fixed-size on-policy buffer with ``(num_steps, num_envs, ...)`` layout."""
+    """Fixed-size on-policy buffer with ``(num_steps, num_envs, ...)`` layout.
+
+    ``dones[t]`` is the AFTER-step flag: the episode ended as a result of
+    acting on ``obs[t]`` (``terminations | truncations`` of step ``t``), so
+    step ``t``'s own GAE target is cut by ``dones[t]``.
+    ``compute_returns_and_advantage``'s ``last_dones`` is the done after the
+    last stored step, i.e. the same flag as ``dones[-1]``.
+    """
 
     def __init__(
         self,
@@ -160,7 +167,7 @@ class RolloutBuffer:
                     next_not_done = 1.0 - last_dones
                     next_values = last_values
                 else:
-                    next_not_done = 1.0 - self.dones[step + 1]
+                    next_not_done = 1.0 - self.dones[step]
                     next_values = self.values[step + 1]
                 real_next_values = next_not_done * next_values + self.final_values[step]
                 lam_coef_sum = lam_coef_sum * next_not_done
@@ -181,9 +188,13 @@ class RolloutBuffer:
             self.advantages = advantages
             self.returns = self.advantages + self.values
         else:
+            # compute_gae takes episode-start flags: starts[t + 1] = dones[t].
+            # starts[0] is never read by compute_gae, so it stays zero.
+            episode_starts = torch.zeros_like(self.dones)
+            episode_starts[1:] = self.dones[:-1]
             self.advantages, self.returns = compute_gae(
                 self.rewards,
-                self.dones,
+                episode_starts,
                 self.values,
                 self.final_values,
                 last_values,
