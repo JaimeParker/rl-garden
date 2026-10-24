@@ -64,6 +64,7 @@ def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
         vf_coef=args.vf_coef,
         target_kl=args.target_kl,
         finite_horizon_gae=args.finite_horizon_gae,
+        bootstrap_at_done=args.bootstrap_at_done,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

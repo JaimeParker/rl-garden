@@ -56,6 +56,7 @@ def _ppo_common_kwargs(
         target_kl=args.target_kl,
         anneal_lr=args.anneal_lr,
         finite_horizon_gae=args.finite_horizon_gae,
+        bootstrap_at_done=args.bootstrap_at_done,
         weight_decay=args.weight_decay,
         use_adamw=args.use_adamw,
         lr_schedule=args.lr_schedule,

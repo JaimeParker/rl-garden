@@ -82,6 +82,7 @@ def build_dppo(args, env, eval_env, logger, checkpoint_dir):
         target_kl=args.target_kl,
         reward_horizon=args.reward_horizon,
         finite_horizon_gae=args.finite_horizon_gae,
+        bootstrap_at_done=args.bootstrap_at_done,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

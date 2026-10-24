@@ -342,6 +342,9 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     target_kl: Optional[float] = 0.1
     anneal_lr: bool = False
     finite_horizon_gae: bool = False
+    # Episode ends whose GAE target bootstraps from final_observation:
+    # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     detach_encoder_on_actor: Optional[bool] = None
     weight_decay: float = 0.0
     use_adamw: bool = False
@@ -472,6 +475,9 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     target_kl: Optional[float] = 1.0
     reward_horizon: Optional[int] = None
     finite_horizon_gae: bool = False
+    # Episode ends whose GAE target bootstraps from final_observation:
+    # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     eval_freq: int = 25
     num_eval_steps: int = 50
 
@@ -522,6 +528,9 @@ class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     vf_coef: float = 0.5
     target_kl: Optional[float] = 1.0
     finite_horizon_gae: bool = False
+    # Episode ends whose GAE target bootstraps from final_observation:
+    # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     eval_freq: int = 25
     num_eval_steps: int = 50
 

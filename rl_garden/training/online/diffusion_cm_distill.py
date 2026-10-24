@@ -85,6 +85,7 @@ def build_diffusion_cm_distill(args, env, eval_env, logger, checkpoint_dir):
         target_kl=args.target_kl,
         reward_horizon=args.reward_horizon,
         finite_horizon_gae=args.finite_horizon_gae,
+        bootstrap_at_done=args.bootstrap_at_done,
         cm_mlp_dims=args.cm_mlp_dims,
         cm_lr=args.cm_lr,
         cm_ema_decay=args.cm_ema_decay,

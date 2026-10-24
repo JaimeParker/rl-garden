@@ -35,6 +35,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         eval_freq: int = 25,
         num_eval_steps: int = 50,
         finite_horizon_gae: bool = False,
+        bootstrap_at_done: str = "truncated",
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
@@ -44,6 +45,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         )
         if num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}.")
+        assert bootstrap_at_done in ("always", "never", "truncated"), bootstrap_at_done
+        self.bootstrap_at_done = bootstrap_at_done
         self.num_steps = num_steps
         self.gamma = gamma
         self.gae_lambda = gae_lambda
@@ -72,6 +75,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             "gamma": self.gamma,
             "gae_lambda": self.gae_lambda,
             "finite_horizon_gae": self.finite_horizon_gae,
+            "bootstrap_at_done": self.bootstrap_at_done,
         }
 
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
@@ -114,8 +118,23 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     def _env_action(self, raw_action: torch.Tensor) -> torch.Tensor:
         return self.policy.clamp_action(raw_action).detach()
 
+    def _bootstrap_mask(
+        self, terminations: torch.Tensor, truncations: torch.Tensor
+    ) -> torch.Tensor:
+        """Envs whose just-ended episode bootstraps its GAE target from
+        ``final_observation``, per ``bootstrap_at_done``; every other env's
+        bootstrap is 0. The episode cut itself (``next_done``) is unaffected."""
+        terminations = terminations.to(self.device, torch.bool)
+        truncations = truncations.to(self.device, torch.bool)
+        if self.bootstrap_at_done == "always":
+            return terminations | truncations
+        if self.bootstrap_at_done == "never":
+            return torch.zeros_like(terminations)
+        return truncations & ~terminations
+
     def _compute_final_values(self, infos, done_mask: torch.Tensor, hidden) -> torch.Tensor:
-        """Bootstrap value for envs that just finished this step.
+        """Bootstrap value for envs that just finished this step and are
+        selected by ``done_mask`` (``_bootstrap_mask``); 0 elsewhere.
 
         ``hidden`` is unused by this stateless default; recurrent subclasses
         override this method to bootstrap from the POST-step, UNMASKED hidden
@@ -217,7 +236,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     self._env_action(actions)
                 )
                 next_done = torch.logical_or(terminations, truncations).to(self.device)
-                final_values = self._compute_final_values(infos, next_done.bool(), hidden)
+                final_values = self._compute_final_values(
+                    infos, self._bootstrap_mask(terminations, truncations), hidden
+                )
                 self.rollout_buffer.add(
                     obs,
                     actions,
