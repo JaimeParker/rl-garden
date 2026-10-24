@@ -464,6 +464,34 @@ renderer. See [`isaaclab-camera-stall.md`](isaaclab-camera-stall.md) for the
 history of the 2.x stall and the 3.0 measurements. State-only tasks (no
 camera) are unaffected.
 
+## Episode metrics
+
+The backend computes each env's episode `return` and `episode_len` itself and
+reports them through `infos["final_info"]`, so they show up in the `[train]`
+line and as `train/return` / `train/episode_len` without any task code.
+
+Per-env episode metrics come from `self.extras["episode_metrics"]`, a dict of
+`(num_envs,)` tensors. Assign it on every step where some env ends (e.g. in
+`_get_dones`); only the rows of envs that ended on that step are read:
+
+```python
+def _get_dones(self):
+    terminated, time_out = ...
+    self.extras["episode_metrics"] = {"success": terminated.clone()}
+    return terminated, time_out
+```
+
+Assign fresh tensors (`.clone()` Isaac Lab's persistent buffers such as
+`self.reset_terminated`). `success` appears as `success_at_end` in `[train]`;
+other keys are logged as `train/<key>`. A key named `return` or
+`episode_len`, or a tensor of another shape, raises `ValueError`.
+
+Scalar aggregates in `self.extras["log"]` (what `ManagerBasedRLEnv` and many
+direct tasks already write on reset, e.g. `Episode_Reward/<term>`) are logged
+as `env/<key>`. The backend forwards `log` only when the task assigns a new
+dict object; Isaac Lab leaves the previous `log` in place on steps where no
+env resets, and that unchanged object is treated as stale.
+
 ## Training your new task
 
 ```bash

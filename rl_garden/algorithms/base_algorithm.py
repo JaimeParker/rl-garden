@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from numbers import Real
 from pathlib import Path
 from typing import Any, Optional
 
@@ -182,6 +183,25 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         if self.logger is None:
             return
         self.logger.add_scalar(f"train/{key}", value, step)
+
+    def _log_env_log_scalars(self, infos: dict, step: int) -> None:
+        """Log an env step's optional ``infos["log"]`` scalar aggregates as
+        ``env/<key>``, with one host transfer for all tensor values. Values
+        that are neither a real number nor a 1-element tensor are skipped."""
+        if self.logger is None or "log" not in infos:
+            return
+        env_log = infos["log"]
+        values = {key: float(value) for key, value in env_log.items() if isinstance(value, Real)}
+        tensor_keys = [
+            key
+            for key, value in env_log.items()
+            if isinstance(value, torch.Tensor) and value.numel() == 1
+        ]
+        if tensor_keys:
+            stacked = torch.stack([env_log[key].detach().reshape(()).float() for key in tensor_keys])
+            values.update(zip(tensor_keys, stacked.tolist()))
+        for key, value in values.items():
+            self.logger.add_scalar(f"env/{key}", value, step)
 
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         if self.logger is None:

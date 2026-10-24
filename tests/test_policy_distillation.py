@@ -272,3 +272,29 @@ def test_checkpoint_round_trip_with_encoder_config(tmp_path):
         agent.policy.state_dict().values(), resumed.policy.state_dict().values()
     ):
         assert torch.equal(original, loaded)
+
+
+class _EnvLogDualObsEnv(_FakeDualObsEnv):
+    def step(self, action):
+        out = super().step(action)
+        out[4]["log"] = {"Episode_Reward/alive": torch.tensor(0.5)}
+        return out
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.scalars: dict[str, list[float]] = {}
+
+    def add_scalar(self, key, value, step):
+        self.scalars.setdefault(key, []).append(value)
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+
+def test_env_log_scalars_are_logged_under_env_prefix():
+    agent = _make_agent(env=_EnvLogDualObsEnv(num_envs=3))
+    agent.logger = _RecordingLogger()
+    agent.learn(total_timesteps=agent.num_steps * agent.num_envs)
+
+    assert agent.logger.scalars["env/Episode_Reward/alive"] == [pytest.approx(0.5)] * agent.num_steps

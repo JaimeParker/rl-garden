@@ -418,6 +418,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         )
                         if self._episode_metric_windows is not None:
                             self._episode_metric_windows[k].extend(done_values.tolist())
+                self._log_env_log_scalars(infos, self._global_step)
 
                 replay_kwargs = self._replay_buffer_add_kwargs(
                     action_context,

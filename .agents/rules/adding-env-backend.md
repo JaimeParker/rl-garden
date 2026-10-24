@@ -227,6 +227,9 @@ checked by `tests/test_vector_env_contract.py`:
 - `metadata["autoreset_mode"] = AutoresetMode.SAME_STEP`
 - `infos["final_observation"]`/`"_final_observation"`/`"final_info"`/`"_final_info"`
   — matching `ManiSkillVectorEnv`'s key set exactly
+- optional `infos["log"]`: a flat dict of scalar aggregates (numbers or
+  1-element tensors), logged by the rollout loops as `env/<key>` at the current
+  global step on every step it is present (omit it on steps with nothing new)
 
 `TorchVectorEnvAdapter` provides all of this for free once handed a numpy
 `gymnasium.vector.VectorEnv`; skip it only if the backend already returns torch

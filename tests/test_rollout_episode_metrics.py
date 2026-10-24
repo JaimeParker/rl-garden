@@ -152,3 +152,31 @@ def test_sac_without_logger_still_canonicalises_window_metrics():
     agent._episode_metric_windows = defaultdict(list)
     agent.learn(total_timesteps=2)
     assert set(agent._episode_metric_windows) == {"return", "episode_len"}
+
+
+class _EnvLogVecEnv(_FinalInfoVecEnv):
+    """``_FinalInfoVecEnv`` that also reports ``infos["log"]`` scalar aggregates."""
+
+    def step(self, actions):
+        out = super().step(actions)
+        out[4]["log"] = {
+            "Episode_Reward/alive": torch.tensor(0.5),
+            "Metrics/ratio": 0.25,
+            "count": torch.tensor([3]),
+            "per_env": torch.ones(self.num_envs),
+            "label": "skipped",
+        }
+        return out
+
+
+@pytest.mark.parametrize("make_agent, total", [(_sac, 4), (_ppo, 4)])
+def test_env_log_scalars_are_logged_under_env_prefix(make_agent, total):
+    agent = make_agent(_EnvLogVecEnv(CANONICAL_EPISODE))
+    agent.logger = _RecordingLogger()
+    agent.learn(total_timesteps=total)
+
+    env_keys = {k for k in agent.logger.scalars if k.startswith("env/")}
+    assert env_keys == {"env/Episode_Reward/alive", "env/Metrics/ratio", "env/count"}
+    assert agent.logger.scalars["env/Episode_Reward/alive"][0] == pytest.approx(0.5)
+    assert agent.logger.scalars["env/Metrics/ratio"][0] == pytest.approx(0.25)
+    assert agent.logger.scalars["env/count"][0] == pytest.approx(3.0)

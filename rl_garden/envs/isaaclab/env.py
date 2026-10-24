@@ -31,6 +31,20 @@ otherwise) and used as the adapter's per-key space, so its bounds (e.g. a
 ``[0, 1]`` depth range) reach the encoders. Isaac Lab itself never checks
 the declaration. Without a declared ``Dict`` (int placeholders, native
 tasks) the spaces are inferred from the runtime tensors.
+
+Episode statistics: Isaac Lab auto-resets inside ``step()`` and never
+writes ``final_info``, so the adapter accumulates each env's return and
+length itself (``EpisodeStatistics``) and sets ``info["final_info"] =
+{"episode": {"return", "episode_len", ...}}`` and ``info["_final_info"] =
+terminated | truncated`` on every step; consumers read only the done rows.
+``info`` is a shallow copy of the env's ``extras`` (Isaac Lab reuses one
+dict across steps, which is never mutated here). Two task-side
+conventions: per-env metrics in ``extras["episode_metrics"]`` (a dict of
+``(num_envs,)`` tensors, e.g. ``{"success": ...}``) are merged into
+``final_info["episode"]`` and removed from ``info``; scalar aggregates in
+``extras["log"]`` are forwarded as ``info["log"]`` only when ``log`` is a
+new dict object (Isaac Lab leaves the previous one in place on steps where
+no env resets, so an unchanged object is stale and dropped).
 """
 from __future__ import annotations
 
@@ -40,6 +54,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
+from rl_garden.envs.episode_statistics import EpisodeStatistics
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
 from rl_garden.envs.isaaclab.detect import generation
 from rl_garden.observations.schema import ObservationContractError
@@ -135,11 +150,14 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         unwrapped = env.unwrapped
         self.num_envs = unwrapped.num_envs
         self.device = unwrapped.device
+        self._episode_stats = EpisodeStatistics(self.num_envs, self.device)
         # Read once, before anything else: Isaac Lab 3.0's env.close() sets
         # single_observation_space to None.
         declared = _declared_observation_spaces(unwrapped)
 
-        obs_dict, _ = env.reset(seed=seed)
+        obs_dict, reset_info = env.reset(seed=seed)
+        # The reset-time `log` is not a training aggregate; never forward it.
+        self._last_forwarded_log = reset_info.get("log")
         if declared is not None:
             _validate_declared_spaces(declared, obs_dict)
         self._last_obs = self._extract_obs(obs_dict)
@@ -230,12 +248,40 @@ class _IsaacLabVecEnvAdapter(gym.Env):
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         obs_dict, info = self._env.reset(seed=seed if seed is not None else self._seed)
         self._last_obs = self._extract_obs(obs_dict)
+        self._episode_stats.reset()
+        self._last_forwarded_log = info.get("log")
         return self._last_obs, info
 
     def step(self, actions: torch.Tensor):
-        obs_dict, reward, terminated, truncated, info = self._env.step(actions)
+        obs_dict, reward, terminated, truncated, extras = self._env.step(actions)
         self._last_obs = self._extract_obs(obs_dict)
+        info = self._step_info(extras, reward, terminated | truncated)
         return self._last_obs, reward, terminated, truncated, info
+
+    def _step_info(self, extras: dict, reward: torch.Tensor, done: torch.Tensor) -> dict:
+        """``extras`` plus ``final_info``/``_final_info`` (see module docstring)."""
+        info = dict(extras)
+        episode = self._episode_stats.step(reward, done)
+        for key, value in info.pop("episode_metrics", {}).items():
+            if key in episode:
+                raise ValueError(
+                    f"IsaacLab task's extras['episode_metrics'][{key!r}] collides with the "
+                    f"adapter-computed episode statistic {key!r}; rename the task metric."
+                )
+            if not isinstance(value, torch.Tensor) or tuple(value.shape) != (self.num_envs,):
+                shape = tuple(value.shape) if isinstance(value, torch.Tensor) else type(value).__name__
+                raise ValueError(
+                    f"IsaacLab task's extras['episode_metrics'][{key!r}] must be a "
+                    f"({self.num_envs},) tensor, got {shape}."
+                )
+            episode[key] = value
+        info["final_info"] = {"episode": episode}
+        info["_final_info"] = done
+        log = info.pop("log", None)
+        if log is not None and log is not self._last_forwarded_log:
+            info["log"] = log
+            self._last_forwarded_log = log
+        return info
 
     def update_obs_space(self, obs) -> None:
         """Duck-typed hook expected on ``env.unwrapped`` by wrappers like

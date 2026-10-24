@@ -413,6 +413,7 @@ class PolicyDistillation(OnPolicyAlgorithm):
                         mean_value = float(done_values.float().mean().item())
                         self._log_rollout_metric(key, mean_value, self._global_step)
                         rollout_episode_metrics[key].append(mean_value)
+                self._log_env_log_scalars(infos, self._global_step)
                 obs = next_obs
             rollout_time = time.perf_counter() - rollout_t
             cumulative["rollout_time"] += rollout_time

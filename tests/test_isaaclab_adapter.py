@@ -206,3 +206,146 @@ def test_state_only_mode_uses_declared_state_bounds() -> None:
 
     state_space = adapter.single_observation_space["state"]
     assert np.all(state_space.low == -1.0) and np.all(state_space.high == 1.0)
+
+
+class _ScriptedExtrasEnv(_FakeIsaacLabEnv):
+    """Steps through scripted ``(reward, terminated, truncated)`` rows and
+    returns one persistent ``extras`` dict, like Isaac Lab's envs."""
+
+    def __init__(self, script: list[tuple[list[float], list[bool], list[bool]]]) -> None:
+        super().__init__({"policy": torch.zeros(NUM_ENVS, 4)})
+        self._script = iter(script)
+        self.extras: dict = {}
+
+    def reset(self, seed=None, options=None):
+        return self._obs, self.extras
+
+    def step(self, actions):
+        reward, terminated, truncated = next(self._script)
+        return (
+            self._obs,
+            torch.tensor(reward),
+            torch.tensor(terminated),
+            torch.tensor(truncated),
+            self.extras,
+        )
+
+
+_NO_DONE = ([0.0, 0.0], [False, False], [False, False])
+
+
+def _scripted_adapter(script) -> tuple[_IsaacLabVecEnvAdapter, _ScriptedExtrasEnv]:
+    env = _ScriptedExtrasEnv(script)
+    adapter = _IsaacLabVecEnvAdapter(env, seed=0)
+    adapter.reset()
+    return adapter, env
+
+
+def _step(adapter: _IsaacLabVecEnvAdapter) -> dict:
+    return adapter.step(torch.zeros(NUM_ENVS, 1))[4]
+
+
+def test_final_info_carries_return_and_length_on_every_step_across_a_reset() -> None:
+    adapter, _ = _scripted_adapter(
+        [
+            ([1.0, 2.0], [False, False], [False, False]),
+            ([3.0, 4.0], [True, False], [False, False]),
+            ([5.0, 6.0], [False, False], [False, True]),
+        ]
+    )
+
+    infos = [_step(adapter) for _ in range(3)]
+
+    for info in infos:
+        assert set(info["final_info"]["episode"]) == {"return", "episode_len"}
+    assert infos[0]["_final_info"].tolist() == [False, False]
+    assert infos[1]["_final_info"].tolist() == [True, False]
+    assert infos[1]["final_info"]["episode"]["return"][0].item() == 4.0
+    assert infos[1]["final_info"]["episode"]["episode_len"][0].item() == 2
+    assert infos[2]["_final_info"].tolist() == [False, True]
+    assert infos[2]["final_info"]["episode"]["return"][1].item() == 12.0
+    assert infos[2]["final_info"]["episode"]["episode_len"][1].item() == 3
+
+
+def test_env_extras_dict_is_not_mutated() -> None:
+    adapter, env = _scripted_adapter([_NO_DONE])
+    env.extras["episode_metrics"] = {"success": torch.ones(NUM_ENVS, dtype=torch.bool)}
+
+    _step(adapter)
+
+    assert set(env.extras) == {"episode_metrics"}
+
+
+def test_episode_metrics_are_merged_into_final_info_and_removed() -> None:
+    adapter, env = _scripted_adapter([([1.0, 1.0], [True, False], [False, False])])
+    success = torch.tensor([True, False])
+    env.extras["episode_metrics"] = {"success": success}
+
+    info = _step(adapter)
+
+    assert "episode_metrics" not in info
+    assert set(info["final_info"]["episode"]) == {"return", "episode_len", "success"}
+    assert info["final_info"]["episode"]["success"] is success
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(torch.ones(NUM_ENVS, 1), id="extra-dim"),
+        pytest.param(torch.ones(NUM_ENVS + 1), id="wrong-width"),
+        pytest.param(1.0, id="not-a-tensor"),
+    ],
+)
+def test_episode_metric_with_bad_shape_raises(value) -> None:
+    adapter, env = _scripted_adapter([_NO_DONE])
+    env.extras["episode_metrics"] = {"success": value}
+
+    with pytest.raises(ValueError, match="'success'"):
+        _step(adapter)
+
+
+@pytest.mark.parametrize("key", ["return", "episode_len"])
+def test_episode_metric_colliding_with_adapter_statistic_raises(key) -> None:
+    adapter, env = _scripted_adapter([_NO_DONE])
+    env.extras["episode_metrics"] = {key: torch.zeros(NUM_ENVS)}
+
+    with pytest.raises(ValueError, match="collides"):
+        _step(adapter)
+
+
+def test_log_is_forwarded_only_when_a_new_dict_object_is_assigned() -> None:
+    adapter, env = _scripted_adapter([_NO_DONE] * 4)
+    first_log = {"Episode_Reward/alive": torch.tensor(1.0)}
+    env.extras["log"] = first_log
+
+    forwarded = [_step(adapter).get("log")]
+    forwarded.append(_step(adapter).get("log"))
+    second_log = {"Episode_Reward/alive": torch.tensor(2.0)}
+    env.extras["log"] = second_log
+    forwarded.append(_step(adapter).get("log"))
+    forwarded.append(_step(adapter).get("log"))
+
+    assert forwarded[0] is first_log and forwarded[1] is None
+    assert forwarded[2] is second_log and forwarded[3] is None
+
+
+def test_reset_time_log_is_not_forwarded() -> None:
+    env = _ScriptedExtrasEnv([_NO_DONE])
+    adapter = _IsaacLabVecEnvAdapter(env, seed=0)
+    env.extras["log"] = {"Episode_Reward/alive": 0.0}
+    adapter.reset()
+
+    assert "log" not in _step(adapter)
+
+
+def test_reset_restarts_episode_statistics() -> None:
+    adapter, _ = _scripted_adapter(
+        [([1.0, 1.0], [False, False], [False, False]), ([2.0, 2.0], [True, True], [False, False])]
+    )
+    _step(adapter)
+
+    adapter.reset()
+    episode = _step(adapter)["final_info"]["episode"]
+
+    assert episode["return"].tolist() == [2.0, 2.0]
+    assert episode["episode_len"].tolist() == [1, 1]
