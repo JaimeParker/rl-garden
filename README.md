@@ -16,15 +16,21 @@ platforms can be integrated without creating platform-specific training entrypoi
 
 ## Capabilities
 
-- **Online RL:** SAC, PPO, RLPD, RLPD-Hybrid, TD3, DrQ-v2, FlashSAC, TDMPC2,
-  DPPO, SACFlow, ACRLPD, plus recurrent and transformer SAC/PPO variants. See
-  the [Training Entrypoints](#training-entrypoints) table for the full list.
-- **Offline RL and imitation:** BC, Diffusion BC, IQL, CQL, Cal-QL, BCQ, PLAS,
-  EDAC, SPOT, ReBRAC, FQL, QGF, QAM, FAC, TD3+BC, AWAC, multitask TDMPC2, PWM
-  (policy learning on a frozen multitask world model), and reward-free RSSM
-  pretraining.
-- **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, FAC, and ACFQL
-  pretraining, warm start, and online fine-tuning.
+- **Online RL:** SAC, PPO, RLPD, RLPD-Hybrid, ExPLORe, SUPE, JSRL, TD3, DrQ-v2,
+  FlashSAC, TDMPC2, DreamerV3, NCRL, DPPO, FlowPPO, online consistency
+  distillation of a diffusion policy, SACFlow, ACRLPD, plus recurrent and
+  transformer SAC/PPO variants. Online imitation: DAgger, GAIL, and
+  teacher-student policy distillation. See the
+  [Training Entrypoints](#training-entrypoints) table for the full list.
+- **Offline RL and imitation:** BC, Diffusion BC, Flow BC, MeanFlow BC,
+  consistency-distilled BC, A2A BC, IQL, IDQL, CQL, Cal-QL, BCQ, PLAS, EDAC,
+  SPOT, ReBRAC, TD3+BC, AWAC, FQL, FloQ, FINO, Value Flows, FAC, QGF, QAM, BPPO,
+  Uni-O4 (with optional OPE gating), HILP, OPAL skill pretraining, WSRL,
+  multitask TDMPC2, PWM (policy learning on a frozen multitask world model), and
+  reward-free RSSM pretraining.
+- **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, FQL, FloQ, FINO,
+  Value Flows, FAC, SO2, and ACFQL pretraining, warm start, and online
+  fine-tuning.
 - **Observations:** a single strict Dict contract -- a ``state`` vector key
   (any low-dim signal, proprioception included, folds into it), optional
   ``state_<name>`` auxiliary/privileged low-dim keys, and any number of
@@ -45,10 +51,13 @@ platforms can be integrated without creating platform-specific training entrypoi
   PWM, and NCRL (pretrained-RSSM
   Dreamer fine-tuning with rehearsal and guidance;
   see [`docs/guides/ncrl.md`](docs/guides/ncrl.md)).
-- **Environment backends:** a registry-based interface with ManiSkill, RoboTwin,
-  IsaacLab (Isaac Lab 3.0 and 2.3.x, auto-detected), MuJoCo, MuJoCo Warp (GPU), dm_control (see
-  [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)), Minari, legacy D4RL/Adroit/Kitchen, a
-  real-robot Franka backend, and a template for adding further platforms.
+- **Environment backends:** a registry-based interface with 13 simulator and
+  dataset backends: ManiSkill, IsaacLab (Isaac Lab 3.0 and 2.3.x, auto-detected),
+  MuJoCo Warp (GPU), MuJoCo, Gymnasium, dm_control (see
+  [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)),
+  Meta-World, RLBench, RoboTwin, robomimic, OGBench, Minari, and legacy
+  D4RL/Adroit/Kitchen. A real-robot Franka backend comes from an optional
+  submodule, and a template backend shows how to add further platforms.
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration
   recording, and learned reward classifiers.
 - **Distributed training:** optional RLinf/Ray adapters for offline, async
@@ -109,9 +118,9 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `tdmpc2`, `dreamer_v3`, `ncrl`, `dppo`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `policy_distillation` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `iql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `fql`, `qgf`, `qam`, `fac`, `wsrl`, `awac`, `td3_bc`, `tdmpc2_multitask`, `pwm`, `rssm_pretrain` |
-| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `fac`, `acfql` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `explore`, `supe`, `jsrl`, `tdmpc2`, `dreamer_v3`, `ncrl`, `dppo`, `flow_ppo`, `diffusion_cm_distill_online`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `gail`, `policy_distillation` |
+| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `mean_flow_bc`, `consistency_distill_bc`, `a2a_bc`, `iql`, `idql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `td3_bc`, `awac`, `fql`, `floq`, `fino`, `value_flows`, `fac`, `qgf`, `qam`, `bppo`, `unio4`, `unio4_ope`, `hilp`, `opal`, `wsrl`, `tdmpc2_multitask`, `pwm`, `rssm_pretrain` |
+| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `fql`, `floq`, `fino`, `value_flows`, `fac`, `so2`, `acfql` |
 
 Every registered algorithm's exact args and defaults can be listed with
 `--print-config`; use `python examples/train_online.py --help` (or
@@ -230,8 +239,13 @@ mapping, rewards, and performance controls.
 Other registered `--env-backend` values: `maniskill` (default for most examples),
 `isaaclab` (see [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md) and the
 [camera-stall history](docs/guides/isaaclab-camera-stall.md)), `mujoco`,
-`mujoco_warp` (GPU-vectorized MuJoCo), `minari`, `d4rl_legacy` (legacy
-Gym/D4RL Adroit and Kitchen tasks, see
+`mujoco_warp` (GPU-vectorized MuJoCo), `dm_control` (see
+[dm_control Integration](docs/guides/dm-control-integration.md)), `metaworld` (see
+[Meta-World Integration](docs/guides/metaworld-integration.md)), `rlbench` (see
+[RLBench Integration](docs/guides/rlbench-integration.md)), `robomimic` (see
+[robomimic Integration](docs/guides/robomimic-integration.md)), `ogbench` (see
+[OGBench Integration](docs/guides/ogbench-integration.md)), `minari`,
+`d4rl_legacy` (legacy Gym/D4RL Adroit and Kitchen tasks, see
 [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)), and
 `gymnasium` (any registered `gymnasium.Env` from your own package, see
 [Training on Your Own Gymnasium Envs](docs/guides/gymnasium-custom-envs.md)).
