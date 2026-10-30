@@ -115,6 +115,27 @@ stride, action scales, clipping diagnostics and short terminal intervals.
 Inspect clipping diagnostics before training. Stride does not automatically
 change action scales; supply matching scales during conversion and execution.
 
+The same procedure supports larger integer strides, such as `--frame-stride 3`
+or `--frame-stride 4`: synchronize all retained observations and recompute actions
+between their endpoint poses. Choose action scales from the resulting motion
+range rather than automatically multiplying them by the stride.
+
+Existing ACT experiments show that a suitable larger demonstration interval can
+substantially reduce the number of decision steps needed to complete a task and
+improve task success within an appropriate range. In the open_laptop comparison,
+stride-two ACT achieved 54.4% success versus 47.2% for the historical stride-one
+reference; on 190 scenes completed by both, mean decision steps fell from 208.03
+to 112.91. These runs also differed in action scales and runtime setup, so the
+success-rate difference cannot be attributed to stride alone. Further ACT
+comparisons with absolute joint targets also showed improvements at intermediate
+strides, but success did not increase monotonically with stride. Those targets
+use future absolute joint positions, not the relative SE(3) labels in this converter.
+
+Larger intervals also reduce feedback density and may skip important contact or
+gripper events. Select the interval using closed-loop evaluation of success and
+decision steps. Fewer decision steps do not imply the same reduction in physical
+simulation time or wall-clock runtime.
+
 The base policy uses three RGB views resized to 224×224, the original 14-dimensional
 control state, a 30-action chunk, batch size 256, 100k updates, seed 1, ResNet18,
 learning rates 1e-4 for the policy and 1e-5 for the backbone, EMA decay 0.999,

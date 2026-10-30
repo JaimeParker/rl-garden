@@ -33,6 +33,9 @@ The ACT base policy for these configurations uses stride-two demonstration sampl
 with actions recomputed between retained poses. See the [ACT data and training guide](ROBOTWIN_ACT.md#stride-two-demonstration-sampling).
 The position, rotation and gripper normalization units are 0.06m, 0.30rad and 0.2.
 This sampling choice requires no additional online action skipping.
+The converter also supports larger integer strides. Experiments suggest that a
+suitable interval can reduce decision steps and improve ACT success, but larger
+is not always better; see the ACT guide for observations and selection criteria.
 
 ## 3. Construction and switching
 

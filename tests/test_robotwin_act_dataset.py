@@ -124,7 +124,8 @@ def _aligned_episode(length):
 
 @pytest.mark.parametrize('length,stride,expected', [
     (2, 2, [0, 1]), (3, 2, [0, 2]), (4, 2, [0, 2, 3]),
-    (5, 2, [0, 2, 4]), (5, 1, [0, 1, 2, 3, 4]), (5, 10, [0, 4])])
+    (5, 2, [0, 2, 4]), (5, 1, [0, 1, 2, 3, 4]), (5, 10, [0, 4]),
+    (8, 3, [0, 3, 6, 7]), (8, 4, [0, 4, 7])])
 def test_synchronized_sampling(length, stride, expected):
     original = _aligned_episode(length)
     sampled, indices = subsample_episode(original, stride)
@@ -151,7 +152,7 @@ def test_misaligned_episode_rejected():
         subsample_episode(original, 2)
 
 
-@pytest.mark.parametrize('stride', [1, 2])
+@pytest.mark.parametrize('stride', [1, 2, 3, 4])
 def test_export_recomputes_endpoint_actions_and_loader_alignment(tmp_path, stride):
     original = _aligned_episode(6)
     path = tmp_path / 'sampled.h5'
