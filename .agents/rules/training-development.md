@@ -55,6 +55,9 @@ algorithm registration, environment backends, or replay/device behavior.
   requested change explicitly modifies that contract.
 - RGBD actor and critic share an encoder. Actor updates detach encoder features;
   critic updates train the encoder.
+  This describes end-to-end visual RL. In the open_laptop frozen-encoder route,
+  supervised pretraining happens separately; neither residual optimizer updates
+  the encoder. See [the route guide](../../docs/OPEN_LAPTOP_RECIPES.md).
 
 ## Specialized Defaults
 

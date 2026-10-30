@@ -91,7 +91,7 @@ def _make_base_action_provider(args, env):
     return provider
 
 
-def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
+def build_residual_sac(args, env, eval_env, logger, checkpoint_dir, *, algorithm_class=None):
     from rl_garden.algorithms import ResidualSAC
     from rl_garden.common.cli_args import (
         image_encoder_factory_from_args,
@@ -128,7 +128,9 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         )
 
     base_action_provider = _make_base_action_provider(args, env)
-    agent = ResidualSAC(
+    # Reuse the complete argument mapping for opt-in residual subclasses.
+    agent_type = ResidualSAC if algorithm_class is None else algorithm_class
+    agent = agent_type(
         env=env,
         eval_env=eval_env,
         base_action_provider=base_action_provider,
@@ -146,6 +148,7 @@ def build_residual_sac(args, env, eval_env, logger, checkpoint_dir):
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
+        bootstrap_at_done=args.bootstrap_at_done,
         nstep=args.nstep,
         tau=args.tau,
         training_freq=args.training_freq,

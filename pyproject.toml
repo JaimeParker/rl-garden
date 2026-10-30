@@ -28,3 +28,6 @@ dev = ["pytest", "ruff"]
 [tool.setuptools.packages.find]
 include = ["rl_garden*", "robot_infra*"]
 exclude = ["3rd_party*", "tests*", "examples*"]
+
+[tool.setuptools.package-data]
+"rl_garden.training.online" = ["open_laptop_defaults.json"]

@@ -1,6 +1,10 @@
-# RoboTwin `open_laptop` Residual SAC Pipeline
+# RoboTwin `open_laptop`: End-to-End Visual Residual SAC Reference
 
-本文说明当前版本 rl-garden 中 `open_laptop` 的 ACT + Residual SAC 训练路径。ACT 数据转换与基准策略训练不在本文展开；这里仅说明当前 residual 配置实际依赖的 ACT checkpoint、输入分辨率与执行接线。
+This document retains the end-to-end visual reference: three 64×64 RGB views with an encoder updated by the critic. References to the current configuration below describe this baseline, not the supervised-pretrained frozen-encoder route.
+
+For privileged-state or frozen-encoder inputs, see the [route guide](OPEN_LAPTOP_RECIPES.md), [observation interface](OBSERVATION_INTERFACE.md) and [encoder guide](ENCODER_INTERFACE.md). All three routes use ACT and the optimized delta-EE executor, but differ in observations, encoder updates and training settings.
+
+See the [ACT guide](ROBOTWIN_ACT.md) for data conversion and base-policy training.
 
 命令中任务名统一使用 `open_laptop`，控制模式使用 `delta_ee`。Residual policy 输出对 ACT base action 的有界修正，环境 adapter 再把 14 维归一化动作转换为 RoboTwin 指令。
 

@@ -175,7 +175,7 @@ def load_residual_h5_to_replay_buffer(
     path: str | Path,
     *,
     num_traj: Optional[int] = None,
-    bootstrap_at_done: str = "always",
+    bootstrap_at_done: str = "truncated",
 ) -> int:
     """Load residual-offline H5 transitions into a residual replay buffer."""
     h5py = _require_h5py()

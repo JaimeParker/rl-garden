@@ -43,7 +43,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         tau: float = 0.01,
         training_freq: int = 64,
         utd: float = 0.5,
-        bootstrap_at_done: str = "always",
+        bootstrap_at_done: str = "truncated",
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -249,7 +249,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self, terminations: torch.Tensor, truncations: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.bootstrap_at_done == "never":
-            need_final_obs = torch.ones_like(terminations, dtype=torch.bool)
+            # Final observations are valid only for ended environments. Keep
+            # continuing rows intact even when only part of a vector batch ends.
+            need_final_obs = truncations | terminations
             stop_bootstrap = truncations | terminations
         elif self.bootstrap_at_done == "always":
             need_final_obs = truncations | terminations
@@ -393,19 +395,31 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
     def learn(self, total_timesteps: int) -> "OffPolicyAlgorithm":
         self._on_training_start(total_timesteps)
-        obs, _ = self.env.reset(seed=self.seed)
-        self._on_env_reset(obs)
+        boundary = getattr(self, "boundary_checkpoints", None)
+        restored = boundary.begin(self, total_timesteps) if boundary is not None else None
+        if restored is not None:
+            if boundary.finished:
+                return self
+            # Codec restores RNG last. Do not reseed, repeat episode hooks,
+            # evaluation, or warmup selection before this pending reset.
+            obs = self.env.complete_boundary_reset()
+        else:
+            obs, _ = self.env.reset(seed=self.seed)
+            self._on_env_reset(obs)
         # A loaded checkpoint may already be well past learning_starts.  Do not
         # emit one rollout of warm-up exploration after every process restart.
         learning_has_started = self._global_step >= self.learning_starts
         cumulative = defaultdict(float)
+        if restored is not None:
+            learning_has_started = restored["learning_has_started"]
+            cumulative.update(restored["cumulative"])
         global_steps_per_iteration = self.num_envs * self.steps_per_env
 
-        while self._global_step < total_timesteps:
-            previous_step = self._global_step
+        while self._global_step < total_timesteps or (boundary is not None and not boundary.finished):
+            previous_step = restored["previous_step"] if restored is not None else self._global_step
             # Eval at iteration boundary.
             if (
-                self.eval_freq > 0
+                restored is None and self.eval_freq > 0
                 and (self._global_step - self.training_freq) // self.eval_freq
                 < self._global_step // self.eval_freq
             ):
@@ -434,7 +448,14 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             rollout_reward_sum = 0.0
             rollout_reward_count = 0
             rollout_episode_metrics: dict[str, list[float]] = defaultdict(list)
-            for _ in range(self.steps_per_env):
+            rollout_offset = 0
+            if restored is not None:
+                rollout_reward_sum = restored["rollout_reward_sum"]
+                rollout_reward_count = restored["rollout_reward_count"]
+                rollout_episode_metrics.update(restored["rollout_episode_metrics"])
+                rollout_offset = restored["rollout_offset"]
+                restored = None
+            for rollout_index in range(rollout_offset, self.steps_per_env):
                 self._global_step += self.num_envs
                 actions, env_actions, action_context = self._rollout_action(
                     obs, learning_has_started
@@ -489,6 +510,19 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 )
                 self._post_rollout_step(action_context, terminations, truncations, infos)
                 obs = next_obs
+                if boundary is not None and self.env.boundary_reset_pending:
+                    context = dict(previous_step=previous_step,
+                                   rollout_offset=rollout_index + 1,
+                                   learning_has_started=learning_has_started,
+                                   cumulative=dict(cumulative),
+                                   rollout_reward_sum=rollout_reward_sum,
+                                   rollout_reward_count=rollout_reward_count,
+                                   rollout_episode_metrics=dict(rollout_episode_metrics))
+                    if boundary.after_transition(self, context):
+                        # The final snapshot is this requested pre-reset point.
+                        # Do not reset or silently train another partial block.
+                        return self
+                    obs = self.env.complete_boundary_reset()
             rollout_time = time.perf_counter() - rollout_t
             cumulative["rollout_time"] += rollout_time
             rollout_reward_mean = (
@@ -517,7 +551,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             )
 
             if self._global_step < self.learning_starts:
-                self._maybe_save_periodic_checkpoint(previous_step)
+                if boundary is None:
+                    self._maybe_save_periodic_checkpoint(previous_step)
                 if self.std_log and should_log:
                     progress = 100.0 * self._global_step / total_timesteps
                     print(
@@ -564,7 +599,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                         flush=True,
                     )
 
-            self._maybe_save_periodic_checkpoint(previous_step)
+            if boundary is None:
+                self._maybe_save_periodic_checkpoint(previous_step)
 
         if self.checkpoint_dir is not None and self.save_final_checkpoint:
             self._save_checkpoint("final.pt")

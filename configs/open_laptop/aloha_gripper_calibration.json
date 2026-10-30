@@ -1,0 +1,12 @@
+{
+  "embodiment": "aloha-agilex",
+  "finger_mesh_sha256": {
+    "7": "cf87ef550d6ab5d71058e7da63ba6ac4c492a9385b3ca0eed37eee0fd0cab97e",
+    "8": "e58e8cbc674bb7465ec81a2db6c4b1d08ccf1d63352e245739aa6418d62b0fd7"
+  },
+  "aperture": {
+    "offset_m": 2.0000000000228169e-07,
+    "formula": "offset + q7 + q8",
+    "definition": "Signed separation of the opposing visual planar finger faces along the gripper joint axis. Not a force, contact or deformation estimate; not a universal hardware calibration."
+  }
+}

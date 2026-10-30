@@ -28,6 +28,10 @@ read that file. If it is missing, stop and ask the user to create it from
 
 ## Project Constraints
 
+For the open_laptop residual routes, read [the route guide](docs/OPEN_LAPTOP_RECIPES.md)
+and [observation contract](docs/OBSERVATION_INTERFACE.md).
+Preserve the separation between privileged supervision and visual policy inputs.
+
 `rl-garden` is a PyTorch-native robot-learning (especially for RL) framework for simulation,
 offline datasets, and real-robot systems. Its environment backend architecture is
 designed to support additional platforms without coupling algorithms or training
@@ -41,7 +45,9 @@ entrypoints to a specific simulator.
 - Keep device transfers explicit for every environment backend. CPU-backed
   environments are supported, but must not introduce implicit CPU copies into a
   GPU training path.
-- RGBD actor and critic share the encoder; actor updates detach encoder features.
+- In end-to-end RGBD RL, actor and critic share the encoder; actor updates detach
+  encoder features. The open_laptop pretrained-encoder route keeps that encoder
+  frozen during residual training.
 - Keep optional environment and hardware dependencies lazy so core package imports,
   registry discovery, and configuration inspection work without every backend
   installed.

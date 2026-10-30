@@ -33,6 +33,16 @@ scripts/train_wsrl_rgbd.sh
 scripts/pretrain_offline.sh calql --offline_dataset_path demos/pickcube.h5
 ```
 
+## open_laptop Residual Routes
+
+Use the [route guide](../../docs/OPEN_LAPTOP_RECIPES.md) to choose privileged-state
+or frozen visual-state inputs. The standalone entrypoint is
+`python -m rl_garden.training.online.laptop_entry --help`.
+The [observation interface](../../docs/OBSERVATION_INTERFACE.md) defines the
+state fields, units and residual scale. The older end-to-end visual launcher
+uses a different observation and trains its encoder during RL; do not copy its
+defaults into these routes.
+
 ## Configuration Inspection
 
 All registry-managed entrypoints accept `--print-config`. It prints the resolved
@@ -49,6 +59,11 @@ python examples/train_off2on.py wsrl --obs_mode rgb --print-config
 Normal runs save the same resolved configuration to
 `{log_dir}/{run_name}/config.json`. Explicit CLI flags override `RLG_*` logging
 environment defaults.
+
+Off-policy bootstrap defaults to `truncated`: continue value estimation at time
+limits, but stop at true task termination. Explicit `always` and `never` remain
+available. Preserve the saved setting when reproducing or continuing older runs.
+See [bootstrap behavior](../../docs/SAC_BOOTSTRAP.md).
 
 ## Offline Evaluation
 

@@ -19,6 +19,8 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     training_freq: int = 64
     utd: float = 0.5
     gamma: float = 0.8
+    # Bootstrap through time limits, but not true task termination.
+    bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     nstep: int = 1
     tau: float = 0.01
     policy_lr: float = 3e-4

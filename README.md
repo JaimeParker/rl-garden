@@ -346,6 +346,7 @@ rather than changing the framework's preferred device path.
 - [Residual SAC](docs/RESIDUAL_SAC.md)
 - [RNG and Numerical Determinism](docs/RNG_AND_NUMERICAL_DETERMINISM.md)
 - [RoboTwin Integration](docs/ROBOTWIN.md)
+- [open_laptop: Privileged-State and Visual Residual Routes](docs/OPEN_LAPTOP_RECIPES.md)
 - [Teleoperation and Recording](docs/TELEOP_README.md)
 - [WSRL Overview](docs/WSRL_README.md)
 - [WSRL Reproduction](docs/WSRL_REPRODUCTION.md)

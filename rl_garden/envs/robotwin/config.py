@@ -59,6 +59,8 @@ class RoboTwinEnvConfig:
     # Observation/action behavior. RoboTwin-native end-effector delta control is
     # named "delta_ee" to match RoboTwin's take_action(action_type=...).
     obs_mode: ObservationMode = "rgb"
+    # Opt-in sources. The original state and camera observations remain unchanged.
+    extra_state: tuple[str, ...] = ()
     include_wrist_cameras: bool = True
     image_size: tuple[int, int] = (224, 224)
     head_camera_type: str = "D435"
@@ -102,6 +104,9 @@ class RoboTwinEnvConfig:
     clear_cache_freq: int = 8
 
     def __post_init__(self) -> None:
+        from .state_sources import validate_sources
+
+        validate_sources(self.extra_state, self.task_name, self.control_mode)
         if self.control_mode == "delta_ee" and self.action_dim != 14:
             raise ValueError("delta_ee control mode requires action_dim=14.")
         if self.clear_cache_freq < 1:

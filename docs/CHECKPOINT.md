@@ -61,3 +61,9 @@ Algorithm class aliases keep legacy checkpoints loadable:
 Each algorithm class declares which checkpoints it accepts via
 `_compatible_checkpoint_algorithms`. Mismatched checkpoints raise a `ValueError`
 describing the incompatibility.
+
+The open_laptop privileged-state and visual-state classes also accept their
+earlier saved class names. New checkpoints use descriptive names. This keeps
+policy weights loadable; it does not make different observation definitions or
+encoder inputs interchangeable. The standalone open_laptop entrypoint records
+its input files and preprocessing settings and checks them when continuing a run.

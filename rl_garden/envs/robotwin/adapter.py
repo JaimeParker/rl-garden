@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 import types
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 
@@ -233,6 +233,10 @@ class RoboTwinTaskAdapter:
             else 0.0
         )
         self.last_reward_components = self._empty_reward_components()
+        if self.cfg.extra_state:
+            from .state_sources import prepare_sources
+
+            prepare_sources(self.task, self.cfg.extra_state)
         obs = self.get_obs()
         obs["_env_seed"] = self.env_seed
         self._start_eval_video_if_needed(obs.get("rgb"))
@@ -245,7 +249,12 @@ class RoboTwinTaskAdapter:
         self._install_task_compatibility()
         action = self._to_robotwin_action(action)
         self._begin_reward_trace()
-        self.task.take_action(action, action_type=self._robotwin_action_type())
+        with ExitStack() as observers:
+            if any(name in self.cfg.extra_state for name in ("open_laptop_robot_v4", "open_laptop_robot_v5")):
+                from .task_state_v4 import observe_control_contacts
+
+                observers.enter_context(observe_control_contacts(self.task, capture_last="open_laptop_robot_v5" in self.cfg.extra_state))
+            self.task.take_action(action, action_type=self._robotwin_action_type())
         self._end_reward_trace()
         self.elapsed_steps += 1
         success = bool(self.task.check_success())
@@ -279,7 +288,12 @@ class RoboTwinTaskAdapter:
     def get_obs(self) -> dict[str, Any]:
         if self.task is None:
             raise RuntimeError("RoboTwin task has not been reset.")
-        return _extract_robotwin_obs(self.task.get_obs(), self._instruction())
+        obs = _extract_robotwin_obs(self.task.get_obs(), self._instruction())
+        if self.cfg.extra_state:
+            from .state_sources import read_sources
+
+            obs.update(read_sources(self.task, self.cfg.extra_state))
+        return obs
 
     def close(self, clear_cache: bool = True) -> None:
         if self.task is not None:
