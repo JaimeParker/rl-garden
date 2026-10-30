@@ -41,4 +41,3 @@ def load_encoder(path, *, variant, expected_sha256, device='cpu', model_factory=
     model = (LaptopEncoder if model_factory is None else model_factory)().to(device)
     model.load_state_dict(state, strict=True)
     return model.eval().requires_grad_(False)
-

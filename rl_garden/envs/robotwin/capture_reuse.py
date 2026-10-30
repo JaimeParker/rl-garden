@@ -52,5 +52,3 @@ def install(verify=False):
         if live_state.LiveState.capture is capture:
             live_state.LiveState.capture = original
     return restore
-
-

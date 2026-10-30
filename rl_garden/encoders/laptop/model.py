@@ -29,4 +29,3 @@ def supervised_loss(pred, label):
     terms['depth_part_consistency'] = .2 * (
         (error * valid).sum(1) / valid.sum(1).clamp_min(1)).mean()
     return total + terms['depth_part_consistency'], terms
-
