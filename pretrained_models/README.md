@@ -24,3 +24,7 @@ scripts/train_residual_sac_rgbd_peg.sh --policy act --ckpt-path act-peg-only
 
 ACT checkpoints may be `{"ema_agent": state_dict, "norm_stats": ...}`,
 `{"agent": state_dict, "norm_stats": ...}`, or a raw ACT state dict.
+
+For the separate supervised open_laptop encoder, see the
+[encoder guide](../docs/ENCODER_INTERFACE.md). Model and training code are included;
+pretrained weights are not distributed.

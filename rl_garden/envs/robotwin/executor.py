@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, NoReturn, Optional
 
 import numpy as np
@@ -112,11 +113,30 @@ class ThreadedRoboTwinExecutor:
     def _wait(self, future, *, operation: str):
         try:
             return future.result(timeout=self.timeout_seconds)
-        except TimeoutError:
+        except FuturesTimeoutError as exc:
+            # Before Python 3.11 this is distinct from builtins.TimeoutError.
+            # result() also re-raises worker exceptions: do not mistake a
+            # completed worker's own TimeoutError for an executor deadline.
+            if future.done() and not future.cancelled() and future.exception() is exc:
+                raise
             _terminate_process_after_executor_timeout(operation, self.timeout_seconds)
 
     def get_obs(self) -> list[dict[str, Any]]:
         return [env.get_obs() for env in self.envs]
+
+    def prepare_boundary_reset(self) -> None:
+        """Release completed tasks before saving; do not draw next scene seeds.
+
+        step() has joined all its futures. Reset cleanup and its counter happen
+        here for BOTH uninterrupted and resumed boundary-mode executions.
+        """
+        for env in self.envs:
+            with env.global_lock:
+                with env.lock:
+                    adapter = env.adapter
+                    if adapter.task is not None:
+                        adapter.reset_count += 1
+                        adapter.close(clear_cache=(adapter.reset_count % adapter.clear_cache_freq == 0))
 
     def close(self, clear_cache: bool = True) -> None:
         for env in self.envs:

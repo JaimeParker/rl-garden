@@ -20,6 +20,26 @@ class RoboTwinEnv(gym.Env):
     """Vectorized RoboTwin environment with rl-garden's env contract."""
 
     metadata = {"render_modes": []}
+    boundary_checkpoint_capable = True
+    _boundary_checkpoints_enabled = False
+    boundary_reset_pending = False
+
+    def enable_boundary_checkpoints(self):
+        if self.num_envs != 1 or not self.cfg.auto_reset:
+            raise ValueError("Boundary checkpoints require one auto-reset environment")
+        self._boundary_checkpoints_enabled = True
+
+    def complete_boundary_reset(self):
+        """Called ONLY after replay insertion and optional boundary publication."""
+        if not self.boundary_reset_pending:
+            raise RuntimeError("No deferred reset")
+        self._update_reset_state_ids([0])
+        raw_obs = self.executor.reset(env_indices=[0], env_seeds=self.reset_state_ids.tolist())
+        self._sync_actual_reset_state_ids(raw_obs, [0])
+        obs = self._tensor_obs(raw_obs)
+        self._reset_metrics([0])
+        self.boundary_reset_pending = False
+        return obs
 
     def __init__(
         self,
@@ -60,6 +80,12 @@ class RoboTwinEnv(gym.Env):
                     shape=(h, w, 3),
                     dtype=np.uint8,
                 )
+        from .state_sources import SOURCE_DIMS
+
+        for name in cfg.extra_state:
+            obs_spaces[f"state_{name}"] = spaces.Box(
+                low=-np.inf, high=np.inf, shape=(SOURCE_DIMS[name],), dtype=np.float32,
+            )
         self.single_observation_space = spaces.Dict(obs_spaces)
         self.observation_space = self.single_observation_space
 
@@ -140,6 +166,8 @@ class RoboTwinEnv(gym.Env):
         }
 
     def step(self, actions):
+        if self.boundary_reset_pending:
+            raise RuntimeError("Complete deferred reset before the next action")
         actions_np = self._actions_to_numpy(actions)
         results = self.executor.step(actions_np)
         raw_obs = [res.obs for res in results]
@@ -205,8 +233,13 @@ class RoboTwinEnv(gym.Env):
         h, w = self.cfg.image_size
         zero_img = np.zeros((h, w, 3), dtype=np.uint8)
         for key in self.single_observation_space.spaces:
-            if key == "state":
-                states = [np.asarray(obs["state"], dtype=np.float32) for obs in raw_obs]
+            if key == "state" or key.startswith("state_"):
+                states = [np.asarray(obs[key], dtype=np.float32) for obs in raw_obs]
+                if key != "state" and any(
+                    s.shape != self.single_observation_space[key].shape
+                    or not np.isfinite(s).all() for s in states
+                ):
+                    raise ValueError(f"Invalid observation for {key}")
                 out[key] = torch.as_tensor(np.stack(states), dtype=torch.float32, device=self.device)
             else:
                 imgs = []
@@ -239,6 +272,15 @@ class RoboTwinEnv(gym.Env):
     def _handle_auto_reset(self, dones: torch.Tensor, obs, infos):
         final_obs = {k: v.clone() for k, v in obs.items()}
         final_info = _clone_info(infos)
+        if self._boundary_checkpoints_enabled:
+            # No next-scene RNG draw, executor reset, or observation replacement.
+            self.boundary_reset_pending = True
+            infos["final_observation"] = final_obs
+            infos["final_info"] = final_info
+            infos["_final_info"] = dones
+            infos["_final_observation"] = dones
+            infos["_elapsed_steps"] = dones
+            return obs, infos
         env_idx = torch.arange(self.num_envs, device=self.device)[dones].tolist()
         self._update_reset_state_ids(env_idx)
         seeds = [int(self.reset_state_ids[idx].item()) for idx in env_idx]

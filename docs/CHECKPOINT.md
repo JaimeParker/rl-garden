@@ -61,3 +61,6 @@ Algorithm class aliases keep legacy checkpoints loadable:
 Each algorithm class declares which checkpoints it accepts via
 `_compatible_checkpoint_algorithms`. Mismatched checkpoints raise a `ValueError`
 describing the incompatibility.
+
+The open_laptop residual classes accept their earlier saved names. Continuation
+also checks input weights and preprocessing; see the [route guide](OPEN_LAPTOP_RECIPES.md).

@@ -68,6 +68,7 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
+        bootstrap_at_done=args.bootstrap_at_done,
         nstep=args.nstep,
         tau=args.tau,
         training_freq=args.training_freq,

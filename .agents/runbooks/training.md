@@ -33,6 +33,9 @@ scripts/train_wsrl_rgbd.sh
 scripts/pretrain_offline.sh calql --offline_dataset_path demos/pickcube.h5
 ```
 
+For open_laptop privileged-state and frozen-encoder residual training, see the
+[route guide](../../docs/OPEN_LAPTOP_RECIPES.md).
+
 ## Configuration Inspection
 
 All registry-managed entrypoints accept `--print-config`. It prints the resolved
@@ -49,6 +52,9 @@ python examples/train_off2on.py wsrl --obs_mode rgb --print-config
 Normal runs save the same resolved configuration to
 `{log_dir}/{run_name}/config.json`. Explicit CLI flags override `RLG_*` logging
 environment defaults.
+
+Off-policy bootstrap defaults to `truncated`; preserve saved settings for older
+runs. See [bootstrap behavior](../../docs/SAC_BOOTSTRAP.md).
 
 ## Offline Evaluation
 

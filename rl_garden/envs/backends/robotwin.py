@@ -103,6 +103,7 @@ class RoboTwinBackend(EnvBackend):
             num_envs=req.num_eval_envs if is_eval else req.num_envs,
             seed=req.seed,
             obs_mode=req.obs_mode,  # type: ignore[arg-type]
+            extra_state=rt.extra_state if rt is not None else (),
             robotwin_root=rt.robotwin_root if rt is not None else None,
             assets_path=rt.assets_path if rt is not None else None,
             seeds_path=rt.seeds_path if rt is not None else None,

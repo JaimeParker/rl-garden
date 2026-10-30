@@ -50,6 +50,8 @@ class ManiSkillConfig:
 class RoboTwinConfig:
     """RoboTwin-specific env settings. CLI prefix: ``--robotwin.<field>``"""
 
+    extra_state: tuple[str, ...] = ()
+
     # camera / rendering
     include_wrist_cameras: bool = True
     random_background: bool = True

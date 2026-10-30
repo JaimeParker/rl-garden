@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-config", default="demo_clean")
     parser.add_argument("--robotwin-root", default="3rd_party/RoboTwin")
     parser.add_argument("--num-episodes", type=int, default=None)
+    parser.add_argument("--frame-stride", type=int, default=1,
+                        help="Subsample synchronized observations before recomputing actions; keep the terminal frame.")
     parser.add_argument(
         "--conversion-mode",
         choices=["auto", "direct", "replay"],
@@ -277,6 +279,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         ee_delta_pos_scale=args.ee_delta_pos_scale,
         ee_delta_rot_scale=args.ee_delta_rot_scale,
         gripper_delta_scale=args.gripper_delta_scale,
+        frame_stride=args.frame_stride,
     )
     metadata["conversion_modes"] = modes
     json_path = Path(args.output_path).with_suffix(".json")

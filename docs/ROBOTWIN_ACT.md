@@ -86,6 +86,10 @@ parameters, transition counts, and clipping diagnostics.
 
 ## Train ACT
 
+For stride-two or larger demonstration intervals, see
+[ACT sampling intervals](ACT_SAMPLING.md). The default conversion stride is 1;
+the open_laptop residual recipes use stride 2 with matching action scales.
+
 ```bash
 PYTHONPATH=$PWD:$PYTHONPATH python examples/train_act_robotwin.py \
   --demo-path demos/robotwin/open_laptop_delta_ee.h5 \
