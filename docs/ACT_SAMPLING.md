@@ -1,8 +1,9 @@
 # ACT demonstration sampling intervals
 
 Use `--frame-stride N` to retain every Nth demonstration observation, including
-the terminal frame. RGB, control state, poses and grippers use the same indices;
-relative SE(3) actions are recomputed between retained poses. The default is 1.
+the terminal frame. RGB, control state, poses and grippers use the same indices.
+Translation, rotation and gripper changes are recomputed between retained frames,
+rather than simply subsampling existing actions. The default is 1.
 
 Suitable larger intervals can reduce completion decision steps and improve ACT
 success in our experiments, but larger is not always better. Choose the interval
