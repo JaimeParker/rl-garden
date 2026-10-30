@@ -543,6 +543,44 @@ Two task-side requirements on 3.0:
   is on, and an override that skips the base implementation drops the
   terminal observation.
 
+## Action repeat
+
+`--isaaclab.action_repeat k` (default 1) makes each policy decision run `k`
+env steps with the same action and sum their rewards
+(`ActionRepeatWrapper`). Use it for tasks whose controller holds one command
+for several env steps, e.g. a task that holds a trajectory chunk: without it
+the policy still decides on every env step, and the decisions that have no
+effect still enter the loss. `k = 1` builds exactly the same env chain as
+before.
+
+- Units. Training arguments count decisions: `--total_timesteps`,
+  `--num_steps` and `--log_freq` are per decision, and `--gamma` discounts per
+  decision, so its time horizon is `k` times longer in env steps. Episode
+  statistics count env steps: `train/return` and `train/episode_len` are per
+  env step, unlike the dm_control backend, whose `episode_len` counts
+  decisions.
+- Episode ends inside a decision. An env that ends on sub-step `j < k` is
+  reset by Isaac Lab and runs the old action for the remaining `k - j` env
+  steps of its new episode. The decision's reward stops at the episode end,
+  but those leftover steps count toward the next episode's logged `return`
+  and `episode_len`. `final_info` and `final_observation` are taken at the
+  sub-step the episode ended; `final_observation` is reported only when the
+  env reports terminal observations (see above).
+- A second episode end of the same env within one decision is dropped: the
+  decision reports only the first one. The wrapper counts such drops per env
+  in `env.dropped_episode_ends` (an int64 tensor on the env device,
+  cumulative). Keep episodes much longer than `k` env steps and it stays at
+  zero.
+- `extras["log"]`: the decision forwards the whole dict from its last
+  sub-step that assigned a new one. A task that refreshes `log` every `N` env
+  steps needs `N >= k`, or the earlier refreshes in a decision are lost.
+- External code that builds the env itself (e.g. an evaluation script) must
+  use the same chain: adapter, then `ActionRepeatWrapper(adapter, k)`, then
+  `ImageFrameStackWrapper(..., autoreset_in_step=True)` for camera tasks with
+  frame stacking, so frames are stacked per decision. Every env step must go
+  through the wrapper; code that keeps a step count aligned to the decision
+  grid depends on it.
+
 ## Training your new task
 
 ```bash
@@ -576,6 +614,7 @@ Relevant IsaacLab-specific CLI flags (`--isaaclab.<field>`, see
   only; 3.0 only)
 - `--isaaclab.final_obs` (default: on for 3.0, off for 2.x; `True` is
   rejected on 2.x) — see [Terminal observations](#terminal-observations)
+- `--isaaclab.action_repeat` (default `1`) — see [Action repeat](#action-repeat)
 - `--isaaclab.env_kwargs_json` — a JSON dict applied as
   `setattr(env_cfg, key, value)` overrides on the parsed cfg, before
   `gym.make`. It's an escape hatch for task-specific cfg fields you want to

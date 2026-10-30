@@ -56,6 +56,7 @@ class IsaacLabBackend(EnvBackend):
             ),
             overrides=cls._preset_overrides(il),
             final_obs=il.final_obs if il is not None else None,
+            action_repeat=il.action_repeat if il is not None else 1,
         )
 
     @staticmethod

@@ -148,6 +148,11 @@ class IsaacLabConfig:
     # envs that is nearly every step, i.e. up to ~2x observation compute
     # (renders/copies) for camera tasks.
     final_obs: bool | None = None
+    # Env steps per policy decision (ActionRepeatWrapper): each action runs
+    # this many env steps and their rewards are summed. With k > 1,
+    # total_timesteps, num_steps and log_freq count decisions, not env steps,
+    # and gamma discounts per decision (k env steps).
+    action_repeat: int = 1
 
 
 @dataclass

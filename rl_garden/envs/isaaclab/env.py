@@ -58,6 +58,9 @@ resets; ``done`` is all False there, so consumers indexing by the mask never
 read it. Isaac Lab 2.x has no terminal observation: no
 ``final_observation`` is reported, so PPO bootstraps every ended episode
 with 0 and off-policy truncations bootstrap from the reset observation.
+
+Action repeat: ``cfg.action_repeat > 1`` wraps the adapter in
+``ActionRepeatWrapper`` (inside the frame stack, so frames are per decision).
 """
 from __future__ import annotations
 
@@ -358,14 +361,21 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
     adapter = _IsaacLabVecEnvAdapter(
         env, seed=cfg.seed, is_visual=cfg.is_visual, state=cfg.state
     )
+    if cfg.action_repeat != 1:
+        from rl_garden.envs.wrappers import ActionRepeatWrapper
+
+        env = ActionRepeatWrapper(adapter, cfg.action_repeat)
+    else:
+        env = adapter
 
     if cfg.frame_stack > 1:
         if not cfg.is_visual:
             raise ObservationContractError("frame_stack > 1 requires a visual observation mode")
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
+        # Stacks decision-level frames; its base_env (env.unwrapped) is the adapter.
         wrapped = ImageFrameStackWrapper(
-            adapter, frame_stack=cfg.frame_stack, autoreset_in_step=True
+            env, frame_stack=cfg.frame_stack, autoreset_in_step=True
         )
         # ImageFrameStackWrapper doesn't forward arbitrary attributes -- copy
         # the rl-garden env-shape attributes onto the outermost object.
@@ -379,4 +389,4 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
         wrapped.post_update_sync = adapter.post_update_sync
         return wrapped
 
-    return adapter
+    return env

@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from rl_garden.envs.isaaclab.env import _box_from_tensor, _IsaacLabVecEnvAdapter
-from rl_garden.envs.wrappers import ImageFrameStackWrapper
+from rl_garden.envs.wrappers import ActionRepeatWrapper, ImageFrameStackWrapper
 from rl_garden.observations.schema import ObservationContractError
 
 NUM_ENVS = 2
@@ -447,3 +447,153 @@ def test_frame_stack_wrapper_stacks_final_observation_over_the_previous_history(
     assert torch.equal(stacked[:, 0], obs["rgb_front"]) and torch.equal(stacked[:, 1], obs["rgb_front"])
     assert info["final_observation"]["state"] is terminal["state"]
     assert info["_final_observation"].tolist() == [True, False]
+
+
+def _repeat_step(env) -> tuple:
+    return env.step(torch.zeros(NUM_ENVS, 1))
+
+
+def test_action_repeat_freezes_episode_statistics_at_the_ending_sub_step_in_env_steps() -> None:
+    adapter, _ = _scripted_adapter(
+        [([1.0, 1.0], [False, False], [False, False])] * 4
+        + [
+            ([1.0, 1.0], [False, False], [False, False]),
+            ([2.0, 1.0], [True, False], [False, False]),
+            ([5.0, 1.0], [False, False], [False, False]),
+            ([5.0, 1.0], [False, False], [False, False]),
+        ]
+        + [
+            ([1.0, 1.0], [False, False], [True, False]),
+            ([1.0, 1.0], [False, False], [False, False]),
+            ([1.0, 1.0], [False, False], [False, False]),
+            ([1.0, 1.0], [False, False], [False, True]),
+        ]
+    )
+    env = ActionRepeatWrapper(adapter, repeat=4)
+
+    _repeat_step(env)
+    _obs, reward, terminated, _truncated, info = _repeat_step(env)
+
+    assert reward.tolist() == [3.0, 4.0]
+    assert terminated.tolist() == [True, False]
+    assert info["_final_info"].tolist() == [True, False]
+    assert info["final_info"]["episode"]["return"][0].item() == 7.0
+    assert info["final_info"]["episode"]["episode_len"][0].item() == 6
+
+    # env0's new episode includes the two uncounted sub-steps of the previous decision.
+    _obs, reward, terminated, truncated, info = _repeat_step(env)
+
+    assert reward.tolist() == [1.0, 4.0]
+    assert terminated.tolist() == [False, False] and truncated.tolist() == [True, True]
+    assert info["final_info"]["episode"]["return"].tolist() == [11.0, 12.0]
+    assert info["final_info"]["episode"]["episode_len"].tolist() == [3, 12]
+    assert env.dropped_episode_ends.tolist() == [0, 0]
+
+
+class _LogAtStepEnv(_ScriptedExtrasEnv):
+    """Assigns a new ``extras["log"]`` dict on the scripted (1-based) steps."""
+
+    def __init__(self, script, logs: dict[int, dict]) -> None:
+        super().__init__(script)
+        self._logs = logs
+        self._num_steps = 0
+
+    def step(self, actions):
+        self._num_steps += 1
+        if self._num_steps in self._logs:
+            self.extras["log"] = self._logs[self._num_steps]
+        return super().step(actions)
+
+
+def test_action_repeat_forwards_a_log_assigned_on_a_middle_sub_step() -> None:
+    log = {"Episode_Reward/alive": torch.tensor(1.0)}
+    adapter = _IsaacLabVecEnvAdapter(_LogAtStepEnv([_NO_DONE] * 8, logs={2: log}), seed=0)
+    adapter.reset()
+    env = ActionRepeatWrapper(adapter, repeat=4)
+
+    first = _repeat_step(env)[4]
+    second = _repeat_step(env)[4]
+
+    assert first["log"] is log
+    assert "log" not in second
+
+
+class _CountingVisualEnv(_ScriptedExtrasEnv):
+    """Visual env whose image pixels equal the number of steps taken plus one."""
+
+    def __init__(self, script) -> None:
+        super().__init__(script, obs=self._frame(1))
+        self._value = 1
+
+    @staticmethod
+    def _frame(value: int) -> dict:
+        return {"rgb_front": torch.full((NUM_ENVS, 8, 8, 3), value, dtype=torch.uint8), "state": _state()}
+
+    def step(self, actions):
+        self._value += 1
+        self._obs = self._frame(self._value)
+        return super().step(actions)
+
+
+def test_frame_stack_over_action_repeat_stacks_decision_level_frames() -> None:
+    adapter = _IsaacLabVecEnvAdapter(_CountingVisualEnv([_NO_DONE] * 8), seed=0, is_visual=True)
+    wrapped = ImageFrameStackWrapper(
+        ActionRepeatWrapper(adapter, repeat=4), frame_stack=3, autoreset_in_step=True
+    )
+    wrapped.reset()
+
+    wrapped.step(torch.zeros(NUM_ENVS, 1))
+    obs = wrapped.step(torch.zeros(NUM_ENVS, 1))[0]
+
+    assert obs["rgb_front"].shape == (NUM_ENVS, 3, 8, 8, 3)
+    assert obs["rgb_front"][:, :, 0, 0, 0].tolist() == [[1, 5, 9]] * NUM_ENVS
+
+
+def _make_env_with_fake_build(monkeypatch, raw_env, **cfg_kwargs):
+    from rl_garden.envs.isaaclab import env as isaaclab_env
+    from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
+    from rl_garden.envs.isaaclab.v3 import runtime as v3_runtime
+
+    monkeypatch.setattr(isaaclab_env, "generation", lambda: "v3")
+    monkeypatch.setattr(v3_runtime, "build", lambda cfg: raw_env)
+    cfg = IsaacLabEnvConfig(env_id="RlGarden-Fake-v0", num_envs=NUM_ENVS, seed=0, **cfg_kwargs)
+    return isaaclab_env.make_isaaclab_env(cfg)
+
+
+def test_make_env_without_action_repeat_returns_the_adapter(monkeypatch) -> None:
+    env = _make_env_with_fake_build(monkeypatch, _FakeIsaacLabEnv({"state": _state()}))
+
+    assert type(env) is _IsaacLabVecEnvAdapter
+
+
+def test_make_env_with_action_repeat_wraps_the_adapter(monkeypatch) -> None:
+    env = _make_env_with_fake_build(monkeypatch, _FakeIsaacLabEnv({"state": _state()}), action_repeat=4)
+
+    assert isinstance(env, ActionRepeatWrapper) and env.repeat == 4
+    assert type(env.env) is _IsaacLabVecEnvAdapter
+    assert env.num_envs == NUM_ENVS and env.single_action_space == env.env.single_action_space
+
+
+def test_make_env_rejects_action_repeat_below_one(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="repeat must be >= 1"):
+        _make_env_with_fake_build(monkeypatch, _FakeIsaacLabEnv({"state": _state()}), action_repeat=0)
+
+
+@pytest.mark.parametrize("action_repeat", [1, 4])
+def test_make_env_frame_stack_wraps_action_repeat(monkeypatch, action_repeat: int) -> None:
+    env = _make_env_with_fake_build(
+        monkeypatch,
+        _FakeIsaacLabEnv(_visual_obs()),
+        is_visual=True,
+        frame_stack=3,
+        action_repeat=action_repeat,
+    )
+
+    assert isinstance(env, ImageFrameStackWrapper)
+    inner = env.env
+    adapter = inner.env if action_repeat > 1 else inner
+    assert isinstance(inner, ActionRepeatWrapper) is (action_repeat > 1)
+    assert type(adapter) is _IsaacLabVecEnvAdapter and env.base_env is adapter
+    assert env.single_observation_space["rgb_front"].shape == (3, 8, 8, 3)
+    assert env.single_observation_space is adapter.single_observation_space
+    assert env.num_envs == NUM_ENVS and env.post_update_sync == adapter.post_update_sync

@@ -669,6 +669,18 @@ def test_isaaclab_backend_make_cfg_forwards_visual_and_frame_stack() -> None:
     assert cfg.frame_stack == 3
 
 
+def test_isaaclab_backend_make_cfg_forwards_action_repeat() -> None:
+    from rl_garden.common.env_args import IsaacLabConfig
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+    cfg = IsaacLabBackend._make_cfg(_make_isaaclab_req(IsaacLabConfig(action_repeat=4)), is_eval=False)
+    default = IsaacLabBackend._make_cfg(_make_isaaclab_req(IsaacLabConfig()), is_eval=False)
+    without_config = IsaacLabBackend._make_cfg(_make_isaaclab_req(None), is_eval=False)
+
+    assert cfg.action_repeat == 4
+    assert default.action_repeat == 1 and without_config.action_repeat == 1
+
+
 def test_isaaclab_backend_make_cfg_defaults_to_no_preset_overrides() -> None:
     from rl_garden.common.env_args import IsaacLabConfig
     from rl_garden.envs.backends.isaaclab import IsaacLabBackend

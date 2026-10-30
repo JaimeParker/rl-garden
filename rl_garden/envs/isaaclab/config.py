@@ -26,3 +26,5 @@ class IsaacLabEnvConfig:
     # (None = on for 3.0, off for 2.x) is applied by v3/v2 ``runtime.build``,
     # so resolving this config never needs Isaac Lab installed.
     final_obs: bool | None = None
+    # Env steps per policy decision; > 1 wraps the adapter in ActionRepeatWrapper.
+    action_repeat: int = 1
