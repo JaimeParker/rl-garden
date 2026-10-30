@@ -14,8 +14,14 @@ class _FakeStaggeredEnv(gym.Env):
     1 per step and resets to 0 the instant it hits its configured
     termination/truncation limit (``None`` = never)."""
 
-    def __init__(self, term_limit: list[int | None], trunc_limit: list[int | None]) -> None:
+    def __init__(
+        self,
+        term_limit: list[int | None],
+        trunc_limit: list[int | None],
+        emit_final_observation: bool = True,
+    ) -> None:
         assert len(term_limit) == len(trunc_limit)
+        self.emit_final_observation = emit_final_observation
         self.num_envs = len(term_limit)
         self.term_limit = term_limit
         self.trunc_limit = trunc_limit
@@ -45,11 +51,12 @@ class _FakeStaggeredEnv(gym.Env):
         if done.any():
             self._value[done] = 0.0
             info = {
-                "final_observation": {"state": final_value[:, None].clone()},
-                "_final_observation": done.clone(),
                 "final_info": {"raw_value": final_value.clone()},
                 "_final_info": done.clone(),
             }
+            if self.emit_final_observation:
+                info["final_observation"] = {"state": final_value[:, None].clone()}
+                info["_final_observation"] = done.clone()
         obs = {"state": self._value[:, None].clone()}
         return obs, reward, terminated, truncated, info
 
@@ -99,3 +106,32 @@ def test_act_steps_one_matches_single_inner_step():
     assert torch.equal(reward, torch.tensor([1.0, 1.0]))
     assert not terminated.any() and not truncated.any()
     assert "final_observation" not in infos
+
+
+def test_final_observation_not_invented_when_inner_env_omits_it():
+    env = ActionChunkWrapper(
+        _FakeStaggeredEnv([1, None], [None, None], emit_final_observation=False),
+        act_steps=2,
+    )
+    _obs, _reward, terminated, _truncated, infos = env.step(torch.zeros(2, 2, 1))
+
+    assert torch.equal(terminated, torch.tensor([True, False]))
+    assert "final_observation" not in infos
+    assert "_final_observation" not in infos
+    assert torch.equal(infos["_final_info"], torch.tensor([True, False]))
+
+
+def test_final_info_emitted_only_on_done_substeps_is_frozen_per_env():
+    # env0 ends on sub-step 0 (and re-ends on every later sub-step), env1 ends
+    # on sub-step 2, env2 never ends. The inner env emits final_info only on
+    # sub-steps where some env is done.
+    env = ActionChunkWrapper(
+        _FakeStaggeredEnv([1, 3, None], [None, None, None], emit_final_observation=False),
+        act_steps=4,
+    )
+    _obs, _reward, _terminated, _truncated, infos = env.step(torch.zeros(3, 4, 1))
+
+    done_mask = infos["_final_info"]
+    assert torch.equal(done_mask, torch.tensor([True, True, False]))
+    assert torch.equal(infos["final_info"]["raw_value"][done_mask], torch.tensor([1.0, 3.0]))
+    assert torch.equal(env.dropped_episode_ends, torch.tensor([3, 0, 0]))

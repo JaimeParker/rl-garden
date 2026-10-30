@@ -10,7 +10,9 @@ sub-step. Same batched-heterogeneous-termination handling as
 accepted post-autoreset tradeoff: a terminated slot keeps receiving decoded
 actions for the rest of the chunk, unavoidable under SAME_STEP autoreset,
 but the returned macro-transition's reward/final-obs are unaffected), reusing
-the same ``_tree_where`` helper. The one structural difference from
+the same ``ChunkAccumulator`` (``final_observation`` is reported only if the
+inner env reports it; second episode ends within one macro-step are counted
+in ``dropped_episode_ends``). The one structural difference from
 ``ActionChunkWrapper`` is this wrapper decodes each sub-step's action itself
 from the *current* observation, rather than consuming a pre-computed chunk
 from the caller.
@@ -49,8 +51,6 @@ sliding window wouldn't vectorize across a batched env anyway.
 """
 from __future__ import annotations
 
-from typing import Any
-
 import gymnasium as gym
 import numpy as np
 import torch
@@ -58,7 +58,7 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.common.types import Obs
-from rl_garden.envs.wrappers._batch_utils import _tree_where
+from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
 from rl_garden.networks.actor_critic import UnsquashedGaussianActor
 
 
@@ -107,24 +107,19 @@ class SkillActionWrapper(gym.Wrapper):
         )
         self.action_space = batch_space(self.single_action_space, env.num_envs)
         self._last_obs: Obs | None = None
+        self._chunk = ChunkAccumulator()
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._last_obs = obs
         return obs, info
 
-    def step(self, skill: torch.Tensor):
-        num_envs = skill.shape[0]
-        device = skill.device
-        active = torch.ones(num_envs, dtype=torch.bool, device=device)
-        reward_sum = torch.zeros(num_envs, device=device)
-        chunk_terminated = torch.zeros(num_envs, dtype=torch.bool, device=device)
-        chunk_truncated = torch.zeros(num_envs, dtype=torch.bool, device=device)
-        final_observation: Obs | None = None
-        final_info: dict[str, Any] = {}
-        obs: Obs
-        infos: dict[str, Any] = {}
+    @property
+    def dropped_episode_ends(self) -> torch.Tensor | None:
+        return self._chunk.dropped_episode_ends
 
+    def step(self, skill: torch.Tensor):
+        self._chunk.begin()
         for _ in range(self.horizon):
             features = torch.cat([self._last_obs["state"], skill], dim=-1)
             with torch.no_grad():
@@ -134,34 +129,5 @@ class SkillActionWrapper(gym.Wrapper):
                     raw_action, _ = self.decoder.action_log_prob(features)
             obs, reward, terminated, truncated, infos = self.env.step(raw_action)
             self._last_obs = obs
-            done = terminated | truncated
-            newly_done = active & done
-            if newly_done.any():
-                step_final_obs = infos.get("final_observation", obs)
-                final_observation = (
-                    step_final_obs
-                    if final_observation is None
-                    else _tree_where(newly_done, step_final_obs, final_observation)
-                )
-                for key, value in infos.get("final_info", {}).items():
-                    final_info[key] = (
-                        _tree_where(newly_done, value, final_info[key])
-                        if key in final_info
-                        else value
-                    )
-                chunk_terminated = chunk_terminated | (terminated & newly_done)
-                chunk_truncated = chunk_truncated | (truncated & newly_done)
-            reward_sum = reward_sum + reward * active.to(reward.dtype)
-            active = active & ~done
-
-        out_infos = dict(infos)
-        for key in ("final_observation", "_final_observation", "final_info", "_final_info"):
-            out_infos.pop(key, None)
-        done_mask = ~active
-        if done_mask.any():
-            out_infos["final_observation"] = final_observation
-            out_infos["_final_observation"] = done_mask
-            if final_info:
-                out_infos["final_info"] = final_info
-                out_infos["_final_info"] = done_mask
-        return obs, reward_sum, chunk_terminated, chunk_truncated, out_infos
+            self._chunk.add(reward, terminated, truncated, infos)
+        return obs, *self._chunk.finish(infos)

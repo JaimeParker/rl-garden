@@ -15,8 +15,16 @@ class _FakeStaggeredEnv(gym.Env):
     1 per step and resets to 0 the instant it hits its configured
     termination/truncation limit (``None`` = never)."""
 
-    def __init__(self, term_limit: list[int | None], trunc_limit: list[int | None]) -> None:
+    def __init__(
+        self,
+        term_limit: list[int | None],
+        trunc_limit: list[int | None],
+        emit_final_observation: bool = True,
+        emit_final_info: bool = False,
+    ) -> None:
         assert len(term_limit) == len(trunc_limit)
+        self.emit_final_observation = emit_final_observation
+        self.emit_final_info = emit_final_info
         self.num_envs = len(term_limit)
         self.term_limit = term_limit
         self.trunc_limit = trunc_limit
@@ -47,10 +55,12 @@ class _FakeStaggeredEnv(gym.Env):
         info: dict = {}
         if done.any():
             self._value[done] = 0.0
-            info = {
-                "final_observation": {"state": final_value.clone()},
-                "_final_observation": done.clone(),
-            }
+            if self.emit_final_observation:
+                info["final_observation"] = {"state": final_value.clone()}
+                info["_final_observation"] = done.clone()
+            if self.emit_final_info:
+                info["final_info"] = {"raw_value": final_value[:, 0].clone()}
+                info["_final_info"] = done.clone()
         return {"state": self._value.clone()}, reward, terminated, truncated, info
 
 
@@ -117,6 +127,38 @@ def test_staggered_termination_freezes_final_obs_and_masks_reward():
     assert torch.equal(done_mask, torch.tensor([True, True, False]))
     final_obs = infos["final_observation"]["state"][done_mask, 0]
     assert torch.allclose(final_obs, torch.tensor([1.0, 3.0]))
+
+
+def test_final_observation_not_invented_when_inner_env_omits_it():
+    env = SkillActionWrapper(
+        _FakeStaggeredEnv([1, None], [None, None], emit_final_observation=False),
+        _RecordingDecoder(1), horizon=2, skill_dim=1,
+    )
+    env.reset()
+    _obs, _reward, terminated, _truncated, infos = env.step(torch.zeros(2, 1))
+
+    assert torch.equal(terminated, torch.tensor([True, False]))
+    assert "final_observation" not in infos
+    assert "_final_observation" not in infos
+
+
+def test_final_info_emitted_only_on_done_substeps_is_frozen_per_env():
+    # env0 ends on sub-step 0 (and re-ends on every later sub-step), env1 ends
+    # on sub-step 2, env2 never ends.
+    env = SkillActionWrapper(
+        _FakeStaggeredEnv(
+            [1, 3, None], [None, None, None],
+            emit_final_observation=False, emit_final_info=True,
+        ),
+        _RecordingDecoder(1), horizon=4, skill_dim=1,
+    )
+    env.reset()
+    _obs, _reward, _terminated, _truncated, infos = env.step(torch.zeros(3, 1))
+
+    done_mask = infos["_final_info"]
+    assert torch.equal(done_mask, torch.tensor([True, True, False]))
+    assert torch.equal(infos["final_info"]["raw_value"][done_mask], torch.tensor([1.0, 3.0]))
+    assert torch.equal(env.dropped_episode_ends, torch.tensor([3, 0, 0]))
 
 
 def test_deterministic_flag_controls_repeatability():

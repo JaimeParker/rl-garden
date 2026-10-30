@@ -14,10 +14,12 @@ already SAME_STEP-autoreset into a new episode by the underlying env), but
 its reward stops counting toward the chunk sum, and its
 ``final_observation``/``final_info`` are frozen at the sub-step it actually
 terminated on rather than overwritten by the new episode's data.
+``final_observation`` is reported only if the inner env reported it: a
+post-reset observation is never passed off as a terminal one. An env that ends
+a second time within one chunk loses that episode end; such drops are counted
+in ``dropped_episode_ends`` (see ``ChunkAccumulator``).
 """
 from __future__ import annotations
-
-from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -25,8 +27,7 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
-from rl_garden.common.types import Obs
-from rl_garden.envs.wrappers._batch_utils import _tree_where
+from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
 
 
 def _repeat_bound(bound: np.ndarray, n: int) -> np.ndarray:
@@ -63,49 +64,15 @@ class ActionChunkWrapper(gym.Wrapper):
             dtype=single.dtype,
         )
         self.action_space = batch_space(self.single_action_space, env.num_envs)
+        self._chunk = ChunkAccumulator()
+
+    @property
+    def dropped_episode_ends(self) -> torch.Tensor | None:
+        return self._chunk.dropped_episode_ends
 
     def step(self, action: torch.Tensor):
-        num_envs = action.shape[0]
-        device = action.device
-        active = torch.ones(num_envs, dtype=torch.bool, device=device)
-        reward_sum = torch.zeros(num_envs, device=device)
-        chunk_terminated = torch.zeros(num_envs, dtype=torch.bool, device=device)
-        chunk_truncated = torch.zeros(num_envs, dtype=torch.bool, device=device)
-        final_observation: Obs | None = None
-        final_info: dict[str, Any] = {}
-        obs: Obs
-        infos: dict[str, Any] = {}
-
+        self._chunk.begin()
         for i in range(self.act_steps):
             obs, reward, terminated, truncated, infos = self.env.step(action[:, i])
-            done = terminated | truncated
-            newly_done = active & done
-            if newly_done.any():
-                step_final_obs = infos.get("final_observation", obs)
-                final_observation = (
-                    step_final_obs
-                    if final_observation is None
-                    else _tree_where(newly_done, step_final_obs, final_observation)
-                )
-                for key, value in infos.get("final_info", {}).items():
-                    final_info[key] = (
-                        _tree_where(newly_done, value, final_info[key])
-                        if key in final_info
-                        else value
-                    )
-                chunk_terminated = chunk_terminated | (terminated & newly_done)
-                chunk_truncated = chunk_truncated | (truncated & newly_done)
-            reward_sum = reward_sum + reward * active.to(reward.dtype)
-            active = active & ~done
-
-        out_infos = dict(infos)
-        for key in ("final_observation", "_final_observation", "final_info", "_final_info"):
-            out_infos.pop(key, None)
-        done_mask = ~active
-        if done_mask.any():
-            out_infos["final_observation"] = final_observation
-            out_infos["_final_observation"] = done_mask
-            if final_info:
-                out_infos["final_info"] = final_info
-                out_infos["_final_info"] = done_mask
-        return obs, reward_sum, chunk_terminated, chunk_truncated, out_infos
+            self._chunk.add(reward, terminated, truncated, infos)
+        return obs, *self._chunk.finish(infos)

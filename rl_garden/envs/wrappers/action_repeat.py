@@ -27,8 +27,9 @@ Contract (the inner env and the output both follow it):
 - An env that ends a second time within the same chunk loses that episode
   end: its flags, ``final_info`` and ``final_observation`` stay those of the
   first. Such drops are counted per env on the device in
-  ``dropped_episode_ends`` (cumulative since construction, not cleared by
-  ``reset()``); episodes much longer than ``repeat`` keep it at zero.
+  ``dropped_episode_ends`` (allocated on the first step, cumulative since
+  then, not cleared by ``reset()``); episodes much longer than ``repeat``
+  keep it at zero.
 - ``infos["log"]`` is the whole dict from the last sub-step that reported
   one. A task that refreshes ``extras["log"]`` every N env steps needs
   ``N >= repeat``, or the earlier refreshes in a chunk are lost.
@@ -49,32 +50,7 @@ from typing import Any
 import gymnasium as gym
 import torch
 
-from rl_garden.envs.wrappers._batch_utils import _tree_where
-
-
-def _tree_clone(tree: Any) -> Any:
-    if isinstance(tree, dict):
-        return {key: _tree_clone(value) for key, value in tree.items()}
-    return tree.clone()
-
-
-def _tree_structure(tree: Any) -> Any:
-    if isinstance(tree, dict):
-        return {key: _tree_structure(value) for key, value in tree.items()}
-    return None
-
-
-def _freeze_newly_done(name: str, newly_done: torch.Tensor, new: Any, frozen: Any) -> Any:
-    """``new`` cloned on its first sub-step (``frozen is None``), else ``new``
-    on the ``newly_done`` rows and ``frozen`` elsewhere."""
-    if frozen is None:
-        return _tree_clone(new)
-    if _tree_structure(new) != _tree_structure(frozen):
-        raise ValueError(
-            f"ActionRepeatWrapper: infos[{name!r}] keys changed between sub-steps: "
-            f"{_tree_structure(frozen)!r} then {_tree_structure(new)!r}."
-        )
-    return _tree_where(newly_done, new, frozen)
+from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
 
 
 class ActionRepeatWrapper(gym.Wrapper):
@@ -86,7 +62,11 @@ class ActionRepeatWrapper(gym.Wrapper):
             raise ValueError(f"repeat must be >= 1, got {repeat}.")
         super().__init__(env)
         self.repeat = int(repeat)
-        self.dropped_episode_ends = torch.zeros(env.num_envs, dtype=torch.int64, device=env.device)
+        self._chunk = ChunkAccumulator()
+
+    @property
+    def dropped_episode_ends(self) -> torch.Tensor | None:
+        return self._chunk.dropped_episode_ends
 
     def __getattr__(self, name: str):
         # Only reached when normal lookup fails. "env" is guarded so a lookup
@@ -96,44 +76,8 @@ class ActionRepeatWrapper(gym.Wrapper):
         return getattr(self.env, name)
 
     def step(self, action: Any):
-        active = None
-        reward_sum = terminated_out = truncated_out = None
-        final_info = final_observation = log = None
+        self._chunk.begin()
         for _ in range(self.repeat):
             obs, reward, terminated, truncated, infos = self.env.step(action)
-            done = terminated | truncated
-            if active is None:
-                active = torch.ones_like(done, dtype=torch.bool)
-                reward_sum = torch.zeros_like(reward)
-                terminated_out = torch.zeros_like(active)
-                truncated_out = torch.zeros_like(active)
-            newly_done = active & done
-            reward_sum = reward_sum + reward * active.to(reward.dtype)
-            terminated_out = terminated_out | (terminated & newly_done)
-            truncated_out = truncated_out | (truncated & newly_done)
-            self.dropped_episode_ends += done & ~active
-            active = active & ~done
-            if "final_info" in infos:
-                final_info = _freeze_newly_done("final_info", newly_done, infos["final_info"], final_info)
-            if "final_observation" in infos:
-                final_observation = _freeze_newly_done(
-                    "final_observation", newly_done, infos["final_observation"], final_observation
-                )
-            if "log" in infos:
-                log = infos["log"]
-
-        out_infos = {
-            key: value
-            for key, value in infos.items()
-            if key != "log" and not key.startswith(("final_", "_final_"))
-        }
-        ended = ~active
-        if final_info is not None:
-            out_infos["final_info"] = final_info
-            out_infos["_final_info"] = ended
-        if final_observation is not None:
-            out_infos["final_observation"] = final_observation
-            out_infos["_final_observation"] = ended
-        if log is not None:
-            out_infos["log"] = log
-        return obs, reward_sum, terminated_out, truncated_out, out_infos
+            self._chunk.add(reward, terminated, truncated, infos)
+        return obs, *self._chunk.finish(infos)

@@ -55,7 +55,6 @@ entrypoints to a specific simulator.
 ## Development Rules
 
 - Inspect existing patterns with `rg` before editing.
-- Make surgical changes. Do not refactor adjacent code or reformat unrelated files.
 - Maximize reuse via subclassing: override in a subclass rather than editing a
   shared parent. Add a parent hook only if ≥2 *existing* subclasses need
   genuinely different behavior there (never a hypothetical future one), with a
