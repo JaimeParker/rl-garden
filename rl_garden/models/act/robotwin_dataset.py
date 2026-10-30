@@ -250,6 +250,24 @@ def compute_delta_ee_actions(
     return clipped, stats
 
 
+def subsample_episode(episode: RobotWinEpisode, stride: int) -> tuple[RobotWinEpisode, np.ndarray]:
+    """Select synchronized observations, retaining both endpoint frames."""
+    if isinstance(stride, bool) or not isinstance(stride, (int, np.integer)) or stride < 1:
+        raise ValueError("Frame stride must be a positive integer.")
+    length = len(episode.states)
+    arrays = (episode.left_endpose, episode.left_gripper,
+              episode.right_endpose, episode.right_gripper, *episode.images.values())
+    if length < 2 or any(len(value) != length for value in arrays):
+        raise ValueError("Episode fields must have matching lengths of at least two frames.")
+    indices = np.unique(np.r_[np.arange(0, length, stride), length - 1])
+    return RobotWinEpisode(
+        states=episode.states[indices], left_endpose=episode.left_endpose[indices],
+        left_gripper=episode.left_gripper[indices], right_endpose=episode.right_endpose[indices],
+        right_gripper=episode.right_gripper[indices],
+        images={key: value[indices] for key, value in episode.images.items()},
+    ), indices
+
+
 def write_act_h5(
     output_path: str | Path,
     episodes: Iterable[RobotWinEpisode],
@@ -260,10 +278,13 @@ def write_act_h5(
     ee_delta_pos_scale: float = 0.03,
     ee_delta_rot_scale: float = 0.15,
     gripper_delta_scale: float = 0.2,
+    frame_stride: int = 1,
 ) -> dict[str, Any]:
     """Write converted RoboTwin episodes into rl-garden ACT HDF5 format."""
 
     output = Path(output_path).expanduser()
+    if isinstance(frame_stride, bool) or not isinstance(frame_stride, (int, np.integer)) or frame_stride < 1:
+        raise ValueError("Frame stride must be a positive integer.")
     output.parent.mkdir(parents=True, exist_ok=True)
     metadata: dict[str, Any] = {
         "env_info": {
@@ -278,10 +299,14 @@ def write_act_h5(
             },
         },
         "task_config": task_config,
+        "sampling": {"frame_stride": int(frame_stride), "keep_terminal_observation": True,
+                     "method": "synchronized observation subsampling; recompute relative SE(3) actions"},
         "episodes": [],
     }
     with h5py.File(output, "w") as root:
         for traj_idx, episode in enumerate(episodes):
+            source_length = len(episode.states)
+            episode, indices = subsample_episode(episode, frame_stride)
             actions, stats = compute_delta_ee_actions(
                 episode.left_endpose,
                 episode.left_gripper,
@@ -294,6 +319,7 @@ def write_act_h5(
             obs_len = actions.shape[0] + 1
             traj = root.create_group(f"traj_{traj_idx}")
             traj.create_dataset("actions", data=actions, dtype=np.float32)
+            traj.create_dataset("source_frame_indices", data=indices)
             obs = traj.create_group("obs")
             sensor_data = obs.create_group("sensor_data")
             for camera_name in camera_names:
@@ -314,6 +340,8 @@ def write_act_h5(
                     "episode_id": traj_idx,
                     "control_mode": "delta_ee",
                     "length": int(actions.shape[0]),
+                    "source_length": source_length - 1,
+                    "terminal_short_interval": bool((source_length - 1) % frame_stride),
                     **stats,
                 }
             )

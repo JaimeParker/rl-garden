@@ -29,6 +29,11 @@ Loading checks interface compatibility rather than private filenames or training
 
 The robot is Aloha. `assets_path` points to a root containing `assets/embodiments/aloha-agilex`. Gripper-width conversion uses the [calibration file](../configs/open_laptop/aloha_gripper_calibration.json).
 
+The ACT base policy for these configurations uses stride-two demonstration sampling,
+with actions recomputed between retained poses. See the [ACT data and training guide](ROBOTWIN_ACT.md#stride-two-demonstration-sampling).
+The position, rotation and gripper normalization units are 0.06m, 0.30rad and 0.2.
+This sampling choice requires no additional online action skipping.
+
 ## 3. Construction and switching
 
 [open_laptop_recipes.py](../rl_garden/training/online/open_laptop_recipes.py) provides `privileged-state` and `visual-state`.
