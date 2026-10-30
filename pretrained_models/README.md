@@ -25,10 +25,6 @@ scripts/train_residual_sac_rgbd_peg.sh --policy act --ckpt-path act-peg-only
 ACT checkpoints may be `{"ema_agent": state_dict, "norm_stats": ...}`,
 `{"agent": state_dict, "norm_stats": ...}`, or a raw ACT state dict.
 
-## open_laptop visual encoder
-
-The supervised laptop encoder is separate from the ResNet loader described above.
-Its model and training code are included, but pretrained weights are not distributed.
-See the [encoder guide](../docs/ENCODER_INTERFACE.md) for the architecture and
-supervised training interface, and the [residual route guide](../docs/OPEN_LAPTOP_RECIPES.md)
-for its use as a frozen state estimator.
+For the separate supervised open_laptop encoder, see the
+[encoder guide](../docs/ENCODER_INTERFACE.md). Model and training code are included;
+pretrained weights are not distributed.

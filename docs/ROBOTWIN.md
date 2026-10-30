@@ -27,10 +27,8 @@ For the `open_laptop` ACT + Residual SAC delta-EE configuration, use the
 [RoboTwin fork](https://github.com/Nole326/RoboTwin) pinned to
 [`77ed01b786767dc1f912ff8e1cf0148ed7a7aae2`](https://github.com/Nole326/RoboTwin/tree/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2).
 It contains the executor changes previously delivered as an external patch.
-See the [privileged-state and frozen-encoder routes](OPEN_LAPTOP_RECIPES.md)
-for their configurations and inputs. The earlier
-[end-to-end visual baseline](ROBOTWIN_OPEN_LAPTOP_RESIDUAL_CURRENT.md)
-documents a separate configuration that updates its encoder during RL. See the fork's
+See the [privileged-state and frozen-encoder routes](OPEN_LAPTOP_RECIPES.md) or the
+[end-to-end visual reference](ROBOTWIN_OPEN_LAPTOP_RESIDUAL_CURRENT.md), and the fork's
 [executor documentation](https://github.com/Nole326/RoboTwin/blob/77ed01b786767dc1f912ff8e1cf0148ed7a7aae2/docs/DELTA_EE_EXECUTOR.md)
 for the changes. This dependency pin is specific to that configuration; it does
 not change the generic PPO examples below.
