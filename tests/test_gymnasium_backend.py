@@ -216,7 +216,7 @@ def test_episode_end_exposes_final_info_and_final_observation():
         _, _, terminated, truncated, infos = env.step(actions)
 
     assert bool(truncated.all()) and not bool(terminated.any())
-    assert bool(infos["_final_observation"].all())
+    assert "_final_observation" not in infos
     assert bool(infos["_final_info"].all())
     episode = infos["final_info"]["episode"]
     assert torch.equal(episode["r"].float(), torch.full((2,), 3.0))
@@ -405,7 +405,7 @@ def test_obs_key_map_renames_spaces_observations_and_final_observation():
 
     assert set(obs) == {"rgb_front", "state"}
     assert bool(truncated.all())
-    assert bool(infos["_final_observation"].all())
+    assert bool(infos["_final_info"].all())
     final_obs = infos["final_observation"]
     assert set(final_obs) == {"rgb_front", "state"}
     assert final_obs["rgb_front"].shape == (2, 16, 16, 3)

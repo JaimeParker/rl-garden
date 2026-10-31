@@ -3,8 +3,9 @@
 For backends whose envs auto-reset inside ``step()`` and report no episode
 statistics themselves. Mirrors gymnasium's ``RecordEpisodeStatistics`` /
 ManiSkill's ``record_metrics``: the returned values are full-width and valid
-only on the rows that finished this step (the ``final_info`` masking
-convention). Everything stays on the env device; no host sync.
+only on the rows that finished this step. Feed it raw env rewards; see the
+episode boundary contract in ``.agents/rules/adding-env-backend.md``.
+Everything stays on the env device; no host sync.
 """
 from __future__ import annotations
 

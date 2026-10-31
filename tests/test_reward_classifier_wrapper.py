@@ -1,9 +1,12 @@
 """Tests for RewardClassifierWrapper."""
 from __future__ import annotations
 
+from typing import ClassVar
+
 import gymnasium as gym
 import pytest
 import torch
+from gymnasium.vector import AutoresetMode
 
 from rl_garden.envs.wrappers.reward_classifier import RewardClassifierWrapper
 
@@ -49,3 +52,24 @@ def test_terminate_on_success_false_never_terminates():
     _, reward, terminated, _, _ = wrapped.step(torch.zeros(1, 7))
     assert reward.item() == 1.0
     assert not bool(terminated[0])
+
+
+class _SameStepAutoresetEnv(_FakeEnv):
+    metadata: ClassVar[dict] = {"autoreset_mode": AutoresetMode.SAME_STEP}
+
+
+def test_same_step_autoreset_env_is_rejected_at_construction():
+    with pytest.raises(ValueError, match="without autoreset"):
+        RewardClassifierWrapper(_SameStepAutoresetEnv(), lambda obs: torch.tensor([0.9]))
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cuda_classifier_output_on_cpu_env_is_moved_to_env_device():
+    classifier = lambda obs: torch.tensor([0.9], device="cuda")
+    wrapped = RewardClassifierWrapper(_FakeEnv(), classifier, threshold=0.5)
+    _, reward, terminated, _, info = wrapped.step(torch.zeros(1, 7))
+    assert reward.device.type == "cpu"
+    assert terminated.device.type == "cpu"
+    assert bool(terminated[0])
+    assert info["classifier_success_prob"].device.type == "cpu"

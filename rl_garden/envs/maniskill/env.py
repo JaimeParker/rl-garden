@@ -11,15 +11,42 @@ as per-camera ``rgb_<cam>``/``depth_<cam>`` keys (``PerCameraRGBDWrapper``) --
 ``FlattenRGBDObservationWrapper``'s channel-stacked bare ``rgb``/``depth`` is
 not used; fusing multiple cameras is the encoder's job (see
 ``CombinedExtractor``'s ``fusion_mode``), not the env's.
+
+A non-default ``reward_scale``/``reward_bias`` is applied to the reward
+``ManiSkillVectorEnv.step`` returns, so its ``episode`` metrics and
+``RecordEpisode`` see the raw env reward.
 """
 from __future__ import annotations
 
+import functools
 from typing import Any
 
 import gymnasium as gym
 
 from rl_garden.envs.maniskill.config import ManiSkillEnvConfig
 from rl_garden.observations.schema import ObservationContractError
+
+
+@functools.cache
+def _scaled_reward_vector_env_class() -> type:
+    """Define the reward-scaling ``ManiSkillVectorEnv`` subclass on first use,
+    keeping ``mani_skill`` a lazy import."""
+    from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
+
+    class _ScaledRewardManiSkillVectorEnv(ManiSkillVectorEnv):
+        """``ManiSkillVectorEnv`` that returns ``reward_scale * reward + reward_bias``
+        after its own ``step`` has recorded the raw reward in the episode metrics."""
+
+        def __init__(self, env, num_envs: int, *, reward_scale: float, reward_bias: float, **kwargs) -> None:
+            super().__init__(env, num_envs, **kwargs)
+            self.reward_scale = float(reward_scale)
+            self.reward_bias = float(reward_bias)
+
+        def step(self, actions):
+            obs, reward, terminated, truncated, infos = super().step(actions)
+            return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, infos
+
+    return _ScaledRewardManiSkillVectorEnv
 
 
 def make_maniskill_env(cfg: ManiSkillEnvConfig):
@@ -109,10 +136,6 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
     if isinstance(env.action_space, gym.spaces.Dict):
         env = FlattenActionSpaceWrapper(env)
 
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
-        env = RewardScaleBiasWrapper(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
-
     if cfg.record_dir is not None and (cfg.save_video or cfg.save_trajectory):
         env = RecordEpisode(
             env,
@@ -124,10 +147,16 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
             video_fps=cfg.video_fps,
         )
 
-    env = ManiSkillVectorEnv(
-        env,
-        cfg.num_envs,
-        ignore_terminations=cfg.ignore_terminations,
-        record_metrics=cfg.record_metrics,
-    )
-    return env
+    vector_kwargs: dict[str, Any] = {
+        "ignore_terminations": cfg.ignore_terminations,
+        "record_metrics": cfg.record_metrics,
+    }
+    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
+        return _scaled_reward_vector_env_class()(
+            env,
+            cfg.num_envs,
+            reward_scale=cfg.reward_scale,
+            reward_bias=cfg.reward_bias,
+            **vector_kwargs,
+        )
+    return ManiSkillVectorEnv(env, cfg.num_envs, **vector_kwargs)

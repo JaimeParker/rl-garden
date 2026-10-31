@@ -48,8 +48,8 @@ class ChunkAccumulator:
     autoreset env into one transition.
 
     Call ``begin()`` once per outer step, ``add()`` after every inner
-    ``step()``, then ``finish(last_infos)`` with the infos of the last inner
-    step. Per env:
+    ``step()``, then ``finish(last_obs, last_infos)`` with the observation and
+    infos of the last inner step. Per env:
 
     - ``reward`` sums the sub-steps up to and including the env's first
       episode end in the chunk; later sub-steps (already in the new episode)
@@ -58,9 +58,10 @@ class ChunkAccumulator:
     - ``final_info``/``final_observation`` are reported only if the inner env
       reported them on some sub-step of the chunk, and then on every outer
       step. They are cloned on their first sub-step and frozen at the sub-step
-      each env ended on; ``_final_info``/``_final_observation`` mark every env
-      that ended in the chunk. A key set that changes between sub-steps raises
-      ``ValueError``.
+      each env ended on; ``_final_info`` marks every env that ended in the
+      chunk. Rows of ``final_observation`` that did not end are ``last_obs``.
+      A key set that changes between sub-steps, or that differs from
+      ``last_obs``, raises ``ValueError``.
     - ``log`` is the whole dict from the last sub-step that reported one. Every
       other info key comes from the last sub-step.
     - A second episode end of the same env within one chunk is dropped: its
@@ -71,6 +72,9 @@ class ChunkAccumulator:
 
     No host sync: all masking is tensor ops on the device of the inner
     ``terminated``/``truncated`` tensors.
+
+    See the episode boundary contract in ``.agents/rules/adding-env-backend.md``
+    for the ``final_*`` keys.
     """
 
     def __init__(self) -> None:
@@ -118,7 +122,7 @@ class ChunkAccumulator:
             self._log = infos["log"]
 
     def finish(
-        self, last_infos: dict[str, Any]
+        self, last_obs: Obs, last_infos: dict[str, Any]
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         if self._active is None:
             raise RuntimeError("ChunkAccumulator.finish() called before any add() since begin().")
@@ -132,8 +136,12 @@ class ChunkAccumulator:
             out_infos["final_info"] = self._final_info
             out_infos["_final_info"] = ended
         if self._final_observation is not None:
-            out_infos["final_observation"] = self._final_observation
-            out_infos["_final_observation"] = ended
+            if _tree_structure(last_obs) != _tree_structure(self._final_observation):
+                raise ValueError(
+                    "infos['final_observation'] keys differ from the observation keys: "
+                    f"{_tree_structure(self._final_observation)!r} vs {_tree_structure(last_obs)!r}."
+                )
+            out_infos["final_observation"] = _tree_where(ended, self._final_observation, last_obs)
         if self._log is not None:
             out_infos["log"] = self._log
         return self._reward_sum, self._terminated, self._truncated, out_infos

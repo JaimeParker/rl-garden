@@ -68,7 +68,8 @@ SAC(env=env, buffer_device="cuda").learn(total_timesteps=100_000)
 | `vector_env_returns_torch` | `false` | The factory's vector env already returns torch tensors on `device`; requires `vector_env_factory` |
 
 Reward scaling uses the shared `--reward_scale`/`--reward_bias` flags, and
-`--num_envs`/`--num_eval_envs`/`--seed` work as for every backend. A
+`--num_envs`/`--num_eval_envs`/`--seed` work as for every backend; logged
+episode `return` stays the sum of raw env rewards, before scale and bias. A
 `reset()` without a seed replays the configured seed, so each evaluation
 round uses the same episodes.
 
@@ -263,8 +264,7 @@ translates Gymnasium's `final_obs` into `final_observation`, as on the
 With `vector_env_returns_torch: true`, the result must already return torch
 tensors on `device` and follow rl-garden's env contract itself:
 `reset(seed=...)`, Dict observations of tensors, and on episode end dense
-`infos["final_observation"]`/`"_final_observation"`/`"final_info"`/
-`"_final_info"`. The backend uses it without conversion and only wraps it so
+`infos["final_observation"]`/`"final_info"`/`"_final_info"`. The backend uses it without conversion and only wraps it so
 that `reset()` without a seed replays the configured seed. The adapter's
 float32 space canonicalization is skipped too, so declare `float32` `Box`
 spaces for float observations.

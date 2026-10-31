@@ -5,17 +5,27 @@ learned binary success signal computed from the current observation, and
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import gymnasium as gym
 import torch
+from gymnasium.vector import AutoresetMode
 
 ClassifierFn = Callable[[dict], torch.Tensor]
 
 
 class RewardClassifierWrapper(gym.Wrapper):
     """``classifier_fn(obs) -> success_prob`` (batched, any shape that
-    reshapes to ``(num_envs,)``), thresholded into a ``{0, 1}`` reward."""
+    reshapes to ``(num_envs,)``), thresholded into a ``{0, 1}`` reward.
+
+    This wrapper ORs success into ``terminated`` but supplies no
+    ``final_observation`` / ``final_info`` and never resets the env, so it is
+    only valid on an env without autoreset (the caller resets on
+    ``terminated`` / ``truncated``). Construction raises ``ValueError`` if
+    the wrapped env declares ``AutoresetMode.SAME_STEP``. The classifier may
+    run on a different device than the env; its output is moved to the
+    env's device.
+    """
 
     def __init__(
         self,
@@ -24,6 +34,11 @@ class RewardClassifierWrapper(gym.Wrapper):
         threshold: float = 0.5,
         terminate_on_success: bool = True,
     ) -> None:
+        if env.metadata.get("autoreset_mode") == AutoresetMode.SAME_STEP:
+            raise ValueError(
+                "RewardClassifierWrapper requires an env without autoreset; "
+                "the caller resets on terminated/truncated."
+            )
         super().__init__(env)
         self.classifier_fn = classifier_fn
         self.threshold = threshold
@@ -40,7 +55,7 @@ class RewardClassifierWrapper(gym.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         with torch.no_grad():
-            success_prob = self.classifier_fn(obs).reshape(-1)
+            success_prob = self.classifier_fn(obs).reshape(-1).to(terminated.device)
         success = success_prob > self.threshold
         classified_reward = success.to(reward.dtype)
         info = dict(info)

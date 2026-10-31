@@ -65,11 +65,14 @@ class _StaggeredSubSteps:
             info["_final_info"] = done
             if self._final_observation:
                 info["final_observation"] = {"state": final_value[:, None]}
-                info["_final_observation"] = done
         if self.num_steps in self._logs:
             info["log"] = self._logs[self.num_steps]
         reward = torch.ones(self.num_envs, device=self.device)
         return reward, terminated, truncated, info
+
+    def observation(self) -> dict:
+        """The observation after the latest ``step()`` (post-autoreset)."""
+        return {"state": self._value[:, None]}
 
 
 def _staggered(**kwargs) -> _StaggeredSubSteps:
@@ -83,7 +86,7 @@ def _run_chunk(chunk: ChunkAccumulator, source: _StaggeredSubSteps, num_sub_step
     for _ in range(num_sub_steps):
         reward, terminated, truncated, infos = source.step()
         chunk.add(reward, terminated, truncated, infos)
-    return chunk.finish(infos)
+    return chunk.finish(source.observation(), infos)
 
 
 @pytest.mark.parametrize("reuse_buffers", [False, True], ids=["fresh-tensors", "reused-buffers"])
@@ -96,9 +99,12 @@ def test_staggered_episode_ends_freeze_at_the_ending_sub_step(reuse_buffers: boo
     assert torch.equal(terminated, torch.tensor([True, True, False, False]))
     assert torch.equal(truncated, torch.tensor([False, False, False, True]))
     ended = torch.tensor([True, True, False, True])
-    assert torch.equal(infos["_final_observation"], ended)
+    assert "_final_observation" not in infos
     assert torch.equal(infos["_final_info"], ended)
-    assert torch.equal(infos["final_observation"]["state"].squeeze(-1)[ended], torch.tensor([1.0, 3.0, 2.0]))
+    final_state = infos["final_observation"]["state"].squeeze(-1)
+    assert torch.equal(final_state[ended], torch.tensor([1.0, 3.0, 2.0]))
+    # The row that did not end holds the returned (last sub-step) observation.
+    assert final_state[2].item() == 4.0
     assert torch.equal(infos["final_info"]["raw_value"][ended], torch.tensor([1.0, 3.0, 2.0]))
     # With reused buffers this only holds because the first report is cloned.
     assert torch.equal(infos["final_info"]["step"][ended], torch.tensor([1.0, 3.0, 2.0]))
@@ -122,7 +128,7 @@ def test_second_episode_end_in_a_chunk_is_counted_and_not_cleared_by_begin() -> 
 def test_no_final_observation_when_the_inner_env_reports_none() -> None:
     infos = _run_chunk(ChunkAccumulator(), _staggered(final_observation=False), num_sub_steps=4)[3]
 
-    assert "final_observation" not in infos and "_final_observation" not in infos
+    assert "final_observation" not in infos
     assert torch.equal(infos["_final_info"], torch.tensor([True, True, False, True]))
 
 
@@ -176,12 +182,23 @@ def test_changing_final_keys_between_sub_steps_raises(name: str) -> None:
         _run_chunk(ChunkAccumulator(), _ChangingKeys([None], [None]), num_sub_steps=4)
 
 
+def test_final_observation_keys_differing_from_the_observation_raise() -> None:
+    chunk, source = ChunkAccumulator(), _staggered()
+    chunk.begin()
+    for _ in range(4):
+        reward, terminated, truncated, infos = source.step()
+        chunk.add(reward, terminated, truncated, infos)
+
+    with pytest.raises(ValueError, match="final_observation"):
+        chunk.finish({"other": source.observation()["state"]}, infos)
+
+
 def test_finish_without_add_raises() -> None:
     chunk = ChunkAccumulator()
     chunk.begin()
 
     with pytest.raises(RuntimeError, match="before any add"):
-        chunk.finish({})
+        chunk.finish({}, {})
 
 
 def _assert_tree_equal(actual, expected) -> None:

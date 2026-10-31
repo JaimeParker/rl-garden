@@ -17,10 +17,10 @@ Contract (the inner env and the output both follow it):
   and the returned ``obs`` is from the new episode after those sub-steps.
 - ``terminated``/``truncated`` are the flags of the env's first episode end
   in the chunk. ``final_info`` and ``final_observation`` are frozen at that
-  sub-step; ``_final_info``/``_final_observation`` mark every env that ended.
-  ``final_observation`` is reported only if the inner env reported it on
-  some sub-step: a post-reset observation is never passed off as a terminal
-  one.
+  sub-step; ``_final_info`` marks every env that ended. ``final_observation``
+  is reported only if the inner env reported it on some sub-step, and its
+  rows of envs that did not end are the returned ``obs``: a post-reset
+  observation is never passed off as a terminal one.
 - Inner episode statistics (e.g. ``EpisodeStatistics`` in the Isaac Lab
   adapter) count env steps, including the uncounted sub-steps above, so a
   logged episode ``return``/``episode_len`` is per env step, not per decision.
@@ -80,4 +80,4 @@ class ActionRepeatWrapper(gym.Wrapper):
         for _ in range(self.repeat):
             obs, reward, terminated, truncated, infos = self.env.step(action)
             self._chunk.add(reward, terminated, truncated, infos)
-        return obs, *self._chunk.finish(infos)
+        return obs, *self._chunk.finish(obs, infos)

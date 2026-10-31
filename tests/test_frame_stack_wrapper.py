@@ -289,7 +289,7 @@ class _FakeSameStepAutoresetEnv(gym.Env):
         info: dict = {}
         if terminated.any():
             info["final_observation"] = self._obs()
-            info["_final_observation"] = terminated.clone()
+            info["_final_info"] = terminated.clone()
             self._value[terminated] = 0
         self.last_info = info
         return self._obs(), self._value.float(), terminated, truncated, info
@@ -340,7 +340,7 @@ def test_autoreset_in_step_stacks_final_observation_from_previous_history():
     assert _frame_values(final_rgb).tolist() == [[0, 1, 2], [0, 1, 2]]
     # Non-image keys stay single-frame.
     assert info["final_observation"]["state"].shape == (2, 1)
-    assert info["_final_observation"].tolist() == [True, False]
+    assert info["_final_info"].tolist() == [True, False]
 
 
 def test_autoreset_in_step_does_not_mutate_inner_info():

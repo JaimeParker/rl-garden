@@ -7,12 +7,19 @@ re-triggerable), and only ends the episode once every stage has fired.
 """
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 import gymnasium as gym
 import torch
+from gymnasium.vector import AutoresetMode
 
 ClassifierFn = Callable[[dict], torch.Tensor]
+
+
+def _obs_device(obs) -> torch.device:
+    while isinstance(obs, dict):
+        obs = next(iter(obs.values()))
+    return obs.device
 
 
 class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
@@ -22,6 +29,14 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
     ``threshold``; the step reward is the sum of newly-fired stages this
     step. Episode ends once every stage has fired, in addition to whatever
     the wrapped env's own ``terminated`` already signals.
+
+    This wrapper ORs success into ``terminated`` but supplies no
+    ``final_observation`` / ``final_info`` and never resets the env, so it is
+    only valid on an env without autoreset (the caller resets on
+    ``terminated`` / ``truncated``). Construction raises ``ValueError`` if
+    the wrapped env declares ``AutoresetMode.SAME_STEP``. Classifiers may run
+    on a different device than the env; their outputs are moved to the
+    env's device.
     """
 
     def __init__(
@@ -30,6 +45,11 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
         classifier_fns: Sequence[ClassifierFn],
         threshold: float = 0.75,
     ) -> None:
+        if env.metadata.get("autoreset_mode") == AutoresetMode.SAME_STEP:
+            raise ValueError(
+                "MultiStageBinaryRewardClassifierWrapper requires an env without "
+                "autoreset; the caller resets on terminated/truncated."
+            )
         super().__init__(env)
         self.classifier_fns = tuple(classifier_fns)
         self.threshold = threshold
@@ -43,7 +63,10 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._received = torch.zeros(
-            self.num_envs, len(self.classifier_fns), dtype=torch.bool
+            self.num_envs,
+            len(self.classifier_fns),
+            dtype=torch.bool,
+            device=_obs_device(obs),
         )
         info = dict(info)
         info["succeed"] = self._received.all(dim=-1)
@@ -53,7 +76,8 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         with torch.no_grad():
             probs = torch.stack(
-                [fn(obs).reshape(-1) for fn in self.classifier_fns], dim=-1
+                [fn(obs).reshape(-1).to(terminated.device) for fn in self.classifier_fns],
+                dim=-1,
             )
         newly = (probs >= self.threshold) & ~self._received
         self._received = self._received | newly

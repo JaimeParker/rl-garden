@@ -130,4 +130,4 @@ class SkillActionWrapper(gym.Wrapper):
             obs, reward, terminated, truncated, infos = self.env.step(raw_action)
             self._last_obs = obs
             self._chunk.add(reward, terminated, truncated, infos)
-        return obs, *self._chunk.finish(infos)
+        return obs, *self._chunk.finish(obs, infos)

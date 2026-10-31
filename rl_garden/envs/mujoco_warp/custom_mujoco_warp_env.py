@@ -177,7 +177,6 @@ class CustomMujocoWarpEnv(VectorEnv):
         infos: dict[str, Any] = {}
         if done_mask.any():
             infos["final_observation"] = _clone_obs(obs)
-            infos["_final_observation"] = done_mask
             infos["final_info"] = {"episode": episode}
             infos["_final_info"] = done_mask
             env_ids = torch.nonzero(done_mask, as_tuple=True)[0]

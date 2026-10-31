@@ -32,7 +32,7 @@ the new episode's first frame, the terminal frame is in
 from its new first frame and returns ``final_observation`` stacked as
 ``previous_history[1:] + terminal_frame`` (SB3 ``VecFrameStack``'s terminal
 convention). ``final_observation`` is stacked for every env; consumers select
-done envs with ``_final_observation``.
+done envs with ``_final_info``.
 """
 
 from __future__ import annotations

@@ -33,12 +33,11 @@ otherwise) and used as the adapter's per-key space, so its bounds (e.g. a
 the declaration. Without a declared ``Dict`` (int placeholders, native
 tasks) the spaces are inferred from the runtime tensors.
 
-Episode statistics: Isaac Lab auto-resets inside ``step()`` and never
-writes ``final_info``, so the adapter accumulates each env's return and
-length itself (``EpisodeStatistics``) and sets ``info["final_info"] =
-{"episode": {"return", "episode_len", ...}}`` and ``info["_final_info"] =
-terminated | truncated`` on every step; consumers read only the done rows.
-``info`` is a shallow copy of the env's ``extras`` (Isaac Lab reuses one
+Episode boundary: see the episode boundary contract in
+``.agents/rules/adding-env-backend.md``. Isaac Lab auto-resets inside
+``step()`` and never writes ``final_info``, so the adapter accumulates each
+env's return and length itself (``EpisodeStatistics``) and emits
+``final_info``/``_final_info`` on every step. ``info`` is a shallow copy of the env's ``extras`` (Isaac Lab reuses one
 dict across steps, which is never mutated here). Two task-side
 conventions: per-env metrics in ``extras["episode_metrics"]`` (a dict of
 ``(num_envs,)`` tensors, e.g. ``{"success": ...}``) are merged into
@@ -52,10 +51,9 @@ Terminal observations: Isaac Lab 3.0 with ``cfg.compute_final_obs`` (set by
 ``extras["final_obs"]`` -- the full-batch observation computed before the
 same-step reset -- on steps where some env resets. The adapter pops it and
 reports it as ``info["final_observation"]`` (same key extraction as the
-step obs, not cloned) with ``info["_final_observation"] = terminated |
-truncated``. Isaac Lab leaves the last value in ``extras`` on steps without
-resets; ``done`` is all False there, so consumers indexing by the mask never
-read it. Isaac Lab 2.x has no terminal observation: no
+step obs). Isaac Lab leaves the last value in ``extras`` on steps without
+resets; that stale value is replaced on every non-done row by the step's
+returned observation. Isaac Lab 2.x has no terminal observation: no
 ``final_observation`` is reported, so PPO bootstraps every ended episode
 with 0 and off-policy truncations bootstrap from the reset observation.
 
@@ -69,11 +67,13 @@ from typing import Any, Optional
 import gymnasium as gym
 import numpy as np
 import torch
+from gymnasium.vector import AutoresetMode
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.episode_statistics import EpisodeStatistics
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
 from rl_garden.envs.isaaclab.detect import generation
+from rl_garden.envs.wrappers._batch_utils import _tree_where
 from rl_garden.observations.schema import ObservationContractError
 
 
@@ -151,7 +151,7 @@ def _check_frames_nonzero(obs: dict) -> None:
 class _IsaacLabVecEnvAdapter(gym.Env):
     """Adapts an IsaacLab env to the rl-garden env shape (see module docstring)."""
 
-    metadata = {"render_modes": []}
+    metadata = {"render_modes": [], "autoreset_mode": AutoresetMode.SAME_STEP}
 
     def __init__(
         self, env: Any, seed: int, *, is_visual: bool = False, state: bool = True
@@ -280,8 +280,9 @@ class _IsaacLabVecEnvAdapter(gym.Env):
 
     def _step_info(self, extras: dict, reward: torch.Tensor, done: torch.Tensor) -> dict:
         """``extras`` plus ``final_info``/``_final_info`` and, when the env
-        reports terminal observations, ``final_observation``/
-        ``_final_observation`` (see module docstring)."""
+        reports terminal observations, ``final_observation`` (see module
+        docstring). Reads ``self._last_obs``, which ``step()`` has already
+        updated."""
         info = dict(extras)
         episode = self._episode_stats.step(reward, done)
         for key, value in info.pop("episode_metrics", {}).items():
@@ -301,10 +302,9 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         info["_final_info"] = done
         final_obs = info.pop("final_obs", None)
         if final_obs is not None:
-            info["final_observation"] = self._extract_obs(final_obs)
-            # Masks stale values too: Isaac Lab keeps the last final_obs in
-            # extras on steps without resets, where done is all False.
-            info["_final_observation"] = done
+            # Isaac Lab keeps the last final_obs in extras on steps without
+            # resets, so non-done rows must not keep its stale values.
+            info["final_observation"] = _tree_where(done, self._extract_obs(final_obs), self._last_obs)
         log = info.pop("log", None)
         if log is not None and log is not self._last_forwarded_log:
             info["log"] = log

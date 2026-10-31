@@ -5,11 +5,9 @@ Wraps a numpy-based ``gymnasium.vector.VectorEnv`` (``SyncVectorEnv``/
 observations/rewards/terminations/truncations as torch tensors, and
 Gymnasium's own ``infos["final_obs"]``/``"_final_obs"`` (SAME_STEP
 autoreset, ``dtype=object``, populated only at terminated/truncated
-indices) translated into rl-garden's dense
-``infos["final_observation"]``/``"_final_observation"`` convention --
-matching ``ManiSkillVectorEnv.step()``'s exact key set
-(``mani_skill/vector/wrappers/gymnasium.py:170-175``): ``final_observation``,
-``final_info``, ``_final_info``, ``_final_observation``.
+indices) translated into the dense ``infos["final_observation"]``;
+``final_info`` and ``_final_info`` are converted to tensors. See the episode
+boundary contract in ``.agents/rules/adding-env-backend.md``.
 
 Replaces two backend-specific adapters that duplicated this translation with
 a latent divergence between them: ``rl_garden.envs.minari.env
@@ -42,8 +40,7 @@ from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 class TorchVectorEnvAdapter(VectorWrapper):
     """Wraps a numpy ``gymnasium.vector.VectorEnv`` to emit rl-garden's torch
-    env contract. See module docstring for the ``final_observation``/
-    ``final_info`` contract."""
+    env contract. See the module docstring for the ``final_*`` translation."""
 
     def __init__(self, vec_env: VectorEnv, device: str) -> None:
         super().__init__(vec_env)
@@ -138,11 +135,9 @@ class TorchVectorEnvAdapter(VectorWrapper):
     def _translate_infos(self, infos: dict[str, Any], obs: Any) -> dict[str, Any]:
         out = dict(infos)
         final_obs_raw = out.pop("final_obs", None)
-        mask = out.pop("_final_obs", None)
+        out.pop("_final_obs", None)
         if final_obs_raw is not None:
             out["final_observation"] = self._stack_final_obs(final_obs_raw, obs)
-        if mask is not None:
-            out["_final_observation"] = self._to_torch(mask)
         if "final_info" in out:
             out["final_info"] = self._convert_info_tree(out["final_info"])
         if "_final_info" in out:

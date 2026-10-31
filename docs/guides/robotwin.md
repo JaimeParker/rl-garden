@@ -248,7 +248,6 @@ expects:
 final_observation
 final_info
 _final_info
-_final_observation
 _elapsed_steps
 ```
 

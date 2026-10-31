@@ -82,7 +82,6 @@ class _FakeStaggeredEnv(gym.Env):
             info["_final_info"] = done
             if self._final_observation:
                 info["final_observation"] = {"state": final_value[:, None]}
-                info["_final_observation"] = done
         if self.num_steps in self._logs:
             info["log"] = self._logs[self.num_steps]
         obs = {"state": self._value[:, None].clone()}
@@ -116,9 +115,12 @@ def test_staggered_episode_ends_freeze_at_the_ending_sub_step(reuse_buffers: boo
     assert torch.equal(truncated, torch.tensor([False, False, False, True]))
     assert torch.equal(obs["state"].squeeze(-1), torch.tensor([0.0, 1.0, 4.0, 0.0]))
     ended = torch.tensor([True, True, False, True])
-    assert torch.equal(infos["_final_observation"], ended)
+    assert "_final_observation" not in infos
     assert torch.equal(infos["_final_info"], ended)
-    assert torch.equal(infos["final_observation"]["state"].squeeze(-1)[ended], torch.tensor([1.0, 3.0, 2.0]))
+    final_state = infos["final_observation"]["state"].squeeze(-1)
+    assert torch.equal(final_state[ended], torch.tensor([1.0, 3.0, 2.0]))
+    # The row that did not end holds the returned observation.
+    assert final_state[~ended].tolist() == obs["state"].squeeze(-1)[~ended].tolist()
     assert torch.equal(infos["final_info"]["raw_value"][ended], torch.tensor([1.0, 3.0, 2.0]))
     assert torch.equal(infos["final_info"]["step"][ended], torch.tensor([1.0, 3.0, 2.0]))
     # Non-final keys come from the last sub-step.

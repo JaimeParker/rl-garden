@@ -225,8 +225,9 @@ checked by `tests/test_vector_env_contract.py`:
   `obs`/`reward`/`terminated`/`truncated` torch tensors (or a dict of torch
   tensors for Dict obs) on the backend's configured device
 - `metadata["autoreset_mode"] = AutoresetMode.SAME_STEP`
-- `infos["final_observation"]`/`"_final_observation"`/`"final_info"`/`"_final_info"`
-  — matching `ManiSkillVectorEnv`'s key set exactly
+- `infos["final_info"]`/`"_final_info"` and, when the backend can provide
+  terminal observations, `infos["final_observation"]` — see the episode
+  boundary contract below
 - optional `infos["log"]`: a flat dict of scalar aggregates (numbers or
   1-element tensors), logged by the rollout loops as `env/<key>` at the current
   global step on every step it is present (omit it on steps with nothing new)
@@ -234,6 +235,47 @@ checked by `tests/test_vector_env_contract.py`:
 `TorchVectorEnvAdapter` provides all of this for free once handed a numpy
 `gymnasium.vector.VectorEnv`; skip it only if the backend already returns torch
 tensors natively (e.g. ManiSkill).
+
+### Episode boundary contract
+
+Under SAME_STEP autoreset the `obs` returned by `step()` is already the first
+observation of the next episode for every env that ended on that step, so the
+ended episode's terminal observation and statistics travel in `infos`. Every
+backend, and every wrapper that changes episode boundaries, follows these
+rules; `tests/test_episode_boundary_contract.py` checks them across backends.
+
+1. An env that resets itself inside `step()` declares
+   `metadata["autoreset_mode"] = gymnasium.vector.AutoresetMode.SAME_STEP`. An
+   env without autoreset (real robots) does not set the key.
+2. `infos["final_info"]` is a dict that always contains `"episode"`, a dict of
+   `(N,)` tensors with the canonical keys `return` (the sum of raw env rewards,
+   without `reward_scale`/`reward_bias`) and `episode_len` (or the aliases
+   `rl_garden.common.eval_metrics.canonical_episode_metric_key` maps to them,
+   e.g. `RecordEpisodeStatistics`'s `r`/`l`), and optionally `success_once`,
+   `success_at_end` and task-specific metrics. Other top-level keys of
+   `final_info` are allowed; tensor leaves there live on the env device, and
+   non-tensor entries (RoboTwin's per-env instruction strings and seeds,
+   ManiSkill's copied info dict) are allowed but ignored by consumers. Exception:
+   ManiSkill with `record_metrics=False` emits no `"episode"`; consumers then
+   log no episode metrics.
+3. `infos["_final_info"]` is an `(N,)` bool tensor on the env device, emitted
+   whenever `final_info` is. It is the only row mask.
+4. `infos["final_observation"]` has the structure, shapes and device of `obs`:
+   ended rows hold the terminal observation, every other row equals the `obs`
+   returned by the same step. Only a backend that can provide terminal
+   observations emits it.
+5. There is no `infos["_final_observation"]`: rl-garden producers do not emit
+   it and consumers do not read it. The extra key that ManiSkill's own
+   `ManiSkillVectorEnv` emits passes through as an ordinary info entry.
+6. The presence of a key does not mean an episode ended: a producer may emit
+   these keys on every step or only on steps where some env ends, and
+   consumers read only the rows `_final_info` selects. The one exception: a
+   missing `final_observation` means the backend provides no terminal
+   observation, and bootstrapping uses 0.
+7. A wrapper that adds to `terminated` either supplies the data of rules 2–4
+   and triggers the reset itself, or is restricted to envs without autoreset
+   and checks rule 1 at construction.
+8. All tensors are on the env device; consumers do their own transfers.
 
 ## 5. Step 3 — Register the config in `EnvBackendArgs`
 

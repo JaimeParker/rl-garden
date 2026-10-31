@@ -90,10 +90,12 @@ def test_staggered_termination_and_truncation_within_one_chunk():
     # land back at a freshly-reset 0; env1/env2 don't re-trigger).
     assert torch.allclose(obs["state"].squeeze(-1), torch.tensor([0.0, 1.0, 4.0, 0.0]))
 
-    done_mask = infos["_final_observation"]
+    done_mask = infos["_final_info"]
     assert torch.equal(done_mask, torch.tensor([True, True, False, True]))
     final_state = infos["final_observation"]["state"].squeeze(-1)
     assert torch.allclose(final_state[done_mask], torch.tensor([1.0, 3.0, 2.0]))
+    assert torch.equal(final_state[~done_mask], obs["state"].squeeze(-1)[~done_mask])
+    assert "_final_observation" not in infos
 
     assert torch.equal(infos["_final_info"], done_mask)
     assert torch.allclose(infos["final_info"]["raw_value"][done_mask], torch.tensor([1.0, 3.0, 2.0]))

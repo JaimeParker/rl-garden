@@ -486,6 +486,8 @@ camera) are unaffected.
 The backend computes each env's episode `return` and `episode_len` itself and
 reports them through `infos["final_info"]`, so they show up in the `[train]`
 line and as `train/return` / `train/episode_len` without any task code.
+`return` is the sum of the raw env rewards, before `--reward_scale` and
+`--reward_bias`.
 
 Per-env episode metrics come from `self.extras["episode_metrics"]`, a dict of
 `(num_envs,)` tensors. Assign it on every step where some env ends (e.g. in
@@ -515,8 +517,8 @@ Isaac Lab resets a done env inside `step()`, so the observation it returns
 for that env already belongs to the next episode. On 3.0 the backend turns on
 the env cfg's `compute_final_obs` by default: Isaac Lab then computes the
 observation once more before the reset, and the backend reports it as
-`infos["final_observation"]` (masked by `infos["_final_observation"]`). PPO
-and off-policy algorithms bootstrap truncated transitions from it
+`infos["final_observation"]` (non-done rows hold the step's returned
+observation). PPO and off-policy algorithms bootstrap truncated transitions from it
 (`--bootstrap-at-done`, default `truncated`; terminations bootstrap 0).
 
 - `--isaaclab.final_obs False` turns it off to save the cost: one extra
@@ -556,8 +558,8 @@ before.
 - Units. Training arguments count decisions: `--total_timesteps`,
   `--num_steps` and `--log_freq` are per decision, and `--gamma` discounts per
   decision, so its time horizon is `k` times longer in env steps. Episode
-  statistics count env steps: `train/return` and `train/episode_len` are per
-  env step, unlike the dm_control backend, whose `episode_len` counts
+  statistics count env steps: `train/return` (a sum of raw env rewards) and
+  `train/episode_len` are per env step, unlike the dm_control backend, whose `episode_len` counts
   decisions.
 - Episode ends inside a decision. An env that ends on sub-step `j < k` is
   reset by Isaac Lab and runs the old action for the remaining `k - j` env

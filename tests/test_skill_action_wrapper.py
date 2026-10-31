@@ -110,12 +110,12 @@ def test_decoder_receives_current_obs_each_substep():
 def test_staggered_termination_freezes_final_obs_and_masks_reward():
     decoder = _RecordingDecoder(1)
     env = SkillActionWrapper(
-        _FakeStaggeredEnv(term_limit=[1, 3, None], trunc_limit=[None, None, None]),
+        _FakeStaggeredEnv(term_limit=[1, 3, None], trunc_limit=[None, None, None], emit_final_info=True),
         decoder, horizon=4, skill_dim=1,
     )
     env.reset()
     skill = torch.zeros(3, 1)
-    _obs, reward, terminated, truncated, infos = env.step(skill)
+    obs, reward, terminated, truncated, infos = env.step(skill)
 
     # env0 terminates at sub-step 1 (reward=1), env1 at sub-step 3
     # (reward=3), env2 never (reward=4).
@@ -123,10 +123,12 @@ def test_staggered_termination_freezes_final_obs_and_masks_reward():
     assert torch.equal(terminated, torch.tensor([True, True, False]))
     assert not truncated.any()
 
-    done_mask = infos["_final_observation"]
+    done_mask = infos["_final_info"]
     assert torch.equal(done_mask, torch.tensor([True, True, False]))
     final_obs = infos["final_observation"]["state"][done_mask, 0]
     assert torch.allclose(final_obs, torch.tensor([1.0, 3.0]))
+    assert torch.equal(infos["final_observation"]["state"][~done_mask], obs["state"][~done_mask])
+    assert "_final_observation" not in infos
 
 
 def test_final_observation_not_invented_when_inner_env_omits_it():

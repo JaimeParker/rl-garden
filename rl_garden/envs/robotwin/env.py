@@ -10,6 +10,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
+from gymnasium.vector import AutoresetMode
 
 from rl_garden.common.utils import get_device
 from rl_garden.envs.robotwin.config import RoboTwinEnvConfig
@@ -30,6 +31,8 @@ class RoboTwinEnv(gym.Env):
         if cfg.num_envs <= 0:
             raise ValueError(f"num_envs must be positive, got {cfg.num_envs}.")
         self.cfg = cfg
+        if cfg.auto_reset:
+            self.metadata = {**self.metadata, "autoreset_mode": AutoresetMode.SAME_STEP}
         self.num_envs = cfg.num_envs
         self.device = get_device(cfg.device)
         bounded_action = cfg.control_mode in {"delta_joint_pos", "ee_delta_pose"}
@@ -99,6 +102,8 @@ class RoboTwinEnv(gym.Env):
         if max_steps is not None:
             truncations = torch.logical_or(truncations, self.elapsed_steps >= max_steps)
         infos = self._record_metrics(rewards, infos)
+        # Episode metrics sum the raw task reward; only the returned reward is scaled.
+        rewards = rewards * self.cfg.reward_scale + self.cfg.reward_bias
         if self.cfg.ignore_terminations:
             if "success" in infos:
                 infos["episode"]["success_at_end"] = infos["success"].clone()
@@ -178,7 +183,6 @@ class RoboTwinEnv(gym.Env):
         infos["final_observation"] = final_obs
         infos["final_info"] = final_info
         infos["_final_info"] = dones
-        infos["_final_observation"] = dones
         infos["_elapsed_steps"] = dones
         return obs, infos
 

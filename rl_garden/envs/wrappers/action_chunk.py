@@ -75,4 +75,4 @@ class ActionChunkWrapper(gym.Wrapper):
         for i in range(self.act_steps):
             obs, reward, terminated, truncated, infos = self.env.step(action[:, i])
             self._chunk.add(reward, terminated, truncated, infos)
-        return obs, *self._chunk.finish(infos)
+        return obs, *self._chunk.finish(obs, infos)

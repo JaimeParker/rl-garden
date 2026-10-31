@@ -319,7 +319,8 @@ class RoboTwinTaskAdapter:
                 reward = 0.0
             else:
                 reward = float(reward_obj.compute_reward())
-        reward = reward * self.cfg.reward_scale + self.cfg.reward_bias
+        # The difference is taken on the raw reward; RoboTwinEnv.step applies
+        # reward_scale/reward_bias afterwards, so the difference no longer cancels reward_bias.
         if self.cfg.use_relative_reward:
             diff = reward - self.last_dense_reward
             self.last_dense_reward = reward

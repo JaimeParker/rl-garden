@@ -1,8 +1,12 @@
 """Tests for MultiStageBinaryRewardClassifierWrapper."""
 from __future__ import annotations
 
+from typing import ClassVar
+
 import gymnasium as gym
+import pytest
 import torch
+from gymnasium.vector import AutoresetMode
 
 from rl_garden.envs.wrappers.multi_stage_classifier import (
     MultiStageBinaryRewardClassifierWrapper,
@@ -88,3 +92,28 @@ def test_reset_clears_received_state():
     _, reward, terminated, _, _ = wrapped.step(torch.zeros(1, 7))
     assert reward.item() == 1.0  # fires again after reset
     assert bool(terminated[0])
+
+
+class _SameStepAutoresetEnv(_FakeEnv):
+    metadata: ClassVar[dict] = {"autoreset_mode": AutoresetMode.SAME_STEP}
+
+
+def test_same_step_autoreset_env_is_rejected_at_construction():
+    with pytest.raises(ValueError, match="without autoreset"):
+        MultiStageBinaryRewardClassifierWrapper(
+            _SameStepAutoresetEnv(), [lambda obs: torch.tensor([0.9])]
+        )
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cuda_classifier_outputs_on_cpu_env_are_moved_to_env_device():
+    fns = [lambda obs: torch.tensor([0.9], device="cuda")] * 2
+    wrapped = MultiStageBinaryRewardClassifierWrapper(_FakeEnv(), fns, threshold=0.75)
+    _, info = wrapped.reset()
+    assert info["succeed"].device.type == "cpu"
+    _, reward, terminated, _, info = wrapped.step(torch.zeros(1, 7))
+    assert reward.device.type == "cpu"
+    assert reward.item() == 2.0
+    assert terminated.device.type == "cpu"
+    assert bool(info["succeed"][0])

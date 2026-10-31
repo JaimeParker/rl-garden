@@ -137,7 +137,7 @@ def test_partial_termination_final_observation_matches_maniskill_convention():
     # ManiSkillVectorEnv.step()'s "just o_{t+1}" convention -- not zeros.
     final_obs = infos["final_observation"]
     assert torch.equal(final_obs.flatten(), torch.tensor([2.0, 102.0]))
-    assert torch.equal(infos["_final_observation"], torch.tensor([True, False]))
+    assert "_final_observation" not in infos
 
     # final_info is preserved (the CPU MuJoCo adapter this replaces used to drop it).
     assert torch.equal(infos["_final_info"], torch.tensor([True, False]))

@@ -57,7 +57,9 @@ platforms can be integrated without creating platform-specific training entrypoi
   [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)),
   Meta-World, RLBench, RoboTwin, robomimic, OGBench, Minari, and legacy
   D4RL/Adroit/Kitchen. A real-robot Franka backend comes from an optional
-  submodule, and a template backend shows how to add further platforms.
+  submodule, and a template backend shows how to add further platforms. Every
+  backend follows the episode boundary contract in
+  [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration
   recording, and learned reward classifiers.
 - **Distributed training:** optional RLinf/Ray adapters for offline, async
