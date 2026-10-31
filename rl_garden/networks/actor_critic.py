@@ -429,12 +429,33 @@ class UnsquashedGaussianActor(nn.Module):
         return mean.clamp(self.action_low, self.action_high)
 
 
+def _per_action_dim_tensor(
+    name: str, values: Sequence[float], act_dim: int
+) -> torch.Tensor:
+    if len(values) != act_dim:
+        raise ValueError(
+            f"{name} must have length act_dim={act_dim}, got {len(values)}."
+        )
+    return torch.as_tensor(list(values), dtype=torch.float32)
+
+
 class DiagGaussianActor(nn.Module):
     """Unsquashed diagonal Gaussian actor used by PPO-style algorithms.
 
     Actions are sampled in env action coordinates and may be clamped by the
     training loop before stepping the environment. Log-probabilities are always
     evaluated on the unclamped action tensor, matching SB3 and ManiSkill PPO.
+
+    Optional per-dimension initialisation (all ``None`` keeps the default
+    ``nn.Linear`` mean head and a uniform ``log_std_init``):
+
+    - ``log_std_init_per_dim``: one initial log-std per action dimension,
+      overriding ``log_std_init``.
+    - ``action_mean_head_gain``: orthogonal mean-head weights with this gain
+      and zero bias. This consumes extra RNG, so modules built after the actor
+      (e.g. a value network) initialise differently from a run without it.
+    - ``action_mean_bias_init``: initial mean-head bias per action dimension,
+      applied after ``action_mean_head_gain`` so the initial mean equals it.
     """
 
     def __init__(
@@ -444,6 +465,9 @@ class DiagGaussianActor(nn.Module):
         hidden_dims: Sequence[int],
         *,
         log_std_init: float = -0.5,
+        log_std_init_per_dim: Optional[Sequence[float]] = None,
+        action_mean_bias_init: Optional[Sequence[float]] = None,
+        action_mean_head_gain: Optional[float] = None,
         use_layer_norm: bool = False,
         use_group_norm: bool = False,
         num_groups: int = 32,
@@ -464,7 +488,23 @@ class DiagGaussianActor(nn.Module):
             kernel_init=kernel_init,
         )
         self.mean = nn.Linear(trunk_dim, act_dim)
-        self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
+        if action_mean_head_gain is not None:
+            nn.init.orthogonal_(self.mean.weight, gain=action_mean_head_gain)
+            nn.init.zeros_(self.mean.bias)
+        if action_mean_bias_init is not None:
+            bias = _per_action_dim_tensor(
+                "action_mean_bias_init", action_mean_bias_init, act_dim
+            )
+            with torch.no_grad():
+                self.mean.bias.copy_(bias.reshape(act_dim))
+        if log_std_init_per_dim is not None:
+            self.log_std = nn.Parameter(
+                _per_action_dim_tensor(
+                    "log_std_init_per_dim", log_std_init_per_dim, act_dim
+                ).reshape(1, act_dim)
+            )
+        else:
+            self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
 
         high = torch.as_tensor(action_space.high, dtype=torch.float32)
         low = torch.as_tensor(action_space.low, dtype=torch.float32)

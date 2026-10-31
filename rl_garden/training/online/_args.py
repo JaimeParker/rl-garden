@@ -373,6 +373,13 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     # (state or visual), unlike SAC-family's vision-gated equivalent.
     critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
     log_std_init: float = -0.5
+    # Per-action-dimension initial log-std; overrides ``log_std_init`` and
+    # must have one entry per action dimension.
+    log_std_init_per_dim: Optional[tuple[float, ...]] = None
+    # Per-action-dimension initial bias of the actor's mean head.
+    action_mean_bias_init: Optional[tuple[float, ...]] = None
+    # Orthogonal init gain (zero bias) for the actor's mean head.
+    action_mean_head_gain: Optional[float] = None
 
 
 @dataclass

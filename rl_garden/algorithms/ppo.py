@@ -39,6 +39,11 @@ def ppo_clip_policy_loss(
     return torch.max(pg_loss1, pg_loss2).mean()
 
 
+def _as_float_list_or_none(values: Optional[Sequence[float]]) -> Optional[list[float]]:
+    """Normalize tuple/list init options so checkpoint metadata round-trips."""
+    return None if values is None else [float(v) for v in values]
+
+
 class PPO(OnPolicyAlgorithm):
     """SB3/ManiSkill-style PPO with rl-garden feature extractors."""
 
@@ -85,6 +90,9 @@ class PPO(OnPolicyAlgorithm):
         actor_hidden_dims: Optional[Sequence[int]] = None,
         value_hidden_dims: Optional[Sequence[int]] = None,
         log_std_init: float = -0.5,
+        log_std_init_per_dim: Optional[Sequence[float]] = None,
+        action_mean_bias_init: Optional[Sequence[float]] = None,
+        action_mean_head_gain: Optional[float] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -198,6 +206,9 @@ class PPO(OnPolicyAlgorithm):
             value_hidden_dims=value_hidden_dims,
         )
         self.log_std_init = log_std_init
+        self.log_std_init_per_dim = _as_float_list_or_none(log_std_init_per_dim)
+        self.action_mean_bias_init = _as_float_list_or_none(action_mean_bias_init)
+        self.action_mean_head_gain = action_mean_head_gain
         self.actor_use_layer_norm = actor_use_layer_norm
         self.value_use_layer_norm = value_use_layer_norm
         self.actor_use_group_norm = actor_use_group_norm
@@ -272,6 +283,9 @@ class PPO(OnPolicyAlgorithm):
             "adaptive_lr_max": self.adaptive_lr_max,
             "net_arch": self.net_arch,
             "log_std_init": self.log_std_init,
+            "log_std_init_per_dim": self.log_std_init_per_dim,
+            "action_mean_bias_init": self.action_mean_bias_init,
+            "action_mean_head_gain": self.action_mean_head_gain,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -362,6 +376,9 @@ class PPO(OnPolicyAlgorithm):
             action_space=self.env.single_action_space,
             net_arch=self.net_arch,
             log_std_init=self.log_std_init,
+            log_std_init_per_dim=self.log_std_init_per_dim,
+            action_mean_bias_init=self.action_mean_bias_init,
+            action_mean_head_gain=self.action_mean_head_gain,
             actor_use_layer_norm=self.actor_use_layer_norm,
             value_use_layer_norm=self.value_use_layer_norm,
             actor_use_group_norm=self.actor_use_group_norm,
