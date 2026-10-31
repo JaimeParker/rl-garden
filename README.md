@@ -19,7 +19,10 @@ platforms can be integrated without creating platform-specific training entrypoi
 - **Online RL:** SAC, PPO, RLPD, RLPD-Hybrid, ExPLORe, SUPE, JSRL, TD3, DrQ-v2,
   FlashSAC, TDMPC2, DreamerV3, NCRL, DPPO, FlowPPO, online consistency
   distillation of a diffusion policy, SACFlow, ACRLPD, plus recurrent and
-  transformer SAC/PPO variants. Online imitation: DAgger, GAIL, and
+  transformer SAC/PPO variants. PPO has a decision-level (semi-Markov) mode for
+  envs whose actions take effect on some steps only, see
+  [`docs/guides/decision-level-ppo.md`](docs/guides/decision-level-ppo.md).
+  Online imitation: DAgger, GAIL, and
   teacher-student policy distillation. See the
   [Training Entrypoints](#training-entrypoints) table for the full list.
 - **Offline RL and imitation:** BC, Diffusion BC, Flow BC, MeanFlow BC,
@@ -425,6 +428,7 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [Checkpoint Save & Load](docs/guides/checkpoint.md)
 - [Configuration System](docs/guides/configuration.md)
 - [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)
+- [Decision-Level (Semi-Markov) PPO](docs/guides/decision-level-ppo.md)
 - [IsaacLab Camera Training Stall (resolved on Isaac Lab 3.0)](docs/guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)

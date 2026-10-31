@@ -80,6 +80,8 @@ def _ppo_common_kwargs(
         log_std_init_per_dim=args.log_std_init_per_dim,
         action_mean_bias_init=args.action_mean_bias_init,
         action_mean_head_gain=args.action_mean_head_gain,
+        decision_level=args.decision_level,
+        per_step_critic=args.per_step_critic,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

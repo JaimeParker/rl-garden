@@ -174,35 +174,54 @@ class PPOPolicy(BasePolicy):
         return self.actor.clamp_action(actions)
 
     def act_with_value_logprob_and_dist_params(
-        self, obs: Obs, deterministic: bool = False, *, stop_gradient_actor: Optional[bool] = None
+        self,
+        obs: Obs,
+        deterministic: bool = False,
+        *,
+        stop_gradient_actor: Optional[bool] = None,
+        sum_dims: bool = True,
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
     ]:
         """Like ``act_with_value_and_logprob``, but also returns the rollout
         Gaussian's ``(mean, log_std)`` -- the "old" distribution params the
         adaptive-KL LR schedule (``lr_schedule="adaptive_kl"``) needs. Single
-        actor forward pass, no duplicate compute."""
+        actor forward pass, no duplicate compute. ``sum_dims=False`` keeps
+        ``log_prob``/``entropy`` per action dimension, ``(N, A)``."""
         actor_features = self._actor_role_features(obs, stop_gradient_actor)
         value_features = self.extract_critic_features(obs)
         dist = self.actor(actor_features)
         action = dist.mean if deterministic else dist.sample()
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
         values = self.value_net(value_features)
         log_std = self.actor.log_std.expand_as(dist.mean)
         return action, values, log_prob, entropy, dist.mean, log_std
 
     def evaluate_actions_with_dist_params(
-        self, obs: Obs, actions: torch.Tensor, *, stop_gradient_actor: Optional[bool] = None
+        self,
+        obs: Obs,
+        actions: torch.Tensor,
+        *,
+        stop_gradient_actor: Optional[bool] = None,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Like ``evaluate_actions``, but also returns the current policy's
         ``(mean, log_std)`` -- the "new" distribution params the adaptive-KL
-        LR schedule needs. Single actor forward pass, no duplicate compute."""
+        LR schedule needs. Single actor forward pass, no duplicate compute.
+        ``sum_dims=False`` keeps ``log_prob``/``entropy`` per action
+        dimension, ``(N, A)``."""
         actor_features = self._actor_role_features(obs, stop_gradient_actor)
         value_features = self.extract_critic_features(obs)
         dist = self.actor(actor_features)
-        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)
+        log_prob = dist.log_prob(actions)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
         values = self.value_net(value_features)
         log_std = self.actor.log_std.expand_as(dist.mean)
         return values, log_prob, entropy, dist.mean, log_std

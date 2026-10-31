@@ -183,6 +183,28 @@ your entry point's wrappers, so your statistics wrapper would never see the
 truncation and `final_info` would lack `"episode"`. The simplest option is
 to leave the wrapper to rl-garden.
 
+## Decision steps
+
+If your env is stepped every step but its action takes effect on only some of
+them (variable-length holds, macro-actions, multi-rate action components),
+return `decision` in the `info` of `step()`: a numpy bool scalar per env, or,
+per action component, `decision_components` with the action's shape. Then
+train PPO with `--decision-level`; see [Decision-Level PPO](decision-level-ppo.md).
+
+- Report it from every env on every step, including the step that ends an
+  episode and the first step after a reset (which must be `True`). An env that
+  omits it on some step raises `ValueError` at the adapter.
+- `TorchVectorEnvAdapter` turns gymnasium's batched value and its `_decision`
+  presence mask into one dense `(N,)` (or `(N,) + action shape`) `torch.bool`
+  tensor on the env device. Under `SAME_STEP` an env that ended reports the flag
+  of its last step in `final_info`, so the adapter reads that row from
+  `final_info` and every other row from the top level.
+- The flag is for the action passed to this `step()`. Emit `decision` or
+  `decision_components` for the whole run, never both and never switching.
+- Wrappers that span several inner steps with one outer action
+  (`ActionRepeatWrapper`, `ActionChunkWrapper`, `SkillActionWrapper`) raise on
+  these keys.
+
 ## Sync vs async
 
 - `sync`: all envs step in the training process. This is fastest for cheap,

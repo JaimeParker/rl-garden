@@ -380,6 +380,12 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     action_mean_bias_init: Optional[tuple[float, ...]] = None
     # Orthogonal init gain (zero bias) for the actor's mean head.
     action_mean_head_gain: Optional[float] = None
+    # The env reports infos["decision"] on every step; returns, advantages
+    # and the policy loss are computed over decision steps.
+    decision_level: bool = False
+    # Decision-level windows only: train the critic on every step (False:
+    # on decision steps only).
+    per_step_critic: bool = True
 
 
 @dataclass

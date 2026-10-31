@@ -6,8 +6,10 @@ observations/rewards/terminations/truncations as torch tensors, and
 Gymnasium's own ``infos["final_obs"]``/``"_final_obs"`` (SAME_STEP
 autoreset, ``dtype=object``, populated only at terminated/truncated
 indices) translated into the dense ``infos["final_observation"]``;
-``final_info`` and ``_final_info`` are converted to tensors. See the episode
-boundary contract in ``.agents/rules/adding-env-backend.md``.
+``final_info`` and ``_final_info`` are converted to tensors, and the optional
+``decision``/``decision_components`` keys become dense ``torch.bool`` tensors
+(their ``_decision*`` presence masks are dropped). See the episode boundary
+contract in ``.agents/rules/adding-env-backend.md``.
 
 Replaces two backend-specific adapters that duplicated this translation with
 a latent divergence between them: ``rl_garden.envs.minari.env
@@ -36,6 +38,15 @@ from gymnasium.vector import AutoresetMode, VectorEnv, VectorWrapper
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.common.spaces import canonicalize_floating_observation_space
+
+# Optional per-step decision flags (episode boundary contract rules 9-10).
+_DECISION_KEYS = ("decision", "decision_components")
+
+
+def _row_present(values: Any, present: Any, row: int) -> bool:
+    """Whether row ``row`` of a gymnasium-batched info entry was reported; a
+    missing presence mask means every row was."""
+    return values is not None and (present is None or bool(present[row]))
 
 
 class TorchVectorEnvAdapter(VectorWrapper):
@@ -138,11 +149,45 @@ class TorchVectorEnvAdapter(VectorWrapper):
         out.pop("_final_obs", None)
         if final_obs_raw is not None:
             out["final_observation"] = self._stack_final_obs(final_obs_raw, obs)
+        for key in _DECISION_KEYS:
+            self._translate_decision_key(out, key)
         if "final_info" in out:
             out["final_info"] = self._convert_info_tree(out["final_info"])
         if "_final_info" in out:
             out["_final_info"] = self._to_torch(out["_final_info"])
         return out
+
+    def _translate_decision_key(self, out: dict[str, Any], key: str) -> None:
+        """Replace gymnasium's batched ``out[key]`` and its ``_key`` presence
+        mask with one dense ``torch.bool`` tensor on the env device.
+
+        Under SAME_STEP autoreset gymnasium moves the info of an env's last
+        step into ``final_info`` and reports the reset info at the top level,
+        so an ended row reads its flag from ``final_info`` (the flag belongs to
+        the step that ended the episode) and every other row from the top
+        level. Every row must report the key. Validation of dtype and shape is
+        left to the consumer (episode boundary contract rules 9-10).
+        """
+        values = out.pop(key, None)
+        present = out.pop(f"_{key}", None)
+        final_info = out.get("final_info")
+        final_values = final_info.get(key) if isinstance(final_info, dict) else None
+        if values is None and final_values is None:
+            return
+        final_present = final_info.get(f"_{key}") if final_values is not None else None
+        ended = out.get("_final_info")
+        rows = []
+        for i in range(self.num_envs):
+            if ended is not None and ended[i] and _row_present(final_values, final_present, i):
+                rows.append(np.asarray(final_values[i], dtype=bool))
+            elif _row_present(values, present, i):
+                rows.append(np.asarray(values[i], dtype=bool))
+            else:
+                raise ValueError(
+                    f"Env {i} did not report infos[{key!r}] on this step; an env that "
+                    "reports it must do so on every step (episode boundary contract)."
+                )
+        out[key] = torch.as_tensor(np.stack(rows), device=self.device)
 
     def _stack_final_obs(self, final_obs_raw: np.ndarray, obs: Any) -> Any:
         if isinstance(obs, dict):

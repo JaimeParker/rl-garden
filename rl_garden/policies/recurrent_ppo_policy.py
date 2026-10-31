@@ -88,13 +88,16 @@ class RecurrentPPOPolicy(PPOPolicy):
         deterministic: bool = False,
         *,
         stop_gradient_actor: bool = False,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, RecurrentState]:
-        """Single rollout step. Returns (actions, values, log_prob, entropy, new_hidden)."""
+        """Single rollout step. Returns (actions, values, log_prob, entropy,
+        new_hidden); ``sum_dims=False`` keeps ``log_prob``/``entropy`` per
+        action dimension, ``(N, A)``."""
         raw = self.extract_features(obs, stop_gradient=False)
         latent, new_hidden = self.recurrent_encoder.step(raw, hidden, episode_starts)
         actor_latent = latent.detach() if stop_gradient_actor else latent
         actions, log_prob, entropy = self.actor.action_log_prob(
-            actor_latent, deterministic=deterministic
+            actor_latent, deterministic=deterministic, sum_dims=sum_dims
         )
         values = self.value_net(latent)
         return actions, values, log_prob, entropy, new_hidden
@@ -107,6 +110,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         deterministic: bool = False,
         *,
         stop_gradient_actor: bool = False,
+        sum_dims: bool = True,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -125,8 +129,11 @@ class RecurrentPPOPolicy(PPOPolicy):
         actor_latent = latent.detach() if stop_gradient_actor else latent
         dist = self.actor(actor_latent)
         actions = dist.mean if deterministic else dist.sample()
-        log_prob = dist.log_prob(actions).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)
+        log_prob = dist.log_prob(actions)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
         values = self.value_net(latent)
         log_std = self.actor.log_std.expand_as(dist.mean)
         return actions, values, log_prob, entropy, new_hidden, dist.mean, log_std
@@ -162,9 +169,11 @@ class RecurrentPPOPolicy(PPOPolicy):
         episode_starts: torch.Tensor,
         *,
         stop_gradient_actor: bool = False,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """BPTT update path. obs/actions: (T, B, ...). Returns (values, log_prob,
-        entropy), each (T, B, 1).
+        entropy), each (T, B, 1); with ``sum_dims=False`` ``log_prob`` and
+        ``entropy`` are (T, B, A).
 
         The encoder sees no time axis (T*B flattened -> encode -> reshaped back to
         (T, B, -1)); the RNN unrolls over the (T, B, -1) latent.
@@ -187,7 +196,9 @@ class RecurrentPPOPolicy(PPOPolicy):
         actor_latent = latent.detach() if stop_gradient_actor else latent
         flat_actor_latent = actor_latent.reshape(num_steps * num_envs, -1)
         flat_actions = actions.reshape(num_steps * num_envs, -1)
-        log_prob, entropy = self.actor.evaluate_action_log_prob(flat_actor_latent, flat_actions)
+        log_prob, entropy = self.actor.evaluate_action_log_prob(
+            flat_actor_latent, flat_actions, sum_dims=sum_dims
+        )
         values = self.value_net(latent.reshape(num_steps * num_envs, -1))
         return (
             values.reshape(num_steps, num_envs, -1),
@@ -203,11 +214,13 @@ class RecurrentPPOPolicy(PPOPolicy):
         episode_starts: torch.Tensor,
         *,
         stop_gradient_actor: bool = False,
+        sum_dims: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Like ``evaluate_actions_sequence``, but also returns the current
         policy's ``(mean, log_std)`` -- the "new" distribution params the
         adaptive-KL LR schedule needs. obs/actions: (T, B, ...). All returns
-        are (T, B, ...)-shaped, matching ``evaluate_actions_sequence``."""
+        are (T, B, ...)-shaped, matching ``evaluate_actions_sequence``
+        (including ``sum_dims``)."""
         num_steps, num_envs = actions.shape[0], actions.shape[1]
         flat_obs = flatten_leading_dims(obs)
         raw = self.extract_features(flat_obs, stop_gradient=False)
@@ -218,8 +231,11 @@ class RecurrentPPOPolicy(PPOPolicy):
         flat_actor_latent = actor_latent.reshape(num_steps * num_envs, -1)
         flat_actions = actions.reshape(num_steps * num_envs, -1)
         dist = self.actor(flat_actor_latent)
-        log_prob = dist.log_prob(flat_actions).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)
+        log_prob = dist.log_prob(flat_actions)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
         values = self.value_net(latent.reshape(num_steps * num_envs, -1))
         log_std = self.actor.log_std.expand_as(dist.mean)
         return (

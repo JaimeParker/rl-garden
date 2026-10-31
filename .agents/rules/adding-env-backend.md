@@ -231,6 +231,9 @@ checked by `tests/test_vector_env_contract.py`:
 - optional `infos["log"]`: a flat dict of scalar aggregates (numbers or
   1-element tensors), logged by the rollout loops as `env/<key>` at the current
   global step on every step it is present (omit it on steps with nothing new)
+- optional `infos["decision"]` / `infos["decision_components"]`: per-step
+  decision flags for event-triggered (semi-Markov) actions, see rules 9–10 of
+  the episode boundary contract below
 
 `TorchVectorEnvAdapter` provides all of this for free once handed a numpy
 `gymnasium.vector.VectorEnv`; skip it only if the backend already returns torch
@@ -276,6 +279,40 @@ rules; `tests/test_episode_boundary_contract.py` checks them across backends.
    and triggers the reset itself, or is restricted to envs without autoreset
    and checks rule 1 at construction.
 8. All tensors are on the env device; consumers do their own transfers.
+9. `infos["decision"]` is optional: a `torch.bool` `(N,)` tensor on the env
+   device, returned by `step()` only (never by `reset()`). Row i is true iff
+   the action passed to *this* `step()` took effect in env i (event-triggered
+   or semi-Markov decisions: variable-length holds, macro-actions, multi-rate
+   controllers; the env is stepped and the policy queried every step). A run
+   emits it on every step or on none; absent everywhere means every step is a
+   decision (the default behavior). Under SAME_STEP the flag belongs to the
+   step that produced `terminated`/`truncated`, i.e. to the episode that
+   ended. The first step of every episode must be a decision; this is a
+   documented requirement covered by tests, not checked per step by
+   consumers. Consumers validate dtype, shape and key-set consistency
+   (`rl_garden/algorithms/_decision_mask.py`); adapters add no logic. Isaac
+   Lab reuses `extras` across steps, so a task that emits the key must write
+   it on every step.
+10. `infos["decision_components"]` is optional and the per-component
+    alternative to rule 9: a `torch.bool` tensor of shape
+    `(N,) + single_action_space.shape`, where `M[i, j]` is true iff action
+    component j took effect in env i. `M` may depend on the state and on the
+    values of the components it marks as effective, never on the values of
+    the components it marks as ineffective (with a diagonal Gaussian policy
+    the product of the effective components' densities is then exactly the
+    likelihood of what the env executed). Both keys on one step, or a key set
+    that changes within a run, raise `ValueError`. Support: the Isaac Lab
+    adapter and every pass-through wrapper forward both keys unchanged;
+    `TorchVectorEnvAdapter` converts gymnasium's batched numpy value and its
+    `_decision`/`_decision_components` presence mask into one dense
+    `torch.bool` tensor (an ended row reads the flag from `final_info`, where
+    gymnasium's SAME_STEP autoreset moves the last step's info) and raises if
+    any row is missing; wrappers that span several inner steps with one outer
+    action (`ActionRepeatWrapper`, `ActionChunkWrapper`,
+    `SkillActionWrapper`, via `ChunkAccumulator`) raise on either key,
+    because the outer action has no defined flag. ManiSkill (its autoreset
+    replaces `infos` on done steps), mujoco_warp (builds `infos` itself) and
+    RoboTwin (list-valued infos) do not emit these keys.
 
 ## 5. Step 3 — Register the config in `EnvBackendArgs`
 

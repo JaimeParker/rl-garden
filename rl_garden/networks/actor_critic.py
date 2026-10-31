@@ -555,15 +555,19 @@ def gaussian_kl_divergence(
     old_log_std: torch.Tensor,
     new_mean: torch.Tensor,
     new_log_std: torch.Tensor,
+    *,
+    sum_dims: bool = True,
 ) -> torch.Tensor:
     """Analytic per-sample KL(old || new) between two diagonal Gaussians,
     summed over the action dimension. Matches rsl_rl's
     ``GaussianDistribution.kl_divergence``
     (``3rd_party/rsl_rl/rsl_rl/modules/distribution.py``), used to drive the
-    ``lr_schedule="adaptive_kl"`` PPO LR schedule."""
+    ``lr_schedule="adaptive_kl"`` PPO LR schedule. ``sum_dims=False`` returns
+    the per-dimension KL, ``(..., A)``."""
     old_dist = torch.distributions.Normal(old_mean, old_log_std.exp())
     new_dist = torch.distributions.Normal(new_mean, new_log_std.exp())
-    return torch.distributions.kl_divergence(old_dist, new_dist).sum(dim=-1)
+    kl = torch.distributions.kl_divergence(old_dist, new_dist)
+    return kl.sum(dim=-1) if sum_dims else kl
 
 
 class _QHead(nn.Module):

@@ -63,6 +63,7 @@ class GAIL(PPO):
     trained discriminator."""
 
     _compatible_checkpoint_algorithms = ("GAIL",)
+    _supports_decision_level = False
 
     def __init__(
         self,

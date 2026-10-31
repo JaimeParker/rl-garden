@@ -7,6 +7,7 @@ Operational how-to for running and configuring the framework.
 - [Checkpoint Save & Load](guides/checkpoint.md)
 - [Configuration System](guides/configuration.md)
 - [D4RL Legacy Manipulation Baselines](guides/d4rl-legacy-expansion.md)
+- [Decision-Level (Semi-Markov) PPO](guides/decision-level-ppo.md)
 - [IsaacLab Camera Training Stall (resolved on Isaac Lab 3.0)](guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](guides/isaaclab-custom-tasks.md)
 - [Meta-World Integration](guides/metaworld-integration.md)

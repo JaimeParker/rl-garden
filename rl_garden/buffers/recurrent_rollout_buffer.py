@@ -36,6 +36,8 @@ class RecurrentRolloutBufferSample:
     initial_hidden: RecurrentState # sliced to mb_envs
     old_mean: Optional[torch.Tensor] = None      # (T, mb_envs, act_dim)
     old_log_std: Optional[torch.Tensor] = None    # (T, mb_envs, act_dim)
+    decision_mask: torch.Tensor | None = None     # (T, mb_envs) bool
+    component_mask: torch.Tensor | None = None    # (T, mb_envs, act_dim) bool
 
 
 class RecurrentRolloutBuffer(RolloutBuffer):
@@ -93,4 +95,10 @@ class RecurrentRolloutBuffer(RolloutBuffer):
                 initial_hidden=_index_recurrent_state(initial_hidden, idx),
                 old_mean=self.means[:, idx] if self.store_dist_params else None,
                 old_log_std=self.log_stds[:, idx] if self.store_dist_params else None,
+                decision_mask=(
+                    self.decisions[:, idx] if self.window_has_decisions else None
+                ),
+                component_mask=(
+                    self.component_mask[:, idx] if self.window_has_components else None
+                ),
             )

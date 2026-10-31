@@ -69,12 +69,15 @@ class ChunkAccumulator:
       per env in ``dropped_episode_ends`` ((N,) int64 on the env device,
       allocated on the first ``add()``, cumulative since then, not cleared by
       ``begin()``).
+    - ``decision``/``decision_components`` (per-step decision flags) raise
+      ``ValueError``: an outer action spanning several inner steps has no
+      defined flag.
 
     No host sync: all masking is tensor ops on the device of the inner
     ``terminated``/``truncated`` tensors.
 
     See the episode boundary contract in ``.agents/rules/adding-env-backend.md``
-    for the ``final_*`` keys.
+    for the ``final_*`` and decision keys.
     """
 
     def __init__(self) -> None:
@@ -97,6 +100,12 @@ class ChunkAccumulator:
         truncated: torch.Tensor,
         infos: dict[str, Any],
     ) -> None:
+        if "decision" in infos or "decision_components" in infos:
+            raise ValueError(
+                "The inner env reports infos['decision'] or infos['decision_components'], "
+                "but an action spanning several env steps has no defined decision flag; "
+                "see the episode boundary contract."
+            )
         done = terminated | truncated
         if self._active is None:
             self._active = torch.ones_like(done, dtype=torch.bool)

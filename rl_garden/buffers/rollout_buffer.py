@@ -24,6 +24,8 @@ class RolloutBufferSample:
     returns: torch.Tensor
     old_mean: Optional[torch.Tensor] = None
     old_log_std: Optional[torch.Tensor] = None
+    decision_mask: torch.Tensor | None = None
+    component_mask: torch.Tensor | None = None
 
 
 class RolloutBuffer:
@@ -34,6 +36,25 @@ class RolloutBuffer:
     step ``t``'s own GAE target is cut by ``dones[t]``.
     ``compute_returns_and_advantage``'s ``last_dones`` is the done after the
     last stored step, i.e. the same flag as ``dones[-1]``.
+
+    ``store_decisions=True`` adds ``decisions`` ((T, N) bool): row ``t`` is
+    true where the action stored at step ``t`` took effect in the env (the
+    env's ``infos["decision"]``). A window whose every ``add()`` passed a
+    ``decision`` uses SMDP GAE (see ``compute_gae``'s ``step_lambda``) and
+    yields ``decision_mask`` in its samples; a window without any keeps the
+    plain path.
+
+    It also adds, for partially effective (multi-rate) action components,
+    ``component_mask`` ((T, N) + action shape bool, the env's
+    ``infos["decision_components"]``) and ``component_log_probs`` (same shape,
+    float32, the rollout log-prob of every action component). A window whose
+    every ``add()`` passed both stores, as each step's behaviour log-prob, the
+    sum over the components that took effect (computed once in
+    ``compute_returns_and_advantage``) and yields ``component_mask`` in its
+    samples; its GAE uses the decisions (any component took effect) like a
+    whole-step window.
+
+    See ``docs/guides/decision-level-ppo.md`` for the decision rules.
     """
 
     def __init__(
@@ -46,6 +67,7 @@ class RolloutBuffer:
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         store_dist_params: bool = False,
+        store_decisions: bool = False,
     ) -> None:
         if num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}.")
@@ -93,16 +115,44 @@ class RolloutBuffer:
             action_shape = shape + tuple(action_space.shape)
             self.means = torch.zeros(action_shape, dtype=torch.float32, device=self.device)
             self.log_stds = torch.zeros(action_shape, dtype=torch.float32, device=self.device)
+        self.store_decisions = store_decisions
+        # Host-side count of add() calls that passed a decision this window.
+        self._decision_rows = 0
+        # Host-side count of add() calls that passed a component mask.
+        self._component_rows = 0
+        if store_decisions:
+            # Rows added without a decision count as decisions.
+            self.decisions = torch.ones(shape, dtype=torch.bool, device=self.device)
+            component_shape = shape + tuple(action_space.shape)
+            self.component_mask = torch.ones(
+                component_shape, dtype=torch.bool, device=self.device
+            )
+            self.component_log_probs = torch.zeros(
+                component_shape, dtype=torch.float32, device=self.device
+            )
 
     @property
     def buffer_size(self) -> int:
         return self.num_steps * self.num_envs
+
+    @property
+    def window_has_decisions(self) -> bool:
+        return self.store_decisions and self._decision_rows > 0
+
+    @property
+    def window_has_components(self) -> bool:
+        return self.store_decisions and self._component_rows > 0
 
     def reset(self) -> None:
         self.pos = 0
         self.full = False
         self.generator_ready = False
         self.final_values.zero_()
+        self._decision_rows = 0
+        self._component_rows = 0
+        if self.store_decisions:
+            self.decisions.fill_(True)
+            self.component_mask.fill_(True)
 
     def add(
         self,
@@ -115,11 +165,35 @@ class RolloutBuffer:
         final_values: torch.Tensor | None = None,
         mean: torch.Tensor | None = None,
         log_std: torch.Tensor | None = None,
+        decision: torch.Tensor | None = None,
+        component_mask: torch.Tensor | None = None,
+        component_log_probs: torch.Tensor | None = None,
     ) -> None:
         if self.pos >= self.num_steps:
             raise RuntimeError(
                 "RolloutBuffer is full; call reset() before adding more."
             )
+        if decision is not None and not self.store_decisions:
+            raise ValueError(
+                "RolloutBuffer.add() got a decision but the buffer was built with "
+                "store_decisions=False."
+            )
+        if (component_mask is None) != (component_log_probs is None):
+            raise ValueError(
+                "RolloutBuffer.add() takes component_mask and component_log_probs "
+                "together."
+            )
+        if component_mask is not None:
+            if not self.store_decisions:
+                raise ValueError(
+                    "RolloutBuffer.add() got a component mask but the buffer was built "
+                    "with store_decisions=False."
+                )
+            if decision is None:
+                raise ValueError(
+                    "RolloutBuffer.add() got a component mask without the decision it "
+                    "implies (any component took effect)."
+                )
 
         if isinstance(self.obs, DictArray):
             assert isinstance(obs, dict)
@@ -142,6 +216,20 @@ class RolloutBuffer:
             assert mean is not None and log_std is not None
             self.means[self.pos] = mean.to(self.device)
             self.log_stds[self.pos] = log_std.to(self.device)
+        if decision is not None:
+            self.decisions[self.pos] = decision.reshape(self.num_envs).to(
+                self.device, torch.bool
+            )
+            self._decision_rows += 1
+        if component_mask is not None:
+            component_shape = self.component_mask.shape[1:]
+            self.component_mask[self.pos] = component_mask.reshape(component_shape).to(
+                self.device, torch.bool
+            )
+            self.component_log_probs[self.pos] = component_log_probs.reshape(
+                component_shape
+            ).to(self.device)
+            self._component_rows += 1
 
         self.pos += 1
         self.full = self.pos == self.num_steps
@@ -154,6 +242,30 @@ class RolloutBuffer:
         *,
         finite_horizon_gae: bool = False,
     ) -> None:
+        if self.window_has_decisions:
+            if self._decision_rows != self.num_steps:
+                raise ValueError(
+                    f"{self._decision_rows} of {self.num_steps} rollout steps reported a "
+                    "decision: the env must report infos['decision'] on every step of a "
+                    "run or on none (episode boundary contract)."
+                )
+            if finite_horizon_gae:
+                raise ValueError("finite_horizon_gae does not support decision steps.")
+        if self.window_has_components:
+            if self._component_rows != self.num_steps:
+                raise ValueError(
+                    f"{self._component_rows} of {self.num_steps} rollout steps reported "
+                    "a component mask: the env must report "
+                    "infos['decision_components'] on every step of a run or on none "
+                    "(episode boundary contract)."
+                )
+            # Behaviour log-prob of a step: the components that took effect.
+            # ``where`` (not a multiply) drops the other components exactly.
+            self.log_probs.copy_(
+                torch.where(self.component_mask, self.component_log_probs, 0.0)
+                .reshape(self.num_steps, self.num_envs, -1)
+                .sum(-1)
+            )
         last_values = last_values.reshape(self.num_envs).to(self.device)
         last_dones = last_dones.reshape(self.num_envs).float().to(self.device)
         advantages = torch.zeros_like(self.rewards)
@@ -192,16 +304,33 @@ class RolloutBuffer:
             # starts[0] is never read by compute_gae, so it stays zero.
             episode_starts = torch.zeros_like(self.dones)
             episode_starts[1:] = self.dones[:-1]
-            self.advantages, self.returns = compute_gae(
-                self.rewards,
-                episode_starts,
-                self.values,
-                self.final_values,
-                last_values,
-                last_dones,
-                self.gamma,
-                self.gae_lambda,
-            )
+            if self.window_has_decisions:
+                # lambda once per decision: inside a hold (next step is not a
+                # decision) the advantage carries back undecayed.
+                step_lambda = torch.full_like(self.rewards, self.gae_lambda)
+                step_lambda[:-1].masked_fill_(~self.decisions[1:], 1.0)
+                self.advantages, self.returns = compute_gae(
+                    self.rewards,
+                    episode_starts,
+                    self.values,
+                    self.final_values,
+                    last_values,
+                    last_dones,
+                    self.gamma,
+                    self.gae_lambda,
+                    step_lambda=step_lambda,
+                )
+            else:
+                self.advantages, self.returns = compute_gae(
+                    self.rewards,
+                    episode_starts,
+                    self.values,
+                    self.final_values,
+                    last_values,
+                    last_dones,
+                    self.gamma,
+                    self.gae_lambda,
+                )
 
         self.generator_ready = False
 
@@ -226,6 +355,14 @@ class RolloutBuffer:
             if self.store_dist_params
             else None
         )
+        flat_decisions = (
+            self.decisions.reshape(-1) if self.window_has_decisions else None
+        )
+        flat_component_mask = (
+            self.component_mask.reshape((-1,) + self.component_mask.shape[2:])
+            if self.window_has_components
+            else None
+        )
 
         indices = torch.randperm(self.buffer_size, device=self.device)
         for start in range(0, self.buffer_size, batch_size):
@@ -239,4 +376,10 @@ class RolloutBuffer:
                 returns=flat_returns[mb_inds],
                 old_mean=flat_means[mb_inds] if flat_means is not None else None,
                 old_log_std=flat_log_stds[mb_inds] if flat_log_stds is not None else None,
+                decision_mask=(
+                    flat_decisions[mb_inds] if flat_decisions is not None else None
+                ),
+                component_mask=(
+                    flat_component_mask[mb_inds] if flat_component_mask is not None else None
+                ),
             )

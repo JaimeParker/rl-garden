@@ -99,13 +99,15 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 deterministic=False,
             )
 
-    def _extra_rollout_buffer_kwargs(self) -> dict:
+    def _extra_rollout_buffer_kwargs(self, infos: dict | None = None) -> dict:
         """Extra ``rollout_buffer.add()`` kwargs for this rollout step.
 
         Trivial no-op default so ``learn()``'s single, shared ``add()`` call
         site can splat this uniformly regardless of subclass; overridden by
         ``PPO`` when ``lr_schedule="adaptive_kl"`` needs to pass along the
-        rollout-time distribution params it stashed during this step.
+        rollout-time distribution params it stashed during this step, and to
+        read the env's per-step decision keys from ``infos`` (the infos of
+        this step's ``env.step()``).
         """
         return {}
 
@@ -256,7 +258,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     values,
                     log_probs,
                     final_values=final_values,
-                    **self._extra_rollout_buffer_kwargs(),
+                    **self._extra_rollout_buffer_kwargs(infos),
                 )
                 rollout_reward_sum += float(rewards.float().sum().item())
                 rollout_reward_count += int(rewards.numel())

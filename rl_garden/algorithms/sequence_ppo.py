@@ -109,6 +109,7 @@ class SequencePPO(PPO):
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
             store_dist_params=(self.lr_schedule == "adaptive_kl"),
+            store_decisions=self.decision_level,
         )
 
     def _initial_hidden_state(self, batch_size: int):
@@ -120,6 +121,8 @@ class SequencePPO(PPO):
     def _rollout_step(self, obs, hidden, episode_starts: torch.Tensor):
         policy_obs = self._obs_to_policy_device(obs)
         self.policy.update_normalizer(policy_obs)
+        if self.decision_level:
+            return self._decision_level_rollout_step(policy_obs, hidden, episode_starts)
         if self.lr_schedule == "adaptive_kl":
             with torch.no_grad():
                 actions, values, log_probs, entropy, new_hidden, mean, log_std = (
@@ -141,6 +144,35 @@ class SequencePPO(PPO):
                 deterministic=False,
                 stop_gradient_actor=self.policy.actor_features_detached,
             )
+
+    def _decision_level_rollout_step(self, policy_obs, hidden, episode_starts: torch.Tensor):
+        """``_rollout_step`` under ``decision_level``: per-component rollout
+        log-probs (see ``PPO._sum_rollout_components``)."""
+        with torch.no_grad():
+            if self.lr_schedule == "adaptive_kl":
+                actions, values, log_probs, entropy, new_hidden, mean, log_std = (
+                    self.policy.act_recurrent_with_dist_params(
+                        policy_obs,
+                        hidden,
+                        episode_starts,
+                        deterministic=False,
+                        stop_gradient_actor=self.policy.actor_features_detached,
+                        sum_dims=False,
+                    )
+                )
+                self._rollout_mean, self._rollout_log_std = mean, log_std
+            else:
+                actions, values, log_probs, entropy, new_hidden = self.policy.act_recurrent(
+                    policy_obs,
+                    hidden,
+                    episode_starts,
+                    deterministic=False,
+                    stop_gradient_actor=self.policy.actor_features_detached,
+                    sum_dims=False,
+                )
+        return (
+            actions, values, *self._sum_rollout_components(log_probs, entropy), new_hidden,
+        )
 
     def _compute_final_values(self, infos, done_mask: torch.Tensor, hidden) -> torch.Tensor:
         """Bootstrap value for envs that just finished, using the POST-step,
@@ -204,6 +236,8 @@ class SequencePPO(PPO):
         )
 
     def _evaluate_minibatch(self, data: RecurrentRolloutBufferSample):
+        if self.rollout_buffer.window_has_components:
+            return self._evaluate_minibatch_per_component(data)
         if self.lr_schedule == "adaptive_kl":
             values, log_prob, entropy, mean, log_std = (
                 self.policy.evaluate_actions_sequence_with_dist_params(
@@ -233,6 +267,52 @@ class SequencePPO(PPO):
             values.flatten(),
             log_prob.flatten(),
             entropy.flatten(),
+            data.old_values.reshape(-1),
+            data.old_log_prob.reshape(-1),
+            data.advantages.reshape(-1),
+            data.returns.reshape(-1),
+            old_mean,
+            old_log_std,
+            new_mean,
+            new_log_std,
+        )
+
+    def _evaluate_minibatch_per_component(self, data: RecurrentRolloutBufferSample):
+        """``_evaluate_minibatch`` for a window with a component mask:
+        ``log_prob`` and ``entropy`` are per component, T-major ``(T * B, A)``
+        (``reshape``, not ``flatten``, which would merge the component axis
+        into the rows)."""
+        actions = self._component_masked_actions(data)
+        if self.lr_schedule == "adaptive_kl":
+            values, log_prob, entropy, mean, log_std = (
+                self.policy.evaluate_actions_sequence_with_dist_params(
+                    data.obs,
+                    actions,
+                    data.initial_hidden,
+                    data.episode_starts,
+                    stop_gradient_actor=self.policy.actor_features_detached,
+                    sum_dims=False,
+                )
+            )
+            new_mean = mean.reshape((-1,) + mean.shape[2:])
+            new_log_std = log_std.reshape((-1,) + log_std.shape[2:])
+            old_mean = data.old_mean.reshape((-1,) + data.old_mean.shape[2:])
+            old_log_std = data.old_log_std.reshape((-1,) + data.old_log_std.shape[2:])
+        else:
+            values, log_prob, entropy = self.policy.evaluate_actions_sequence(
+                data.obs,
+                actions,
+                data.initial_hidden,
+                data.episode_starts,
+                stop_gradient_actor=self.policy.actor_features_detached,
+                sum_dims=False,
+            )
+            new_mean = new_log_std = old_mean = old_log_std = None
+        action_dim = log_prob.shape[-1]
+        return (
+            values.flatten(),
+            log_prob.reshape(-1, action_dim),
+            entropy.reshape(-1, action_dim),
             data.old_values.reshape(-1),
             data.old_log_prob.reshape(-1),
             data.advantages.reshape(-1),

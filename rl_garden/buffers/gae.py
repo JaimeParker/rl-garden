@@ -24,6 +24,7 @@ def compute_gae(
     last_dones: torch.Tensor,
     gamma: float,
     gae_lambda: float,
+    step_lambda: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Standard (non-finite-horizon) GAE with an auto-reset bootstrap fix.
 
@@ -45,8 +46,29 @@ def compute_gae(
     post-reset next observation's value, which would otherwise wrongly
     bootstrap into the following episode. Returns ``(advantages, returns)``,
     each ``(num_steps, num_envs)``.
+
+    ``step_lambda`` (optional, ``(num_steps, num_envs)``, same device and
+    dtype as ``rewards``) replaces ``gae_lambda`` per step: row ``t`` scales
+    the advantage carried back from step ``t + 1``. Its last row multiplies
+    the zero initial carry, so it does not take part. ``None`` keeps the
+    scalar ``gae_lambda`` recurrence unchanged.
+
+    For semi-Markov decisions (the sampled action takes effect only on the
+    steps flagged by ``decision``), ``step_lambda[t] = where(decision[t + 1],
+    gae_lambda, 1.0)`` gives SMDP GAE: ``gamma`` discounts every env step,
+    ``lambda`` applies once per decision, and the value terms of the
+    non-decision steps inside a hold cancel exactly, so the advantage of a
+    decision step is ``sum_k gamma^k r + gamma^n (V_next + lambda * A_next)
+    - V`` over its ``n``-step hold. An episode ending inside a hold is cut by
+    the episode-start flags as usual; a hold running past the last stored
+    step bootstraps from ``last_values``.
     """
     num_steps = rewards.shape[0]
+    if step_lambda is not None and step_lambda.shape != rewards.shape:
+        raise ValueError(
+            f"step_lambda must have the shape of rewards {tuple(rewards.shape)}, "
+            f"got {tuple(step_lambda.shape)}."
+        )
     last_values = last_values.reshape(-1).to(rewards.device)
     last_dones = last_dones.reshape(-1).float().to(rewards.device)
     advantages = torch.zeros_like(rewards)
@@ -61,7 +83,11 @@ def compute_gae(
             next_values = values[step + 1]
         real_next_values = next_not_done * next_values + final_values[step]
         delta = rewards[step] + gamma * real_next_values - values[step]
-        last_gae_lam = delta + gamma * gae_lambda * next_not_done * last_gae_lam
+        if step_lambda is None:
+            last_gae_lam = delta + gamma * gae_lambda * next_not_done * last_gae_lam
+        else:
+            lam = step_lambda[step]
+            last_gae_lam = delta + gamma * lam * next_not_done * last_gae_lam
         advantages[step] = last_gae_lam
 
     returns = advantages + values

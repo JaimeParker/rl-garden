@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import warnings
 from typing import Any, Iterator, Literal, Optional, Sequence
 
@@ -10,6 +11,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from rl_garden.algorithms._decision_mask import (
+    DecisionMaskReader,
+    warn_if_decision_keys_ignored,
+)
 from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.rollout_buffer import RolloutBuffer, RolloutBufferSample
@@ -26,6 +31,8 @@ def ppo_clip_policy_loss(
     advantages: torch.Tensor,
     ratio: torch.Tensor,
     clip_coef: float,
+    *,
+    mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """PPO's clipped surrogate objective: ``mean(max(-adv*ratio, -adv*clip(ratio)))``.
 
@@ -33,10 +40,33 @@ def ppo_clip_policy_loss(
     BPPO reuses only this formula, not ``_ppo_minibatch_update``, since it
     normalizes/omega-weights advantages in a different order and has no
     rollout buffer or value-clipping to hook into.
+
+    ``mask`` (bool, same shape as ``advantages``) averages over the true rows
+    only; masked rows contribute exactly zero (0 when no row is true).
     """
     pg_loss1 = -advantages * ratio
     pg_loss2 = -advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-    return torch.max(pg_loss1, pg_loss2).mean()
+    if mask is None:
+        return torch.max(pg_loss1, pg_loss2).mean()
+    return _masked_mean(torch.max(pg_loss1, pg_loss2), mask, mask.sum())
+
+
+def _masked_mean(x: torch.Tensor, mask: torch.Tensor, count: torch.Tensor) -> torch.Tensor:
+    """Mean of ``x`` over the rows where ``mask`` is true; 0 when none is.
+    ``torch.where`` (not a multiply) keeps non-finite masked rows out."""
+    return torch.where(mask, x, 0.0).sum() / count.clamp_min(1)
+
+
+def _normalize_masked_advantages(
+    advantages: torch.Tensor, mask: torch.Tensor, count: torch.Tensor
+) -> torch.Tensor:
+    """Standardize ``advantages`` with the mean and unbiased std of the true
+    rows. Left unchanged when fewer than two rows are true (tensor ``where``,
+    no host branch)."""
+    mean = _masked_mean(advantages, mask, count)
+    variance = torch.where(mask, (advantages - mean) ** 2, 0.0).sum() / (count - 1).clamp_min(1)
+    normalized = (advantages - mean) / (variance.sqrt() + 1e-8)
+    return torch.where(count > 1, normalized, advantages)
 
 
 def _as_float_list_or_none(values: Optional[Sequence[float]]) -> Optional[list[float]]:
@@ -48,6 +78,9 @@ class PPO(OnPolicyAlgorithm):
     """SB3/ManiSkill-style PPO with rl-garden feature extractors."""
 
     _compatible_checkpoint_algorithms = ("PPO",)
+    # decision_level=True reads the env's per-step decision keys and computes
+    # SMDP GAE over decision steps (see rl_garden/algorithms/_decision_mask.py).
+    _supports_decision_level: bool = True
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {
             "actor_extractor_class",
@@ -122,7 +155,16 @@ class PPO(OnPolicyAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        decision_level: bool = False,
+        per_step_critic: bool = True,
     ) -> None:
+        """``decision_level=True`` reads the env's per-step decision keys:
+        returns, advantages and the policy loss are computed over decision
+        steps. ``per_step_critic`` only matters for a rollout window that
+        carries a decision mask (it has no effect when ``decision_level`` is
+        off): True trains the critic on every step, False on decision steps
+        only. See ``docs/guides/decision-level-ppo.md`` for the env contract
+        and the training rules."""
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -172,6 +214,16 @@ class PPO(OnPolicyAlgorithm):
                 "deadlocks. Pass target_kl=None for multi-GPU runs (rsl_rl "
                 "has no early-stop mechanism at all, for the same reason)."
             )
+        if decision_level and not self._supports_decision_level:
+            raise ValueError(f"{type(self).__name__} does not support decision_level=True.")
+        if decision_level and finite_horizon_gae:
+            raise ValueError(
+                "decision_level=True is incompatible with finite_horizon_gae=True: "
+                "SMDP GAE is implemented for the standard GAE recurrence only."
+            )
+        self.decision_level = decision_level
+        self.per_step_critic = per_step_critic
+        self._decision_keys_warned = False
         self.learning_rate = learning_rate
         self.num_minibatches = num_minibatches
         self.minibatch_size = max(1, self.batch_size // num_minibatches)
@@ -226,6 +278,15 @@ class PPO(OnPolicyAlgorithm):
         self.critic_encoder_config = critic_encoder_config
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
+        # Built here rather than in _setup_model(): SequencePPO replaces
+        # _setup_model() wholesale and needs the same reader.
+        self._decision_reader = (
+            DecisionMaskReader(
+                self.num_envs, tuple(self.env.single_action_space.shape), self.device
+            )
+            if decision_level
+            else None
+        )
         self._setup_model()
 
     def _rollout_policy(
@@ -233,6 +294,8 @@ class PPO(OnPolicyAlgorithm):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         policy_obs = self._obs_to_policy_device(obs)
         self.policy.update_normalizer(policy_obs)
+        if self.decision_level:
+            return self._decision_level_rollout_policy(policy_obs)
         # No explicit stop_gradient_actor: PPOPolicy applies
         # BasePolicy.extract_actor_features's encoder_sharing rule by
         # default (see rl_garden/policies/base.py); both call sites are
@@ -253,10 +316,59 @@ class PPO(OnPolicyAlgorithm):
                 deterministic=False,
             )
 
-    def _extra_rollout_buffer_kwargs(self) -> dict:
-        if self.lr_schedule != "adaptive_kl":
-            return {}
-        return {"mean": self._rollout_mean, "log_std": self._rollout_log_std}
+    def _decision_level_rollout_policy(
+        self, policy_obs
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """``_rollout_policy`` under ``decision_level``: the policy returns
+        per-component log-probs, kept for a step whose env reports a
+        component mask (see ``_sum_rollout_components``)."""
+        with torch.no_grad():
+            if self.lr_schedule == "adaptive_kl":
+                actions, values, log_prob, entropy, mean, log_std = (
+                    self.policy.act_with_value_logprob_and_dist_params(
+                        policy_obs,
+                        deterministic=False,
+                        sum_dims=False,
+                    )
+                )
+                self._rollout_mean, self._rollout_log_std = mean, log_std
+            else:
+                actions, values, log_prob, entropy = self.policy(
+                    policy_obs,
+                    deterministic=False,
+                    sum_dims=False,
+                )
+        return actions, values, *self._sum_rollout_components(log_prob, entropy)
+
+    def _sum_rollout_components(
+        self, log_prob: torch.Tensor, entropy: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Stash the ``(N, A)`` per-component rollout log-probs and return the
+        per-step ``(N, 1)`` sums: the same reduction the actor applies with
+        ``sum_dims=True``, so the summed values are bit-identical to it."""
+        self._rollout_component_log_probs = log_prob
+        return log_prob.sum(-1, keepdim=True), entropy.sum(-1, keepdim=True)
+
+    def _extra_rollout_buffer_kwargs(self, infos: dict | None = None) -> dict:
+        out = (
+            {"mean": self._rollout_mean, "log_std": self._rollout_log_std}
+            if self.lr_schedule == "adaptive_kl"
+            else {}
+        )
+        if infos is None:
+            return out
+        if not self.decision_level:
+            if not self._decision_keys_warned:
+                self._decision_keys_warned = warn_if_decision_keys_ignored(infos)
+            return out
+        masks = self._decision_reader.read(infos)
+        if masks is not None:
+            decision, component_mask = masks
+            out["decision"] = decision
+            if component_mask is not None:
+                out["component_mask"] = component_mask
+                out["component_log_probs"] = self._rollout_component_log_probs
+        return out
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
@@ -286,6 +398,8 @@ class PPO(OnPolicyAlgorithm):
             "log_std_init_per_dim": self.log_std_init_per_dim,
             "action_mean_bias_init": self.action_mean_bias_init,
             "action_mean_head_gain": self.action_mean_head_gain,
+            "decision_level": self.decision_level,
+            "per_step_critic": self.per_step_critic,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -417,6 +531,7 @@ class PPO(OnPolicyAlgorithm):
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
             store_dist_params=(self.lr_schedule == "adaptive_kl"),
+            store_decisions=self.decision_level,
         )
 
     def _current_clip_coef(self) -> float:
@@ -438,8 +553,9 @@ class PPO(OnPolicyAlgorithm):
         advantages: torch.Tensor,
         ratio: torch.Tensor,
         clip_coef: float,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return ppo_clip_policy_loss(advantages, ratio, clip_coef)
+        return ppo_clip_policy_loss(advantages, ratio, clip_coef, mask=mask)
 
     def _ppo_minibatch_update(
         self,
@@ -456,7 +572,9 @@ class PPO(OnPolicyAlgorithm):
         old_log_std: Optional[torch.Tensor] = None,
         new_mean: Optional[torch.Tensor] = None,
         new_log_std: Optional[torch.Tensor] = None,
-    ) -> dict[str, float | bool]:
+        decision_mask: torch.Tensor | None = None,
+        component_mask: torch.Tensor | None = None,
+    ) -> dict[str, float | bool | torch.Tensor]:
         """One PPO minibatch gradient step on 1-D tensors. ``result["stop"]`` is
         True if target_kl triggered an early stop (caller should break after
         recording ``clipfrac``, matching the pre-refactor loop's behavior of
@@ -468,24 +586,70 @@ class PPO(OnPolicyAlgorithm):
         adaptive-KL rule, before the gradient step below. Note the early
         return above (on ``target_kl``) skips the LR update for that
         minibatch too -- rsl_rl has no early-stop mechanism to interact with,
-        so pass ``target_kl=None`` for a numeric parity run against it."""
-        if self.norm_adv and len(advantages) > 1:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        so pass ``target_kl=None`` for a numeric parity run against it.
 
-        logratio = log_prob - old_log_prob
+        ``decision_mask`` ((B,) bool, same device) restricts advantage
+        normalization, the policy loss, entropy and the KL statistics to
+        decision rows; the value loss covers every row when
+        ``per_step_critic`` and the decision rows otherwise. Masked rows are
+        replaced by finite values before any arithmetic, so they contribute
+        exactly zero to the loss and its gradients. Each DDP rank normalizes
+        by its own decision count. ``result["decisions"]`` is that count, a
+        device tensor.
+
+        ``component_mask`` ((B, A) bool, only together with ``decision_mask``)
+        marks the action components that took effect; ``log_prob`` and
+        ``entropy`` are then per component, (B, A), and ``old_log_prob`` is
+        already the sum over the components that took effect. The log-ratio,
+        entropy and adaptive-KL terms of a step sum its components that took
+        effect, so a component that never took effect gets no policy
+        gradient; everything after that reduction is the decision-mask path."""
+        if component_mask is not None and decision_mask is None:
+            raise ValueError("component_mask requires decision_mask.")
+        if decision_mask is None:
+            if self.norm_adv and len(advantages) > 1:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            logratio = log_prob - old_log_prob
+            row_mean = torch.mean
+            decision_stats = {}
+        else:
+            decisions = decision_mask.sum()
+
+            def row_mean(x: torch.Tensor) -> torch.Tensor:
+                return _masked_mean(x, decision_mask, decisions)
+
+            if component_mask is not None:
+                # ``where`` before the sum: components that did not take
+                # effect contribute exactly zero, gradients included.
+                log_prob = torch.where(component_mask, log_prob, 0.0).sum(-1)
+                entropy = torch.where(component_mask, entropy, 0.0).sum(-1)
+            advantages = torch.where(decision_mask, advantages, 0.0)
+            logratio = torch.where(decision_mask, log_prob - old_log_prob, 0.0)
+            if self.norm_adv:
+                advantages = _normalize_masked_advantages(advantages, decision_mask, decisions)
+            decision_stats = {"decisions": decisions}
+
         ratio = logratio.exp()
         with torch.no_grad():
-            old_approx_kl = (-logratio).mean()
-            approx_kl = ((ratio - 1.0) - logratio).mean()
-            clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean().item()
+            old_approx_kl = row_mean(-logratio)
+            approx_kl = row_mean((ratio - 1.0) - logratio)
+            clipfrac = row_mean(((ratio - 1.0).abs() > clip_coef).float()).item()
         if self.target_kl is not None and approx_kl > self.target_kl:
-            return {"stop": True, "clipfrac": clipfrac}
+            return {"stop": True, "clipfrac": clipfrac, **decision_stats}
 
         if self.lr_schedule == "adaptive_kl":
             with torch.no_grad():
-                kl_mean = gaussian_kl_divergence(
-                    old_mean, old_log_std, new_mean, new_log_std
-                ).mean()
+                if component_mask is None:
+                    kl = gaussian_kl_divergence(old_mean, old_log_std, new_mean, new_log_std)
+                else:
+                    kl = torch.where(
+                        component_mask,
+                        gaussian_kl_divergence(
+                            old_mean, old_log_std, new_mean, new_log_std, sum_dims=False
+                        ),
+                        0.0,
+                    ).sum(-1)
+                kl_mean = row_mean(kl)
                 kl_mean = allreduce_mean(kl_mean)
                 current_lr = self.policy_optimizer.param_groups[0]["lr"]
                 if kl_mean > self.desired_kl * 2.0:
@@ -497,15 +661,25 @@ class PPO(OnPolicyAlgorithm):
                 for group in self.policy_optimizer.param_groups:
                     group["lr"] = new_lr
 
-        policy_loss = self._policy_loss(advantages=advantages, ratio=ratio, clip_coef=clip_coef)
-        if self.clip_vloss:
+        policy_loss = self._policy_loss(
+            advantages=advantages, ratio=ratio, clip_coef=clip_coef, mask=decision_mask
+        )
+        if decision_mask is not None:
+            value_loss = self._masked_value_loss(
+                values=values,
+                old_values=old_values,
+                returns=returns,
+                decision_mask=decision_mask,
+                clip_coef=clip_coef,
+            )
+        elif self.clip_vloss:
             v_loss_unclipped = (values - returns) ** 2
             values_clipped = old_values + torch.clamp(values - old_values, -clip_coef, clip_coef)
             v_loss_clipped = (values_clipped - returns) ** 2
             value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
         else:
             value_loss = 0.5 * F.mse_loss(values, returns)
-        entropy_loss = entropy.mean()
+        entropy_loss = row_mean(entropy)
         loss = policy_loss - self.ent_coef * entropy_loss + self.vf_coef * value_loss
 
         self.policy_optimizer.zero_grad(set_to_none=True)
@@ -523,7 +697,44 @@ class PPO(OnPolicyAlgorithm):
             "old_approx_kl": float(old_approx_kl.detach().item()),
             "clipfrac": clipfrac,
             "loss": float(loss.detach().item()),
+            **decision_stats,
         }
+
+    def _masked_value_loss(
+        self,
+        *,
+        values: torch.Tensor,
+        old_values: torch.Tensor,
+        returns: torch.Tensor,
+        decision_mask: torch.Tensor,
+        clip_coef: float,
+    ) -> torch.Tensor:
+        """Value loss of a window with a decision mask, over every row when
+        ``per_step_critic`` and over decision rows otherwise. One formula for
+        both cases, so with an all-true mask they give identical losses."""
+        value_mask = torch.ones_like(decision_mask) if self.per_step_critic else decision_mask
+        detached_values = values.detach()
+        returns = torch.where(value_mask, returns, detached_values)
+        v_loss = (values - returns) ** 2
+        if self.clip_vloss:
+            old_values = torch.where(value_mask, old_values, detached_values)
+            values_clipped = old_values + torch.clamp(values - old_values, -clip_coef, clip_coef)
+            v_loss = torch.max(v_loss, (values_clipped - returns) ** 2)
+        return 0.5 * _masked_mean(v_loss, value_mask, value_mask.sum())
+
+    def _minibatch_masks(self, data) -> dict[str, torch.Tensor]:
+        """Mask kwargs of ``_ppo_minibatch_update`` for one minibatch: empty
+        unless the window carries decisions. ``reshape(-1)`` is a no-op on flat
+        samples and T-major on ``(T, mb_envs)`` sequence samples, the same
+        order as ``_evaluate_minibatch``'s flattening; the component mask keeps
+        its component axis, ``(B, A)``."""
+        if not self.rollout_buffer.window_has_decisions:
+            return {}
+        masks = {"decision_mask": data.decision_mask.reshape(-1)}
+        if self.rollout_buffer.window_has_components:
+            action_dim = math.prod(self.env.single_action_space.shape)
+            masks["component_mask"] = data.component_mask.reshape(-1, action_dim)
+        return masks
 
     def _iter_minibatches(self) -> Iterator[RolloutBufferSample]:
         return self.rollout_buffer.get(self.minibatch_size)
@@ -537,7 +748,11 @@ class PPO(OnPolicyAlgorithm):
     ]:
         """Returns 1-D (values, log_prob, entropy, old_values, old_log_prob,
         advantages, returns, old_mean, old_log_std, new_mean, new_log_std).
-        The last four are ``None`` unless ``lr_schedule == "adaptive_kl"``."""
+        The last four are ``None`` unless ``lr_schedule == "adaptive_kl"``.
+        In a window with a component mask ``log_prob`` and ``entropy`` are
+        per component, (B, A)."""
+        if self.rollout_buffer.window_has_components:
+            return self._evaluate_minibatch_per_component(data)
         # No explicit stop_gradient_actor: PPOPolicy applies
         # BasePolicy.extract_actor_features's encoder_sharing rule by default.
         if self.lr_schedule == "adaptive_kl":
@@ -550,6 +765,35 @@ class PPO(OnPolicyAlgorithm):
             new_mean = new_log_std = old_mean = old_log_std = None
         return (
             values.flatten(), log_prob.flatten(), entropy.flatten(),
+            data.old_values, data.old_log_prob, data.advantages, data.returns,
+            old_mean, old_log_std, new_mean, new_log_std,
+        )
+
+    @staticmethod
+    def _component_masked_actions(data) -> torch.Tensor:
+        """Stored actions with the components that did not take effect set to
+        0. Their log-probs are dropped by ``where`` anyway, but an arbitrary
+        value there could make that log-prob non-finite, and the zero gradient
+        ``where`` sends back would then turn into NaN (``0 * inf``)."""
+        return torch.where(data.component_mask, data.actions, 0.0)
+
+    def _evaluate_minibatch_per_component(self, data: RolloutBufferSample):
+        """``_evaluate_minibatch`` for a window with a component mask:
+        ``log_prob`` and ``entropy`` keep their component axis, (B, A)."""
+        actions = self._component_masked_actions(data)
+        if self.lr_schedule == "adaptive_kl":
+            values, log_prob, entropy, new_mean, new_log_std = (
+                self.policy.evaluate_actions_with_dist_params(data.obs, actions, sum_dims=False)
+            )
+            old_mean, old_log_std = data.old_mean, data.old_log_std
+        else:
+            values, log_prob, entropy = self.policy.evaluate_actions(
+                data.obs, actions, sum_dims=False
+            )
+            new_mean = new_log_std = old_mean = old_log_std = None
+        action_dim = log_prob.shape[-1]
+        return (
+            values.flatten(), log_prob.reshape(-1, action_dim), entropy.reshape(-1, action_dim),
             data.old_values, data.old_log_prob, data.advantages, data.returns,
             old_mean, old_log_std, new_mean, new_log_std,
         )
@@ -569,6 +813,7 @@ class PPO(OnPolicyAlgorithm):
         old_approx_kls: list[float] = []
         clipfracs: list[float] = []
         losses: list[float] = []
+        decision_counts: list[torch.Tensor] = []
         continue_training = True
 
         for _ in range(self.update_epochs):
@@ -590,7 +835,10 @@ class PPO(OnPolicyAlgorithm):
                     old_log_std=old_log_std,
                     new_mean=new_mean,
                     new_log_std=new_log_std,
+                    **self._minibatch_masks(data),
                 )
+                if "decisions" in result:
+                    decision_counts.append(result.pop("decisions"))
 
                 clipfracs.append(result["clipfrac"])
                 if result["stop"]:
@@ -609,13 +857,17 @@ class PPO(OnPolicyAlgorithm):
         self._step_lr()
         b_values = self.rollout_buffer.values.reshape(-1)
         b_returns = self.rollout_buffer.returns.reshape(-1)
+        if self.rollout_buffer.window_has_decisions and not self.per_step_critic:
+            # Explained variance over the rows the critic is trained on.
+            value_rows = self.rollout_buffer.decisions.reshape(-1)
+            b_values, b_returns = b_values[value_rows], b_returns[value_rows]
         y_var = torch.var(b_returns)
         explained_var = (
             float("nan")
             if y_var == 0
             else float((1 - torch.var(b_returns - b_values) / y_var).item())
         )
-        return {
+        metrics = {
             "loss": float(np.mean(losses)) if losses else 0.0,
             "policy_loss": float(np.mean(policy_losses)) if policy_losses else 0.0,
             "value_loss": float(np.mean(value_losses)) if value_losses else 0.0,
@@ -627,6 +879,50 @@ class PPO(OnPolicyAlgorithm):
             "clip_coef": clip_coef,
             "learning_rate": float(self.policy_optimizer.param_groups[0]["lr"]),
         }
+        if decision_counts:
+            counts = torch.stack(decision_counts).float()
+            (
+                metrics["decisions_per_minibatch_min"],
+                metrics["decisions_per_minibatch_mean"],
+            ) = torch.stack([counts.min(), counts.mean()]).tolist()
+        return metrics
+
+    def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        super()._log_update_metrics(metrics, step)
+        if self.logger is None or not self.decision_level:
+            return
+        if self.rollout_buffer.window_has_decisions:
+            # The buffer still holds the window train() just used.
+            env_steps = self.rollout_buffer.buffer_size
+            decisions = self.rollout_buffer.decisions.sum().float()
+            count, fraction, env_steps_per_decision = torch.stack(
+                [decisions, decisions / env_steps, env_steps / decisions.clamp_min(1)]
+            ).tolist()
+            self._log_rollout_metric("decisions", count, step)
+            self._log_rollout_metric("decision_fraction", fraction, step)
+            self._log_rollout_metric("env_steps_per_decision", env_steps_per_decision, step)
+        if self.rollout_buffer.window_has_components:
+            self._log_component_metrics(step)
+        log_stds = self.policy.actor.log_std.detach().view(-1).tolist()
+        for dim, log_std in enumerate(log_stds):
+            self.logger.add_scalar(f"policy/log_std/{dim}", log_std, step)
+
+    def _log_component_metrics(self, step: int) -> None:
+        """``train/component_usage/<j>``: fraction of env steps on which
+        component j took effect; ``train/components_per_decision``: mean
+        number of components that took effect per decision step."""
+        buffer = self.rollout_buffer
+        component_mask = buffer.component_mask.reshape(buffer.num_steps, buffer.num_envs, -1)
+        usage = component_mask.float().mean((0, 1))
+        components_per_decision = torch.where(
+            buffer.decisions, component_mask.sum(-1), 0
+        ).sum() / buffer.decisions.sum().clamp_min(1)
+        *usage_values, per_decision = torch.cat(
+            [usage, components_per_decision.float().reshape(1)]
+        ).tolist()
+        for component, value in enumerate(usage_values):
+            self._log_rollout_metric(f"component_usage/{component}", value, step)
+        self._log_rollout_metric("components_per_decision", per_decision, step)
 
     def learn(self, total_timesteps: int) -> "PPO":
         self._target_timesteps = total_timesteps

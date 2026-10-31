@@ -583,6 +583,44 @@ before.
   through the wrapper; code that keeps a step count aligned to the decision
   grid depends on it.
 
+## Decision steps
+
+Some tasks step and query the policy every env step, but the action takes effect
+only on some of them (a variable-length hold, a macro-action, a multi-rate
+controller). The task reports which steps those are, and `--decision-level`
+trains PPO on them only. The training side is described in
+[Decision-Level PPO](decision-level-ppo.md); this section is the task side.
+
+In `_pre_physics_step` (the point where the action is consumed), write one of:
+
+```python
+def _pre_physics_step(self, actions):
+    ...
+    # True where this step's action took effect, per env.
+    self.extras["decision"] = takes_effect.clone()          # bool, (num_envs,)
+    # or, per action component:
+    self.extras["decision_components"] = effective.clone()  # bool, (num_envs, action_dim)
+```
+
+- Write the key on **every** step. Isaac Lab reuses `extras` across steps, so a
+  value left from an earlier step cannot be told apart from a fresh one; a key
+  that is not rewritten is read as the stale value. A run reports `decision` or
+  `decision_components` on every step or never, and never both.
+- The flag belongs to the step the action was given to. On the step that ends an
+  episode it is the ended episode's flag.
+- The first step after a reset must report `True` (at least one component `True` for
+  `decision_components`): an episode starts with a decision.
+- For `decision_components`, the mask may depend on the state and on the values
+  of the components it marks as effective, never on the values of the
+  components it marks as ineffective.
+- Use fresh tensors (`.clone()`), not a persistent buffer you write in place.
+- `--isaaclab.action_repeat > 1` cannot be combined with decision keys: the
+  repeat wrapper's `ChunkAccumulator` raises `ValueError` on the first step that
+  carries one.
+
+Train with `--decision-level` (`--no-per-step-critic` to fit the critic on
+decision steps only; see the guide for the trade-off).
+
 ## Training your new task
 
 ```bash
@@ -617,6 +655,10 @@ Relevant IsaacLab-specific CLI flags (`--isaaclab.<field>`, see
 - `--isaaclab.final_obs` (default: on for 3.0, off for 2.x; `True` is
   rejected on 2.x) — see [Terminal observations](#terminal-observations)
 - `--isaaclab.action_repeat` (default `1`) — see [Action repeat](#action-repeat)
+- `--decision-level` (a training flag of `ppo`, `recurrent_ppo` and
+  `transformer_ppo`, not under `--isaaclab.`) — train on the steps the task
+  flags in `extras["decision"]`; see [Decision steps](#decision-steps) and
+  [Decision-Level PPO](decision-level-ppo.md)
 - `--isaaclab.env_kwargs_json` — a JSON dict applied as
   `setattr(env_cfg, key, value)` overrides on the parsed cfg, before
   `gym.make`. It's an escape hatch for task-specific cfg fields you want to
