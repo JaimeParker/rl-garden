@@ -135,6 +135,62 @@ def test_recurrent_final_values_with_truncation_subset_mask():
     assert torch.allclose(final_values, expected, atol=1e-6)
 
 
+_requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CPU env + CUDA policy needs a CUDA device"
+)
+
+
+@pytest.mark.gpu
+@_requires_cuda
+def test_ppo_final_values_with_cpu_env_and_cuda_policy():
+    """The env keeps ``final_observation`` on CPU while the bootstrap mask is
+    built on the policy's CUDA device."""
+    agent = PPO(
+        _EpisodeEndVecEnv(),
+        **_ppo_kwargs(device="cuda", bootstrap_at_done="always"),
+    )
+    agent.policy.predict_values = _state_sum_values
+    agent.train = _skip_update
+
+    agent.learn(total_timesteps=agent.num_envs)
+
+    expected = torch.where(
+        torch.tensor([True, True, True, False]), _FINAL_STATE.sum(dim=-1), torch.zeros(4)
+    )
+    final_values = agent.rollout_buffer.final_values[0]
+    assert final_values.device.type == "cuda"
+    assert torch.allclose(final_values.cpu(), expected)
+
+
+@pytest.mark.gpu
+@_requires_cuda
+def test_recurrent_final_values_with_cpu_env_and_cuda_policy():
+    agent = RecurrentPPO(
+        _EpisodeEndVecEnv(), **_ppo_kwargs(device="cuda"), rnn_hidden_size=8
+    )
+    obs, _ = agent.env.reset(seed=0)
+    hidden = agent._initial_hidden_state(agent.num_envs)
+    actions, _, _, _, hidden = agent._rollout_step(
+        obs, hidden, torch.ones(agent.num_envs, device=agent.device)
+    )
+    _, _, terminations, truncations, infos = agent.env.step(agent._env_action(actions))
+    mask = agent._bootstrap_mask(terminations, truncations)
+    assert mask.device.type == "cuda"
+    assert mask.tolist() == [False, True, False, False]
+
+    final_values = agent._compute_final_values(infos, mask, hidden)
+
+    full_values, _ = agent._predict_values_recurrent(
+        agent._obs_to_policy_device(infos["final_observation"]),
+        hidden,
+        torch.zeros(agent.num_envs, device=agent.device),
+    )
+    expected = torch.where(
+        mask, full_values.view(-1), torch.zeros(agent.num_envs, device=agent.device)
+    )
+    assert torch.allclose(final_values, expected, atol=1e-6)
+
+
 @pytest.mark.parametrize(
     "algorithm,module,builder",
     [

@@ -18,7 +18,7 @@ import torch
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.common.eval_metrics import canonical_episode_metric_key
+from rl_garden.common.eval_metrics import masked_episode_metrics
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import (
     InitialTrainingPhase,
@@ -241,7 +241,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self, terminations: torch.Tensor, truncations: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.bootstrap_at_done == "never":
-            need_final_obs = torch.ones_like(terminations, dtype=torch.bool)
+            # Every done stops bootstrapping, so next_obs never enters the target
+            # and the post-reset obs is a valid placeholder at done rows.
+            need_final_obs = torch.zeros_like(terminations, dtype=torch.bool)
             stop_bootstrap = truncations | terminations
         elif self.bootstrap_at_done == "always":
             need_final_obs = truncations | terminations
@@ -388,36 +390,13 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 )
                 self._write_final_obs(real_next_obs, infos, need_final_obs)
 
-                if "final_info" in infos and self.logger is not None:
-                    fi = infos["final_info"]
-                    done_mask = infos["_final_info"]
-                    for raw_key, v in fi["episode"].items():
-                        k = canonical_episode_metric_key(raw_key)
-                        if k is None:
-                            continue
-                        done_values = v[done_mask]
-                        if done_values.numel() == 0:
-                            continue
-                        mean_value = float(done_values.float().mean().item())
+                for k, done_values in masked_episode_metrics(infos).items():
+                    mean_value = float(done_values.float().mean().item())
+                    if self.logger is not None:
                         self._log_rollout_metric(k, mean_value, self._global_step)
-                        rollout_episode_metrics[k].append(mean_value)
-                        if self._episode_metric_windows is not None:
-                            self._episode_metric_windows[k].extend(done_values.tolist())
-                elif "final_info" in infos:
-                    fi = infos["final_info"]
-                    done_mask = infos["_final_info"]
-                    for raw_key, v in fi["episode"].items():
-                        k = canonical_episode_metric_key(raw_key)
-                        if k is None:
-                            continue
-                        done_values = v[done_mask]
-                        if done_values.numel() == 0:
-                            continue
-                        rollout_episode_metrics[k].append(
-                            float(done_values.float().mean().item())
-                        )
-                        if self._episode_metric_windows is not None:
-                            self._episode_metric_windows[k].extend(done_values.tolist())
+                    rollout_episode_metrics[k].append(mean_value)
+                    if self._episode_metric_windows is not None:
+                        self._episode_metric_windows[k].extend(done_values.tolist())
                 self._log_env_log_scalars(infos, self._global_step)
 
                 replay_kwargs = self._replay_buffer_add_kwargs(

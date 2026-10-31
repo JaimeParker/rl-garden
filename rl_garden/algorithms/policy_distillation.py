@@ -66,7 +66,7 @@ from gymnasium import spaces
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.distillation_rollout_buffer import DistillationRolloutBuffer
-from rl_garden.common.eval_metrics import canonical_episode_metric_key
+from rl_garden.common.eval_metrics import masked_episode_metrics
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.types import Obs
@@ -400,19 +400,10 @@ class PolicyDistillation(OnPolicyAlgorithm):
                 next_done = torch.logical_or(terminations, truncations).to(self.device)
                 self.distillation_buffer.add(obs, teacher_action, next_done)
 
-                if "final_info" in infos:
-                    fi = infos["final_info"]
-                    done_mask = infos["_final_info"]
-                    for raw_key, value in fi["episode"].items():
-                        key = canonical_episode_metric_key(raw_key)
-                        if key is None:
-                            continue
-                        done_values = value[done_mask]
-                        if done_values.numel() == 0:
-                            continue
-                        mean_value = float(done_values.float().mean().item())
-                        self._log_rollout_metric(key, mean_value, self._global_step)
-                        rollout_episode_metrics[key].append(mean_value)
+                for key, done_values in masked_episode_metrics(infos).items():
+                    mean_value = float(done_values.float().mean().item())
+                    self._log_rollout_metric(key, mean_value, self._global_step)
+                    rollout_episode_metrics[key].append(mean_value)
                 self._log_env_log_scalars(infos, self._global_step)
                 obs = next_obs
             rollout_time = time.perf_counter() - rollout_t

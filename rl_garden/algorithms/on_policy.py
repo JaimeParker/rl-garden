@@ -11,7 +11,7 @@ import torch
 
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.buffers.rollout_buffer import RolloutBuffer
-from rl_garden.common.eval_metrics import canonical_episode_metric_key
+from rl_garden.common.eval_metrics import masked_episode_metrics
 from rl_garden.common.logger import Logger
 
 
@@ -132,6 +132,19 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             return torch.zeros_like(terminations)
         return truncations & ~terminations
 
+    @staticmethod
+    def _select_final_obs(infos, done_mask: torch.Tensor):
+        """Rows of ``final_observation`` for the envs in ``done_mask``.
+
+        ``done_mask`` lives on the policy device while ``final_observation``
+        stays on the env device (they differ for CPU-backed envs), so the mask
+        follows each observation leaf.
+        """
+        final_obs = infos["final_observation"]
+        if isinstance(final_obs, dict):
+            return {k: v[done_mask.to(v.device)] for k, v in final_obs.items()}
+        return final_obs[done_mask.to(final_obs.device)]
+
     def _compute_final_values(self, infos, done_mask: torch.Tensor, hidden) -> torch.Tensor:
         """Bootstrap value for envs that just finished this step and are
         selected by ``done_mask`` (``_bootstrap_mask``); 0 elsewhere.
@@ -144,11 +157,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         final_values = torch.zeros(self.num_envs, device=self.device)
         if "final_observation" not in infos or not done_mask.any():
             return final_values
-        final_obs = infos["final_observation"]
-        if isinstance(final_obs, dict):
-            final_obs = {k: v[done_mask] for k, v in final_obs.items()}
-        else:
-            final_obs = final_obs[done_mask]
+        final_obs = self._select_final_obs(infos, done_mask)
         with torch.no_grad():
             values = self.policy.predict_values(
                 self._obs_to_policy_device(final_obs)
@@ -252,19 +261,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 rollout_reward_sum += float(rewards.float().sum().item())
                 rollout_reward_count += int(rewards.numel())
 
-                if "final_info" in infos:
-                    fi = infos["final_info"]
-                    done_mask = infos["_final_info"]
-                    for raw_key, v in fi["episode"].items():
-                        k = canonical_episode_metric_key(raw_key)
-                        if k is None:
-                            continue
-                        done_values = v[done_mask]
-                        if done_values.numel() == 0:
-                            continue
-                        mean_value = float(done_values.float().mean().item())
-                        self._log_rollout_metric(k, mean_value, self._global_step)
-                        rollout_episode_metrics[k].append(mean_value)
+                for k, done_values in masked_episode_metrics(infos).items():
+                    mean_value = float(done_values.float().mean().item())
+                    self._log_rollout_metric(k, mean_value, self._global_step)
+                    rollout_episode_metrics[k].append(mean_value)
                 self._log_env_log_scalars(infos, self._global_step)
                 obs = next_obs
             rollout_time = time.perf_counter() - rollout_t

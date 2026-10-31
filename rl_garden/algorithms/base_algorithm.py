@@ -227,12 +227,7 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
                 self._eval_step_hook(
                     obs_before, critic_action, rewards, terminations, truncations, infos
                 )
-                if "final_info" in infos:
-                    append_masked_episode_metrics(
-                        metrics,
-                        infos["final_info"]["episode"],
-                        infos.get("_final_info"),
-                    )
+                append_masked_episode_metrics(metrics, infos)
         self.policy.train()
         out: dict[str, float] = {}
         for k, vs in metrics.items():

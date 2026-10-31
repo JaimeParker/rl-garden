@@ -146,11 +146,7 @@ class SequencePPO(PPO):
         final_values = torch.zeros(self.num_envs, device=self.device)
         if "final_observation" not in infos or not done_mask.any():
             return final_values
-        final_obs = infos["final_observation"]
-        if isinstance(final_obs, dict):
-            final_obs = {k: v[done_mask] for k, v in final_obs.items()}
-        else:
-            final_obs = final_obs[done_mask]
+        final_obs = self._select_final_obs(infos, done_mask)
         done_hidden = self.policy.recurrent_encoder.index_state(hidden, done_mask)
         episode_starts = torch.zeros(int(done_mask.sum().item()), device=self.device)
         with torch.no_grad():

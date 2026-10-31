@@ -69,7 +69,10 @@ class FixedRewardEvalEnv(DummyVecEnv):
         infos = {}
         if done.any():
             episode_return = torch.tensor([sum(self.rewards[: self.step_idx + 1])])
-            infos = {"final_info": {"episode": {"return": episode_return}}}
+            infos = {
+                "final_info": {"episode": {"return": episode_return}},
+                "_final_info": done.clone(),
+            }
         self.step_idx += 1
         return obs, reward, done, torch.zeros_like(done), infos
 

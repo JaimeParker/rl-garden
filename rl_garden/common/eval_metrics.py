@@ -4,14 +4,15 @@ Vectorized env backends report completed-episode stats in
 ``infos["final_info"]["episode"]``, using different raw key conventions per
 backend (gymnasium.wrappers.RecordEpisodeStatistics's classic ``"r"``/``"l"``/
 ``"t"``, or a backend's own canonical names like ``"return"``/
-``"success_at_end"``). This module normalizes them to one set of names so
-eval logging and downstream metric lookups (``_first_metric``,
-``_log_eval_stdout``) behave the same way regardless of which env backend
-produced them.
+``"success_at_end"``); see the episode boundary contract in
+``.agents/rules/adding-env-backend.md``. This module normalizes them to one
+set of names so eval logging and downstream metric lookups
+(``_first_metric``, ``_log_eval_stdout``) behave the same way regardless of
+which env backend produced them.
 """
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import torch
 
@@ -37,23 +38,47 @@ def canonical_episode_metric_key(raw_key: str) -> Optional[str]:
     return EVAL_METRIC_ALIASES.get(raw_key, raw_key)
 
 
-def append_masked_episode_metrics(
-    metrics: dict[str, list[torch.Tensor]],
-    episode: Mapping[str, torch.Tensor],
-    done_mask: Optional[torch.Tensor],
-) -> None:
-    """Append this step's completed-episode stats from ``episode`` into ``metrics``.
+def masked_episode_metrics(infos: Mapping[str, Any]) -> dict[str, torch.Tensor]:
+    """Return this step's completed-episode stats, keyed by canonical name.
 
-    ``episode`` is ``infos["final_info"]["episode"]`` from a vectorized env
-    step. ``done_mask`` (typically ``infos["_final_info"]``) selects which
-    sub-envs actually completed this step; entries for sub-envs that haven't
-    finished are stale full-width values and must be filtered out.
+    Reads ``infos["final_info"]["episode"]`` from a vectorized env step and
+    keeps only the rows selected by ``infos["_final_info"]``; rows of sub-envs
+    that did not finish this step hold stale full-width values. Each value is
+    the tensor of done-row entries, left on the env device. Keys whose
+    done-row selection is empty are omitted.
+
+    Returns ``{}`` when the step carries no ``final_info`` or its
+    ``final_info`` has no ``episode`` (e.g. ManiSkill with
+    ``record_metrics=False``).
+
+    Raises:
+        ValueError: ``final_info`` is present without its ``_final_info`` mask.
     """
-    for raw_key, value in episode.items():
+    final_info = infos.get("final_info")
+    if final_info is None or "episode" not in final_info:
+        return {}
+    if "_final_info" not in infos:
+        raise ValueError(
+            "infos has 'final_info' but no '_final_info' mask; the env must emit "
+            "'_final_info' whenever it emits 'final_info'."
+        )
+    done_mask = infos["_final_info"]
+    metrics: dict[str, torch.Tensor] = {}
+    for raw_key, value in final_info["episode"].items():
         key = canonical_episode_metric_key(raw_key)
         if key is None:
             continue
-        done_values = value[done_mask] if done_mask is not None else value
+        done_values = value[done_mask]
         if done_values.numel() == 0:
             continue
+        metrics[key] = done_values
+    return metrics
+
+
+def append_masked_episode_metrics(
+    metrics: dict[str, list[torch.Tensor]],
+    infos: Mapping[str, Any],
+) -> None:
+    """Append this step's ``masked_episode_metrics(infos)`` into ``metrics``."""
+    for key, done_values in masked_episode_metrics(infos).items():
         metrics.setdefault(key, []).append(done_values)

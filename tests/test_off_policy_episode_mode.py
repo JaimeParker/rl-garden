@@ -246,6 +246,70 @@ class _ScriptedVecEnvWithEpisodeInfo(_ScriptedVecEnv):
         return obs, rewards, terminations, truncations, infos
 
 
+class _StaleFinalObservationVecEnv(_ScriptedVecEnv):
+    """Env 0 ends every step. ``final_observation`` is a sentinel on every row,
+    standing in for producers whose non-done rows are stale rather than the
+    current obs."""
+
+    FINAL_OBS_VALUE = 7.0
+
+    def step(self, actions):
+        obs, rewards, terminations, truncations, _ = super().step(actions)
+        infos = {"final_observation": torch.full_like(obs, self.FINAL_OBS_VALUE)}
+        return obs, rewards, terminations, truncations, infos
+
+
+def _replayed_next_state(agent, monkeypatch) -> list[torch.Tensor]:
+    captured: list[torch.Tensor] = []
+    original_add = agent.replay_buffer.add
+
+    def spy(obs, next_obs, *args, **kwargs):
+        captured.append(next_obs["state"].clone())
+        return original_add(obs, next_obs, *args, **kwargs)
+
+    monkeypatch.setattr(agent.replay_buffer, "add", spy)
+    return captured
+
+
+def test_bootstrap_at_done_never_stops_every_done_and_reads_no_final_obs():
+    agent = _agent(_ScriptedVecEnv(episode_len=[1, 1_000]), bootstrap_at_done="never")
+    terminations = torch.tensor([True, False])
+    truncations = torch.tensor([False, False])
+
+    need_final_obs, stop_bootstrap = agent._compute_done_masks(terminations, truncations)
+
+    assert need_final_obs.tolist() == [False, False]
+    assert stop_bootstrap.tolist() == [True, False]
+
+
+def test_bootstrap_at_done_never_does_not_rewrite_replayed_next_obs(monkeypatch):
+    env = _StaleFinalObservationVecEnv(episode_len=[1, 1_000])
+    agent = _agent(env, bootstrap_at_done="never")
+    _stub_train(agent, monkeypatch)
+    replayed = _replayed_next_state(agent, monkeypatch)
+
+    agent.learn(total_timesteps=agent.num_envs * agent.steps_per_env)
+
+    assert replayed
+    for next_obs in replayed:
+        assert torch.equal(next_obs, torch.zeros_like(next_obs))
+
+
+def test_bootstrap_at_done_always_still_rewrites_only_done_rows(monkeypatch):
+    """Contrast case: the other modes still take ``final_observation`` rows."""
+    env = _StaleFinalObservationVecEnv(episode_len=[1, 1_000])
+    agent = _agent(env, bootstrap_at_done="always")
+    _stub_train(agent, monkeypatch)
+    replayed = _replayed_next_state(agent, monkeypatch)
+
+    agent.learn(total_timesteps=agent.num_envs * agent.steps_per_env)
+
+    assert replayed
+    for next_obs in replayed:
+        assert torch.all(next_obs[0] == _StaleFinalObservationVecEnv.FINAL_OBS_VALUE)
+        assert torch.all(next_obs[1] == 0.0)
+
+
 def test_stats_window_size_none_preserves_per_iteration_nan(monkeypatch, capsys):
     """stats_window_size defaults to None: return=/success_at_end= must keep
     their original per-iteration-only meaning (nan when the iteration
