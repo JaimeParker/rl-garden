@@ -31,6 +31,8 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `super().__init__(..., actor_extractor=..., critic_extractor=...,
   encoder_sharing=...)`, and use `extract_actor_features()`/`extract_critic_features()`
   and their dimension properties for head construction.
+  `graph_ppo_policy.py` holds `GraphPPOPolicy`, the `PPOPolicy` whose trunk is a
+  `GraphSpec` (built by `PPO` when `policy_graph` is set).
   `bc_guide.py` holds the behaviour-cloning guide policy NCRL swaps in during
   guidance windows; `action_mask.py` holds the padded-action-dim masking (`masked_bounded_normal`)
   for NCRL's multi-embodiment actor.
@@ -55,6 +57,14 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   implementations (`symlog.py`, `twohot.py`, `normed_mlp.py`,
   `running_scale.py`, `q_ensemble.py`, `returns.py`'s `lambda_return`,
   `init.py`).
+  `networks/graph/` holds the YAML policy-graph machinery for the PPO family:
+  `spec.py` (`GraphSpec`, validation, canonical form, the YAML reference in its
+  module docstring), `registry.py` (node-type registry, `rlgarden.graph_nodes`
+  entry points), `nodes.py` (in-tree nodes and the module builder), `losses.py`
+  (auxiliary-loss registry and info-target checks), `executor.py` (flat, step
+  and sequence runs, hidden-state layout) and `builtin.py` (the graphs that
+  reproduce `PPOPolicy`/`RecurrentPPOPolicy`). User guide:
+  [`docs/guides/policy-graphs.md`](../../docs/guides/policy-graphs.md).
 - `rl_garden/world_models/` — the abstract `WorldModel`/`State` contract
   (`base.py`) every model-based algorithm's learned dynamics model
   implements, the `SequenceBatch` window batch every `model_loss` reads

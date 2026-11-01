@@ -15,7 +15,11 @@ from typing import Optional
 
 import tyro
 
-from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_num_eval_steps
+from rl_garden.common.cli_args import (
+    resolve_critic_encoder_config,
+    resolve_num_eval_steps,
+    resolve_obs_groups_config,
+)
 from rl_garden.common.effective_config import (
     ConfigError,
     FieldSource,
@@ -326,7 +330,11 @@ class BaseAlgorithmRegistry:
         # only for algorithms that registered an `algorithm_cls` factory
         # (AlgorithmEntry); algorithms without one defer the mismatch to
         # agent-construction time, the same documented gap as before.
-        if hasattr(args, "encoder_sharing"):
+        # A policy graph replaces encoder_sharing (edges decide), so it is
+        # validated on its own instead.
+        if getattr(args, "policy_graph", None) is not None:
+            self._validate_policy_graph(command)
+        elif hasattr(args, "encoder_sharing"):
             if obs is not None and obs_groups is not None:
                 expected_keys = set(obs.expected_keys)
                 actor_keys = (
@@ -427,6 +435,89 @@ class BaseAlgorithmRegistry:
         load_checkpoint = getattr(args, "load_checkpoint", None)
         if load_checkpoint is not None and not Path(load_checkpoint).is_file():
             raise ConfigError(f"Checkpoint does not exist: {load_checkpoint}")
+
+    def _validate_policy_graph(self, command: ParsedCommand) -> None:
+        """``--policy-graph`` preflight without an observation space:
+        conflicting encoder options, graph structure, and statefulness
+        against the algorithm. A file or inline graph is replaced by its
+        canonical text (recorded as runtime-derived)."""
+        from rl_garden.encoders.config import EncoderConfig
+        from rl_garden.networks.graph.builtin import (
+            builtin_graph_is_stateful,
+            builtin_graph_name,
+            resolve_builtin_stage,
+        )
+        from rl_garden.networks.graph.spec import (
+            GraphSpec,
+            is_builtin_graph_source,
+            read_graph_source,
+        )
+
+        args = command.args
+        conflicts = [
+            flag
+            for flag, is_set in (
+                ("--encoder-sharing", getattr(args, "encoder_sharing", None) is not None),
+                (
+                    "--detach-encoder-on-actor",
+                    getattr(args, "detach_encoder_on_actor", None) is not None,
+                ),
+                (
+                    "--obs-groups",
+                    hasattr(args, "obs_groups") and resolve_obs_groups_config(args) is not None,
+                ),
+                (
+                    "--critic-encoder.*",
+                    hasattr(args, "critic_encoder")
+                    and resolve_critic_encoder_config(args) is not None,
+                ),
+            )
+            if is_set
+        ]
+        if conflicts:
+            raise ConfigError(
+                f"--policy-graph expresses the encoder routing (edges decide gradient "
+                f"flow); drop {', '.join(conflicts)}."
+            )
+        entry = self._entries.get(command.algorithm)
+        algorithm_cls = entry.algorithm_cls() if entry is not None and entry.algorithm_cls else None
+        source = read_graph_source(args.policy_graph)
+        builtin_name = None
+        if is_builtin_graph_source(source):
+            builtin_name = builtin_graph_name(source)
+            stateful = builtin_graph_is_stateful(builtin_name)
+        else:
+            if getattr(args, "encoder", EncoderConfig()) != EncoderConfig():
+                raise ConfigError(
+                    "--encoder.* is only read by a built-in policy graph; put the "
+                    "settings in the graph's encoder node 'config'."
+                )
+            spec = GraphSpec.parse(source)
+            stateful = spec.is_stateful
+            canonical = spec.to_yaml()
+            if canonical != args.policy_graph:
+                command.derived["policy_graph"] = {
+                    "before": json_value(args.policy_graph),
+                    "after": json_value(canonical),
+                    "reason": "canonical policy graph",
+                }
+                args.policy_graph = canonical
+                override_sources(
+                    command.sources,
+                    {"policy_graph"},
+                    kind="runtime-derived",
+                    detail="canonical policy graph",
+                )
+        needs_stateful = getattr(algorithm_cls, "stateful_policy", None)
+        if needs_stateful is not None and stateful != needs_stateful:
+            raise ConfigError(
+                f"{command.algorithm} needs a {'stateful' if needs_stateful else 'stateless'} "
+                f"policy graph; stateful graphs (gru/lstm/gtrxl nodes) run with "
+                "recurrent_ppo/transformer_ppo, stateless ones with ppo."
+            )
+        configured_stage = getattr(algorithm_cls, "configured_sequence_stage", None)
+        if builtin_name is not None and configured_stage is not None:
+            resolve_builtin_stage(builtin_name, configured_stage(vars(args)), command.algorithm)
 
     def _preflight_config(self, command: ParsedCommand):
         args = command.args

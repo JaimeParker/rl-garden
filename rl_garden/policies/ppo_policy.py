@@ -100,6 +100,10 @@ class PPOPolicy(BasePolicy):
             backbone_type=critic_backbone_type or backbone_type,
         )
 
+    @property
+    def is_stateful(self) -> bool:
+        return False
+
     def extract_features(self, obs: Obs, stop_gradient: bool = False) -> torch.Tensor:
         """Raw actor-extractor access with an explicit ``stop_gradient`` --
         an escape hatch for diagnostics/back-compat callers. The rollout/

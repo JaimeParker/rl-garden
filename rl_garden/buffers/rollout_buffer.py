@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
 import torch
@@ -26,6 +27,15 @@ class RolloutBufferSample:
     old_log_std: Optional[torch.Tensor] = None
     decision_mask: torch.Tensor | None = None
     component_mask: torch.Tensor | None = None
+    rewards: torch.Tensor | None = None
+    dones: torch.Tensor | None = None
+    #: Declared per-step extras (``RolloutBuffer(extra_specs=...)``); empty
+    #: when the window stored none.
+    extras: dict[str, torch.Tensor] = field(default_factory=dict)
+
+
+#: Extra per-step tensor name -> (per-env shape, dtype).
+ExtraSpecs = Mapping[str, tuple[tuple[int, ...], torch.dtype]]
 
 
 class RolloutBuffer:
@@ -55,6 +65,11 @@ class RolloutBuffer:
     whole-step window.
 
     See ``docs/guides/decision-level-ppo.md`` for the decision rules.
+
+    ``extra_specs`` (name -> (per-env shape, dtype)) declares extra per-step
+    tensors, stored in ``extras[name]`` ((T, N) + shape) and passed to
+    ``add(extras=...)`` as a dict with exactly those names. A window stores
+    them on every step or on none; samples carry them in ``extras``.
     """
 
     def __init__(
@@ -68,6 +83,7 @@ class RolloutBuffer:
         gae_lambda: float = 0.95,
         store_dist_params: bool = False,
         store_decisions: bool = False,
+        extra_specs: ExtraSpecs | None = None,
     ) -> None:
         if num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}.")
@@ -130,6 +146,16 @@ class RolloutBuffer:
             self.component_log_probs = torch.zeros(
                 component_shape, dtype=torch.float32, device=self.device
             )
+        self.extra_specs = {
+            name: (tuple(extra_shape), dtype)
+            for name, (extra_shape, dtype) in (extra_specs or {}).items()
+        }
+        self.extras = {
+            name: torch.zeros(shape + extra_shape, dtype=dtype, device=self.device)
+            for name, (extra_shape, dtype) in self.extra_specs.items()
+        }
+        # Host-side count of add() calls that passed the extras.
+        self._extra_rows = 0
 
     @property
     def buffer_size(self) -> int:
@@ -143,6 +169,10 @@ class RolloutBuffer:
     def window_has_components(self) -> bool:
         return self.store_decisions and self._component_rows > 0
 
+    @property
+    def window_has_extras(self) -> bool:
+        return self._extra_rows > 0
+
     def reset(self) -> None:
         self.pos = 0
         self.full = False
@@ -150,6 +180,7 @@ class RolloutBuffer:
         self.final_values.zero_()
         self._decision_rows = 0
         self._component_rows = 0
+        self._extra_rows = 0
         if self.store_decisions:
             self.decisions.fill_(True)
             self.component_mask.fill_(True)
@@ -168,6 +199,7 @@ class RolloutBuffer:
         decision: torch.Tensor | None = None,
         component_mask: torch.Tensor | None = None,
         component_log_probs: torch.Tensor | None = None,
+        extras: Mapping[str, torch.Tensor] | None = None,
     ) -> None:
         if self.pos >= self.num_steps:
             raise RuntimeError(
@@ -194,6 +226,11 @@ class RolloutBuffer:
                     "RolloutBuffer.add() got a component mask without the decision it "
                     "implies (any component took effect)."
                 )
+        if extras is not None and set(extras) != set(self.extra_specs):
+            raise ValueError(
+                f"RolloutBuffer.add() got extras {sorted(extras)}, but the buffer declares "
+                f"{sorted(self.extra_specs)}."
+            )
 
         if isinstance(self.obs, DictArray):
             assert isinstance(obs, dict)
@@ -230,6 +267,11 @@ class RolloutBuffer:
                 component_shape
             ).to(self.device)
             self._component_rows += 1
+        if extras is not None:
+            for name, value in extras.items():
+                stored = self.extras[name]
+                stored[self.pos] = value.reshape(stored.shape[1:]).to(self.device, stored.dtype)
+            self._extra_rows += 1
 
         self.pos += 1
         self.full = self.pos == self.num_steps
@@ -251,6 +293,11 @@ class RolloutBuffer:
                 )
             if finite_horizon_gae:
                 raise ValueError("finite_horizon_gae does not support decision steps.")
+        if self.window_has_extras and self._extra_rows != self.num_steps:
+            raise ValueError(
+                f"{self._extra_rows} of {self.num_steps} rollout steps passed the extras "
+                f"{sorted(self.extra_specs)}: a window stores them on every step or on none."
+            )
         if self.window_has_components:
             if self._component_rows != self.num_steps:
                 raise ValueError(
@@ -345,6 +392,16 @@ class RolloutBuffer:
         flat_log_probs = self.log_probs.reshape(-1)
         flat_advantages = self.advantages.reshape(-1)
         flat_returns = self.returns.reshape(-1)
+        flat_rewards = self.rewards.reshape(-1)
+        flat_dones = self.dones.reshape(-1)
+        flat_extras = (
+            {
+                name: value.reshape((-1,) + value.shape[2:])
+                for name, value in self.extras.items()
+            }
+            if self.window_has_extras
+            else {}
+        )
         flat_means = (
             self.means.reshape((-1,) + self.means.shape[2:])
             if self.store_dist_params
@@ -382,4 +439,7 @@ class RolloutBuffer:
                 component_mask=(
                     flat_component_mask[mb_inds] if flat_component_mask is not None else None
                 ),
+                rewards=flat_rewards[mb_inds],
+                dones=flat_dones[mb_inds],
+                extras={name: value[mb_inds] for name, value in flat_extras.items()},
             )

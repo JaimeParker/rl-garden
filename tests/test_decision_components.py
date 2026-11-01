@@ -78,24 +78,21 @@ def _disable_optimizer_step(monkeypatch, agent) -> None:
 def _minibatch_update(agent, data) -> tuple[dict, dict[str, torch.Tensor | None], float]:
     """One ``_ppo_minibatch_update`` on ``data``; returns its result, the
     parameter gradients and the learning rate it set (restored afterwards)."""
-    (
-        values, log_prob, entropy, old_values, old_log_prob, advantages, returns,
-        old_mean, old_log_std, new_mean, new_log_std,
-    ) = agent._evaluate_minibatch(data)
+    evaluation = agent._evaluate_minibatch(data)
     learning_rates = [group["lr"] for group in agent.policy_optimizer.param_groups]
     result = agent._ppo_minibatch_update(
-        values=values,
-        log_prob=log_prob,
-        entropy=entropy,
-        old_values=old_values,
-        old_log_prob=old_log_prob,
-        advantages=advantages,
-        returns=returns,
+        values=evaluation.values,
+        log_prob=evaluation.log_prob,
+        entropy=evaluation.entropy,
+        old_values=evaluation.old_values,
+        old_log_prob=evaluation.old_log_prob,
+        advantages=evaluation.advantages,
+        returns=evaluation.returns,
         clip_coef=agent.clip_coef,
-        old_mean=old_mean,
-        old_log_std=old_log_std,
-        new_mean=new_mean,
-        new_log_std=new_log_std,
+        old_mean=evaluation.old_mean,
+        old_log_std=evaluation.old_log_std,
+        new_mean=evaluation.new_mean,
+        new_log_std=evaluation.new_log_std,
         **agent._minibatch_masks(data),
     )
     learning_rate = agent.policy_optimizer.param_groups[0]["lr"]
@@ -644,7 +641,9 @@ def test_per_step_terms_are_sums_over_components_that_took_effect(monkeypatch):
     monkeypatch.setattr(agent, "_policy_loss", recording_policy_loss)
     monkeypatch.setattr(ppo_module, "allreduce_mean", recording_allreduce_mean)
     evaluated = agent._evaluate_minibatch(data)
-    assert evaluated[1].shape == evaluated[2].shape == (NUM_ENVS * NUM_STEPS, NUM_COMPONENTS)
+    assert evaluated.log_prob.shape == evaluated.entropy.shape == (
+        NUM_ENVS * NUM_STEPS, NUM_COMPONENTS
+    )
     result, _, _ = _minibatch_update(agent, data)
 
     # Hand-computed Gaussian terms, per component, in float64.
@@ -698,7 +697,10 @@ def test_sequence_evaluation_keeps_component_axis_t_major():
     _collect_windows(agent)
     data = next(agent.rollout_buffer.get_sequences(1, agent._rollout_initial_hidden, shuffle=False))
 
-    _, log_prob, entropy, _, old_log_prob, *_ = agent._evaluate_minibatch(data)
+    evaluation = agent._evaluate_minibatch(data)
+    log_prob, entropy, old_log_prob = (
+        evaluation.log_prob, evaluation.entropy, evaluation.old_log_prob
+    )
     masks = agent._minibatch_masks(data)
     _, expected_log_prob, expected_entropy = agent.policy.evaluate_actions_sequence(
         data.obs,

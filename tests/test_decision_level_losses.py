@@ -63,17 +63,15 @@ def _disable_optimizer_step(monkeypatch, agent) -> None:
 
 
 def _update_and_grads(agent, data) -> tuple[dict, dict[str, torch.Tensor | None]]:
-    (
-        values, log_prob, entropy, old_values, old_log_prob, advantages, returns, *_,
-    ) = agent._evaluate_minibatch(data)
+    evaluation = agent._evaluate_minibatch(data)
     result = agent._ppo_minibatch_update(
-        values=values,
-        log_prob=log_prob,
-        entropy=entropy,
-        old_values=old_values,
-        old_log_prob=old_log_prob,
-        advantages=advantages,
-        returns=returns,
+        values=evaluation.values,
+        log_prob=evaluation.log_prob,
+        entropy=evaluation.entropy,
+        old_values=evaluation.old_values,
+        old_log_prob=evaluation.old_log_prob,
+        advantages=evaluation.advantages,
+        returns=evaluation.returns,
         clip_coef=agent.clip_coef,
         **agent._minibatch_masks(data),
     )
@@ -331,11 +329,13 @@ def test_minibatch_without_decisions_is_finite_and_never_stops_early():
     results: list[dict] = []
 
     def evaluate_at_rollout_log_probs(data):
-        outputs = list(evaluate(data))
+        evaluation = evaluate(data)
         env_ids = torch.round(data.obs["state"][0, :, 1] * 10).long()
-        log_prob = outputs[1]
-        outputs[1] = rollout_log_probs[:, env_ids].reshape(-1) + (log_prob - log_prob.detach())
-        return tuple(outputs)
+        log_prob = evaluation.log_prob
+        return dataclasses.replace(
+            evaluation,
+            log_prob=rollout_log_probs[:, env_ids].reshape(-1) + (log_prob - log_prob.detach()),
+        )
 
     def recording_update(**kwargs):
         result = update(**kwargs)

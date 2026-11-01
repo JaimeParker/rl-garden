@@ -164,6 +164,26 @@ where those bootstraps read it. With an all-true mask both settings give the
 same value loss. `train/explained_variance` is computed over the rows the
 critic is trained on.
 
+### Decision masks and policy graphs
+
+A [policy graph](policy-graphs.md) can add losses on extra nodes (the `losses:`
+section). Each is reduced like the policy loss: with `mask: decision` (the
+default) it is the mean over the minibatch's decision rows, with `mask: none` the
+mean over every step. A decision-masked loss on a minibatch with no decision
+rows is 0 and stays connected to the graph. When the window carries no decision
+mask (the env reported no decision key), both settings are the plain mean. The
+targets (`info.<key>`, `batch.rewards`, `batch.dones`) are stored on every env
+step, decision or not, so the env must report an `info.<key>` target on every
+step. Each loss is logged as `losses/graph_loss/<node>`.
+
+`--policy-graph builtin:recurrent` works with `--decision-level` under
+`recurrent_ppo`, including with per-component masks:
+
+```bash
+python examples/train_online.py recurrent_ppo --env_backend isaaclab --env_id <task> \
+  --decision-level --policy-graph builtin:recurrent
+```
+
 ## 4. Flags and incompatible combinations
 
 | flag | default | meaning |

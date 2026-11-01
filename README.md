@@ -25,6 +25,11 @@ platforms can be integrated without creating platform-specific training entrypoi
   Online imitation: DAgger, GAIL, and
   teacher-student policy distillation. See the
   [Training Entrypoints](#training-entrypoints) table for the full list.
+- **Policy graphs:** the trunk of a PPO-family policy (`ppo`, `recurrent_ppo`,
+  `transformer_ppo`) can be declared in YAML with `--policy-graph`: encoders over
+  observation-key subsets, MLP, concat, GRU, LSTM, and GTrXL nodes, per-edge
+  gradient `detach`, and auxiliary losses on extra nodes, see
+  [`docs/guides/policy-graphs.md`](docs/guides/policy-graphs.md).
 - **Offline RL and imitation:** BC, Diffusion BC, Flow BC, MeanFlow BC,
   consistency-distilled BC, A2A BC, IQL, IDQL, CQL, Cal-QL, BCQ, PLAS, EDAC,
   SPOT, ReBRAC, TD3+BC, AWAC, FQL, FloQ, FINO, Value Flows, FAC, QGF, QAM, BPPO,
@@ -432,6 +437,7 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [IsaacLab Camera Training Stall (resolved on Isaac Lab 3.0)](docs/guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)
+- [Policy Graphs (YAML-Declared PPO Policies)](docs/guides/policy-graphs.md)
 - [RoboTwin Integration](docs/guides/robotwin.md)
 - [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
 - [WSRL Reproduction](docs/guides/wsrl-reproduction.md)

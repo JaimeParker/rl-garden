@@ -42,6 +42,7 @@ from gymnasium import spaces
 
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.integrations.rlinf import require_rlinf
+from rl_garden.policies.graph_ppo_policy import GraphPPOPolicy
 from rl_garden.policies.ppo_policy import PPOPolicy
 
 try:
@@ -60,7 +61,12 @@ except ImportError:
 # and the module docstring above.
 _POLICIES: dict[str, type[PPOPolicy]] = {
     "ppo": PPOPolicy,
+    "graph_ppo": GraphPPOPolicy,
 }
+# Policies whose trunk comes from ``rlgarden_policy_kwargs["graph"]`` (a
+# policy-graph mapping, see rl_garden/networks/graph/spec.py) instead of a
+# FlattenExtractor built here; the graph must be stateless.
+_GRAPH_POLICIES = frozenset({"graph_ppo"})
 
 
 def resolve_policy(name: str) -> type[PPOPolicy]:
@@ -99,7 +105,8 @@ def build_policy_from_cfg(cfg: Any) -> PPOPolicy:
     ``PatchWeightSyncer``'s exact-key-set-equality requirement to hold.
     """
     model_cfg = cfg
-    policy_cls = resolve_policy(model_cfg.get("rlgarden_policy", "ppo"))
+    policy_name = model_cfg.get("rlgarden_policy", "ppo")
+    policy_cls = resolve_policy(policy_name)
     obs_dim = int(model_cfg.obs_dim)
     action_dim = int(model_cfg.action_dim)
     observation_space = spaces.Box(
@@ -108,6 +115,18 @@ def build_policy_from_cfg(cfg: Any) -> PPOPolicy:
     action_space = spaces.Box(
         low=-1.0, high=1.0, shape=(action_dim,), dtype="float32"
     )
+    if policy_name in _GRAPH_POLICIES:
+        policy = policy_cls(
+            observation_space=observation_space,
+            action_space=action_space,
+            **dict(model_cfg.get("rlgarden_policy_kwargs", {})),
+        )
+        if policy.is_stateful:
+            raise ValueError(
+                f"rlgarden_policy={policy_name!r} needs a stateless graph: this wrapper "
+                "implements the PPO contract (no hidden state)."
+            )
+        return policy
     actor_extractor = FlattenExtractor(observation_space=observation_space)
     policy_kwargs = dict(model_cfg.get("rlgarden_policy_kwargs", {}))
     return policy_cls(

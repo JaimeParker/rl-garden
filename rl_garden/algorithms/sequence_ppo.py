@@ -16,13 +16,14 @@ from typing import Any, Iterator
 
 import torch
 
-from rl_garden.algorithms.ppo import PPO
+from rl_garden.algorithms.ppo import PPO, MinibatchEval
 from rl_garden.buffers.recurrent_rollout_buffer import (
     RecurrentRolloutBuffer,
     RecurrentRolloutBufferSample,
 )
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder
+from rl_garden.policies.graph_ppo_policy import GraphPPOPolicy
 from rl_garden.policies.recurrent_ppo_policy import RecurrentPPOPolicy
 
 
@@ -36,21 +37,15 @@ class SequencePPO(PPO):
     # sharing against the resolved value, and read statically by
     # algorithm_registry's preflight.
     encoder_sharing_choices: tuple = ("shared_critic_grad", "shared")
+    stateful_policy: bool = True
 
     def _build_sequence_encoder(self, actor_extractor) -> SequenceLatentEncoder:
         raise NotImplementedError
 
-    def _setup_model(self) -> None:
-        # num_envs/num_minibatches are set earlier in PPO.__init__ (via
-        # OnPolicyAlgorithm.__init__), before this method runs -- safe to
-        # validate here, before any sequence-encoder module gets constructed.
-        if self.num_envs % self.num_minibatches != 0:
-            raise ValueError(
-                f"{type(self).__name__} requires num_envs ({self.num_envs}) to be "
-                f"divisible by num_minibatches ({self.num_minibatches}) for "
-                "env-axis minibatching."
-            )
-        extractor_kwargs = self._policy_extractor_kwargs(self.env.single_observation_space)
+    def _build_policy(self, observation_space) -> RecurrentPPOPolicy | GraphPPOPolicy:
+        if self.policy_graph is not None:
+            return self._build_graph_policy(observation_space)
+        extractor_kwargs = self._policy_extractor_kwargs(observation_space)
         actor_extractor = extractor_kwargs["actor_extractor"]
         if actor_extractor.structured_feature_config() is not None:
             raise NotImplementedError(
@@ -58,8 +53,8 @@ class SequencePPO(PPO):
                 "extractors this round (ViT token_and_prop layouts untested)."
             )
         sequence_encoder = self._build_sequence_encoder(actor_extractor)
-        self.policy = RecurrentPPOPolicy(
-            observation_space=self.env.single_observation_space,
+        return RecurrentPPOPolicy(
+            observation_space=observation_space,
             action_space=self.env.single_action_space,
             recurrent_encoder=sequence_encoder,
             net_arch=self.net_arch,
@@ -82,7 +77,19 @@ class SequencePPO(PPO):
             # RecurrentPPOPolicy's clear guard, instead of being silently
             # dropped.
             **extractor_kwargs,
-        ).to(self.device)
+        )
+
+    def _setup_model(self) -> None:
+        # num_envs/num_minibatches are set earlier in PPO.__init__ (via
+        # OnPolicyAlgorithm.__init__), before this method runs -- safe to
+        # validate here, before any sequence-encoder module gets constructed.
+        if self.num_envs % self.num_minibatches != 0:
+            raise ValueError(
+                f"{type(self).__name__} requires num_envs ({self.num_envs}) to be "
+                f"divisible by num_minibatches ({self.num_minibatches}) for "
+                "env-axis minibatching."
+            )
+        self.policy = self._build_policy(self.env.single_observation_space).to(self.device)
         self.policy_optimizer = make_optimizer(
             self.policy.parameters(),
             lr=self.learning_rate,
@@ -110,13 +117,14 @@ class SequencePPO(PPO):
             gae_lambda=self.gae_lambda,
             store_dist_params=(self.lr_schedule == "adaptive_kl"),
             store_decisions=self.decision_level,
+            extra_specs=self._rollout_extra_specs(),
         )
 
     def _initial_hidden_state(self, batch_size: int):
-        return self.policy.recurrent_encoder.get_initial_state(batch_size, self.device)
+        return self.policy.initial_hidden_state(batch_size, self.device)
 
     def _snapshot_window_initial_hidden(self, hidden, next_done: torch.Tensor):
-        return self.policy.recurrent_encoder.mask_state(hidden, 1.0 - next_done.float())
+        return self.policy.mask_hidden_state(hidden, 1.0 - next_done.float())
 
     def _rollout_step(self, obs, hidden, episode_starts: torch.Tensor):
         policy_obs = self._obs_to_policy_device(obs)
@@ -182,7 +190,7 @@ class SequencePPO(PPO):
         if "final_observation" not in infos or not done_mask.any():
             return final_values
         final_obs = self._select_final_obs(infos, done_mask)
-        done_hidden = self.policy.recurrent_encoder.index_state(hidden, done_mask)
+        done_hidden = self.policy.index_hidden_state(hidden, done_mask)
         episode_starts = torch.zeros(int(done_mask.sum().item()), device=self.device)
         with torch.no_grad():
             values, _ = self._predict_values_recurrent(
@@ -208,7 +216,7 @@ class SequencePPO(PPO):
     # mismatch. These overrides carry hidden state across eval steps instead.
 
     def _eval_start_hook(self) -> None:
-        self._eval_hidden = self.policy.recurrent_encoder.get_initial_state(
+        self._eval_hidden = self.policy.initial_hidden_state(
             self.eval_env.num_envs, self.device
         )
         self._eval_episode_start = torch.ones(self.eval_env.num_envs, device=self.device)
@@ -235,92 +243,46 @@ class SequencePPO(PPO):
             self.num_minibatches, initial_hidden=self._rollout_initial_hidden
         )
 
-    def _evaluate_minibatch(self, data: RecurrentRolloutBufferSample):
-        if self.rollout_buffer.window_has_components:
-            return self._evaluate_minibatch_per_component(data)
+    def _evaluate_minibatch(self, data: RecurrentRolloutBufferSample) -> MinibatchEval:
+        """BPTT evaluation of a ``(T, B)`` window, every term flattened
+        T-major so row ``t * B + b`` is step ``t`` of env ``b`` in all of
+        them. In a window with a component mask ``log_prob``/``entropy`` are
+        per component, ``(T * B, A)``."""
+        per_component = self.rollout_buffer.window_has_components
+        actions = self._component_masked_actions(data) if per_component else data.actions
+        evaluate_kwargs = {"stop_gradient_actor": self.policy.actor_features_detached}
+        if per_component:
+            evaluate_kwargs["sum_dims"] = False
+        sequence = (data.obs, actions, data.initial_hidden, data.episode_starts)
         if self.lr_schedule == "adaptive_kl":
-            values, log_prob, entropy, mean, log_std = (
-                self.policy.evaluate_actions_sequence_with_dist_params(
-                    data.obs,
-                    data.actions,
-                    data.initial_hidden,
-                    data.episode_starts,
-                    stop_gradient_actor=self.policy.actor_features_detached,
-                )
+            (values, log_prob, entropy, mean, log_std), graph_outputs = self._evaluate_policy(
+                self.policy.evaluate_actions_sequence_with_dist_params,
+                *sequence,
+                **evaluate_kwargs,
             )
             new_mean = mean.reshape((-1,) + mean.shape[2:])
             new_log_std = log_std.reshape((-1,) + log_std.shape[2:])
             old_mean = data.old_mean.reshape((-1,) + data.old_mean.shape[2:])
             old_log_std = data.old_log_std.reshape((-1,) + data.old_log_std.shape[2:])
         else:
-            values, log_prob, entropy = self.policy.evaluate_actions_sequence(
-                data.obs,
-                data.actions,
-                data.initial_hidden,
-                data.episode_starts,
-                stop_gradient_actor=self.policy.actor_features_detached,
+            (values, log_prob, entropy), graph_outputs = self._evaluate_policy(
+                self.policy.evaluate_actions_sequence, *sequence, **evaluate_kwargs
             )
             new_mean = new_log_std = old_mean = old_log_std = None
-        # (T,B,1) tensors; T-major flatten so index [t,b] lands at the same flat
-        # offset across all eleven tensors below.
-        return (
-            values.flatten(),
-            log_prob.flatten(),
-            entropy.flatten(),
-            data.old_values.reshape(-1),
-            data.old_log_prob.reshape(-1),
-            data.advantages.reshape(-1),
-            data.returns.reshape(-1),
-            old_mean,
-            old_log_std,
-            new_mean,
-            new_log_std,
-        )
-
-    def _evaluate_minibatch_per_component(self, data: RecurrentRolloutBufferSample):
-        """``_evaluate_minibatch`` for a window with a component mask:
-        ``log_prob`` and ``entropy`` are per component, T-major ``(T * B, A)``
-        (``reshape``, not ``flatten``, which would merge the component axis
-        into the rows)."""
-        actions = self._component_masked_actions(data)
-        if self.lr_schedule == "adaptive_kl":
-            values, log_prob, entropy, mean, log_std = (
-                self.policy.evaluate_actions_sequence_with_dist_params(
-                    data.obs,
-                    actions,
-                    data.initial_hidden,
-                    data.episode_starts,
-                    stop_gradient_actor=self.policy.actor_features_detached,
-                    sum_dims=False,
-                )
-            )
-            new_mean = mean.reshape((-1,) + mean.shape[2:])
-            new_log_std = log_std.reshape((-1,) + log_std.shape[2:])
-            old_mean = data.old_mean.reshape((-1,) + data.old_mean.shape[2:])
-            old_log_std = data.old_log_std.reshape((-1,) + data.old_log_std.shape[2:])
-        else:
-            values, log_prob, entropy = self.policy.evaluate_actions_sequence(
-                data.obs,
-                actions,
-                data.initial_hidden,
-                data.episode_starts,
-                stop_gradient_actor=self.policy.actor_features_detached,
-                sum_dims=False,
-            )
-            new_mean = new_log_std = old_mean = old_log_std = None
-        action_dim = log_prob.shape[-1]
-        return (
-            values.flatten(),
-            log_prob.reshape(-1, action_dim),
-            entropy.reshape(-1, action_dim),
-            data.old_values.reshape(-1),
-            data.old_log_prob.reshape(-1),
-            data.advantages.reshape(-1),
-            data.returns.reshape(-1),
-            old_mean,
-            old_log_std,
-            new_mean,
-            new_log_std,
+        log_prob, entropy = self._policy_term_rows(log_prob, entropy, per_component)
+        return MinibatchEval(
+            values=values.flatten(),
+            log_prob=log_prob,
+            entropy=entropy,
+            old_values=data.old_values.reshape(-1),
+            old_log_prob=data.old_log_prob.reshape(-1),
+            advantages=data.advantages.reshape(-1),
+            returns=data.returns.reshape(-1),
+            old_mean=old_mean,
+            old_log_std=old_log_std,
+            new_mean=new_mean,
+            new_log_std=new_log_std,
+            graph_outputs=graph_outputs,
         )
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

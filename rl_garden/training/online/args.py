@@ -386,6 +386,12 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     # Decision-level windows only: train the critic on every step (False:
     # on decision steps only).
     per_step_critic: bool = True
+    # Policy trunk as a graph: a path to a YAML file, inline YAML text, or
+    # builtin:<mlp|recurrent|gru|lstm|gtrxl> (see rl_garden/networks/graph/spec.py;
+    # recurrent = the algorithm's own stage, gru/lstm/gtrxl must match it).
+    # Replaces --encoder-sharing/--obs-groups/--critic-encoder; --encoder.*
+    # is read only by a built-in graph.
+    policy_graph: Optional[str] = None
 
 
 @dataclass

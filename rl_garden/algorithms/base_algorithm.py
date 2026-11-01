@@ -57,6 +57,10 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
     # safe to load.  ``validate_checkpoint_metadata`` will accept a stored
     # algorithm_class that matches *any* entry in this tuple.
     _compatible_checkpoint_algorithms: tuple[str, ...] = ()
+    #: Canonical text of the policy graph the policy was built from (set by
+    #: the PPO family when a ``policy_graph`` is given); checkpoints must
+    #: agree on whether there is one.
+    policy_graph_yaml: Optional[str] = None
 
     def __init__(
         self,
@@ -379,6 +383,7 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             strict=strict,
+            policy_graph=self.policy_graph_yaml,
         )
         self.load_state_dict(checkpoint["state"], strict=strict, load_optimizers=load_optimizers)
 

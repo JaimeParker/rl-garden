@@ -62,6 +62,7 @@ _UniqueKeyLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     _construct_unique_mapping,
 )
+UniqueKeyLoader = _UniqueKeyLoader
 
 
 @dataclass(frozen=True)

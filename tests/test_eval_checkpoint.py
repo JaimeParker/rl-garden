@@ -324,3 +324,82 @@ def test_resolve_phase_auto_reports_ambiguous_algorithm(monkeypatch):
 
     with pytest.raises(SystemExit, match="ambiguous"):
         eval_checkpoint._resolve_phase_and_algorithm("auto", "auto", checkpoint)
+
+
+_TRUNK_GRAPH = """
+nodes:
+  obs:     {type: input}
+  encoder: {type: encoder, config: {normalize_obs: true}}
+  trunk:   {type: mlp, net_arch: [8]}
+  actor:   {type: actor}
+  value:   {type: value}
+edges:
+  - {from: obs, to: encoder}
+  - {from: encoder, to: trunk}
+  - {from: trunk, to: actor, detach: true}
+  - {from: trunk, to: value}
+"""
+
+
+@pytest.mark.parametrize("with_config_json", [False, True], ids=["metadata-only", "config-json"])
+@pytest.mark.parametrize(
+    "algorithm,cli",
+    [
+        pytest.param("ppo", ["--policy-graph", _TRUNK_GRAPH], id="ppo-inline"),
+        pytest.param(
+            "recurrent_ppo",
+            ["--policy-graph", "builtin:recurrent", "--rnn-type", "gru", "--rnn-hidden-size", "8"],
+            id="recurrent_ppo-builtin",
+        ),
+    ],
+)
+def test_policy_graph_round_trips_through_eval_checkpoint(
+    tmp_path, algorithm, cli, with_config_json
+):
+    """The checkpoint records the canonical graph text; eval_checkpoint's
+    overlay (the run's config.json first, then the checkpoint metadata)
+    hands it back to the builder, which rebuilds a policy the checkpoint
+    loads into."""
+    import json
+
+    from _decision_fakes import _FixedHoldVecEnv
+
+    from rl_garden.common.checkpoint import load_checkpoint_file
+    from rl_garden.common.effective_config import json_value
+    from rl_garden.training.online import registry
+
+    builder = eval_checkpoint._builder_from_module(
+        eval_checkpoint._training_module("online", algorithm), algorithm
+    )
+    args = registry.parse_args(
+        [algorithm, *cli, "--num-minibatches", "2", "--log-type", "none"]
+    )
+    agent = builder(args, _FixedHoldVecEnv(emit_decisions=False), None, None, None)
+    run_dir = tmp_path / "run"
+    path = agent.save(run_dir / "checkpoints" / "checkpoint.pt")
+    checkpoint = load_checkpoint_file(path, map_location="cpu")
+    canonical = checkpoint["metadata"]["hyperparameters"]["policy_graph"]
+    assert canonical == agent.policy.graph_spec.to_yaml()
+    assert not canonical.startswith("builtin:")
+
+    if with_config_json:
+        # What a run records: the args as given (a built-in name stays a name).
+        (run_dir / "config.json").write_text(json.dumps({"inputs": json_value(args)}))
+        eval_args = eval_checkpoint.EvalCheckpointArgs(checkpoint_path=str(path))
+    else:
+        eval_args = eval_checkpoint.EvalCheckpointArgs(
+            checkpoint_path=str(path), config_path=str(tmp_path / "missing.json")
+        )
+    restored_args = eval_checkpoint._load_training_args(
+        "online", algorithm, eval_args, checkpoint
+    )
+    assert restored_args.policy_graph == canonical
+
+    restored = builder(restored_args, _FixedHoldVecEnv(emit_decisions=False), None, None, None)
+    restored.load(path, load_replay_buffer=False)
+    expected = agent.policy.state_dict()
+    actual = restored.policy.state_dict()
+    assert actual.keys() == expected.keys()
+    assert any(key.startswith("graph_nodes.") for key in expected)
+    for key, value in expected.items():
+        assert torch.equal(actual[key].cpu(), value.cpu()), key

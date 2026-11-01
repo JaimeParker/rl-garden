@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RNNType
@@ -44,6 +44,14 @@ class RecurrentPPO(SequencePPO):
             rnn_type=self.rnn_type,
             num_layers=self.rnn_num_layers,
         )
+
+    @classmethod
+    def configured_sequence_stage(cls, settings: Mapping[str, Any]) -> tuple[str, str]:
+        rnn_type = settings["rnn_type"]
+        return rnn_type, f"rnn_type={rnn_type!r}"
+
+    def _builtin_stage_params(self) -> dict[str, Any]:
+        return {"hidden_size": self.rnn_hidden_size, "num_layers": self.rnn_num_layers}
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {

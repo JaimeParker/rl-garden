@@ -139,17 +139,16 @@ def test_ppo_adaptive_kl_lr_shrinks_for_large_kl():
     agent.rollout_buffer.compute_returns_and_advantage(last_values, next_done)
 
     data = next(agent._iter_minibatches())
-    (values, log_prob, entropy, old_values, old_log_prob, advantages, returns,
-     old_mean, old_log_std, new_mean, new_log_std) = agent._evaluate_minibatch(data)
-    new_mean = new_mean + 10.0  # force a large KL vs. old_mean
+    evaluation = agent._evaluate_minibatch(data)
+    new_mean = evaluation.new_mean + 10.0  # force a large KL vs. old_mean
 
     lr_before = agent.policy_optimizer.param_groups[0]["lr"]
     agent._ppo_minibatch_update(
-        values=values, log_prob=log_prob, entropy=entropy,
-        old_values=old_values, old_log_prob=old_log_prob,
-        advantages=advantages, returns=returns, clip_coef=0.2,
-        old_mean=old_mean, old_log_std=old_log_std,
-        new_mean=new_mean, new_log_std=new_log_std,
+        values=evaluation.values, log_prob=evaluation.log_prob, entropy=evaluation.entropy,
+        old_values=evaluation.old_values, old_log_prob=evaluation.old_log_prob,
+        advantages=evaluation.advantages, returns=evaluation.returns, clip_coef=0.2,
+        old_mean=evaluation.old_mean, old_log_std=evaluation.old_log_std,
+        new_mean=new_mean, new_log_std=evaluation.new_log_std,
     )
     lr_after = agent.policy_optimizer.param_groups[0]["lr"]
     assert lr_after < lr_before

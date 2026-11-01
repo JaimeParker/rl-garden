@@ -80,6 +80,19 @@ class RecurrentPPOPolicy(PPOPolicy):
         )
         self.recurrent_encoder = recurrent_encoder
 
+    @property
+    def is_stateful(self) -> bool:
+        return True
+
+    def initial_hidden_state(self, batch_size: int, device) -> RecurrentState:
+        return self.recurrent_encoder.get_initial_state(batch_size, device)
+
+    def mask_hidden_state(self, state: RecurrentState, keep_mask: torch.Tensor) -> RecurrentState:
+        return self.recurrent_encoder.mask_state(state, keep_mask)
+
+    def index_hidden_state(self, state: RecurrentState, indices: torch.Tensor) -> RecurrentState:
+        return self.recurrent_encoder.index_state(state, indices)
+
     def act_recurrent(
         self,
         obs: Obs,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator, Optional, Union
 
 import torch
@@ -38,6 +38,9 @@ class RecurrentRolloutBufferSample:
     old_log_std: Optional[torch.Tensor] = None    # (T, mb_envs, act_dim)
     decision_mask: torch.Tensor | None = None     # (T, mb_envs) bool
     component_mask: torch.Tensor | None = None    # (T, mb_envs, act_dim) bool
+    rewards: torch.Tensor | None = None           # (T, mb_envs)
+    dones: torch.Tensor | None = None             # (T, mb_envs) after-step flags
+    extras: dict[str, torch.Tensor] = field(default_factory=dict)  # (T, mb_envs, ...)
 
 
 class RecurrentRolloutBuffer(RolloutBuffer):
@@ -100,5 +103,12 @@ class RecurrentRolloutBuffer(RolloutBuffer):
                 ),
                 component_mask=(
                     self.component_mask[:, idx] if self.window_has_components else None
+                ),
+                rewards=self.rewards[:, idx],
+                dones=self.dones[:, idx],
+                extras=(
+                    {name: value[:, idx] for name, value in self.extras.items()}
+                    if self.window_has_extras
+                    else {}
                 ),
             )

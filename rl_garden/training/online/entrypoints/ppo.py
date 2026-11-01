@@ -6,6 +6,7 @@ from __future__ import annotations
 def _ppo_observation_kwargs(args) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.encoders.config import EncoderConfig
+    from rl_garden.networks.graph.spec import is_builtin_graph_source
 
     # detach_encoder_on_actor's old semantics: None/True -> the encoder is
     # trained only by the value loss, actor path detached
@@ -25,6 +26,11 @@ def _ppo_observation_kwargs(args) -> dict:
     else:
         encoder_config = EncoderConfig(normalize_obs=True) if args.encoder.normalize_obs else None
 
+    if args.policy_graph is not None:
+        # The graph carries the encoder routing; only a built-in graph
+        # reads the CLI encoder config.
+        builtin = is_builtin_graph_source(args.policy_graph)
+        return {"encoder_config": encoder_config if builtin else None}
     return {
         "encoder_config": encoder_config,
         "obs_groups": resolve_obs_groups_config(args),
@@ -38,6 +44,8 @@ def _ppo_common_kwargs(
 ) -> dict:
     """Kwargs shared by ``PPO`` and ``RecurrentPPO`` construction -- everything
     except the rnn-specific params that only ``RecurrentPPO`` accepts."""
+    from rl_garden.networks.graph.spec import optional_graph_source
+
     return dict(
         env=env,
         eval_env=eval_env,
@@ -82,6 +90,7 @@ def _ppo_common_kwargs(
         action_mean_head_gain=args.action_mean_head_gain,
         decision_level=args.decision_level,
         per_step_critic=args.per_step_critic,
+        policy_graph=optional_graph_source(args.policy_graph),
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

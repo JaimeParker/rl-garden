@@ -3,7 +3,7 @@ and actor/critic heads -- Transformer sibling of ``RecurrentPPO``."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.networks.gtrxl import GTrXLLatentEncoder
@@ -60,6 +60,23 @@ class TransformerPPO(SequencePPO):
             dropout_rate=self.dropout_rate,
             gru_bias=self.gru_bias,
         )
+
+    @classmethod
+    def configured_sequence_stage(cls, settings: Mapping[str, Any]) -> tuple[str, str]:
+        del settings
+        return "gtrxl", f"{cls.__name__} builds a GTrXL stage"
+
+    def _builtin_stage_params(self) -> dict[str, Any]:
+        return {
+            "embed_dim": self.embed_dim,
+            "head_dim": self.head_dim,
+            "num_heads": self.num_heads,
+            "num_layers": self.num_transformer_layers,
+            "mlp_num": self.mlp_num,
+            "memory_len": self.memory_len,
+            "dropout_rate": self.dropout_rate,
+            "gru_bias": self.gru_bias,
+        }
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {

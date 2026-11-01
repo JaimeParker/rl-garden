@@ -341,6 +341,31 @@ and no `Vision*` sibling class — a `Dict` observation with
 state-only one, driven entirely by `encoder_config`/`obs_groups` and the
 schema derived from the observation space.
 
+**PPO-family policy graphs.** A `PPO` subclass gets `--policy-graph` support
+(`GraphPPOPolicy`, see [`docs/guides/policy-graphs.md`](../../docs/guides/policy-graphs.md))
+through `_ppo_common_kwargs` in `training/online/entrypoints/ppo.py`: build the
+agent with it and the `policy_graph` constructor argument, the preflight, the
+checkpoint metadata and the rollout-buffer extras are already wired. What a
+subclass still decides:
+
+- `stateful_policy` (class attribute, `False` on `PPO`, `True` on `SequencePPO`):
+  whether its policy carries hidden state. A graph with `gru`/`lstm`/`gtrxl`
+  nodes is accepted only when it matches.
+- `configured_sequence_stage(cls, settings) -> (kind, setting that decides it)`
+  and `_builtin_stage_params(self) -> dict`: only for a subclass that builds a
+  sequence stage itself. They let `builtin:recurrent` resolve to that stage with
+  the subclass's own sizes and let preflight reject a disagreeing
+  `builtin:<kind>` (see `RecurrentPPO`, `TransformerPPO`). The defaults mean
+  "no stage".
+- A subclass that overrides `_build_policy` must return
+  `self._build_graph_policy(observation_space)` when `self.policy_graph` is set,
+  one that builds its own rollout buffer must pass
+  `extra_specs=self._rollout_extra_specs()`, and one that overrides
+  `_evaluate_minibatch` must fill `MinibatchEval.graph_outputs` through
+  `self._evaluate_policy(...)` (all three as `SequencePPO` does). Keep calling
+  `PPO.train()` (as `GAIL.train` does through `super()`) so the graph losses
+  reach the loss.
+
 ### 6. Export the class
 
 Add one line to `rl_garden/algorithms/__init__.py` (flat eager import list +

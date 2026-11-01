@@ -7,7 +7,7 @@ policy/optimizer state.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
@@ -71,6 +71,19 @@ def _canonical_observation_metadata(metadata: Any) -> Any:
     return metadata
 
 
+def _first_differing_line(checkpoint_text: str, current_text: str) -> str:
+    checkpoint_lines = checkpoint_text.splitlines()
+    current_lines = current_text.splitlines()
+    for number, (stored, current) in enumerate(zip(checkpoint_lines, current_lines), start=1):
+        if stored != current:
+            return f"first difference at line {number}: checkpoint {stored!r}, agent {current!r}"
+    number = min(len(checkpoint_lines), len(current_lines)) + 1
+    return (
+        f"first difference at line {number}: checkpoint has {len(checkpoint_lines)} lines, "
+        f"agent has {len(current_lines)}"
+    )
+
+
 def validate_checkpoint_metadata(
     checkpoint: dict[str, Any],
     *,
@@ -79,7 +92,12 @@ def validate_checkpoint_metadata(
     observation_space: spaces.Space,
     action_space: spaces.Space,
     strict: bool,
+    policy_graph: Optional[str] = None,
 ) -> None:
+    """``policy_graph`` is the current agent's canonical policy-graph text
+    (``None`` without a graph); the checkpoint's must be present exactly
+    when it is, and then equal to it (a graph differing only in ``detach``
+    or an activation has the same parameter shapes)."""
     metadata = checkpoint.get("metadata", {})
     errors: list[str] = []
 
@@ -101,6 +119,26 @@ def validate_checkpoint_metadata(
         errors.append("observation_space metadata does not match current env")
     if metadata.get("action_space") != current_action:
         errors.append("action_space metadata does not match current env")
+    hyperparameters = metadata.get("hyperparameters")
+    checkpoint_graph = (
+        hyperparameters.get("policy_graph") if isinstance(hyperparameters, dict) else None
+    )
+    if checkpoint_graph is not None and policy_graph is None:
+        errors.append(
+            "policy_graph mismatch: the checkpoint's policy was built from a policy "
+            "graph but the current agent has none; pass the same --policy-graph "
+            "(its canonical text is in the checkpoint's hyperparameters['policy_graph'])"
+        )
+    elif checkpoint_graph is None and policy_graph is not None:
+        errors.append(
+            "policy_graph mismatch: the current agent's policy is built from a policy "
+            "graph but the checkpoint's is not; drop --policy-graph to load it"
+        )
+    elif checkpoint_graph is not None and checkpoint_graph != policy_graph:
+        errors.append(
+            "policy_graph mismatch: the checkpoint's policy graph differs from the "
+            f"current agent's; {_first_differing_line(checkpoint_graph, policy_graph)}"
+        )
 
     if errors and strict:
         raise ValueError("Incompatible checkpoint:\n- " + "\n- ".join(errors))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import warnings
-from typing import Any, Iterator, Literal, Optional, Sequence
+from typing import Any, Iterator, Literal, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
@@ -19,11 +19,35 @@ from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.rollout_buffer import RolloutBuffer, RolloutBufferSample
 from rl_garden.common.ddp import allreduce_grads, allreduce_mean, is_ddp_active
+from rl_garden.common.effective_config import ConfigError
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.actor_critic import gaussian_kl_divergence
-from rl_garden.observations import ObsGroups
+from rl_garden.networks.graph.builtin import (
+    builtin_graph,
+    builtin_graph_name,
+    resolve_builtin_stage,
+)
+from rl_garden.networks.graph.losses import (
+    INFO_TARGET_PREFIX,
+    TargetSpecs,
+    find_graph_loss,
+    read_info_targets,
+    target_rows,
+)
+from rl_garden.networks.graph.spec import (
+    GraphSpec,
+    LossSpec,
+    is_builtin_graph_source,
+    read_graph_source,
+)
+from rl_garden.observations import (
+    ObservationSchema,
+    ObsGroups,
+    normalize_observation_space,
+)
+from rl_garden.policies.graph_ppo_policy import GraphPPOPolicy
 from rl_garden.policies.ppo_policy import PPOPolicy
 
 
@@ -74,6 +98,33 @@ def _as_float_list_or_none(values: Optional[Sequence[float]]) -> Optional[list[f
     return None if values is None else [float(v) for v in values]
 
 
+@dataclasses.dataclass(slots=True)
+class MinibatchEval:
+    """The current policy evaluated on one minibatch, flattened to rows, with
+    the stored rollout terms it is compared against (device tensors).
+
+    Every tensor is 1-D over the minibatch rows, except ``log_prob`` and
+    ``entropy`` in a window with a component mask, which keep the component
+    axis, ``(B, A)``. Sequence minibatches are flattened T-major. The four
+    distribution parameters are set only when ``lr_schedule ==
+    "adaptive_kl"``. ``graph_outputs`` is the executor's outputs dict of a
+    ``GraphPPOPolicy`` (node name -> output), ``None`` for other policies.
+    """
+
+    values: torch.Tensor
+    log_prob: torch.Tensor
+    entropy: torch.Tensor
+    old_values: torch.Tensor
+    old_log_prob: torch.Tensor
+    advantages: torch.Tensor
+    returns: torch.Tensor
+    old_mean: torch.Tensor | None = None
+    old_log_std: torch.Tensor | None = None
+    new_mean: torch.Tensor | None = None
+    new_log_std: torch.Tensor | None = None
+    graph_outputs: dict[str, torch.Tensor] | None = None
+
+
 class PPO(OnPolicyAlgorithm):
     """SB3/ManiSkill-style PPO with rl-garden feature extractors."""
 
@@ -81,6 +132,9 @@ class PPO(OnPolicyAlgorithm):
     # decision_level=True reads the env's per-step decision keys and computes
     # SMDP GAE over decision steps (see rl_garden/algorithms/decision_mask.py).
     _supports_decision_level: bool = True
+    #: Whether this algorithm's policy carries hidden state; a policy graph
+    #: must match (a stateful graph needs a ``SequencePPO`` algorithm).
+    stateful_policy: bool = False
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {
             "actor_extractor_class",
@@ -157,6 +211,7 @@ class PPO(OnPolicyAlgorithm):
         save_final_checkpoint: bool = True,
         decision_level: bool = False,
         per_step_critic: bool = True,
+        policy_graph: Optional[str] = None,
     ) -> None:
         """``decision_level=True`` reads the env's per-step decision keys:
         returns, advantages and the policy loss are computed over decision
@@ -164,7 +219,18 @@ class PPO(OnPolicyAlgorithm):
         carries a decision mask (it has no effect when ``decision_level`` is
         off): True trains the critic on every step, False on decision steps
         only. See ``docs/guides/decision-level-ppo.md`` for the env contract
-        and the training rules."""
+        and the training rules.
+
+        ``policy_graph`` (YAML text, or ``"builtin:<mlp|recurrent|gru|lstm|gtrxl>"``)
+        builds a ``GraphPPOPolicy`` instead; see
+        ``rl_garden.networks.graph.spec`` for the format. The graph expresses
+        the encoder routing, so ``encoder_sharing``/``obs_groups``/
+        ``critic_encoder_config``/``policy_kwargs`` must be unset, and
+        ``encoder_config`` is only read by a built-in graph. The graph's
+        ``losses:`` are added to the PPO loss on every minibatch and logged
+        as ``losses/graph_loss/<node>``; an ``info.<key>`` target is stored per
+        step next to the observation (the env must report it on every
+        step, checked from the first rollout step on)."""
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -278,6 +344,10 @@ class PPO(OnPolicyAlgorithm):
         self.critic_encoder_config = critic_encoder_config
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
+        self.policy_graph = self._resolve_policy_graph(policy_graph)
+        self.policy_graph_yaml = (
+            self.policy_graph.to_yaml() if self.policy_graph is not None else None
+        )
         # Built here rather than in _setup_model(): SequencePPO replaces
         # _setup_model() wholesale and needs the same reader.
         self._decision_reader = (
@@ -357,6 +427,10 @@ class PPO(OnPolicyAlgorithm):
         )
         if infos is None:
             return out
+        if self.rollout_buffer.extra_specs:
+            out["extras"] = read_info_targets(
+                infos, self.rollout_buffer.extra_specs, self.num_envs, self.rollout_buffer.pos
+            )
         if not self.decision_level:
             if not self._decision_keys_warned:
                 self._decision_keys_warned = warn_if_decision_keys_ignored(infos)
@@ -413,6 +487,7 @@ class PPO(OnPolicyAlgorithm):
                 if self.critic_encoder_config is not None
                 else None
             ),
+            "policy_graph": self.policy_graph_yaml,
         }
         return meta
 
@@ -484,9 +559,117 @@ class PPO(OnPolicyAlgorithm):
             )
         return normalized
 
-    def _setup_model(self) -> None:
-        self.policy = PPOPolicy(
-            observation_space=self.env.single_observation_space,
+    def _resolve_policy_graph(self, source: Optional[str]) -> Optional[GraphSpec]:
+        """Parse ``policy_graph`` (expanding a built-in name with this
+        algorithm's own settings) and check it against the other encoder
+        options and ``stateful_policy``."""
+        if source is None:
+            return None
+        conflicts = [
+            name
+            for name, value in (
+                ("encoder_sharing", self.encoder_sharing),
+                ("obs_groups", self.obs_groups),
+                ("critic_encoder_config", self.critic_encoder_config),
+                ("policy_kwargs", self.policy_kwargs or None),
+            )
+            if value is not None
+        ]
+        if conflicts:
+            raise ConfigError(
+                f"policy_graph expresses the encoder routing (edges decide gradient "
+                f"flow); {conflicts} must not be set alongside it."
+            )
+        source = read_graph_source(source)
+        if is_builtin_graph_source(source):
+            stage = resolve_builtin_stage(
+                builtin_graph_name(source),
+                type(self).configured_sequence_stage(vars(self)),
+                type(self).__name__,
+            )
+            spec = builtin_graph(
+                stage or "mlp",
+                encoder_config=self.encoder_config,
+                encoder_sharing=type(self).encoder_sharing,
+                stage_params=self._builtin_stage_params() if stage is not None else None,
+            )
+            if stage is None:
+                self._warn_if_builtin_mlp_differs_from_ppo_policy()
+        else:
+            if self.encoder_config is not None:
+                raise ConfigError(
+                    "encoder_config is only read by a built-in policy graph; a custom "
+                    "graph's encoder nodes carry their own 'config'."
+                )
+            spec = GraphSpec.parse(source)
+        if spec.is_stateful != self.stateful_policy:
+            needed = "a stateful" if self.stateful_policy else "a stateless"
+            raise ConfigError(
+                f"{type(self).__name__} needs {needed} policy graph; this graph's "
+                f"stateful nodes are {list(spec.stateful_nodes)} (stateful graphs run "
+                "with recurrent_ppo/transformer_ppo, stateless ones with ppo)."
+            )
+        self.encoder_sharing_origin = "policy_graph"
+        return spec
+
+    def _warn_if_builtin_mlp_differs_from_ppo_policy(self) -> None:
+        space = normalize_observation_space(self.env.single_observation_space)
+        if (
+            type(self).encoder_sharing == "shared_critic_grad"
+            and ObservationSchema.from_space(space).has_images
+        ):
+            warnings.warn(
+                "policy_graph 'builtin:mlp' on image observations is not PPOPolicy's "
+                "objective: its detach edge cuts the whole encoder latent from the actor "
+                "loss, while PPOPolicy (encoder_sharing='shared_critic_grad') detaches only "
+                "the image branches and still trains the proprio branch with the actor "
+                "loss. Write a graph to choose the routing explicitly.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    @classmethod
+    def configured_sequence_stage(cls, settings: Mapping[str, Any]) -> Optional[tuple[str, str]]:
+        """``(kind, setting that decides it)`` of the sequence stage this
+        algorithm builds from ``settings`` (its own attributes, or the CLI
+        args at preflight); ``None``: no stage."""
+        del settings
+        return None
+
+    def _builtin_stage_params(self) -> dict[str, Any]:
+        """Node parameters of this algorithm's own sequence stage in a
+        built-in graph (node defaults when empty)."""
+        return {}
+
+    def _build_graph_policy(self, observation_space) -> GraphPPOPolicy:
+        return GraphPPOPolicy(
+            observation_space,
+            self.env.single_action_space,
+            graph=self.policy_graph,
+            net_arch=self.net_arch,
+            log_std_init=self.log_std_init,
+            log_std_init_per_dim=self.log_std_init_per_dim,
+            action_mean_bias_init=self.action_mean_bias_init,
+            action_mean_head_gain=self.action_mean_head_gain,
+            actor_use_layer_norm=self.actor_use_layer_norm,
+            value_use_layer_norm=self.value_use_layer_norm,
+            actor_use_group_norm=self.actor_use_group_norm,
+            value_use_group_norm=self.value_use_group_norm,
+            num_groups=self.num_groups,
+            actor_dropout_rate=self.actor_dropout_rate,
+            value_dropout_rate=self.value_dropout_rate,
+            kernel_init=self.kernel_init,
+            backbone_type=self.backbone_type,
+            critic_backbone_type=self.critic_backbone_type,
+        )
+
+    def _build_policy(self, observation_space) -> PPOPolicy:
+        """Subclasses that build a different policy class override this; the
+        tail of ``_setup_model`` (device move, optimizer) is shared."""
+        if self.policy_graph is not None:
+            return self._build_graph_policy(observation_space)
+        return PPOPolicy(
+            observation_space=observation_space,
             action_space=self.env.single_action_space,
             net_arch=self.net_arch,
             log_std_init=self.log_std_init,
@@ -503,8 +686,11 @@ class PPO(OnPolicyAlgorithm):
             kernel_init=self.kernel_init,
             backbone_type=self.backbone_type,
             critic_backbone_type=self.critic_backbone_type,
-            **self._policy_extractor_kwargs(self.env.single_observation_space),
-        ).to(self.device)
+            **self._policy_extractor_kwargs(observation_space),
+        )
+
+    def _setup_model(self) -> None:
+        self.policy = self._build_policy(self.env.single_observation_space).to(self.device)
         self.policy_optimizer = make_optimizer(
             self.policy.parameters(),
             lr=self.learning_rate,
@@ -532,7 +718,15 @@ class PPO(OnPolicyAlgorithm):
             gae_lambda=self.gae_lambda,
             store_dist_params=(self.lr_schedule == "adaptive_kl"),
             store_decisions=self.decision_level,
+            extra_specs=self._rollout_extra_specs(),
         )
+
+    def _rollout_extra_specs(self) -> TargetSpecs:
+        """Per-step extras the rollout buffer stores: the ``info.<key>``
+        targets of the policy graph's losses."""
+        if isinstance(self.policy, GraphPPOPolicy):
+            return self.policy.info_target_specs
+        return {}
 
     def _current_clip_coef(self) -> float:
         return self.clip_coef
@@ -574,6 +768,7 @@ class PPO(OnPolicyAlgorithm):
         new_log_std: Optional[torch.Tensor] = None,
         decision_mask: torch.Tensor | None = None,
         component_mask: torch.Tensor | None = None,
+        aux_loss: torch.Tensor | None = None,
     ) -> dict[str, float | bool | torch.Tensor]:
         """One PPO minibatch gradient step on 1-D tensors. ``result["stop"]`` is
         True if target_kl triggered an early stop (caller should break after
@@ -603,7 +798,11 @@ class PPO(OnPolicyAlgorithm):
         already the sum over the components that took effect. The log-ratio,
         entropy and adaptive-KL terms of a step sum its components that took
         effect, so a component that never took effect gets no policy
-        gradient; everything after that reduction is the decision-mask path."""
+        gradient; everything after that reduction is the decision-mask path.
+
+        ``aux_loss`` (a scalar, e.g. the policy graph's losses) is added to
+        the PPO loss as is; its gradients join the global grad-norm clip and
+        the optimizer's weight decay like every other parameter's."""
         if component_mask is not None and decision_mask is None:
             raise ValueError("component_mask requires decision_mask.")
         if decision_mask is None:
@@ -681,6 +880,8 @@ class PPO(OnPolicyAlgorithm):
             value_loss = 0.5 * F.mse_loss(values, returns)
         entropy_loss = row_mean(entropy)
         loss = policy_loss - self.ent_coef * entropy_loss + self.vf_coef * value_loss
+        if aux_loss is not None:
+            loss = loss + aux_loss
 
         self.policy_optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -739,35 +940,67 @@ class PPO(OnPolicyAlgorithm):
     def _iter_minibatches(self) -> Iterator[RolloutBufferSample]:
         return self.rollout_buffer.get(self.minibatch_size)
 
-    def _evaluate_minibatch(
-        self, data: RolloutBufferSample
-    ) -> tuple[
-        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-        torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor],
-        Optional[torch.Tensor],
-    ]:
-        """Returns 1-D (values, log_prob, entropy, old_values, old_log_prob,
-        advantages, returns, old_mean, old_log_std, new_mean, new_log_std).
-        The last four are ``None`` unless ``lr_schedule == "adaptive_kl"``.
-        In a window with a component mask ``log_prob`` and ``entropy`` are
-        per component, (B, A)."""
-        if self.rollout_buffer.window_has_components:
-            return self._evaluate_minibatch_per_component(data)
+    def _evaluate_minibatch(self, data: RolloutBufferSample) -> MinibatchEval:
+        """Evaluate the current policy on ``data``. In a window with a
+        component mask the stored actions that did not take effect are
+        zeroed and ``log_prob``/``entropy`` keep their component axis."""
+        per_component = self.rollout_buffer.window_has_components
+        actions = self._component_masked_actions(data) if per_component else data.actions
         # No explicit stop_gradient_actor: PPOPolicy applies
         # BasePolicy.extract_actor_features's encoder_sharing rule by default.
+        component_kwargs = {"sum_dims": False} if per_component else {}
         if self.lr_schedule == "adaptive_kl":
-            values, log_prob, entropy, new_mean, new_log_std = (
-                self.policy.evaluate_actions_with_dist_params(data.obs, data.actions)
+            (values, log_prob, entropy, new_mean, new_log_std), graph_outputs = (
+                self._evaluate_policy(
+                    self.policy.evaluate_actions_with_dist_params,
+                    data.obs,
+                    actions,
+                    **component_kwargs,
+                )
             )
             old_mean, old_log_std = data.old_mean, data.old_log_std
         else:
-            values, log_prob, entropy = self.policy.evaluate_actions(data.obs, data.actions)
+            (values, log_prob, entropy), graph_outputs = self._evaluate_policy(
+                self.policy.evaluate_actions, data.obs, actions, **component_kwargs
+            )
             new_mean = new_log_std = old_mean = old_log_std = None
-        return (
-            values.flatten(), log_prob.flatten(), entropy.flatten(),
-            data.old_values, data.old_log_prob, data.advantages, data.returns,
-            old_mean, old_log_std, new_mean, new_log_std,
+        log_prob, entropy = self._policy_term_rows(log_prob, entropy, per_component)
+        return MinibatchEval(
+            values=values.flatten(),
+            log_prob=log_prob,
+            entropy=entropy,
+            old_values=data.old_values,
+            old_log_prob=data.old_log_prob,
+            advantages=data.advantages,
+            returns=data.returns,
+            old_mean=old_mean,
+            old_log_std=old_log_std,
+            new_mean=new_mean,
+            new_log_std=new_log_std,
+            graph_outputs=graph_outputs,
         )
+
+    def _evaluate_policy(
+        self, evaluate, *args, **kwargs
+    ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor] | None]:
+        """Call a policy evaluate method; a ``GraphPPOPolicy`` is asked for
+        its graph outputs too, which are split off the returned tuple."""
+        if not isinstance(self.policy, GraphPPOPolicy):
+            return evaluate(*args, **kwargs), None
+        *evaluated, graph_outputs = evaluate(*args, return_graph_outputs=True, **kwargs)
+        return tuple(evaluated), graph_outputs
+
+    @staticmethod
+    def _policy_term_rows(
+        log_prob: torch.Tensor, entropy: torch.Tensor, per_component: bool
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Flatten ``log_prob``/``entropy`` to rows (T-major for sequences);
+        per component they keep the component axis, ``(rows, A)``
+        (``reshape``: ``flatten`` would merge it into the rows)."""
+        if not per_component:
+            return log_prob.flatten(), entropy.flatten()
+        action_dim = log_prob.shape[-1]
+        return log_prob.reshape(-1, action_dim), entropy.reshape(-1, action_dim)
 
     @staticmethod
     def _component_masked_actions(data) -> torch.Tensor:
@@ -776,27 +1009,6 @@ class PPO(OnPolicyAlgorithm):
         value there could make that log-prob non-finite, and the zero gradient
         ``where`` sends back would then turn into NaN (``0 * inf``)."""
         return torch.where(data.component_mask, data.actions, 0.0)
-
-    def _evaluate_minibatch_per_component(self, data: RolloutBufferSample):
-        """``_evaluate_minibatch`` for a window with a component mask:
-        ``log_prob`` and ``entropy`` keep their component axis, (B, A)."""
-        actions = self._component_masked_actions(data)
-        if self.lr_schedule == "adaptive_kl":
-            values, log_prob, entropy, new_mean, new_log_std = (
-                self.policy.evaluate_actions_with_dist_params(data.obs, actions, sum_dims=False)
-            )
-            old_mean, old_log_std = data.old_mean, data.old_log_std
-        else:
-            values, log_prob, entropy = self.policy.evaluate_actions(
-                data.obs, actions, sum_dims=False
-            )
-            new_mean = new_log_std = old_mean = old_log_std = None
-        action_dim = log_prob.shape[-1]
-        return (
-            values.flatten(), log_prob.reshape(-1, action_dim), entropy.reshape(-1, action_dim),
-            data.old_values, data.old_log_prob, data.advantages, data.returns,
-            old_mean, old_log_std, new_mean, new_log_std,
-        )
 
     def train(self) -> dict[str, float]:
         self.policy.train()
@@ -814,28 +1026,31 @@ class PPO(OnPolicyAlgorithm):
         clipfracs: list[float] = []
         losses: list[float] = []
         decision_counts: list[torch.Tensor] = []
+        graph_losses: dict[str, list[torch.Tensor]] = {}
         continue_training = True
 
         for _ in range(self.update_epochs):
             for data in self._iter_minibatches():
-                (
-                    values, log_prob, entropy, old_values, old_log_prob, advantages, returns,
-                    old_mean, old_log_std, new_mean, new_log_std,
-                ) = self._evaluate_minibatch(data)
+                evaluation = self._evaluate_minibatch(data)
+                masks = self._minibatch_masks(data)
+                aux_loss, node_losses = self._graph_aux_loss(
+                    data, evaluation, masks.get("decision_mask")
+                )
                 result = self._ppo_minibatch_update(
-                    values=values,
-                    log_prob=log_prob,
-                    entropy=entropy,
-                    old_values=old_values,
-                    old_log_prob=old_log_prob,
-                    advantages=advantages,
-                    returns=returns,
+                    values=evaluation.values,
+                    log_prob=evaluation.log_prob,
+                    entropy=evaluation.entropy,
+                    old_values=evaluation.old_values,
+                    old_log_prob=evaluation.old_log_prob,
+                    advantages=evaluation.advantages,
+                    returns=evaluation.returns,
                     clip_coef=clip_coef,
-                    old_mean=old_mean,
-                    old_log_std=old_log_std,
-                    new_mean=new_mean,
-                    new_log_std=new_log_std,
-                    **self._minibatch_masks(data),
+                    old_mean=evaluation.old_mean,
+                    old_log_std=evaluation.old_log_std,
+                    new_mean=evaluation.new_mean,
+                    new_log_std=evaluation.new_log_std,
+                    aux_loss=aux_loss,
+                    **masks,
                 )
                 if "decisions" in result:
                     decision_counts.append(result.pop("decisions"))
@@ -851,6 +1066,8 @@ class PPO(OnPolicyAlgorithm):
                 approx_kls.append(result["approx_kl"])
                 old_approx_kls.append(result["old_approx_kl"])
                 losses.append(result["loss"])
+                for node, node_loss in node_losses.items():
+                    graph_losses.setdefault(node, []).append(node_loss)
             if not continue_training:
                 break
 
@@ -885,7 +1102,70 @@ class PPO(OnPolicyAlgorithm):
                 metrics["decisions_per_minibatch_min"],
                 metrics["decisions_per_minibatch_mean"],
             ) = torch.stack([counts.min(), counts.mean()]).tolist()
+        if graph_losses:
+            means = torch.stack([torch.stack(values).mean() for values in graph_losses.values()])
+            for node, value in zip(graph_losses, means.tolist()):
+                metrics[f"graph_loss/{node}"] = value
         return metrics
+
+    def _graph_losses(self) -> tuple[LossSpec, ...]:
+        if isinstance(self.policy, GraphPPOPolicy):
+            return self.policy.graph_spec.losses
+        return ()
+
+    def _graph_aux_loss(
+        self,
+        data,
+        evaluation: MinibatchEval,
+        decision_mask: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
+        """The policy graph's losses on one minibatch: ``(sum of weight *
+        loss, {node: detached unweighted loss})``; ``(None, {})`` without
+        losses.
+
+        Graph outputs and targets are both laid out as minibatch rows: the
+        outputs of a sequence minibatch are already ``(T * B, ...)`` T-major
+        and its ``(T, B, ...)`` targets are reshaped the same way. Each loss
+        is reduced like the policy loss: over decision rows when its ``mask``
+        is ``decision`` and the window has a decision mask (0, still
+        connected to the graph, when there are none), over every row
+        otherwise. Every loss is computed on every minibatch, so DDP ranks
+        backpropagate through the same parameters; a weight-0 loss is logged
+        but stays out of the backward pass on every rank."""
+        losses = self._graph_losses()
+        if evaluation.graph_outputs is None or not losses:
+            return None, {}
+        aux_loss = None
+        node_losses = {}
+        for loss in losses:
+            loss_type = find_graph_loss(loss.type)
+            pred, target = target_rows(
+                loss_type, evaluation.graph_outputs[loss.node], self._graph_loss_target(data, loss)
+            )
+            row_loss = loss_type.fn(pred, target)
+            if loss.mask == "decision" and decision_mask is not None:
+                value = _masked_mean(row_loss, decision_mask, decision_mask.sum())
+            else:
+                value = row_loss.mean()
+            node_losses[loss.node] = value.detach()
+            if loss.weight > 0:
+                weighted = loss.weight * value
+                aux_loss = weighted if aux_loss is None else aux_loss + weighted
+        return aux_loss, node_losses
+
+    @staticmethod
+    def _graph_loss_target(data, loss: LossSpec) -> torch.Tensor:
+        if loss.target == "batch.rewards":
+            return data.rewards
+        if loss.target == "batch.dones":
+            return data.dones
+        key = loss.target[len(INFO_TARGET_PREFIX):]
+        if key not in data.extras:
+            raise ValueError(
+                f"graph loss on node {loss.node!r}: target {loss.target!r} was not stored "
+                "this window (the rollout passed no infos)."
+            )
+        return data.extras[key]
 
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         super()._log_update_metrics(metrics, step)

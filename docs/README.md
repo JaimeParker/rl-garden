@@ -13,6 +13,7 @@ Operational how-to for running and configuring the framework.
 - [Meta-World Integration](guides/metaworld-integration.md)
 - [Offline Training Acceleration](guides/offline-acceleration.md)
 - [OGBench Integration](guides/ogbench-integration.md)
+- [Policy Graphs (YAML-Declared PPO Policies)](guides/policy-graphs.md)
 - [RLBench Integration](guides/rlbench-integration.md)
 - [robomimic Integration](guides/robomimic-integration.md)
 - [RoboTwin Integration](guides/robotwin.md)

@@ -139,3 +139,78 @@ def test_build_policy_from_cfg_constructs_expected_policy():
     assert isinstance(policy, PPOPolicy)
     assert policy.observation_space.shape == (6,)
     assert policy.action_space.shape == (3,)
+
+
+class _GraphCfg:
+    """Minimal DictConfig-like fake: attribute and .get() access."""
+
+    def __init__(self, **kwargs):
+        self._data = kwargs
+
+    def __getattr__(self, key):
+        try:
+            return self._data[key]
+        except KeyError:
+            raise AttributeError(key) from None
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+
+def _graph_cfg(graph: dict) -> _GraphCfg:
+    return _GraphCfg(
+        obs_dim=6,
+        action_dim=3,
+        rlgarden_policy="graph_ppo",
+        rlgarden_policy_kwargs={"graph": graph, "net_arch": [16]},
+    )
+
+
+_FLAT_GRAPH = {
+    "nodes": {
+        "obs": {"type": "input"},
+        "encoder": {"type": "encoder"},
+        "trunk": {"type": "mlp", "net_arch": [8]},
+        "actor": {"type": "actor"},
+        "value": {"type": "value"},
+    },
+    "edges": [
+        {"from": "obs", "to": "encoder"},
+        {"from": "encoder", "to": "trunk"},
+        {"from": "trunk", "to": "actor"},
+        {"from": "trunk", "to": "value"},
+    ],
+}
+
+
+def test_build_policy_from_cfg_builds_a_graph_policy_over_flat_states():
+    from rl_garden.policies.graph_ppo_policy import GraphPPOPolicy
+
+    assert resolve_policy("graph_ppo") is GraphPPOPolicy
+    first = build_policy_from_cfg(_graph_cfg(_FLAT_GRAPH))
+    second = build_policy_from_cfg(_graph_cfg(_FLAT_GRAPH))
+    assert isinstance(first, GraphPPOPolicy)
+    assert list(first.state_dict()) == list(second.state_dict())
+
+    batch = 4
+    states, actions = torch.randn(batch, 6), torch.randn(batch, 3).clamp(-0.9, 0.9)
+    sampled, values, log_prob, _ = first.forward(states, sum_dims=False)
+    assert sampled.shape == (batch, 3) and values.shape == (batch, 1)
+    assert log_prob.shape == (batch, 3)
+    values, log_prob, entropy = first.evaluate_actions(states, actions, sum_dims=False)
+    assert log_prob.shape == entropy.shape == (batch, 3)
+    assert first.predict_values(states).shape == (batch, 1)
+
+    model = RLGardenPPOModel(first)
+    out = model.default_forward({"states": states, "action": actions})
+    assert out["logprobs"].shape == (batch, 3) and out["values"].shape == (batch, 1)
+    chunk_actions, result = model.predict_action_batch({"states": states})
+    assert chunk_actions.shape == (batch, 1, 3)
+    assert result["prev_logprobs"].shape == (batch, 3)
+
+
+def test_build_policy_from_cfg_rejects_a_stateful_graph():
+    from rl_garden.networks.graph.builtin import recurrent_actor_critic
+
+    with pytest.raises(ValueError, match="needs a stateless graph"):
+        build_policy_from_cfg(_graph_cfg(recurrent_actor_critic("gru", hidden_size=8).to_dict()))
