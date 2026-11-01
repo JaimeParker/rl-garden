@@ -67,6 +67,20 @@ _ALGORITHMS: dict[str, type[OfflineRLAlgorithm]] = {
 }
 
 
+def register_algorithm(name: str, algorithm_cls: type[OfflineRLAlgorithm]) -> None:
+    """Make ``algorithm_cls`` selectable as
+    ``cfg.actor.model.rlgarden_algorithm=name``.
+
+    The class must satisfy the offline-uniform contract (train on a uniform
+    replay sample; no extra batch fields such as ``mc_returns``). Every RLinf
+    worker process builds it, so the registering module must be imported in
+    each of them. Raises ``ValueError`` for a name already taken.
+    """
+    if name in _ALGORITHMS:
+        raise ValueError(f"RLinf offline algorithm {name!r} is already registered.")
+    _ALGORITHMS[name] = algorithm_cls
+
+
 def resolve_algorithm(name: str) -> type[OfflineRLAlgorithm]:
     """Look up an offline-uniform-contract algorithm by config name.
 

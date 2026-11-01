@@ -1,9 +1,17 @@
-"""SAC run function."""
+"""SAC run function.
+
+``sac_common_kwargs`` and ``sac_observation_kwargs`` map a ``SACArgs``-shaped
+args object onto ``SAC`` constructor kwargs; every SAC-family builder (in-tree
+or in another package) builds its agent from them.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
 
-def _sac_common_kwargs(
+
+def sac_common_kwargs(
     args, env, eval_env, logger, checkpoint_dir, image_kwargs
 ) -> dict:
     """Kwargs shared by every SAC-family algorithm built from ``SACTrainingArgs``
@@ -61,7 +69,7 @@ def _sac_common_kwargs(
     )
 
 
-def _sac_observation_kwargs(args) -> dict:
+def sac_observation_kwargs(args) -> dict:
     """Observation-related kwargs shared by every SAC-family entrypoint that
     supports a distinct critic encoder (sac/rlpd/rlpd_hybrid). The algorithm
     resolves image keys/encoders itself from ``encoder_config``/``obs_groups``
@@ -81,17 +89,31 @@ def _sac_observation_kwargs(args) -> dict:
     return kwargs
 
 
-def build_sac(args, env, eval_env, logger, checkpoint_dir):
+def build_sac(
+    args,
+    env,
+    eval_env,
+    logger,
+    checkpoint_dir,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` from ``args``: ``SAC``, or ``SACDDP`` under
+    multi-GPU DDP, when ``None``; a given class is used as is, DDP or not.
+    ``extra_kwargs`` go to its constructor next to the common SAC kwargs."""
     import os
 
-    from rl_garden.algorithms import SAC
-    from rl_garden.algorithms.sac_ddp import SACDDP
     from rl_garden.common.ddp import ddp_rank, is_ddp_active
     from rl_garden.training.inspection import construct_agent
 
-    image_kwargs = _sac_observation_kwargs(args)
+    image_kwargs = sac_observation_kwargs(args)
 
-    algo_cls = SACDDP if is_ddp_active() else SAC
+    if algorithm_cls is None:
+        from rl_garden.algorithms import SAC
+        from rl_garden.algorithms.sac_ddp import SACDDP
+
+        algorithm_cls = SACDDP if is_ddp_active() else SAC
     mmap_dir = args.mmap_dir
     if is_ddp_active() and mmap_dir is not None:
         if args.mmap_mode == "open":
@@ -104,10 +126,11 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
         mmap_dir = os.path.join(mmap_dir, f"rank{ddp_rank()}")
 
     agent = construct_agent(
-        algo_cls,
+        algorithm_cls,
         mmap_dir=mmap_dir,
         mmap_mode=args.mmap_mode,
-        **_sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        **sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        **extra_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -116,7 +139,8 @@ def build_sac(args, env, eval_env, logger, checkpoint_dir):
     return agent
 
 
-def run_sac(args: SACArgs) -> None:
+def run_sac(args: SACArgs, *, build_agent: Callable | None = None) -> None:
+    """Train with ``build_agent`` (``build_sac`` when ``None``)."""
     from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online.runner import run_online
 
@@ -130,7 +154,7 @@ def run_sac(args: SACArgs) -> None:
         args,
         obs_tag=obs_tag,
         make_env_request=make_env_request,
-        build_agent=build_sac,
+        build_agent=build_sac if build_agent is None else build_agent,
         post_learn=lambda agent: getattr(agent.replay_buffer, "flush", lambda: None)(),
     )
 
@@ -162,4 +186,6 @@ def _sac_algorithm_cls() -> type:
     return SAC
 
 
-registry.register("sac", SACArgs, run_sac, algorithm_cls=_sac_algorithm_cls)
+registry.register(
+    "sac", SACArgs, run_sac, algorithm_cls=_sac_algorithm_cls, build_agent=build_sac
+)

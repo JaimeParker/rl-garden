@@ -1,0 +1,18 @@
+# Packaging of the reference downstream package (not installed by the tests:
+# tests/test_downstream_extension.py puts this directory on sys.path and
+# stands in for the entry point below).
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rlg-downstream-example"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = ["rl_garden"]
+
+[project.entry-points."rlgarden.algorithms"]
+rlg_downstream_example = "rlg_downstream_example.registration"
+
+[tool.setuptools.packages.find]
+include = ["rlg_downstream_example*"]

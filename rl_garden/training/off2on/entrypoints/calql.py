@@ -175,4 +175,5 @@ registry.register(
     CalQLOff2OnArgs,
     run_calql,
     algorithm_cls=_off2_on_calql_algorithm_cls,
+    build_agent=build_calql,
 )

@@ -15,7 +15,6 @@ from typing import Any, Literal, Optional
 
 from rl_garden.algorithms.sac import SAC
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
-from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.networks import BackboneType, KernelInit
 from rl_garden.policies.rlpd_policy import RLPDPolicy
 
@@ -31,6 +30,7 @@ class RLPD(PriorDataReplayMixin, SAC):
     """
 
     _compatible_checkpoint_algorithms = ("RLPD",)
+    policy_class = RLPDPolicy
 
     def __init__(
         self,
@@ -72,66 +72,25 @@ class RLPD(PriorDataReplayMixin, SAC):
             **sac_kwargs,
         )
 
-    def _build_policy(self) -> RLPDPolicy:
-        return RLPDPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self._policy_action_space(),
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            critic_impl=self.critic_impl,
-            actor_use_layer_norm=self.actor_use_layer_norm,
-            critic_use_layer_norm=self.critic_use_layer_norm,
-            actor_dropout_rate=self.actor_dropout_rate,
-            critic_dropout_rate=self.critic_dropout_rate,
-            kernel_init=self.kernel_init,
-            backbone_type=self.backbone_type,
-            use_pnorm=self.use_pnorm,
-            std_parameterization=self.std_parameterization,
-            log_std_min=self.actor_log_std_min,
-            log_std_mode=self.actor_log_std_mode,
-            actor_feature_dim=self.actor_feature_dim,
-            critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            critic_backbone_type=self.critic_backbone_type,
-            **self._policy_extractor_kwargs(
-                self.env.single_observation_space,
-                augmentation_seed=self._image_augmentation_seed,
-            ),
-        )
+    def _policy_kwargs(self, observation_space) -> dict[str, Any]:
+        # RLPDPolicy names every keyword, so the extras' position in the dict
+        # does not matter.
+        return {
+            **super()._policy_kwargs(observation_space),
+            "actor_dropout_rate": self.actor_dropout_rate,
+            "critic_dropout_rate": self.critic_dropout_rate,
+            "kernel_init": self.kernel_init,
+            "backbone_type": self.backbone_type,
+            "use_pnorm": self.use_pnorm,
+            "std_parameterization": self.std_parameterization,
+        }
 
-    def _setup_model(self) -> None:
-        super()._setup_model()
-        if not (self.exclude_bias_from_decay and self.weight_decay > 0):
-            return
-        # SAC._setup_model() already built self.q_optimizer/self.actor_optimizer
-        # (uniform weight decay) and self._lr_schedulers bound to those exact
-        # objects. Rebuilding just the optimizers here would leave the
-        # schedulers pointing at now-discarded objects -- so the schedulers
-        # must be rebuilt too, not just the optimizers.
-        self.q_optimizer = make_optimizer(
-            list(self.policy.critic_and_encoder_parameters()),
-            lr=self.q_lr,
-            weight_decay=self.weight_decay,
-            use_adamw=self.use_adamw,
-            exclude_bias_from_decay=True,
+    def _make_optimizers(self, *, exclude_bias_from_decay: bool = False):
+        # Without weight decay there is nothing to exclude: keep one group.
+        return super()._make_optimizers(
+            exclude_bias_from_decay=exclude_bias_from_decay
+            or (self.exclude_bias_from_decay and self.weight_decay > 0)
         )
-        self.actor_optimizer = make_optimizer(
-            list(self.policy.actor_parameters()),
-            lr=self.policy_lr,
-            weight_decay=self.weight_decay,
-            use_adamw=self.use_adamw,
-            exclude_bias_from_decay=True,
-        )
-        self._lr_schedulers = [
-            make_lr_scheduler(
-                opt,
-                schedule_type=self.lr_schedule,
-                warmup_steps=self.lr_warmup_steps,
-                decay_steps=self.lr_decay_steps,
-                min_lr_ratio=self.lr_min_ratio,
-            )
-            for opt in (self.q_optimizer, self.actor_optimizer)
-        ]
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {

@@ -6,9 +6,11 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.encoders import FlattenExtractor
+from rl_garden.integrations.rlinf import ppo_model
 from rl_garden.integrations.rlinf.ppo_model import (
     RLGardenPPOModel,
     build_policy_from_cfg,
+    register_policy,
     resolve_policy,
 )
 from rl_garden.policies.ppo_policy import PPOPolicy
@@ -141,6 +143,35 @@ def test_build_policy_from_cfg_constructs_expected_policy():
     assert policy.action_space.shape == (3,)
 
 
+class _DownstreamPolicy(PPOPolicy):
+    """Stands in for a policy class defined in another package."""
+
+
+def test_register_policy_makes_a_policy_buildable_from_cfg(monkeypatch):
+    monkeypatch.setattr(ppo_model, "_POLICIES", dict(ppo_model._POLICIES))
+
+    register_policy("downstream_ppo", _DownstreamPolicy)
+
+    assert resolve_policy("downstream_ppo") is _DownstreamPolicy
+    cfg = _GraphCfg(
+        obs_dim=6,
+        action_dim=3,
+        rlgarden_policy="downstream_ppo",
+        rlgarden_policy_kwargs={"net_arch": [16]},
+    )
+    policy = build_policy_from_cfg(cfg)
+    assert type(policy) is _DownstreamPolicy
+    assert policy.action_space.shape == (3,)
+
+
+def test_register_policy_rejects_a_taken_name(monkeypatch):
+    monkeypatch.setattr(ppo_model, "_POLICIES", dict(ppo_model._POLICIES))
+
+    with pytest.raises(ValueError, match="already registered"):
+        register_policy("ppo", _DownstreamPolicy)
+    assert resolve_policy("ppo") is PPOPolicy
+
+
 class _GraphCfg:
     """Minimal DictConfig-like fake: attribute and .get() access."""
 
@@ -206,6 +237,49 @@ def test_build_policy_from_cfg_builds_a_graph_policy_over_flat_states():
     assert out["logprobs"].shape == (batch, 3) and out["values"].shape == (batch, 1)
     chunk_actions, result = model.predict_action_batch({"states": states})
     assert chunk_actions.shape == (batch, 1, 3)
+    assert result["prev_logprobs"].shape == (batch, 3)
+
+
+_TWO_ACTOR_SINK_GRAPH = {
+    "nodes": {
+        "obs": {"type": "input"},
+        "encoder": {"type": "encoder"},
+        "trunk": {"type": "mlp", "net_arch": [8]},
+        "arm": {"type": "actor", "action_dims": [0, 2]},
+        "gripper": {"type": "actor", "action_dims": [2, 3], "net_arch": []},
+        "value": {"type": "value"},
+    },
+    "edges": [
+        {"from": "obs", "to": "encoder"},
+        {"from": "encoder", "to": "trunk"},
+        {"from": "trunk", "to": "arm"},
+        {"from": "encoder", "to": "gripper"},
+        {"from": "trunk", "to": "value"},
+    ],
+}
+
+
+def test_build_policy_from_cfg_builds_a_graph_policy_with_two_actor_sinks():
+    from rl_garden.networks.actor_critic import SplitDiagGaussianActor
+
+    policy = build_policy_from_cfg(_graph_cfg(_TWO_ACTOR_SINK_GRAPH))
+    assert isinstance(policy.actor, SplitDiagGaussianActor)
+    assert policy.actor.action_slices == ((0, 2), (2, 3))
+
+    batch = 4
+    states, actions = torch.randn(batch, 6), torch.randn(batch, 3).clamp(-0.9, 0.9)
+    sampled, values, log_prob, _ = policy.forward(states, sum_dims=False)
+    assert sampled.shape == (batch, 3) and values.shape == (batch, 1)
+    assert log_prob.shape == (batch, 3)
+    values, log_prob, entropy = policy.evaluate_actions(states, actions, sum_dims=False)
+    assert log_prob.shape == entropy.shape == (batch, 3)
+    assert policy.predict_values(states).shape == (batch, 1)
+
+    model = RLGardenPPOModel(policy)
+    out = model.default_forward({"states": states, "action": actions})
+    assert out["logprobs"].shape == (batch, 3) and out["values"].shape == (batch, 1)
+    rollout_actions, result = model.predict_action_batch({"states": states})
+    assert rollout_actions.shape == (batch, 1, 3)
     assert result["prev_logprobs"].shape == (batch, 3)
 
 

@@ -36,6 +36,13 @@ Algorithm families, by base class:
 
 There is no `rl_garden/algorithms/components/` package; do not invent one.
 
+An algorithm that lives in another package (a subclass registered through the
+`rlgarden.algorithms` entry-point group, built with the in-tree builders) is
+covered by the extension contract,
+[`docs/guides/extending.md`](../../docs/guides/extending.md); its protected
+methods and builders are part of that contract, so a change to them updates the
+guide in the same commit.
+
 ---
 
 ## Part A — Algorithm implementation (`rl_garden/algorithms/`)
@@ -334,6 +341,20 @@ posterior. The policy
 maintains eval-only state through `DreamerPolicy.predict()`, separate from the
 buffer's training-time carry.
 
+**SAC-family hooks.** A `SAC` subclass changes the model and the update
+through these hooks rather than copying `_build_policy`, `_setup_model` or
+`train` (full table: the SAC family seam table in
+[`docs/guides/extending.md`](../../docs/guides/extending.md)):
+
+| Hook | Default | Override for |
+|---|---|---|
+| class attr `policy_class` + `_policy_kwargs(observation_space)` | `SACPolicy` with SAC's keywords and the extractors | a `SACPolicy` subclass and its extra keywords: `{**super()._policy_kwargs(observation_space), ...}` |
+| `_make_optimizers(*, exclude_bias_from_decay=False)` | `(q_optimizer, actor_optimizer)` over `critic_and_encoder_parameters()` / `actor_parameters()` | other critic/actor optimizer settings (RLPD excludes biases from weight decay); extra optimizers go in `_setup_model` + `_optimizer_names()` |
+| `_critic_features(obs, *, target)` | the critic extractor's features, detached when the phase freezes the encoder | reading the critic latent (an auxiliary head); call `super()` |
+| `_critic_loss(data)` | TD loss and its info dict | extra critic loss terms and metrics |
+| `_critic_step(data)` / `_actor_step(data)` / `_alpha_step(log_prob)` | one optimizer step each, called by `train` and `train_high_utd` | wrapping a step; keep `super()` |
+| `_post_critic_update(data, info)` / `_post_actor_update(data)` | no-op / `{}` | per-step side effects (priorities, a Lagrange multiplier) and actor-side metrics |
+
 See `SAC` and `PPO` (`rl_garden/algorithms/sac.py`, `ppo.py`) for the
 reference implementations. There is no separate vision-specific wiring path
 and no `Vision*` sibling class — a `Dict` observation with
@@ -343,7 +364,7 @@ schema derived from the observation space.
 
 **PPO-family policy graphs.** A `PPO` subclass gets `--policy-graph` support
 (`GraphPPOPolicy`, see [`docs/guides/policy-graphs.md`](../../docs/guides/policy-graphs.md))
-through `_ppo_common_kwargs` in `training/online/entrypoints/ppo.py`: build the
+through `ppo_common_kwargs` in `training/online/entrypoints/ppo.py`: build the
 agent with it and the `policy_graph` constructor argument, the preflight, the
 checkpoint metadata and the rollout-buffer extras are already wired. What a
 subclass still decides:
@@ -360,11 +381,26 @@ subclass still decides:
 - A subclass that overrides `_build_policy` must return
   `self._build_graph_policy(observation_space)` when `self.policy_graph` is set,
   one that builds its own rollout buffer must pass
-  `extra_specs=self._rollout_extra_specs()`, and one that overrides
-  `_evaluate_minibatch` must fill `MinibatchEval.graph_outputs` through
+  `extra_specs=self.policy.rollout_extra_specs()`, and one that overrides
+  `_evaluate_minibatch` must fill `MinibatchEval.outputs` through
   `self._evaluate_policy(...)` (all three as `SequencePPO` does). Keep calling
   `PPO.train()` (as `GAIL.train` does through `super()`) so the graph losses
   reach the loss.
+
+**PPO training-loop hooks.** Override one of these instead of `learn()`,
+`train()` or `_ppo_minibatch_update()` (contract and signatures:
+[`docs/guides/extending.md`](../../docs/guides/extending.md), "PPO seam table"):
+
+| Hook | Default | Override for |
+|---|---|---|
+| `_next_done(terminations, truncations, infos)` | `terminations \| truncations` | the episode cut GAE and the recurrent state see |
+| `_after_env_step(rewards, terminations, truncations, infos)` | no-op | per-step state stashed right after `env.step()` |
+| `_bootstrap_mask(...)` / `_compute_final_values(...)` | per `bootstrap_at_done` | which ended episodes bootstrap, and from what value |
+| class attr `rollout_buffer_class` | `RolloutBuffer` (`RecurrentRolloutBuffer` on `SequencePPO`) | a buffer subclass (GAE, storage); built by `_build_rollout_buffer()` |
+| `_rollout_extra_specs()` / `_rollout_extras()` | policy's `rollout_extra_specs()` / `{}` | a per-step tensor computed during the rollout, read as `data.extras[key]` |
+| `_policy_loss(...)`, `_value_loss(...)`, `_entropy_term(terms)`, `_total_loss(...)` | clipped surrogate, `0.5 * mse` (clipped with `clip_vloss`), row mean, `pg - ent_coef * ent + vf_coef * v (+ aux)` | one term of the minibatch loss |
+| `_aux_loss(data, evaluation, decision_mask)` | policy-graph losses | an auxiliary loss in the same `backward()` |
+| `_extra_update_metrics(stats)` | `{}` | metrics reduced over the update's `UpdateStats` |
 
 ### 6. Export the class
 
@@ -430,8 +466,15 @@ def _my_algo_algorithm_cls() -> type:
 
     return MyAlgo
 
-registry.register("my_algo", MyAlgoArgs, run_my_algo, algorithm_cls=_my_algo_algorithm_cls)
+registry.register(
+    "my_algo", MyAlgoArgs, run_my_algo,
+    algorithm_cls=_my_algo_algorithm_cls, build_agent=build_my_algo,
+)
 ```
+
+`build_agent=` is the builder checkpoint evaluation rebuilds the agent with
+(`rl_garden/training/evaluation.py`); every in-tree entry with a `build_*`
+function declares it (`tests/test_training_registry.py` checks this).
 
 `registry.register` rejects both a duplicate `name` and a duplicate `args_cls` —
 reusing another algorithm's `Args` dataclass fails at import time, so give
@@ -501,7 +544,10 @@ def _my_algo_algorithm_cls() -> type:
 
     return MyAlgo
 
-registry.register("my_algo", MyAlgoArgs, run_my_algo, algorithm_cls=_my_algo_algorithm_cls)
+registry.register(
+    "my_algo", MyAlgoArgs, run_my_algo,
+    algorithm_cls=_my_algo_algorithm_cls, build_agent=build_my_algo,
+)
 ```
 
 `OfflineCommonArgs` (`offline/args.py`) already composes `LoggingArgs,
@@ -541,7 +587,7 @@ def _run_my_bc(args, cleanup):
             return _run_my_bc(normalized_args, cleanup)
 
     # ... build Logger, checkpoint_dir; construct env via OfflineEnvSpec,
-    # agent via construct_agent(MyBC, ...) ...
+    # agent via build_my_bc(args, env, logger, checkpoint_dir=checkpoint_dir) ...
     if is_dry_run():
         emit_materialized_config(env_request=..., env=env, eval_env=None, agent=agent, derived=...)
         return
@@ -553,13 +599,23 @@ def _run_my_bc(args, cleanup):
         save_final_checkpoint=args.save_final_checkpoint, log_freq=args.log_freq,
     )
 
-registry.register("my_bc", MyBCArgs, run_my_bc)
+registry.register(
+    "my_bc", MyBCArgs, run_my_bc,
+    algorithm_cls=_my_bc_algorithm_cls, build_agent=build_my_bc,
+)
 ```
 
 The `has_config_session()`/`prepare_standalone`/`config_session` recursion and
 the dry-run branch are copied from `run_offline` itself
 (`rl_garden/common/effective_config.py` has `persist_effective_config`), since
-there is no shared runner to call.
+there is no shared runner to call. The agent comes from a
+`build_my_bc(args, env_spec, logger, eval_env=None, *, algorithm_cls=None,
+**extra_kwargs)` that maps Args to constructor kwargs through
+`construct_agent`; `extra_kwargs` replace or extend them (the run passes its
+`checkpoint_dir`, and a temporary `mmap_dir` in a dry run), so checkpoint
+evaluation rebuilds the agent from the run's Args alone. A class whose policy
+cannot act in the environment evaluation builds sets
+`checkpoint_eval_unsupported_reason` (see `BaseAlgorithm`).
 
 ### Registry allowlist step (`dataset_path` algorithms only)
 
@@ -645,8 +701,9 @@ python -c "from rl_garden.algorithms import Off2OnMyAlgo; print([c.__name__ for 
    hyperparameter dataclass(es).
 4. `rl_garden/training/<phase>/entrypoints/my_algo.py` — the run module (env/dataset
    request, `build_my_algo`, `run_my_algo`, `Args`, `registry.register`).
-   **Required:** pass `algorithm_cls=_my_algo_algorithm_cls` to `registry.register()`
-   (see Part B/C for the pattern).
+   **Required:** pass `algorithm_cls=_my_algo_algorithm_cls` and
+   `build_agent=build_my_algo` to `registry.register()` (see Part B/C for the
+   pattern; a bespoke runner without a `build_*` function passes no builder).
 5. `rl_garden/training/algorithm_registry.py`'s `_validate_config` allowlist
    tuple — **only** for a bespoke offline algorithm requiring `--dataset_path`
    (see Part C).

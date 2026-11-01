@@ -97,4 +97,6 @@ def _off2on_fql_algorithm_cls() -> type:
     return Off2OnFQL
 
 
-registry.register("fql", FQLOff2OnArgs, run_fql, algorithm_cls=_off2on_fql_algorithm_cls)
+registry.register(
+    "fql", FQLOff2OnArgs, run_fql, algorithm_cls=_off2on_fql_algorithm_cls, build_agent=build_fql
+)

@@ -129,4 +129,6 @@ def _jsrl_algorithm_cls() -> type:
     return JSRL
 
 
-registry.register("jsrl", JSRLArgs, run_jsrl, algorithm_cls=_jsrl_algorithm_cls)
+registry.register(
+    "jsrl", JSRLArgs, run_jsrl, algorithm_cls=_jsrl_algorithm_cls, build_agent=build_jsrl
+)

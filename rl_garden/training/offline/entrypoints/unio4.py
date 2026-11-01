@@ -133,4 +133,6 @@ def _uni_o4_algorithm_cls() -> type:
 
     return UniO4
 
-registry.register("unio4", UniO4Args, run_unio4, algorithm_cls=_uni_o4_algorithm_cls)
+registry.register(
+    "unio4", UniO4Args, run_unio4, algorithm_cls=_uni_o4_algorithm_cls, build_agent=build_unio4
+)

@@ -94,7 +94,12 @@ agent rules; this file is a plain orientation reference, not a rules doc.
 - `rl_garden/models/` — ACT and reward models.
 - `rl_garden/training/` — registry base and independent `online/`, `offline/`, and
   `off2on/` packages; each holds `args.py`, `registry.py`, `runner.py`, and an `entrypoints/`
-  package with one module per algorithm (all imported by the registry).
+  package with one module per algorithm (all imported by the registry, followed by the
+  modules of the `rlgarden.algorithms` entry-point group). `evaluation.py` is checkpoint
+  evaluation (`rl-garden-eval`; `examples/eval_checkpoint.py` wraps it) and `cli.py` the
+  console-script mains. Extension contract for algorithms in other packages:
+  [`docs/guides/extending.md`](../../docs/guides/extending.md), reference package
+  `tests/fixtures/downstream_extension/`.
   New entrypoints: `online/entrypoints/ncrl.py` (`ncrl`), `offline/entrypoints/pwm.py` (`pwm`) and
   `offline/entrypoints/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
 - `robot_infra/` — optional submodule ([rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra)):
@@ -105,7 +110,8 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   not under `rl_garden/` at all. It imports `rl_garden` as a library and
   registers `franka_real` through the `rlgarden.env_backends` entry-point
   group (`rl_garden/envs/backend_registry.py`).
-- `examples/` — thin training dispatchers and specialized experiment entrypoints.
+- `examples/` — thin training dispatchers (wrappers of `rl_garden/training/cli.py`) and
+  specialized experiment entrypoints.
 - `configs/` — reusable preset configs for training.
 - `scripts/` — shell launchers with experiment defaults.
 - `tools/` — standalone utilities: `conversion/` (checkpoint/dataset format

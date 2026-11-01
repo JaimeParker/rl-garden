@@ -107,4 +107,6 @@ def _awac_algorithm_cls() -> type:
 
     return AWAC
 
-registry.register("awac", AWACArgs, run_awac, algorithm_cls=_awac_algorithm_cls)
+registry.register(
+    "awac", AWACArgs, run_awac, algorithm_cls=_awac_algorithm_cls, build_agent=build_awac
+)

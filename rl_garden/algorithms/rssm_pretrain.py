@@ -105,6 +105,10 @@ def sequence_dataset_env_spec(dataset_dir: str | Path, padded_action_dim: Option
 
 class RSSMPretrain(OfflineModelBasedAlgorithm):
     _compatible_checkpoint_algorithms = ("RSSMPretrain",)
+    checkpoint_eval_unsupported_reason = (
+        "it is a reward-free world-model pretraining stage; its actor and critic "
+        "are never trained"
+    )
     encoder_sharing = "shared"
     encoder_sharing_choices = ("shared",)
 

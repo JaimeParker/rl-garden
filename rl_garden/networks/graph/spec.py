@@ -1,10 +1,12 @@
 """Policy graph spec: a YAML description of a PPO policy's trunk.
 
-A graph names the networks between the observation and the two PPO heads
-and wires them with edges. ``GraphPPOPolicy``
+A graph names the networks between the observation and the PPO heads and
+wires them with edges. ``GraphPPOPolicy``
 (``rl_garden.policies.graph_ppo_policy``) builds the modules and runs the
 graph; the Gaussian actor head and the scalar value head stay the PPO
-contract and read the inputs of the ``actor`` and ``value`` sinks.
+contract and read the inputs of the ``actor`` and ``value`` sinks. With
+several ``actor`` sinks, each owns a slice of the action and gets its own
+mean head; the slice means form one Gaussian action.
 
 Example (the built-in recurrent graph)::
 
@@ -42,9 +44,22 @@ gtrxl       ``embed_dim`` (256), ``head_dim`` (64), ``num_heads``   one
             (4), ``num_layers`` (3), ``mlp_num`` (2),
             ``memory_len`` (64), ``dropout_rate`` (0.0),
             ``gru_bias`` (2.0)
-actor       -- (sink: the actor head reads this input)              one
+actor       ``action_dims`` (``[start, stop]``, a half-open slice   one
+            of the action; may be omitted with one actor sink),
+            ``net_arch`` (null: the algorithm's ``pi`` widths;
+            ``[]``: one linear layer) -- sink: a mean head
+            reads this input
 value       -- (sink: the value head reads this input)              one
 ==========  ======================================================  ==========
+
+Several ``actor`` sinks: each needs ``action_dims``, the slices must not
+overlap (checked at parse) and must cover the whole action (checked when
+the policy is built, where the action width is known). The heads are
+ordered by ``start``, never by name; their means are concatenated in that
+order into one action with one ``log_std``. A head's ``net_arch`` sets only
+its hidden widths; backbone type, norm, dropout and kernel init come from
+the algorithm's actor options. The optional actor fields are written to the
+canonical form only when given.
 
 ``gru``/``lstm``/``gtrxl`` are stateful: a graph with one or more of them
 needs a ``SequencePPO`` algorithm (``recurrent_ppo``/``transformer_ppo``), a
@@ -81,14 +96,15 @@ A loss node runs only in the update (never during rollouts), on every
 minibatch: on a recurrent graph over the ``(T, B)`` window, flattened to
 ``T * B`` rows T-major exactly like its target. Its gradient reaches every
 upstream node unless an edge on its path has ``detach: true``. It is logged
-as ``losses/graph_loss/<node>`` (the unweighted mean over the window).
+as ``losses/aux/<node>`` (the unweighted mean over the window).
 
-Rules: exactly one ``input``, one ``actor`` and one ``value`` node; sinks
-have no outgoing edge; every other non-input node has an outgoing edge or a
-loss; no cycle; ``encoder`` reads the ``input`` node and only it. Every
-violation raises ``ConfigError`` naming the node. ``GraphSpec.to_yaml()``
-writes the canonical form (sorted nodes and edges, every default explicit)
-that checkpoints record.
+Rules: exactly one ``input`` node, one or more ``actor`` nodes and exactly
+one ``value`` node; sinks have no outgoing edge; every other non-input node
+has an outgoing edge or a loss; no cycle; ``encoder`` reads the ``input``
+node and only it. Every violation raises ``ConfigError`` naming the node.
+``GraphSpec.to_yaml()`` writes the canonical form (sorted nodes and edges,
+every default explicit except the optional actor fields) that checkpoints
+record.
 """
 
 from __future__ import annotations
@@ -249,8 +265,59 @@ class GraphSpec:
         return self.nodes_with_role("input")[0]
 
     @property
-    def actor_sink(self) -> str:
-        return self.nodes_with_role("actor")[0]
+    def actor_sinks(self) -> tuple[str, ...]:
+        """The ``actor`` sinks in action order: by the start of their
+        ``action_dims`` (one sink may omit it), never by name."""
+        return tuple(
+            sorted(
+                self.nodes_with_role("actor"),
+                key=lambda name: self.node(name).params.get("action_dims", [0])[0],
+            )
+        )
+
+    def actor_action_slices(self, action_dim: int) -> tuple[tuple[int, int], ...]:
+        """The half-open action slice of each sink in ``actor_sinks``. Needs
+        the action width, so it runs when the policy is built: the slices must
+        cover ``[0, action_dim)`` exactly (``ConfigError`` naming the sinks
+        otherwise). A single sink without ``action_dims`` covers it all."""
+        sinks = self.actor_sinks
+        if len(sinks) == 1:
+            given = self.node(sinks[0]).params.get("action_dims")
+            if given is not None and given != [0, action_dim]:
+                raise ConfigError(
+                    f"actor sink {sinks[0]!r} has action_dims {given}, but it is the only "
+                    f"actor sink, so it outputs the whole action: [0, {action_dim}] (or omit "
+                    "action_dims)."
+                )
+            return ((0, action_dim),)
+        slices = tuple(tuple(self.node(sink).params["action_dims"]) for sink in sinks)
+        covered, previous = 0, None
+        for sink, (start, stop) in zip(sinks, slices):
+            if start > covered:
+                where = (
+                    f"before actor sink {sink!r}"
+                    if previous is None
+                    else f"between actor sinks {previous!r} and {sink!r}"
+                )
+                raise ConfigError(
+                    f"actor sinks {list(sinks)} leave action dims [{covered}, {start}) "
+                    f"uncovered {where}; their action_dims must cover [0, {action_dim}) "
+                    "exactly."
+                )
+            if stop > action_dim:
+                raise ConfigError(
+                    f"actor sink {sink!r} has action_dims [{start}, {stop}], beyond the "
+                    f"{action_dim}-dim action; the action_dims of actor sinks {list(sinks)} "
+                    f"must cover [0, {action_dim}) exactly."
+                )
+            covered, previous = stop, sink
+        if covered < action_dim:
+            raise ConfigError(
+                f"actor sinks {list(sinks)} leave action dims [{covered}, {action_dim}) "
+                f"uncovered after actor sink {previous!r}; their action_dims must cover "
+                f"[0, {action_dim}) exactly."
+            )
+        return slices
 
     @property
     def value_sink(self) -> str:
@@ -302,14 +369,15 @@ class GraphSpec:
     # --- validation -------------------------------------------------------
 
     def _validate_structure(self) -> None:
-        for role in ("input", "actor", "value"):
+        for role in ("input", "value"):
             named = self.nodes_with_role(role)
             if len(named) != 1:
                 described = f"node(s) {list(named)}" if named else "no node"
                 raise ConfigError(
                     f"policy graph needs exactly one {role!r} node, found {described}."
                 )
-        for sink in (self.actor_sink, self.value_sink):
+        self._validate_actor_sinks()
+        for sink in (*self.actor_sinks, self.value_sink):
             if self.outgoing(sink):
                 raise ConfigError(
                     f"sink node {sink!r} has an outgoing edge; actor/value sinks "
@@ -328,6 +396,33 @@ class GraphSpec:
                 raise ConfigError(
                     f"loss on node {loss.node!r}: input and sink nodes produce no "
                     "output of their own to put a loss on."
+                )
+
+    def _validate_actor_sinks(self) -> None:
+        """At least one ``actor`` sink; with several, every one has
+        ``action_dims`` and no two slices overlap. Coverage of the action
+        needs its width: ``actor_action_slices``."""
+        sinks = self.nodes_with_role("actor")
+        if not sinks:
+            raise ConfigError("policy graph needs at least one 'actor' node, found no node.")
+        if len(sinks) == 1:
+            return
+        missing = [sink for sink in sinks if "action_dims" not in self.node(sink).params]
+        if missing:
+            raise ConfigError(
+                f"policy graph has {len(sinks)} actor sinks {list(sinks)}: each needs "
+                f"'action_dims: [start, stop]', its slice of the action; missing on "
+                f"{missing}."
+            )
+        ordered = self.actor_sinks
+        for first, second in zip(ordered, ordered[1:]):
+            first_dims = self.node(first).params["action_dims"]
+            second_dims = self.node(second).params["action_dims"]
+            if first_dims[1] > second_dims[0]:
+                raise ConfigError(
+                    f"actor sinks {first!r} (action_dims {first_dims}) and {second!r} "
+                    f"(action_dims {second_dims}) overlap; each action dim belongs to one "
+                    "actor sink."
                 )
 
     def _validate_node_edges(self, node: NodeSpec, loss_nodes: set[str]) -> None:

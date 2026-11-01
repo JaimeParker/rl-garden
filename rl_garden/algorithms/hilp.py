@@ -72,6 +72,10 @@ class HILP(OfflineRLAlgorithm):
     """
 
     _compatible_checkpoint_algorithms = ("HILP",)
+    checkpoint_eval_unsupported_reason = (
+        "it is a skill-learning stage: its skill actor acts only given a skill "
+        "latent, which no environment provides"
+    )
 
     def __init__(
         self,

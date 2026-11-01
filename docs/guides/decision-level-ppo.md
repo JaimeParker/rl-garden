@@ -174,7 +174,7 @@ rows is 0 and stays connected to the graph. When the window carries no decision
 mask (the env reported no decision key), both settings are the plain mean. The
 targets (`info.<key>`, `batch.rewards`, `batch.dones`) are stored on every env
 step, decision or not, so the env must report an `info.<key>` target on every
-step. Each loss is logged as `losses/graph_loss/<node>`.
+step. Each loss is logged as `losses/aux/<node>`.
 
 `--policy-graph builtin:recurrent` works with `--decision-level` under
 `recurrent_ppo`, including with per-component masks:

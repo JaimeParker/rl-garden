@@ -111,4 +111,6 @@ def _qgf_algorithm_cls() -> type:
 
     return QGF
 
-registry.register("qgf", QGFArgs, run_qgf, algorithm_cls=_qgf_algorithm_cls)
+registry.register(
+    "qgf", QGFArgs, run_qgf, algorithm_cls=_qgf_algorithm_cls, build_agent=build_qgf
+)

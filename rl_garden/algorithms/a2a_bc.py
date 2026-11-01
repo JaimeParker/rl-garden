@@ -39,6 +39,10 @@ class A2ABC(OfflineRLAlgorithm):
     needed here."""
 
     _compatible_checkpoint_algorithms = ("A2ABC",)
+    checkpoint_eval_unsupported_reason = (
+        "its policy predicts a whole action chunk (batch, horizon_steps, action_dim) "
+        "and the class has no receding-horizon execution of it in an environment"
+    )
     # No critic -- extract_actor_features must never stop-gradient (the
     # encoder is trained end-to-end by the flow/reconstruction/consistency
     # losses, the only losses that ever touch it); see BC's identical

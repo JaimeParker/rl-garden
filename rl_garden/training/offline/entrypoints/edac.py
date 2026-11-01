@@ -97,4 +97,6 @@ def _edac_algorithm_cls() -> type:
     return EDAC
 
 
-registry.register("edac", EDACArgs, run_edac, algorithm_cls=_edac_algorithm_cls)
+registry.register(
+    "edac", EDACArgs, run_edac, algorithm_cls=_edac_algorithm_cls, build_agent=build_edac
+)

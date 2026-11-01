@@ -114,4 +114,6 @@ def _qam_algorithm_cls() -> type:
 
     return QAM
 
-registry.register("qam", QAMArgs, run_qam, algorithm_cls=_qam_algorithm_cls)
+registry.register(
+    "qam", QAMArgs, run_qam, algorithm_cls=_qam_algorithm_cls, build_agent=build_qam
+)

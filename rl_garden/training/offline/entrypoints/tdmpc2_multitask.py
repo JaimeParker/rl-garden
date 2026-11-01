@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.effective_config import json_value, persist_effective_config
@@ -28,6 +29,80 @@ from rl_garden.training.inspection import (
     prepare_standalone,
     run_preflight,
 )
+
+
+def build_tdmpc2_multitask(
+    args: TDMPC2MultitaskArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``TDMPC2Multitask`` when ``None``) on
+    ``env_spec`` from ``args``; the task table comes from the manifest of
+    ``args.dataset_dir``. ``extra_kwargs`` replace or extend its constructor
+    kwargs (the run passes its ``mmap_dir`` and ``checkpoint_dir``).
+    ``eval_env`` is unused: the agent trains on its dataset alone."""
+    from rl_garden.buffers.tdmpc2_multitask_dataset import infer_multitask_dataset_specs
+    from rl_garden.training.inspection import construct_agent
+
+    del eval_env
+    if algorithm_cls is None:
+        from rl_garden.algorithms.tdmpc2_multitask import TDMPC2Multitask
+
+        algorithm_cls = TDMPC2Multitask
+    tasks, obs_dims, action_dims, episode_lengths = infer_multitask_dataset_specs(
+        args.dataset_dir
+    )
+    kwargs = {
+        "env": env_spec,
+        "tasks": tasks,
+        "obs_dims": obs_dims,
+        "action_dims": action_dims,
+        "episode_lengths": episode_lengths,
+        "mmap_dir": args.mmap_dir,
+        "mmap_mode": "create",
+        "buffer_size": args.buffer_size,
+        "batch_size": args.batch_size,
+        "horizon": args.horizon,
+        "task_dim": args.task_dim,
+        "latent_dim": args.latent_dim,
+        "enc_dim": args.enc_dim,
+        "num_enc_layers": args.num_enc_layers,
+        "mlp_dim": args.mlp_dim,
+        "simnorm_dim": args.simnorm_dim,
+        "num_q": args.num_q,
+        "num_bins": args.num_bins,
+        "vmin": args.vmin,
+        "vmax": args.vmax,
+        "dropout": args.dropout,
+        "log_std_min": args.log_std_min,
+        "log_std_max": args.log_std_max,
+        "entropy_coef": args.entropy_coef,
+        "lr": args.lr,
+        "enc_lr_scale": args.enc_lr_scale,
+        "grad_clip_norm": args.grad_clip_norm,
+        "tau": args.tau,
+        "rho": args.rho,
+        "consistency_coef": args.consistency_coef,
+        "reward_coef": args.reward_coef,
+        "value_coef": args.value_coef,
+        "discount_denom": args.discount_denom,
+        "discount_min": args.discount_min,
+        "discount_max": args.discount_max,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_replay_buffer": args.save_replay_buffer,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
 
 
 def run_tdmpc2_multitask(args: TDMPC2MultitaskArgs) -> None:
@@ -45,12 +120,10 @@ def _run_tdmpc2_multitask(
     from gymnasium import spaces
 
     from rl_garden.algorithms.offline import OfflineEnvSpec, run_offline_pretraining
-    from rl_garden.algorithms.tdmpc2_multitask import TDMPC2Multitask
     from rl_garden.buffers.tdmpc2_multitask_dataset import (
         infer_multitask_dataset_specs,
         load_multitask_dataset,
     )
-    from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -129,52 +202,8 @@ def _run_tdmpc2_multitask(
         ),
         num_envs=1,
     )
-    agent = construct_agent(
-        TDMPC2Multitask,
-        env=env,
-        tasks=tasks,
-        obs_dims=obs_dims,
-        action_dims=action_dims,
-        episode_lengths=episode_lengths,
-        mmap_dir=mmap_dir,
-        mmap_mode="create",
-        buffer_size=args.buffer_size,
-        batch_size=args.batch_size,
-        horizon=args.horizon,
-        task_dim=args.task_dim,
-        latent_dim=args.latent_dim,
-        enc_dim=args.enc_dim,
-        num_enc_layers=args.num_enc_layers,
-        mlp_dim=args.mlp_dim,
-        simnorm_dim=args.simnorm_dim,
-        num_q=args.num_q,
-        num_bins=args.num_bins,
-        vmin=args.vmin,
-        vmax=args.vmax,
-        dropout=args.dropout,
-        log_std_min=args.log_std_min,
-        log_std_max=args.log_std_max,
-        entropy_coef=args.entropy_coef,
-        lr=args.lr,
-        enc_lr_scale=args.enc_lr_scale,
-        grad_clip_norm=args.grad_clip_norm,
-        tau=args.tau,
-        rho=args.rho,
-        consistency_coef=args.consistency_coef,
-        reward_coef=args.reward_coef,
-        value_coef=args.value_coef,
-        discount_denom=args.discount_denom,
-        discount_min=args.discount_min,
-        discount_max=args.discount_max,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_replay_buffer=args.save_replay_buffer,
-        save_final_checkpoint=args.save_final_checkpoint,
+    agent = build_tdmpc2_multitask(
+        args, env, logger, mmap_dir=mmap_dir, checkpoint_dir=checkpoint_dir
     )
 
     if args.load_checkpoint is not None:
@@ -253,8 +282,16 @@ class TDMPC2MultitaskArgs(TDMPC2MultitaskTrainingArgs, ObservationArgs):
     """
 
 
+def _tdmpc2_multitask_algorithm_cls() -> type:
+    from rl_garden.algorithms.tdmpc2_multitask import TDMPC2Multitask
+
+    return TDMPC2Multitask
+
+
 registry.register(
     "tdmpc2_multitask",
     TDMPC2MultitaskArgs,
     run_tdmpc2_multitask,
+    algorithm_cls=_tdmpc2_multitask_algorithm_cls,
+    build_agent=build_tdmpc2_multitask,
 )

@@ -19,7 +19,13 @@ from rl_garden.common.utils import polyak_update
 
 
 class SACCore:
-    """Mixin containing SAC-family update logic."""
+    """Mixin containing SAC-family update logic.
+
+    Extension points for a subclass: ``_critic_features`` (the critic's
+    input features), ``_critic_loss`` and its info dict, the step methods
+    ``_critic_step`` / ``_actor_step`` / ``_alpha_step`` that ``train`` and
+    ``train_high_utd`` call, and ``_post_critic_update`` /
+    ``_post_actor_update`` run after them."""
 
     # Extra batch fields beyond the SAC standard (obs/next_obs/actions/rewards/
     # dones) that subclasses want carried through ``_slice_batch``. Subclasses
@@ -170,12 +176,18 @@ class SACCore:
             yield from self.temperature_lagrange.parameters()
 
     def _post_actor_update(self, data) -> dict[str, torch.Tensor]:
+        """Extension point run after each actor step and its temperature step
+        (actor steps only; CQL steps its Lagrange multiplier here). Returns
+        detached scalar tensors that ``train`` averages and returns when
+        ``compute_info`` is set. Default: ``{}``."""
         return {}
 
     def _post_critic_update(self, data, critic_info: dict[str, torch.Tensor]) -> None:
-        """Hook run unconditionally right after each critic optimizer step.
-        Default: no-op. Recurrent/priority-replay subclasses use this to push
-        per-sample TD-error priorities back into the replay buffer."""
+        """Extension point run unconditionally right after each critic
+        optimizer step and its scheduler step, including every high-UTD
+        minibatch slice, with ``_critic_loss``'s info. Default: no-op.
+        Recurrent/priority-replay subclasses use this to push per-sample
+        TD-error priorities back into the replay buffer."""
         return None
 
     def _actor_diagnostics(self, data) -> dict[str, torch.Tensor]:
@@ -246,7 +258,18 @@ class SACCore:
 
     # --- SAC losses ---
 
-    def _critic_forward(self, obs, actions, target: bool = False):
+    def _critic_features(self, obs, *, target: bool) -> torch.Tensor:
+        """Extension point: the critic features of ``obs`` that
+        ``_critic_forward`` feeds to the critic (``target`` says which critic;
+        the default extracts the same features for both).
+
+        Computed once per critic step on the batch (once per minibatch slice
+        under high UTD), inside ``_critic_loss``. When the training phase
+        freezes the encoder (``update_encoder`` false) the whole feature
+        vector is detached. An override that reads the features, for example
+        to train an auxiliary head inside the critic step, calls ``super()``
+        to keep that rule and returns the same tensor."""
+        del target  # one feature path serves the online and the target critic
         stop_gradient = not self._training_update_mask().update_encoder
         features = self.policy.extract_critic_features(obs, stop_gradient=stop_gradient)
         if stop_gradient:
@@ -254,6 +277,10 @@ class SACCore:
             # image branches only. A frozen training phase must detach the
             # complete shared feature vector, including proprio branches.
             features = features.detach()
+        return features
+
+    def _critic_forward(self, obs, actions, target: bool = False):
+        features = self._critic_features(obs, target=target)
         return self.policy.q_values_all(features, actions, target=target)
 
     def _target_q(self, data) -> torch.Tensor:
@@ -290,6 +317,12 @@ class SACCore:
         }
 
     def _critic_loss(self, data) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Extension point: ``(loss, info)`` of one critic step on ``data``.
+
+        ``info`` maps names to detached scalar tensors; ``train`` averages
+        each key over the update and returns it when ``compute_info`` is set
+        (one host sync per key). An override adds terms with
+        ``loss, info = super()._critic_loss(data)``."""
         q_pred = self._critic_forward(data.obs, data.actions, target=False)
         td_loss, info = self._td_loss(data, q_pred)
         info["critic_loss"] = td_loss.detach()
@@ -327,6 +360,63 @@ class SACCore:
             stacked = torch.stack(vals)
             out[key] = float(stacked.mean().item())
         return out
+
+    def _critic_step(self, data) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Extension point: one critic optimizer step on ``data``; returns
+        ``_critic_loss``'s ``(loss, info)``.
+
+        Runs ``_critic_loss``, ``q_optimizer`` zero_grad/backward, the DDP
+        all-reduce and clip over ``policy.critic_and_encoder_parameters()``,
+        the step, the critic scheduler step and ``_post_critic_update``.
+        ``train`` calls it once per gradient step and ``train_high_utd`` once
+        per minibatch slice, each time after ``policy.prepare_batch_all`` on
+        ``data``. An override wraps ``super()._critic_step(data)``; a new loss
+        term belongs in ``_critic_loss``."""
+        critic_loss, critic_info = self._critic_loss(data)
+        self.q_optimizer.zero_grad()
+        critic_loss.backward()
+        critic_params = list(self.policy.critic_and_encoder_parameters())
+        self._sync_ddp_grads(critic_params)
+        self._clip_grad_norm(critic_params)
+        self.q_optimizer.step()
+        self._step_critic_scheduler()
+        self._post_critic_update(data, critic_info)
+        return critic_loss, critic_info
+
+    def _actor_step(self, data) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extension point: one actor optimizer step on ``data``; returns
+        ``_actor_loss_from_batch``'s ``(loss, detached log_prob)``.
+
+        Runs the loss, ``actor_optimizer`` zero_grad/backward, the DDP
+        all-reduce and clip over ``policy.actor_parameters()``, the step and
+        the actor scheduler step. ``_alpha_step`` and then
+        ``_post_actor_update`` follow it on every actor step."""
+        actor_loss, log_prob_detached = self._actor_loss_from_batch(data)
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        actor_params = list(self.policy.actor_parameters())
+        self._sync_ddp_grads(actor_params)
+        self._clip_grad_norm(actor_params)
+        self.actor_optimizer.step()
+        self._step_actor_scheduler()
+        return actor_loss, log_prob_detached
+
+    def _alpha_step(self, log_prob_detached: torch.Tensor) -> Optional[torch.Tensor]:
+        """Extension point: one temperature step from the actor step's
+        detached log-probs; returns the (undetached) ``_alpha_loss`` or
+        ``None`` when the temperature is fixed (``autotune`` false), in which
+        case nothing is stepped. Uses ``alpha_optimizer`` over
+        ``_alpha_parameters()``."""
+        if not self.autotune:
+            return None
+        alpha_loss = self._alpha_loss(log_prob_detached)
+        self.alpha_optimizer.zero_grad()
+        alpha_loss.backward()
+        alpha_params = list(self._alpha_parameters())
+        self._sync_ddp_grads(alpha_params)
+        self._clip_grad_norm(alpha_params)
+        self.alpha_optimizer.step()
+        return alpha_loss
 
     def train(
         self, gradient_steps: int, compute_info: bool = False
@@ -367,15 +457,7 @@ class SACCore:
             self.policy.prepare_batch_all(data.obs, data.next_obs)
 
             if update_mask.update_critic:
-                critic_loss, critic_info = self._critic_loss(data)
-                self.q_optimizer.zero_grad()
-                critic_loss.backward()
-                critic_params = list(self.policy.critic_and_encoder_parameters())
-                self._sync_ddp_grads(critic_params)
-                self._clip_grad_norm(critic_params)
-                self.q_optimizer.step()
-                self._step_critic_scheduler()
-                self._post_critic_update(data, critic_info)
+                critic_loss, critic_info = self._critic_step(data)
 
                 if compute_info:
                     critic_losses_t.append(critic_loss.detach())
@@ -386,25 +468,10 @@ class SACCore:
                 update_mask.update_actor
                 and self._global_update % self.policy_frequency == 0
             ):
-                actor_loss, log_prob_detached = self._actor_loss_from_batch(data)
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                actor_params = list(self.policy.actor_parameters())
-                self._sync_ddp_grads(actor_params)
-                self._clip_grad_norm(actor_params)
-                self.actor_optimizer.step()
-                self._step_actor_scheduler()
-
-                if self.autotune:
-                    alpha_loss = self._alpha_loss(log_prob_detached)
-                    self.alpha_optimizer.zero_grad()
-                    alpha_loss.backward()
-                    alpha_params = list(self._alpha_parameters())
-                    self._sync_ddp_grads(alpha_params)
-                    self._clip_grad_norm(alpha_params)
-                    self.alpha_optimizer.step()
-                    if compute_info:
-                        alpha_losses_t.append(alpha_loss.detach())
+                actor_loss, log_prob_detached = self._actor_step(data)
+                alpha_loss = self._alpha_step(log_prob_detached)
+                if alpha_loss is not None and compute_info:
+                    alpha_losses_t.append(alpha_loss.detach())
 
                 post_info = self._post_actor_update(data)
                 if compute_info:
@@ -475,15 +542,7 @@ class SACCore:
                 mb = self._slice_batch(full_batch, j * minibatch_size, minibatch_size)
                 self.policy.prepare_batch_all(mb.obs, mb.next_obs)
 
-                critic_loss, critic_info = self._critic_loss(mb)
-                self.q_optimizer.zero_grad()
-                critic_loss.backward()
-                critic_params = list(self.policy.critic_and_encoder_parameters())
-                self._sync_ddp_grads(critic_params)
-                self._clip_grad_norm(critic_params)
-                self.q_optimizer.step()
-                self._step_critic_scheduler()
-                self._post_critic_update(mb, critic_info)
+                critic_loss, critic_info = self._critic_step(mb)
 
                 if compute_info:
                     critic_losses_t.append(critic_loss.detach())
@@ -503,25 +562,10 @@ class SACCore:
         alpha_loss_t: Optional[torch.Tensor] = None
         post_info: dict[str, torch.Tensor] = {}
         if update_mask.update_actor:
-            actor_loss, log_prob_detached = self._actor_loss_from_batch(full_batch)
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            actor_params = list(self.policy.actor_parameters())
-            self._sync_ddp_grads(actor_params)
-            self._clip_grad_norm(actor_params)
-            self.actor_optimizer.step()
-            self._step_actor_scheduler()
-
-            if self.autotune:
-                alpha_loss = self._alpha_loss(log_prob_detached)
-                self.alpha_optimizer.zero_grad()
-                alpha_loss.backward()
-                alpha_params = list(self._alpha_parameters())
-                self._sync_ddp_grads(alpha_params)
-                self._clip_grad_norm(alpha_params)
-                self.alpha_optimizer.step()
-                if compute_info:
-                    alpha_loss_t = alpha_loss.detach()
+            actor_loss, log_prob_detached = self._actor_step(full_batch)
+            alpha_loss = self._alpha_step(log_prob_detached)
+            if alpha_loss is not None and compute_info:
+                alpha_loss_t = alpha_loss.detach()
 
             post_info = self._post_actor_update(full_batch)
 

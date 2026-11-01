@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from abc import abstractmethod
 from collections import defaultdict
@@ -13,6 +14,20 @@ from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.buffers.rollout_buffer import RolloutBuffer
 from rl_garden.common.eval_metrics import masked_episode_metrics
 from rl_garden.common.logger import Logger
+
+
+@dataclasses.dataclass(slots=True)
+class RolloutStats:
+    """Host-side statistics of one rollout window, read by the ``[train]``
+    console line and the ``time/`` scalars."""
+
+    rollout_time: float = 0.0
+    reward_sum: float = 0.0
+    reward_count: int = 0
+    #: Episode metric name -> one mean per env step that ended an episode.
+    episode_metrics: dict[str, list[float]] = dataclasses.field(
+        default_factory=lambda: defaultdict(list)
+    )
 
 
 class OnPolicyAlgorithm(BaseAlgorithm):
@@ -105,9 +120,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         Trivial no-op default so ``learn()``'s single, shared ``add()`` call
         site can splat this uniformly regardless of subclass; overridden by
         ``PPO`` when ``lr_schedule="adaptive_kl"`` needs to pass along the
-        rollout-time distribution params it stashed during this step, and to
-        read the env's per-step decision keys from ``infos`` (the infos of
-        this step's ``env.step()``).
+        rollout-time distribution params it stashed during this step, to
+        pass the step's declared extras (``PPO._rollout_extras`` and the
+        ``infos`` entries) and to read the env's per-step decision keys from
+        ``infos`` (the infos of this step's ``env.step()``).
         """
         return {}
 
@@ -197,6 +213,194 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         stateless policy.predict_values(obs)."""
         return self.policy.predict_values(obs).view(-1)
 
+    def _next_done(
+        self, terminations: torch.Tensor, truncations: torch.Tensor, infos: dict
+    ) -> torch.Tensor:
+        """Extension point: the episode cut of one env step, ``(num_envs,)``
+        on ``self.device``. It is stored as the step's ``dones`` (GAE stops
+        propagating there), marks the next step's ``episode_starts`` (a
+        recurrent policy resets its hidden state there) and, after the last
+        step, is the window's final done. Default: terminated or truncated.
+
+        The bootstrap value of an ended episode is chosen separately by
+        ``_bootstrap_mask`` / ``_compute_final_values``; ``infos`` is this
+        step's ``env.step()`` infos."""
+        del infos  # the default cut reads only the two flags
+        return torch.logical_or(terminations, truncations).to(self.device)
+
+    def _after_env_step(
+        self,
+        rewards: torch.Tensor,
+        terminations: torch.Tensor,
+        truncations: torch.Tensor,
+        infos: dict,
+    ) -> None:
+        """Extension point, no-op by default: called once per rollout step
+        right after ``env.step()``, before the episode cut (``_next_done``),
+        the bootstrap value and ``rollout_buffer.add``, with that step's
+        results on the env's device. A subclass may stash per-step state here
+        (e.g. for ``_rollout_extras``); the tensors are the ones stored next,
+        so changing them in place changes what the buffer stores. The
+        episode metrics are extracted from ``infos`` after this hook."""
+
+    def _maybe_evaluate(self, total_timesteps: int) -> None:
+        """Evaluate every ``eval_freq`` updates (before the update's rollout)
+        and log the ``eval/`` metrics, ``time/eval_time`` and the ``[eval]``
+        console line."""
+        if not (self.eval_freq > 0 and self._global_update % self.eval_freq == 0):
+            return
+        stime = time.perf_counter()
+        eval_metrics = self._evaluate()
+        if self.logger is not None:
+            self._log_eval_metrics(eval_metrics, self._global_step)
+            self.logger.add_scalar(
+                "time/eval_time", time.perf_counter() - stime, self._global_step
+            )
+        if self.std_log:
+            eval_return = self._first_metric(eval_metrics, ("return",))
+            eval_success = self._first_metric(
+                eval_metrics, ("success_at_end", "success_once")
+            )
+            print(
+                "[eval] "
+                f"step={self._global_step}/{total_timesteps} "
+                f"return={self._fmt_metric(eval_return)} "
+                f"success_at_end={self._fmt_metric(eval_success)}",
+                flush=True,
+            )
+
+    def _collect_rollout(self, obs, hidden, next_done: torch.Tensor):
+        """Fill ``rollout_buffer`` with one window of ``num_steps`` env steps
+        from ``obs``/``hidden``/``next_done`` (the state the previous window
+        ended in), then compute its returns and advantages. Returns ``(obs,
+        hidden, next_done, rollout_stats)``: the state this window ended in
+        and its ``RolloutStats``."""
+        self.rollout_buffer.reset()
+        # Fold the episode-boundary reset from the END of the previous
+        # rollout window into the snapshot BEFORE this window starts. This
+        # is what lets RolloutBuffer.get_sequences() reconstruct BPTT
+        # windows without needing to store dones[-1] anywhere -- see
+        # rollout_buffer.py::get_sequences() docstring. No-op (hidden is
+        # None) for stateless policies.
+        window_initial_hidden = self._snapshot_window_initial_hidden(hidden, next_done)
+        rollout_t = time.perf_counter()
+        stats = RolloutStats()
+        for _ in range(self.num_steps):
+            self._global_step += self.num_envs
+            actions, values, log_probs, _, hidden = self._rollout_step(
+                obs, hidden, next_done
+            )
+            next_obs, rewards, terminations, truncations, infos = self.env.step(
+                self._env_action(actions)
+            )
+            self._after_env_step(rewards, terminations, truncations, infos)
+            next_done = self._next_done(terminations, truncations, infos)
+            final_values = self._compute_final_values(
+                infos, self._bootstrap_mask(terminations, truncations), hidden
+            )
+            self.rollout_buffer.add(
+                obs,
+                actions,
+                rewards,
+                next_done,
+                values,
+                log_probs,
+                final_values=final_values,
+                **self._extra_rollout_buffer_kwargs(infos),
+            )
+            stats.reward_sum += float(rewards.float().sum().item())
+            stats.reward_count += int(rewards.numel())
+
+            for k, done_values in masked_episode_metrics(infos).items():
+                mean_value = float(done_values.float().mean().item())
+                self._log_rollout_metric(k, mean_value, self._global_step)
+                stats.episode_metrics[k].append(mean_value)
+            self._log_env_log_scalars(infos, self._global_step)
+            obs = next_obs
+        stats.rollout_time = time.perf_counter() - rollout_t
+
+        with torch.no_grad():
+            last_values = self._predict_last_values(
+                self._obs_to_policy_device(obs), hidden
+            )
+        self.rollout_buffer.compute_returns_and_advantage(
+            last_values,
+            next_done,
+            finite_horizon_gae=self.finite_horizon_gae,
+        )
+        self._rollout_initial_hidden = window_initial_hidden
+        return obs, hidden, next_done, stats
+
+    def _update_and_log(
+        self,
+        rollout_stats: RolloutStats,
+        cumulative: dict[str, float],
+        total_timesteps: int,
+    ) -> None:
+        """Run ``train()`` on the collected window, then the env's optional
+        ``post_update_sync()``; at the ``log_freq`` points log ``train()``'s
+        metrics (``_log_update_metrics``), the ``time/`` scalars and the
+        ``[train]`` console line. ``cumulative`` holds the run's total
+        rollout and update times (this update's time is added here)."""
+        update_t = time.perf_counter()
+        losses = self.train()
+        # Duck-typed hook some env backends need after a heavy training
+        # burst, before the next rollout's first step() (e.g. IsaacLab's
+        # Kit renderer hangs on the next render call otherwise). No-op
+        # for backends that don't define it.
+        post_update_hook = getattr(self.env, "post_update_sync", None)
+        if post_update_hook is not None:
+            post_update_hook()
+        update_time = time.perf_counter() - update_t
+        cumulative["update_time"] += update_time
+
+        should_log = (
+            self.log_freq > 0
+            and (self._global_step - self.batch_size) // self.log_freq
+            < self._global_step // self.log_freq
+        )
+        if not should_log:
+            return
+        rollout_time = rollout_stats.rollout_time
+        rollout_fps = self.batch_size / rollout_time if rollout_time > 0 else float("nan")
+        if self.logger is not None:
+            self._log_update_metrics(losses, self._global_step)
+            self.logger.add_scalar("time/update_time", update_time, self._global_step)
+            self.logger.add_scalar("time/rollout_time", rollout_time, self._global_step)
+            self.logger.add_scalar("time/rollout_fps", rollout_fps, self._global_step)
+            for k, v in cumulative.items():
+                self.logger.add_scalar(f"time/total_{k}", v, self._global_step)
+            self.logger.add_scalar(
+                "time/total_rollout+update_time",
+                cumulative["rollout_time"] + cumulative["update_time"],
+                self._global_step,
+            )
+        if self.std_log:
+            reward_mean = (
+                rollout_stats.reward_sum / rollout_stats.reward_count
+                if rollout_stats.reward_count > 0
+                else float("nan")
+            )
+            episode_means = {
+                k: float(sum(v) / len(v))
+                for k, v in rollout_stats.episode_metrics.items()
+                if len(v) > 0
+            }
+            rollout_return = self._first_metric(episode_means, ("return",))
+            rollout_success = self._first_metric(
+                episode_means, ("success_at_end", "success_once")
+            )
+            progress = 100.0 * self._global_step / total_timesteps
+            print(
+                "[train] "
+                f"step={self._global_step}/{total_timesteps} ({progress:.2f}%) "
+                f"reward={self._fmt_metric(reward_mean)} "
+                f"return={self._fmt_metric(rollout_return)} "
+                f"success_at_end={self._fmt_metric(rollout_success)} "
+                f"fps={self._fmt_metric(rollout_fps)}",
+                flush=True,
+            )
+
     def learn(self, total_timesteps: int) -> "OnPolicyAlgorithm":
         obs, _ = self.env.reset(seed=self.seed)
         next_done = torch.zeros(self.num_envs, device=self.device)
@@ -205,148 +409,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         while self._global_step < total_timesteps:
             previous_step = self._global_step
-            if self.eval_freq > 0 and self._global_update % self.eval_freq == 0:
-                stime = time.perf_counter()
-                eval_metrics = self._evaluate()
-                if self.logger is not None:
-                    self._log_eval_metrics(eval_metrics, self._global_step)
-                    self.logger.add_scalar(
-                        "time/eval_time", time.perf_counter() - stime, self._global_step
-                    )
-                if self.std_log:
-                    eval_return = self._first_metric(eval_metrics, ("return",))
-                    eval_success = self._first_metric(
-                        eval_metrics, ("success_at_end", "success_once")
-                    )
-                    print(
-                        "[eval] "
-                        f"step={self._global_step}/{total_timesteps} "
-                        f"return={self._fmt_metric(eval_return)} "
-                        f"success_at_end={self._fmt_metric(eval_success)}",
-                        flush=True,
-                    )
-
-            self.rollout_buffer.reset()
-            # Fold the episode-boundary reset from the END of the previous
-            # rollout window into the snapshot BEFORE this window starts. This
-            # is what lets RolloutBuffer.get_sequences() reconstruct BPTT
-            # windows without needing to store dones[-1] anywhere -- see
-            # rollout_buffer.py::get_sequences() docstring. No-op (hidden is
-            # None) for stateless policies.
-            window_initial_hidden = self._snapshot_window_initial_hidden(hidden, next_done)
-            rollout_t = time.perf_counter()
-            rollout_reward_sum = 0.0
-            rollout_reward_count = 0
-            rollout_episode_metrics: dict[str, list[float]] = defaultdict(list)
-            for _ in range(self.num_steps):
-                self._global_step += self.num_envs
-                actions, values, log_probs, _, hidden = self._rollout_step(
-                    obs, hidden, next_done
-                )
-                next_obs, rewards, terminations, truncations, infos = self.env.step(
-                    self._env_action(actions)
-                )
-                next_done = torch.logical_or(terminations, truncations).to(self.device)
-                final_values = self._compute_final_values(
-                    infos, self._bootstrap_mask(terminations, truncations), hidden
-                )
-                self.rollout_buffer.add(
-                    obs,
-                    actions,
-                    rewards,
-                    next_done,
-                    values,
-                    log_probs,
-                    final_values=final_values,
-                    **self._extra_rollout_buffer_kwargs(infos),
-                )
-                rollout_reward_sum += float(rewards.float().sum().item())
-                rollout_reward_count += int(rewards.numel())
-
-                for k, done_values in masked_episode_metrics(infos).items():
-                    mean_value = float(done_values.float().mean().item())
-                    self._log_rollout_metric(k, mean_value, self._global_step)
-                    rollout_episode_metrics[k].append(mean_value)
-                self._log_env_log_scalars(infos, self._global_step)
-                obs = next_obs
-            rollout_time = time.perf_counter() - rollout_t
-            cumulative["rollout_time"] += rollout_time
-
-            with torch.no_grad():
-                last_values = self._predict_last_values(
-                    self._obs_to_policy_device(obs), hidden
-                )
-            self.rollout_buffer.compute_returns_and_advantage(
-                last_values,
-                next_done,
-                finite_horizon_gae=self.finite_horizon_gae,
+            self._maybe_evaluate(total_timesteps)
+            obs, hidden, next_done, rollout_stats = self._collect_rollout(
+                obs, hidden, next_done
             )
-            self._rollout_initial_hidden = window_initial_hidden
-
-            update_t = time.perf_counter()
-            losses = self.train()
-            # Duck-typed hook some env backends need after a heavy training
-            # burst, before the next rollout's first step() (e.g. IsaacLab's
-            # Kit renderer hangs on the next render call otherwise). No-op
-            # for backends that don't define it.
-            post_update_hook = getattr(self.env, "post_update_sync", None)
-            if post_update_hook is not None:
-                post_update_hook()
-            update_time = time.perf_counter() - update_t
-            cumulative["update_time"] += update_time
-
-            should_log = (
-                self.log_freq > 0
-                and (self._global_step - self.batch_size) // self.log_freq
-                < self._global_step // self.log_freq
-            )
-            if should_log:
-                rollout_fps = (
-                    self.batch_size / rollout_time if rollout_time > 0 else float("nan")
-                )
-                if self.logger is not None:
-                    self._log_update_metrics(losses, self._global_step)
-                    self.logger.add_scalar(
-                        "time/update_time", update_time, self._global_step
-                    )
-                    self.logger.add_scalar(
-                        "time/rollout_time", rollout_time, self._global_step
-                    )
-                    self.logger.add_scalar(
-                        "time/rollout_fps", rollout_fps, self._global_step
-                    )
-                    for k, v in cumulative.items():
-                        self.logger.add_scalar(f"time/total_{k}", v, self._global_step)
-                    self.logger.add_scalar(
-                        "time/total_rollout+update_time",
-                        cumulative["rollout_time"] + cumulative["update_time"],
-                        self._global_step,
-                    )
-                if self.std_log:
-                    reward_mean = (
-                        rollout_reward_sum / rollout_reward_count
-                        if rollout_reward_count > 0
-                        else float("nan")
-                    )
-                    episode_means = {
-                        k: float(sum(v) / len(v))
-                        for k, v in rollout_episode_metrics.items()
-                        if len(v) > 0
-                    }
-                    rollout_return = self._first_metric(episode_means, ("return",))
-                    rollout_success = self._first_metric(
-                        episode_means, ("success_at_end", "success_once")
-                    )
-                    progress = 100.0 * self._global_step / total_timesteps
-                    print(
-                        "[train] "
-                        f"step={self._global_step}/{total_timesteps} ({progress:.2f}%) "
-                        f"reward={self._fmt_metric(reward_mean)} "
-                        f"return={self._fmt_metric(rollout_return)} "
-                        f"success_at_end={self._fmt_metric(rollout_success)} "
-                        f"fps={self._fmt_metric(rollout_fps)}",
-                        flush=True,
-                    )
+            cumulative["rollout_time"] += rollout_stats.rollout_time
+            self._update_and_log(rollout_stats, cumulative, total_timesteps)
             self._maybe_save_periodic_checkpoint(previous_step)
 
         if self.checkpoint_dir is not None and self.save_final_checkpoint:

@@ -199,4 +199,6 @@ def _rlpd_algorithm_cls() -> type:
     return RLPD
 
 
-registry.register("rlpd", RLPDArgs, run_rlpd, algorithm_cls=_rlpd_algorithm_cls)
+registry.register(
+    "rlpd", RLPDArgs, run_rlpd, algorithm_cls=_rlpd_algorithm_cls, build_agent=build_rlpd
+)

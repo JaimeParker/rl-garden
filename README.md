@@ -434,6 +434,7 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [Configuration System](docs/guides/configuration.md)
 - [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)
 - [Decision-Level (Semi-Markov) PPO](docs/guides/decision-level-ppo.md)
+- [Extending rl-garden from Your Own Package](docs/guides/extending.md)
 - [IsaacLab Camera Training Stall (resolved on Isaac Lab 3.0)](docs/guides/isaaclab-camera-stall.md)
 - [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)

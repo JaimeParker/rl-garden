@@ -46,6 +46,9 @@ class OPAL(OfflineRLAlgorithm):
     """
 
     _compatible_checkpoint_algorithms = ("OPAL",)
+    checkpoint_eval_unsupported_reason = (
+        "it is a skill-VAE pretraining stage with no policy that acts in an environment"
+    )
 
     def __init__(
         self,

@@ -12,7 +12,7 @@ and in ``_build_sequence_encoder()``.
 """
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any, ClassVar, Iterator
 
 import torch
 
@@ -21,7 +21,6 @@ from rl_garden.buffers.recurrent_rollout_buffer import (
     RecurrentRolloutBuffer,
     RecurrentRolloutBufferSample,
 )
-from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder
 from rl_garden.policies.graph_ppo_policy import GraphPPOPolicy
 from rl_garden.policies.recurrent_ppo_policy import RecurrentPPOPolicy
@@ -38,13 +37,19 @@ class SequencePPO(PPO):
     # algorithm_registry's preflight.
     encoder_sharing_choices: tuple = ("shared_critic_grad", "shared")
     stateful_policy: bool = True
+    policy_class: ClassVar[type[RecurrentPPOPolicy]] = RecurrentPPOPolicy
+    rollout_buffer_class: ClassVar[type[RecurrentRolloutBuffer]] = RecurrentRolloutBuffer
 
     def _build_sequence_encoder(self, actor_extractor) -> SequenceLatentEncoder:
         raise NotImplementedError
 
     def _build_policy(self, observation_space) -> RecurrentPPOPolicy | GraphPPOPolicy:
+        """``PPO._build_policy`` with the sequence encoder between the
+        extractor and the heads: ``policy_class`` also receives
+        ``recurrent_encoder``."""
         if self.policy_graph is not None:
             return self._build_graph_policy(observation_space)
+        head_kwargs = self._policy_head_kwargs(observation_space)
         extractor_kwargs = self._policy_extractor_kwargs(observation_space)
         actor_extractor = extractor_kwargs["actor_extractor"]
         if actor_extractor.structured_feature_config() is not None:
@@ -53,24 +58,11 @@ class SequencePPO(PPO):
                 "extractors this round (ViT token_and_prop layouts untested)."
             )
         sequence_encoder = self._build_sequence_encoder(actor_extractor)
-        return RecurrentPPOPolicy(
+        return self.policy_class(
             observation_space=observation_space,
             action_space=self.env.single_action_space,
             recurrent_encoder=sequence_encoder,
-            net_arch=self.net_arch,
-            log_std_init=self.log_std_init,
-            log_std_init_per_dim=self.log_std_init_per_dim,
-            action_mean_bias_init=self.action_mean_bias_init,
-            action_mean_head_gain=self.action_mean_head_gain,
-            actor_use_layer_norm=self.actor_use_layer_norm,
-            value_use_layer_norm=self.value_use_layer_norm,
-            actor_use_group_norm=self.actor_use_group_norm,
-            value_use_group_norm=self.value_use_group_norm,
-            num_groups=self.num_groups,
-            actor_dropout_rate=self.actor_dropout_rate,
-            value_dropout_rate=self.value_dropout_rate,
-            kernel_init=self.kernel_init,
-            backbone_type=self.backbone_type,
+            **head_kwargs,
             # Threaded through (rather than omitted) so a misconfigured
             # policy_kwargs['critic_extractor_class'] (or asymmetric
             # obs_groups/encoder_sharing="separate") raises
@@ -89,36 +81,7 @@ class SequencePPO(PPO):
                 f"divisible by num_minibatches ({self.num_minibatches}) for "
                 "env-axis minibatching."
             )
-        self.policy = self._build_policy(self.env.single_observation_space).to(self.device)
-        self.policy_optimizer = make_optimizer(
-            self.policy.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-            use_adamw=self.use_adamw,
-        )
-        self._lr_scheduler = (
-            None
-            if self.lr_schedule == "adaptive_kl"
-            else make_lr_scheduler(
-                self.policy_optimizer,
-                schedule_type=self.lr_schedule,
-                warmup_steps=self.lr_warmup_steps,
-                decay_steps=self.lr_decay_steps,
-                min_lr_ratio=self.lr_min_ratio,
-            )
-        )
-        self.rollout_buffer = RecurrentRolloutBuffer(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            num_steps=self.num_steps,
-            num_envs=self.num_envs,
-            device=self.device,
-            gamma=self.gamma,
-            gae_lambda=self.gae_lambda,
-            store_dist_params=(self.lr_schedule == "adaptive_kl"),
-            store_decisions=self.decision_level,
-            extra_specs=self._rollout_extra_specs(),
-        )
+        super()._setup_model()
 
     def _initial_hidden_state(self, batch_size: int):
         return self.policy.initial_hidden_state(batch_size, self.device)
@@ -243,19 +206,25 @@ class SequencePPO(PPO):
             self.num_minibatches, initial_hidden=self._rollout_initial_hidden
         )
 
-    def _evaluate_minibatch(self, data: RecurrentRolloutBufferSample) -> MinibatchEval:
-        """BPTT evaluation of a ``(T, B)`` window, every term flattened
-        T-major so row ``t * B + b`` is step ``t`` of env ``b`` in all of
-        them. In a window with a component mask ``log_prob``/``entropy`` are
-        per component, ``(T * B, A)``."""
-        per_component = self.rollout_buffer.window_has_components
-        actions = self._component_masked_actions(data) if per_component else data.actions
-        evaluate_kwargs = {"stop_gradient_actor": self.policy.actor_features_detached}
-        if per_component:
-            evaluate_kwargs["sum_dims"] = False
+    def _evaluate_terms(
+        self,
+        data: RecurrentRolloutBufferSample,
+        actions: torch.Tensor,
+        evaluate_kwargs: dict[str, Any],
+    ) -> MinibatchEval:
+        """BPTT evaluation of a ``(T, B)`` window; the stored terms and both
+        distributions' parameters are flattened T-major, so row ``t * B + b``
+        is step ``t`` of env ``b`` in all of them (``_evaluate_minibatch``
+        flattens ``values``/``log_prob``/``entropy`` the same way). In a
+        window with a component mask ``log_prob``/``entropy`` are per
+        component, ``(T * B, A)``."""
+        evaluate_kwargs = {
+            "stop_gradient_actor": self.policy.actor_features_detached,
+            **evaluate_kwargs,
+        }
         sequence = (data.obs, actions, data.initial_hidden, data.episode_starts)
         if self.lr_schedule == "adaptive_kl":
-            (values, log_prob, entropy, mean, log_std), graph_outputs = self._evaluate_policy(
+            (values, log_prob, entropy, mean, log_std), outputs = self._evaluate_policy(
                 self.policy.evaluate_actions_sequence_with_dist_params,
                 *sequence,
                 **evaluate_kwargs,
@@ -265,13 +234,12 @@ class SequencePPO(PPO):
             old_mean = data.old_mean.reshape((-1,) + data.old_mean.shape[2:])
             old_log_std = data.old_log_std.reshape((-1,) + data.old_log_std.shape[2:])
         else:
-            (values, log_prob, entropy), graph_outputs = self._evaluate_policy(
+            (values, log_prob, entropy), outputs = self._evaluate_policy(
                 self.policy.evaluate_actions_sequence, *sequence, **evaluate_kwargs
             )
             new_mean = new_log_std = old_mean = old_log_std = None
-        log_prob, entropy = self._policy_term_rows(log_prob, entropy, per_component)
         return MinibatchEval(
-            values=values.flatten(),
+            values=values,
             log_prob=log_prob,
             entropy=entropy,
             old_values=data.old_values.reshape(-1),
@@ -282,7 +250,7 @@ class SequencePPO(PPO):
             old_log_std=old_log_std,
             new_mean=new_mean,
             new_log_std=new_log_std,
-            graph_outputs=graph_outputs,
+            outputs=outputs,
         )
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

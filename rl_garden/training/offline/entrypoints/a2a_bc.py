@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from gymnasium import spaces
 
@@ -50,12 +51,74 @@ def run_a2a_bc(args: A2ABCArgs) -> None:
             callback()
 
 
-def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
+def build_a2a_bc(
+    args: A2ABCArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``A2ABC`` when ``None``) on ``env_spec`` from
+    ``args``. ``extra_kwargs`` replace or extend its constructor kwargs (the
+    run passes its ``checkpoint_dir``). ``eval_env`` is unused: the agent
+    trains on its dataset alone."""
     from rl_garden.common.cli_args import resolve_obs_groups_config
-    from rl_garden.algorithms import A2ABC, OfflineEnvSpec
+    from rl_garden.training.inspection import construct_agent
+
+    del eval_env
+    if algorithm_cls is None:
+        from rl_garden.algorithms import A2ABC
+
+        algorithm_cls = A2ABC
+    kwargs = {
+        "env": env_spec,
+        "dataset_path": args.dataset_path,
+        "horizon_steps": args.horizon_steps,
+        "cond_steps": args.cond_steps,
+        "latent_dim": args.latent_dim,
+        "cnn_num_layers": args.cnn_num_layers,
+        "cnn_hidden_channels": args.cnn_hidden_channels,
+        "cnn_kernel_size": args.cnn_kernel_size,
+        "cnn_activation_fn": args.activation_fn,
+        "decoder_net_arch": args.decoder_net_arch,
+        "flow_hidden_dims": args.flow_hidden_dims,
+        "num_sampling_steps": args.num_sampling_steps,
+        "consistency_weight": args.consistency_weight,
+        "enc_recon_weight": args.enc_recon_weight,
+        "flow_recon_weight": args.flow_recon_weight,
+        "enc_contrastive_weight": args.enc_contrastive_weight,
+        "flow_contrastive_weight": args.flow_contrastive_weight,
+        "contrastive_temperature": args.contrastive_temperature,
+        "encoder_config": args.encoder,
+        "obs_groups": resolve_obs_groups_config(args),
+        "image_augmentation_seed": args.seed + 1_000_003,
+        "actor_lr": args.actor_lr,
+        "weight_decay": args.weight_decay,
+        "lr_schedule": args.lr_schedule,
+        "lr_warmup_steps": args.lr_warmup_steps,
+        "lr_decay_steps": args.lr_decay_steps,
+        "lr_min_ratio": args.lr_min_ratio,
+        "grad_clip_norm": args.grad_clip_norm,
+        "batch_size": args.batch_size,
+        "num_traj": args.offline_num_traj,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
+
+
+def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
+    from rl_garden.algorithms import OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
     from rl_garden.observations import ObservationSchema, normalize_observation_space
-    from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -110,47 +173,7 @@ def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
 
     env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
     image_keys = ObservationSchema.from_space(normalize_observation_space(obs_space)).image_keys
-    agent = construct_agent(
-        A2ABC,
-        env=env,
-        dataset_path=args.dataset_path,
-        horizon_steps=args.horizon_steps,
-        cond_steps=args.cond_steps,
-        latent_dim=args.latent_dim,
-        cnn_num_layers=args.cnn_num_layers,
-        cnn_hidden_channels=args.cnn_hidden_channels,
-        cnn_kernel_size=args.cnn_kernel_size,
-        cnn_activation_fn=args.activation_fn,
-        decoder_net_arch=args.decoder_net_arch,
-        flow_hidden_dims=args.flow_hidden_dims,
-        num_sampling_steps=args.num_sampling_steps,
-        consistency_weight=args.consistency_weight,
-        enc_recon_weight=args.enc_recon_weight,
-        flow_recon_weight=args.flow_recon_weight,
-        enc_contrastive_weight=args.enc_contrastive_weight,
-        flow_contrastive_weight=args.flow_contrastive_weight,
-        contrastive_temperature=args.contrastive_temperature,
-        encoder_config=args.encoder,
-        obs_groups=resolve_obs_groups_config(args),
-        image_augmentation_seed=args.seed + 1_000_003,
-        actor_lr=args.actor_lr,
-        weight_decay=args.weight_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        batch_size=args.batch_size,
-        num_traj=args.offline_num_traj,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_final_checkpoint=args.save_final_checkpoint,
-    )
+    agent = build_a2a_bc(args, env, logger, checkpoint_dir=checkpoint_dir)
 
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
@@ -198,4 +221,16 @@ def _run_a2a_bc(args: A2ABCArgs, cleanup: list[Callable[[], None]]) -> None:
     )
 
 
-registry.register("a2a_bc", A2ABCArgs, run_a2a_bc)
+def _a2a_bc_algorithm_cls() -> type:
+    from rl_garden.algorithms import A2ABC
+
+    return A2ABC
+
+
+registry.register(
+    "a2a_bc",
+    A2ABCArgs,
+    run_a2a_bc,
+    algorithm_cls=_a2a_bc_algorithm_cls,
+    build_agent=build_a2a_bc,
+)

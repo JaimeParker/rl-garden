@@ -158,4 +158,6 @@ def _wsrl_algorithm_cls() -> type:
 
     return WSRL
 
-registry.register("wsrl", WSRLOff2OnArgs, run_wsrl, algorithm_cls=_wsrl_algorithm_cls)
+registry.register(
+    "wsrl", WSRLOff2OnArgs, run_wsrl, algorithm_cls=_wsrl_algorithm_cls, build_agent=build_wsrl
+)

@@ -8,10 +8,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from rl_garden.training import evaluation as eval_checkpoint
 
-def _load_module():
+
+def _load_example_wrapper():
     path = Path(__file__).resolve().parents[1] / "examples" / "eval_checkpoint.py"
-    spec = importlib.util.spec_from_file_location("eval_checkpoint", path)
+    spec = importlib.util.spec_from_file_location("example_eval_checkpoint", path)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -20,7 +22,26 @@ def _load_module():
     return module
 
 
-eval_checkpoint = _load_module()
+def test_example_wrapper_reexports_the_package_evaluation():
+    wrapper = _load_example_wrapper()
+
+    for name in (
+        "EvalCheckpointArgs",
+        "evaluate_agent",
+        "evaluate_checkpoint",
+        "main",
+        "_algorithm_from_class",
+        "_apply_mapping_to_args",
+        "_builder_from_module",
+        "_config_args",
+        "_env_request",
+        "_headline_metrics",
+        "_load_training_args",
+        "_resolve_phase_and_algorithm",
+        "_training_module",
+        "_write_json",
+    ):
+        assert getattr(wrapper, name) is getattr(eval_checkpoint, name), name
 
 
 class _Policy:
@@ -610,3 +631,85 @@ def test_eval_env_count_need_not_divide_by_the_run_num_minibatches(
     assert result["algorithm"] == "recurrent_ppo"
     assert result["num_eval_envs"] == 3
     assert result["metrics"]["episodes_completed"] == 2.0
+
+
+def _gymnasium_run_args():
+    from rl_garden.common.env_args import GymnasiumConfig
+    from rl_garden.observations import ObservationConfig
+
+    run_args = _ppo_run_args(
+        env_backend="gymnasium",
+        gymnasium=GymnasiumConfig(vector_env_factory="my_pkg.envs:make_vector_env"),
+    )
+    run_args.env_id = "MyToy-v0"
+    run_args.control_mode = "joint_torque"
+    run_args.obs = ObservationConfig(extra_state=("goal",))
+    return run_args
+
+
+def test_eval_keeps_the_run_environment_when_the_cli_leaves_it_out(tmp_path):
+    """No ``--env-backend``/``--env-id``/``--obs.*``/``--control-mode`` on the
+    eval CLI: a gymnasium run is rebuilt on its own backend and env."""
+    args, eval_args = _restored_args(tmp_path, _gymnasium_run_args())
+
+    assert eval_args.env_backend is None and eval_args.env_id is None
+    assert args.env_backend == "gymnasium"
+    assert args.env_id == "MyToy-v0"
+    assert args.control_mode == "joint_torque"
+    assert args.obs.extra_state == ("goal",)
+    request = eval_checkpoint._env_request(args, eval_args)
+    assert request.env_id == "MyToy-v0"
+    assert request.backend_config.vector_env_factory == "my_pkg.envs:make_vector_env"
+
+
+def test_eval_cli_environment_fields_override_the_run_when_passed(tmp_path):
+    import tyro
+
+    from rl_garden.observations import ObservationConfig
+
+    run_dir = tmp_path / "run"
+    _save_run_config(run_dir, _gymnasium_run_args())
+    eval_args = tyro.cli(
+        eval_checkpoint.EvalCheckpointArgs,
+        args=[
+            "--checkpoint-path",
+            str(run_dir / "checkpoints" / "checkpoint.pt"),
+            "--env-id",
+            "OtherToy-v0",
+            "--control-mode",
+            "pd_joint_delta_pos",
+            "--obs.rgb",
+            "cam0",
+        ],
+    )
+    args = eval_checkpoint._load_training_args("online", "ppo", eval_args, {"metadata": {}})
+    assert args.env_id == "OtherToy-v0"
+    # A value equal to the training default still overrides the run's value.
+    assert args.control_mode == "pd_joint_delta_pos"
+    assert args.obs == ObservationConfig(rgb=("cam0",))
+    assert args.env_backend == "gymnasium"
+
+    args, _ = _restored_args(tmp_path, _gymnasium_run_args(), env_backend="maniskill")
+    assert args.env_backend == "maniskill"
+    assert args.obs.extra_state == ("goal",)
+
+
+def test_eval_builds_the_agent_with_the_registry_entry_builder(monkeypatch):
+    from rl_garden.training.online.entrypoints import ppo as ppo_module
+
+    def declared_builder(*args):
+        raise AssertionError("not called")
+
+    class _Registry:
+        def entries(self):
+            return {
+                "declared": SimpleNamespace(build_agent=declared_builder),
+                "ppo": SimpleNamespace(build_agent=None),
+            }
+
+    monkeypatch.setattr(eval_checkpoint, "_registry_for_phase", lambda phase: _Registry())
+
+    assert eval_checkpoint._registered_builder("online", "declared") is declared_builder
+    # Without a declared builder, the entry's module in the phase's
+    # entrypoints package supplies it.
+    assert eval_checkpoint._registered_builder("online", "ppo") is ppo_module.build_ppo

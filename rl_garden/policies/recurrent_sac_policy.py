@@ -20,7 +20,7 @@ from rl_garden.policies.sac_policy import SACPolicy, LOG_STD_MAX, LOG_STD_MIN
 class RecurrentSACPolicy(SACPolicy):
     """SACPolicy with a RecurrentLatentEncoder between actor_extractor and
     the actor/critic heads. Always assumes a flat-latent actor_extractor --
-    the caller (RecurrentSAC._build_policy) is responsible for rejecting
+    the caller (SequenceSAC._policy_kwargs) is responsible for rejecting
     ``structured_feature_config() is not None`` before constructing this."""
 
     def __init__(

@@ -157,4 +157,5 @@ registry.register(
     PolicyDistillationArgs,
     run_policy_distillation,
     algorithm_cls=_policy_distillation_algorithm_cls,
+    build_agent=build_policy_distillation,
 )

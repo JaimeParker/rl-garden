@@ -208,4 +208,6 @@ def _supe_algorithm_cls() -> type:
     return SUPE
 
 
-registry.register("supe", SUPEArgs, run_supe, algorithm_cls=_supe_algorithm_cls)
+registry.register(
+    "supe", SUPEArgs, run_supe, algorithm_cls=_supe_algorithm_cls, build_agent=build_supe
+)

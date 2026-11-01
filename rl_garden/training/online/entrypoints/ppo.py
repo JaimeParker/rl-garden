@@ -1,9 +1,17 @@
-"""PPO run function."""
+"""PPO run function.
+
+``ppo_observation_kwargs`` and ``ppo_common_kwargs`` map a ``PPOArgs``-shaped
+args object onto ``PPO`` constructor kwargs; every PPO-family builder (in-tree
+or in another package) builds its agent from them.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
 
-def _ppo_observation_kwargs(args) -> dict:
+
+def ppo_observation_kwargs(args) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.encoders.config import EncoderConfig
     from rl_garden.networks.graph.spec import is_builtin_graph_source
@@ -39,7 +47,7 @@ def _ppo_observation_kwargs(args) -> dict:
     }
 
 
-def _ppo_common_kwargs(
+def ppo_common_kwargs(
     args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict
 ) -> dict:
     """Kwargs shared by ``PPO`` and ``RecurrentPPO`` construction -- everything
@@ -104,21 +112,37 @@ def _ppo_common_kwargs(
     )
 
 
-def build_ppo(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.algorithms import PPO
+def build_ppo(
+    args,
+    env,
+    eval_env,
+    logger,
+    checkpoint_dir,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``PPO`` when ``None``) from ``args``;
+    ``extra_kwargs`` go to its constructor next to the common PPO kwargs."""
     from rl_garden.training.inspection import construct_agent
 
-    image_kwargs = _ppo_observation_kwargs(args)
+    if algorithm_cls is None:
+        from rl_garden.algorithms import PPO
+
+        algorithm_cls = PPO
+    image_kwargs = ppo_observation_kwargs(args)
     agent = construct_agent(
-        PPO,
-        **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        algorithm_cls,
+        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        **extra_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
     return agent
 
 
-def run_ppo(args: PPOArgs) -> None:
+def run_ppo(args: PPOArgs, *, build_agent: Callable | None = None) -> None:
+    """Train with ``build_agent`` (``build_ppo`` when ``None``)."""
     from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online.runner import run_online
 
@@ -127,7 +151,7 @@ def run_ppo(args: PPOArgs) -> None:
         args,
         obs_tag=obs_tag,
         make_env_request=make_env_request,
-        build_agent=build_ppo,
+        build_agent=build_ppo if build_agent is None else build_agent,
     )
 
 
@@ -158,4 +182,6 @@ def _ppo_algorithm_cls() -> type:
     return PPO
 
 
-registry.register("ppo", PPOArgs, run_ppo, algorithm_cls=_ppo_algorithm_cls)
+registry.register(
+    "ppo", PPOArgs, run_ppo, algorithm_cls=_ppo_algorithm_cls, build_agent=build_ppo
+)

@@ -128,4 +128,6 @@ def _bppo_algorithm_cls() -> type:
 
     return BPPO
 
-registry.register("bppo", BPPOArgs, run_bppo, algorithm_cls=_bppo_algorithm_cls)
+registry.register(
+    "bppo", BPPOArgs, run_bppo, algorithm_cls=_bppo_algorithm_cls, build_agent=build_bppo
+)

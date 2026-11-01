@@ -116,4 +116,10 @@ def _off2_on_awac_algorithm_cls() -> type:
 
     return Off2OnAWAC
 
-registry.register("awac", AWACOff2OnArgs, run_awac, algorithm_cls=_off2_on_awac_algorithm_cls)
+registry.register(
+    "awac",
+    AWACOff2OnArgs,
+    run_awac,
+    algorithm_cls=_off2_on_awac_algorithm_cls,
+    build_agent=build_awac,
+)

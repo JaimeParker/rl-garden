@@ -91,4 +91,10 @@ def _flow_bc_algorithm_cls() -> type:
 
     return FlowBC
 
-registry.register("flow_bc", FlowBCArgs, run_flow_bc, algorithm_cls=_flow_bc_algorithm_cls)
+registry.register(
+    "flow_bc",
+    FlowBCArgs,
+    run_flow_bc,
+    algorithm_cls=_flow_bc_algorithm_cls,
+    build_agent=build_flow_bc,
+)

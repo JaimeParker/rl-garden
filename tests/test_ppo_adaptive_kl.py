@@ -215,7 +215,7 @@ def test_recurrent_ppo_adaptive_kl_rollout_mean_matches_stored_buffer_provenance
 
 
 def test_adaptive_kl_reaches_buffer_through_cli_args_entrypoint():
-    """lr_schedule="adaptive_kl" must survive PPOArgs -> _ppo_common_kwargs ->
+    """lr_schedule="adaptive_kl" must survive PPOArgs -> ppo_common_kwargs ->
     construct_agent(PPO, ...) unfiltered -- every other test in this file
     calls PPO(...)/RecurrentPPO(...) directly, bypassing the CLI args layer
     entirely, so this is the only test exercising the actual entrypoint."""

@@ -139,4 +139,6 @@ def _cql_algorithm_cls() -> type:
 
     return CQL
 
-registry.register("cql", CQLArgs, run_cql, algorithm_cls=_cql_algorithm_cls)
+registry.register(
+    "cql", CQLArgs, run_cql, algorithm_cls=_cql_algorithm_cls, build_agent=build_cql
+)

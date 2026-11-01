@@ -234,8 +234,9 @@ def _with_edges(*extra) -> dict:
             _with_edges({"from": "trunk", "to": "pi"}) | {
                 "nodes": {**_mlp_graph()["nodes"], "pi": {"type": "actor"}}
             },
-            r"exactly one 'actor' node, found node\(s\) \['actor', 'pi'\]",
-            id="two-actor-sinks",
+            r"2 actor sinks \['actor', 'pi'\]: each needs 'action_dims: \[start, stop\]'.*"
+            r"missing on \['actor', 'pi'\]",
+            id="two-actor-sinks-without-action-dims",
         ),
         pytest.param(
             _mlp_graph(

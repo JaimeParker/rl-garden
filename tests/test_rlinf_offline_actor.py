@@ -12,11 +12,28 @@ import pytest
 import torch
 
 from rl_garden.algorithms import AWAC, BC, CQL, IQL, TD3BC
+from rl_garden.integrations.rlinf import offline_actor
 from rl_garden.integrations.rlinf.offline_actor import (
     _ALGORITHMS,
     _dataset_batch_to_sample,
+    register_algorithm,
     resolve_algorithm,
 )
+
+
+class _DownstreamIQL(IQL):
+    """Stands in for an IQL subclass defined in another package."""
+
+
+def test_register_algorithm_makes_an_offline_subclass_resolvable(monkeypatch):
+    monkeypatch.setattr(offline_actor, "_ALGORITHMS", dict(offline_actor._ALGORITHMS))
+
+    register_algorithm("downstream_iql", _DownstreamIQL)
+
+    assert resolve_algorithm("downstream_iql") is _DownstreamIQL
+    with pytest.raises(ValueError, match="already registered"):
+        register_algorithm("iql", _DownstreamIQL)
+    assert resolve_algorithm("iql") is IQL
 
 
 def test_algorithm_dispatch_covers_offline_uniform_contract():

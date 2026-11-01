@@ -62,6 +62,12 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
     #: the PPO family when a ``policy_graph`` is given); checkpoints must
     #: agree on whether there is one.
     policy_graph_yaml: Optional[str] = None
+    #: Why checkpoint evaluation (``rl-garden-eval``) cannot run this
+    #: algorithm's policy in an environment, or ``None`` when it can.
+    #: Evaluation refuses such a checkpoint with this reason before building
+    #: any environment; the checkpoint still rebuilds and loads through the
+    #: registry entry's builder.
+    checkpoint_eval_unsupported_reason: Optional[str] = None
 
     def __init__(
         self,
@@ -209,6 +215,12 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             self.logger.add_scalar(f"env/{key}", value, step)
 
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
+        """Extension point: log the metrics dict ``train()`` returned, at
+        ``step`` (the global step), on the training loop's logging steps
+        (``log_freq``). Logs nothing without a logger. Subclasses log under
+        their own prefix (``OnPolicyAlgorithm``: ``losses/<key>``); an
+        override that adds metrics calls ``super()`` so the base keys stay
+        logged."""
         if self.logger is None:
             return
         self.logger.log_metrics(metrics, step)

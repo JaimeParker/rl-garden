@@ -103,4 +103,5 @@ registry.register(
     "flash_sac",
     FlashSACArgs,
     run_flash_sac,
+    build_agent=build_flash_sac,
 )

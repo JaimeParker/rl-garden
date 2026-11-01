@@ -120,4 +120,6 @@ def _flo_q_algorithm_cls() -> type:
 
     return FloQ
 
-registry.register("floq", FloQArgs, run_floq, algorithm_cls=_flo_q_algorithm_cls)
+registry.register(
+    "floq", FloQArgs, run_floq, algorithm_cls=_flo_q_algorithm_cls, build_agent=build_floq
+)

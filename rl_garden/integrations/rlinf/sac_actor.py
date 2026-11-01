@@ -51,6 +51,20 @@ _ALGORITHMS: dict[str, type[OffPolicyAlgorithm]] = {
 }
 
 
+def register_algorithm(name: str, algorithm_cls: type[OffPolicyAlgorithm]) -> None:
+    """Make ``algorithm_cls`` selectable as
+    ``cfg.actor.model.rlgarden_algorithm=name``.
+
+    The class must satisfy the SACCore contract (a ``SAC`` subclass does) and
+    accept ``(env=OfflineEnvSpec, **rlgarden_algorithm_kwargs)``. Every RLinf
+    worker process builds it, so the registering module must be imported in
+    each of them. Raises ``ValueError`` for a name already taken.
+    """
+    if name in _ALGORITHMS:
+        raise ValueError(f"RLinf SAC algorithm {name!r} is already registered.")
+    _ALGORITHMS[name] = algorithm_cls
+
+
 def resolve_algorithm(name: str) -> type[OffPolicyAlgorithm]:
     """Look up a SACCore-contract algorithm by config name.
 

@@ -1,11 +1,27 @@
-"""Shared algorithm registry and CLI dispatch support."""
+"""Shared algorithm registry and CLI dispatch support.
+
+Each phase registry discovers its algorithms by importing every module of the
+phase's ``entrypoints`` package, then every module advertised in the
+``rlgarden.algorithms`` entry-point group. The entry-point form lets a
+pip-installed package register algorithms without any file inside
+``rl_garden``: declare it in that package's ``pyproject.toml``::
+
+    [project.entry-points."rlgarden.algorithms"]
+    my_package = "my_package.registration"
+
+and have ``my_package.registration`` call ``registry.register(...)`` on the
+phase registries it extends at import time. The group is loaded once per
+process, by whichever phase registry discovers first.
+"""
 
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import json
 import pkgutil
 import sys
+import threading
 import warnings
 from collections.abc import Callable, Sequence
 from copy import deepcopy
@@ -35,6 +51,34 @@ from rl_garden.common.effective_config import (
 )
 from rl_garden.observations import ObservationContractError, resolve_encoder_sharing
 
+ALGORITHM_ENTRY_POINT_GROUP = "rlgarden.algorithms"
+
+_ALGORITHM_ENTRY_POINTS_LOADED = False
+# Reentrant: an entry-point module may itself trigger another phase
+# registry's discover() while it is being imported.
+_ALGORITHM_ENTRY_POINTS_LOCK = threading.RLock()
+
+
+def load_algorithm_entry_points() -> None:
+    """Import every module of the ``rlgarden.algorithms`` entry-point group,
+    once per process. A module that fails to import raises, naming its
+    entry point; the group is then retried on the next discovery."""
+    global _ALGORITHM_ENTRY_POINTS_LOADED
+    if _ALGORITHM_ENTRY_POINTS_LOADED:
+        return
+    with _ALGORITHM_ENTRY_POINTS_LOCK:
+        if _ALGORITHM_ENTRY_POINTS_LOADED:
+            return
+        for entry_point in importlib.metadata.entry_points(group=ALGORITHM_ENTRY_POINT_GROUP):
+            try:
+                entry_point.load()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{ALGORITHM_ENTRY_POINT_GROUP} entry point {entry_point.name!r} "
+                    f"({entry_point.value}) failed to load: {exc}"
+                ) from exc
+        _ALGORITHM_ENTRY_POINTS_LOADED = True
+
 
 @dataclass(frozen=True)
 class AlgorithmEntry:
@@ -43,12 +87,18 @@ class AlgorithmEntry:
     #: Optional, zero-arg factory returning the algorithm class -- a thunk
     #: rather than the class itself so registration (which runs at module
     #: import time, during ``discover()``) never has to import
-    #: ``rl_garden.algorithms`` eagerly; see ``_validate_config``'s static
-    #: encoder_sharing preflight, the only caller. Training modules opt in by
-    #: passing e.g. ``algorithm_cls=lambda: SAC`` (with the import inside the
-    #: lambda) to ``register()``; omitted for algorithms the preflight
-    #: doesn't check.
+    #: ``rl_garden.algorithms`` eagerly. Read by ``_validate_config``'s static
+    #: encoder_sharing / policy-graph preflight and by checkpoint evaluation
+    #: (``--algorithm auto`` matches a checkpoint's class name against it).
+    #: Training modules opt in by passing e.g. ``algorithm_cls=lambda: SAC``
+    #: (with the import inside the lambda) to ``register()``.
     algorithm_cls: Optional[Callable[[], type]] = None
+    #: Optional agent builder, the one ``run_fn`` constructs its agent with:
+    #: ``build_agent(args, env, eval_env, logger, checkpoint_dir)`` for the
+    #: online and off2on phases, ``build_agent(args, env_spec, logger,
+    #: eval_env)`` for the offline phase. Checkpoint evaluation rebuilds the
+    #: agent through it.
+    build_agent: Optional[Callable] = None
 
 
 @dataclass(frozen=True)
@@ -80,12 +130,13 @@ class BaseAlgorithmRegistry:
         run_fn: Callable,
         *,
         algorithm_cls: Optional[Callable[[], type]] = None,
+        build_agent: Optional[Callable] = None,
     ) -> None:
         if name in self._entries:
             raise ValueError(f"Algorithm {name!r} already registered")
         if any(entry.args_cls is args_cls for entry in self._entries.values()):
             raise ValueError(f"Args type {args_cls.__name__!r} already registered")
-        self._entries[name] = AlgorithmEntry(args_cls, run_fn, algorithm_cls)
+        self._entries[name] = AlgorithmEntry(args_cls, run_fn, algorithm_cls, build_agent)
 
     def entries(self) -> dict[str, AlgorithmEntry]:
         return dict(self._entries)
@@ -99,6 +150,9 @@ class BaseAlgorithmRegistry:
         for info in pkgutil.iter_modules(package.__path__):
             if not info.name.startswith("_"):
                 importlib.import_module(f"{self.package_name}.{info.name}")
+        # After the in-tree modules, so an external name that clashes with
+        # an in-tree one fails in the external register() call.
+        load_algorithm_entry_points()
         self._discovered = True
 
     def _defaults(self) -> dict[str, object]:

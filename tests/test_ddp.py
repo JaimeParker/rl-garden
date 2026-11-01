@@ -233,20 +233,132 @@ class _FakeBoxEnv:
         return self._obs(), reward, terminated, truncated, {}
 
 
-def _ppo_target_kl_raises_worker(rank: int, world_size: int, init_method: str) -> None:
+def _ppo_target_kl_accepted_worker(rank: int, world_size: int, init_method: str) -> None:
     _init_gloo(rank, world_size, init_method)
     assert is_ddp_active()
-    try:
-        PPO(_FakeBoxEnv(), device="cpu", target_kl=0.1, eval_freq=0, log_freq=0)
-        raised = False
-    except ValueError as exc:
-        raised = "target_kl" in str(exc)
-    assert raised
+    agent = PPO(_FakeBoxEnv(), device="cpu", target_kl=0.01, eval_freq=0, log_freq=0)
+    assert agent.target_kl == 0.01
     _destroy_gloo()
 
 
-def test_ppo_raises_when_target_kl_set_under_ddp():
-    _spawn(_ppo_target_kl_raises_worker, world_size=2)
+def test_ppo_accepts_target_kl_under_ddp():
+    _spawn(_ppo_target_kl_accepted_worker, world_size=2)
+
+
+def _gather_flat(tensor: torch.Tensor, world_size: int) -> list[torch.Tensor]:
+    gathered = [torch.zeros_like(tensor) for _ in range(world_size)]
+    dist.all_gather(gathered, tensor)
+    return gathered
+
+
+def _flat_params(agent: PPO) -> torch.Tensor:
+    return torch.cat([p.detach().reshape(-1) for p in agent.policy.parameters()])
+
+
+def _ppo_target_kl_collective_stop_worker(
+    rank: int, world_size: int, init_method: str, target_kl: float, expect_stop: bool
+) -> None:
+    """Rank 0's minibatch has an approx-KL of e - 2 (about 0.72), rank 1's
+    of 0: the ranks' mean (about 0.36) decides for both."""
+    _init_gloo(rank, world_size, init_method)
+    agent = PPO(
+        _FakeBoxEnv(num_envs=4),
+        device="cpu",
+        seed=11 + rank,  # different data per rank
+        num_steps=6,
+        num_minibatches=2,
+        update_epochs=1,
+        target_kl=target_kl,
+        eval_freq=0,
+        log_freq=0,
+        std_log=False,
+        net_arch=[16],
+    )
+    broadcast_module_state(agent.policy, src=0)
+    agent.train = lambda: {}  # collect one window, no update
+    agent.learn(total_timesteps=agent.num_steps * agent.num_envs)
+
+    evaluation = agent._evaluate_minibatch(next(agent._iter_minibatches()))
+    log_ratio = 1.0 if rank == 0 else 0.0
+    before = _flat_params(agent)
+    result = agent._ppo_minibatch_update(
+        values=evaluation.values,
+        log_prob=evaluation.log_prob,
+        entropy=evaluation.entropy,
+        old_values=evaluation.old_values,
+        old_log_prob=evaluation.log_prob.detach() - log_ratio,
+        advantages=evaluation.advantages,
+        returns=evaluation.returns,
+        clip_coef=agent.clip_coef,
+    )
+
+    stops = _gather_flat(torch.tensor([float(result["stop"])]), world_size)
+    assert [bool(stop.item()) for stop in stops] == [expect_stop] * world_size
+    after = _flat_params(agent)
+    assert torch.equal(after, before) == expect_stop
+    for other in _gather_flat(after, world_size):
+        assert torch.allclose(other, after, atol=1e-6)
+    if not expect_stop:
+        # The rank's own approx-KL is reported, not the ranks' mean.
+        assert (result["approx_kl"] > 0.5) == (rank == 0)
+    _destroy_gloo()
+
+
+@pytest.mark.parametrize(
+    "target_kl, expect_stop",
+    [
+        # Above rank 1's 0 but below the mean: rank 1 stops too.
+        pytest.param(0.2, True, id="both-stop"),
+        # Below rank 0's 0.72 but above the mean: rank 0 continues too and
+        # both reach the gradient all-reduce (a per-rank stop deadlocked).
+        pytest.param(0.5, False, id="both-continue"),
+    ],
+)
+def test_ppo_target_kl_stop_is_decided_on_the_ranks_mean_approx_kl(target_kl, expect_stop):
+    _spawn(_ppo_target_kl_collective_stop_worker, world_size=2, extra_args=(target_kl, expect_stop))
+
+
+def _ppo_target_kl_learn_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
+    agent = PPO(
+        _FakeBoxEnv(num_envs=4),
+        device="cpu",
+        seed=7 + rank,
+        num_steps=6,
+        num_minibatches=4,
+        update_epochs=4,
+        target_kl=1e-4,
+        eval_freq=0,
+        log_freq=0,
+        std_log=False,
+        net_arch=[16],
+    )
+    broadcast_module_state(agent.policy, src=0)
+    stops: list[bool] = []
+    minibatch_update = agent._ppo_minibatch_update
+
+    def recording_minibatch_update(**kwargs):
+        result = minibatch_update(**kwargs)
+        stops.append(bool(result["stop"]))
+        return result
+
+    agent._ppo_minibatch_update = recording_minibatch_update
+    agent.learn(total_timesteps=agent.num_steps * agent.num_envs * 3)
+
+    # Same minibatch count and the same stops on every rank (each rank's
+    # data differs), and the early stop did fire.
+    record = torch.tensor([len(stops), sum(stops)], dtype=torch.float32)
+    for other in _gather_flat(record, world_size):
+        assert torch.equal(other, record)
+    assert sum(stops) >= 1
+    params = _flat_params(agent)
+    for other in _gather_flat(params, world_size):
+        assert torch.allclose(other, params, atol=1e-5)
+    _destroy_gloo()
+
+
+def test_ppo_ddp_learn_with_target_kl_keeps_ranks_in_step():
+    _spawn(_ppo_target_kl_learn_worker, world_size=2)
 
 
 def _ppo_ddp_e2e_worker(rank: int, world_size: int, init_method: str) -> None:

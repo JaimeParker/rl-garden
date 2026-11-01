@@ -138,4 +138,6 @@ def _dppo_algorithm_cls() -> type:
     return DPPO
 
 
-registry.register("dppo", DPPOArgs, run_dppo, algorithm_cls=_dppo_algorithm_cls)
+registry.register(
+    "dppo", DPPOArgs, run_dppo, algorithm_cls=_dppo_algorithm_cls, build_agent=build_dppo
+)

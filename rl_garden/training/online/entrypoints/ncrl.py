@@ -138,4 +138,6 @@ def _ncrl_algorithm_cls() -> type:
     return NCRL
 
 
-registry.register("ncrl", NCRLArgs, run_ncrl, algorithm_cls=_ncrl_algorithm_cls)
+registry.register(
+    "ncrl", NCRLArgs, run_ncrl, algorithm_cls=_ncrl_algorithm_cls, build_agent=build_ncrl
+)

@@ -170,7 +170,7 @@ def test_ppo_normalize_obs_checkpoint_round_trip(tmp_path):
 
 
 def test_normalize_obs_reaches_extractor_through_cli_args_entrypoint():
-    """--encoder.normalize_obs must survive PPOArgs -> _ppo_common_kwargs ->
+    """--encoder.normalize_obs must survive PPOArgs -> ppo_common_kwargs ->
     construct_agent(PPO, ...) unfiltered, not just PPO(normalize_obs=...)
     called directly (every other test in this file bypasses the CLI args
     layer)."""

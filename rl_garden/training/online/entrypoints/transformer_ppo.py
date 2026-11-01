@@ -2,20 +2,37 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from rl_garden.training.online.entrypoints.ppo import (
-    _ppo_common_kwargs,
-    _ppo_observation_kwargs,
+    ppo_common_kwargs,
+    ppo_observation_kwargs,
 )
 
 
-def build_transformer_ppo(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.algorithms import TransformerPPO
+def build_transformer_ppo(
+    args,
+    env,
+    eval_env,
+    logger,
+    checkpoint_dir,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``TransformerPPO`` when ``None``) from ``args``;
+    ``extra_kwargs`` go to its constructor next to the PPO and GTrXL kwargs."""
     from rl_garden.training.inspection import construct_agent
 
-    image_kwargs = _ppo_observation_kwargs(args)
+    if algorithm_cls is None:
+        from rl_garden.algorithms import TransformerPPO
+
+        algorithm_cls = TransformerPPO
+    image_kwargs = ppo_observation_kwargs(args)
     agent = construct_agent(
-        TransformerPPO,
-        **_ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        algorithm_cls,
+        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
         embed_dim=args.embed_dim,
         head_dim=args.head_dim,
         num_heads=args.num_heads,
@@ -24,13 +41,17 @@ def build_transformer_ppo(args, env, eval_env, logger, checkpoint_dir):
         memory_len=args.memory_len,
         dropout_rate=args.dropout_rate,
         gru_bias=args.gru_bias,
+        **extra_kwargs,
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
     return agent
 
 
-def run_transformer_ppo(args: TransformerPPOArgs) -> None:
+def run_transformer_ppo(
+    args: TransformerPPOArgs, *, build_agent: Callable | None = None
+) -> None:
+    """Train with ``build_agent`` (``build_transformer_ppo`` when ``None``)."""
     from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online.runner import run_online
 
@@ -39,7 +60,7 @@ def run_transformer_ppo(args: TransformerPPOArgs) -> None:
         args,
         obs_tag=obs_tag,
         make_env_request=make_env_request,
-        build_agent=build_transformer_ppo,
+        build_agent=build_transformer_ppo if build_agent is None else build_agent,
     )
 
 
@@ -77,4 +98,5 @@ registry.register(
     TransformerPPOArgs,
     run_transformer_ppo,
     algorithm_cls=_transformer_ppo_algorithm_cls,
+    build_agent=build_transformer_ppo,
 )

@@ -34,6 +34,7 @@ def _discrete_labels_from_actions(actions: torch.Tensor) -> torch.Tensor:
 
 class RLPDHybrid(DemoInterventionMixin, RLPD):
     _compatible_checkpoint_algorithms = ("RLPDHybrid",)
+    policy_class = RLPDHybridPolicy
 
     def __init__(
         self,
@@ -58,32 +59,11 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
         if self.use_grasp_penalty:
             self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "grasp_penalty")
 
-    def _build_policy(self) -> RLPDHybridPolicy:
-        return RLPDHybridPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self._policy_action_space(),
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            critic_impl=self.critic_impl,
-            actor_use_layer_norm=self.actor_use_layer_norm,
-            critic_use_layer_norm=self.critic_use_layer_norm,
-            actor_dropout_rate=self.actor_dropout_rate,
-            critic_dropout_rate=self.critic_dropout_rate,
-            kernel_init=self.kernel_init,
-            backbone_type=self.backbone_type,
-            use_pnorm=self.use_pnorm,
-            log_std_min=self.actor_log_std_min,
-            log_std_mode=self.actor_log_std_mode,
-            actor_feature_dim=self.actor_feature_dim,
-            critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            discrete_hidden_dims=(self.discrete_hidden_dim,),
-            critic_backbone_type=self.critic_backbone_type,
-            **self._policy_extractor_kwargs(
-                self.env.single_observation_space,
-                augmentation_seed=self._image_augmentation_seed,
-            ),
-        )
+    def _policy_kwargs(self, observation_space) -> dict[str, Any]:
+        return {
+            **super()._policy_kwargs(observation_space),
+            "discrete_hidden_dims": (self.discrete_hidden_dim,),
+        }
 
     def _build_replay_buffer(self):
         if not self.use_grasp_penalty and not self.memory_efficient_buffer:

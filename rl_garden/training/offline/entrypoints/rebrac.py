@@ -108,4 +108,10 @@ def _re_brac_algorithm_cls() -> type:
 
     return ReBRAC
 
-registry.register("rebrac", ReBRACArgs, run_rebrac, algorithm_cls=_re_brac_algorithm_cls)
+registry.register(
+    "rebrac",
+    ReBRACArgs,
+    run_rebrac,
+    algorithm_cls=_re_brac_algorithm_cls,
+    build_agent=build_rebrac,
+)

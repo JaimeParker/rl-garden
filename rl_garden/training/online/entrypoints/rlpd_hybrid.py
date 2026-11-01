@@ -204,4 +204,6 @@ registry.register(
     "rlpd_hybrid",
     RLPDHybridArgs,
     run_rlpd_hybrid,
-    algorithm_cls=_rlpd_hybrid_algorithm_cls)
+    algorithm_cls=_rlpd_hybrid_algorithm_cls,
+    build_agent=build_rlpd_hybrid,
+)

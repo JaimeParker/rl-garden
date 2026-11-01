@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Literal, Optional, Sequence
+from typing import Literal, Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -439,12 +439,101 @@ def _per_action_dim_tensor(
     return torch.as_tensor(list(values), dtype=torch.float32)
 
 
-class DiagGaussianActor(nn.Module):
-    """Unsquashed diagonal Gaussian actor used by PPO-style algorithms.
+#: What a PPO Gaussian actor reads: one features tensor, or one per mean head
+#: (``SplitDiagGaussianActor``).
+ActorFeatures = Union[torch.Tensor, Sequence[torch.Tensor]]
+
+
+class DiagGaussianActorBase(nn.Module):
+    """The distribution half of the PPO diagonal Gaussian actors: one
+    state-independent ``log_std`` parameter of shape ``(1, act_dim)``, the
+    action bounds, and every method built on ``forward``. A subclass builds
+    its mean network and implements ``_mean(features) -> (..., act_dim)``.
 
     Actions are sampled in env action coordinates and may be clamped by the
     training loop before stepping the environment. Log-probabilities are always
     evaluated on the unclamped action tensor, matching SB3 and ManiSkill PPO.
+    """
+
+    @staticmethod
+    def _init_mean_layer(
+        layer: nn.Linear, gain: Optional[float], bias: Optional[torch.Tensor]
+    ) -> None:
+        """Orthogonal weights with ``gain`` and zero bias, then ``bias``
+        (each only when given)."""
+        if gain is not None:
+            nn.init.orthogonal_(layer.weight, gain=gain)
+            nn.init.zeros_(layer.bias)
+        if bias is not None:
+            with torch.no_grad():
+                layer.bias.copy_(bias)
+
+    def _init_log_std_and_action_bounds(
+        self,
+        action_space: spaces.Box,
+        act_dim: int,
+        log_std_init: float,
+        log_std_init_per_dim: Optional[Sequence[float]],
+    ) -> None:
+        if log_std_init_per_dim is not None:
+            self.log_std = nn.Parameter(
+                _per_action_dim_tensor(
+                    "log_std_init_per_dim", log_std_init_per_dim, act_dim
+                ).reshape(1, act_dim)
+            )
+        else:
+            self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
+
+        high = torch.as_tensor(action_space.high, dtype=torch.float32)
+        low = torch.as_tensor(action_space.low, dtype=torch.float32)
+        self.register_buffer("action_high", high)
+        self.register_buffer("action_low", low)
+
+    def _mean(self, features: ActorFeatures) -> torch.Tensor:
+        raise NotImplementedError
+
+    def forward(self, features: ActorFeatures) -> torch.distributions.Normal:
+        mean = self._mean(features)
+        log_std = self.log_std.expand_as(mean)
+        return torch.distributions.Normal(mean, log_std.exp())
+
+    def action_log_prob(
+        self,
+        features: ActorFeatures,
+        deterministic: bool = False,
+        *,
+        sum_dims: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        dist = self(features)
+        action = dist.mean if deterministic else dist.sample()
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
+        return action, log_prob, entropy
+
+    def evaluate_action_log_prob(
+        self, features: ActorFeatures, actions: torch.Tensor, *, sum_dims: bool = True
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        dist = self(features)
+        log_prob = dist.log_prob(actions)
+        entropy = dist.entropy()
+        if sum_dims:
+            log_prob = log_prob.sum(-1, keepdim=True)
+            entropy = entropy.sum(-1, keepdim=True)
+        return log_prob, entropy
+
+    def deterministic_action(self, features: ActorFeatures) -> torch.Tensor:
+        return self(features).mean
+
+    def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
+        return torch.max(torch.min(actions, self.action_high), self.action_low)
+
+
+class DiagGaussianActor(DiagGaussianActorBase):
+    """Unsquashed diagonal Gaussian actor used by PPO-style algorithms: one
+    trunk and one ``nn.Linear`` mean head over one features tensor.
 
     Optional per-dimension initialisation (all ``None`` keeps the default
     ``nn.Linear`` mean head and a uniform ``log_std_init``):
@@ -488,66 +577,127 @@ class DiagGaussianActor(nn.Module):
             kernel_init=kernel_init,
         )
         self.mean = nn.Linear(trunk_dim, act_dim)
-        if action_mean_head_gain is not None:
-            nn.init.orthogonal_(self.mean.weight, gain=action_mean_head_gain)
-            nn.init.zeros_(self.mean.bias)
-        if action_mean_bias_init is not None:
-            bias = _per_action_dim_tensor(
-                "action_mean_bias_init", action_mean_bias_init, act_dim
-            )
-            with torch.no_grad():
-                self.mean.bias.copy_(bias.reshape(act_dim))
-        if log_std_init_per_dim is not None:
-            self.log_std = nn.Parameter(
-                _per_action_dim_tensor(
-                    "log_std_init_per_dim", log_std_init_per_dim, act_dim
-                ).reshape(1, act_dim)
-            )
-        else:
-            self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
+        bias = (
+            None
+            if action_mean_bias_init is None
+            else _per_action_dim_tensor("action_mean_bias_init", action_mean_bias_init, act_dim)
+        )
+        self._init_mean_layer(self.mean, action_mean_head_gain, bias)
+        self._init_log_std_and_action_bounds(
+            action_space, act_dim, log_std_init, log_std_init_per_dim
+        )
 
-        high = torch.as_tensor(action_space.high, dtype=torch.float32)
-        low = torch.as_tensor(action_space.low, dtype=torch.float32)
-        self.register_buffer("action_high", high)
-        self.register_buffer("action_low", low)
+    def _mean(self, features: torch.Tensor) -> torch.Tensor:
+        return self.mean(self.trunk(features))
 
-    def forward(self, features: torch.Tensor) -> torch.distributions.Normal:
-        mean = self.mean(self.trunk(features))
-        log_std = self.log_std.expand_as(mean)
-        return torch.distributions.Normal(mean, log_std.exp())
 
-    def action_log_prob(
+class ActionSliceMeanHead(nn.Module):
+    """One mean head of ``SplitDiagGaussianActor``: a trunk and a linear
+    output layer over its own features, for its own slice of the action."""
+
+    def __init__(self, trunk: nn.Module, mean: nn.Linear) -> None:
+        super().__init__()
+        self.trunk = trunk
+        self.mean = mean
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.mean(self.trunk(features))
+
+
+class SplitDiagGaussianActor(DiagGaussianActorBase):
+    """Diagonal Gaussian actor whose mean is several heads, one per
+    contiguous slice of the action: head ``i`` reads ``features[i]`` and
+    outputs ``action_slices[i]``; ``forward`` concatenates the head outputs
+    in slice order. The slices are half-open ``(start, stop)`` pairs that
+    tile ``[0, act_dim)`` in order. ``log_std`` stays one ``(1, act_dim)``
+    parameter, so the distribution methods are ``DiagGaussianActorBase``'s.
+
+    Each head is built like ``DiagGaussianActor``'s trunk and mean layer:
+    its own ``hidden_dims[i]`` (``[]``: the linear layer alone), the shared
+    ``backbone_type``, norm, dropout and ``kernel_init`` options. Heads are
+    built in slice order (each trunk, then its linear layer), then
+    ``log_std``. ``action_mean_bias_init`` is read by global action
+    dimension, each head taking its slice; ``action_mean_head_gain``
+    initialises every head's linear layer; ``log_std_init_per_dim`` sets the
+    whole ``log_std``.
+    """
+
+    def __init__(
         self,
-        features: torch.Tensor,
-        deterministic: bool = False,
+        features_dims: Sequence[int],
+        action_space: spaces.Box,
+        action_slices: Sequence[tuple[int, int]],
+        hidden_dims: Sequence[Sequence[int]],
         *,
-        sum_dims: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        dist = self(features)
-        action = dist.mean if deterministic else dist.sample()
-        log_prob = dist.log_prob(action)
-        entropy = dist.entropy()
-        if sum_dims:
-            log_prob = log_prob.sum(-1, keepdim=True)
-            entropy = entropy.sum(-1, keepdim=True)
-        return action, log_prob, entropy
+        log_std_init: float = -0.5,
+        log_std_init_per_dim: Optional[Sequence[float]] = None,
+        action_mean_bias_init: Optional[Sequence[float]] = None,
+        action_mean_head_gain: Optional[float] = None,
+        use_layer_norm: bool = False,
+        use_group_norm: bool = False,
+        num_groups: int = 32,
+        dropout_rate: Optional[float] = None,
+        kernel_init: Optional[KernelInit] = None,
+        backbone_type: BackboneType = "mlp",
+    ) -> None:
+        super().__init__()
+        act_dim = int(np.prod(action_space.shape))
+        if not len(features_dims) == len(action_slices) == len(hidden_dims):
+            raise ValueError(
+                "SplitDiagGaussianActor needs one features width, action slice and "
+                f"hidden_dims per head; got {len(features_dims)}, {len(action_slices)} "
+                f"and {len(hidden_dims)}."
+            )
+        self.action_slices = tuple((int(start), int(stop)) for start, stop in action_slices)
+        starts = [start for start, _ in self.action_slices]
+        stops = [stop for _, stop in self.action_slices]
+        tiles_the_action = (
+            bool(self.action_slices)
+            and starts == [0, *stops[:-1]]
+            and stops[-1] == act_dim
+            and all(stop > start for start, stop in self.action_slices)
+        )
+        if not tiles_the_action:
+            raise ValueError(
+                f"action_slices {list(self.action_slices)} must tile [0, {act_dim}) in "
+                "order with non-empty slices."
+            )
+        bias = (
+            None
+            if action_mean_bias_init is None
+            else _per_action_dim_tensor("action_mean_bias_init", action_mean_bias_init, act_dim)
+        )
+        heads = []
+        for features_dim, (start, stop), head_hidden_dims in zip(
+            features_dims, self.action_slices, hidden_dims
+        ):
+            trunk, trunk_dim = _build_trunk(
+                features_dim,
+                head_hidden_dims,
+                backbone_type=backbone_type,
+                use_layer_norm=use_layer_norm,
+                use_group_norm=use_group_norm,
+                num_groups=num_groups,
+                dropout_rate=dropout_rate,
+                kernel_init=kernel_init,
+            )
+            mean = nn.Linear(trunk_dim, stop - start)
+            self._init_mean_layer(
+                mean, action_mean_head_gain, None if bias is None else bias[start:stop]
+            )
+            heads.append(ActionSliceMeanHead(trunk, mean))
+        self.heads = nn.ModuleList(heads)
+        self._init_log_std_and_action_bounds(
+            action_space, act_dim, log_std_init, log_std_init_per_dim
+        )
 
-    def evaluate_action_log_prob(
-        self, features: torch.Tensor, actions: torch.Tensor, *, sum_dims: bool = True
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        dist = self(features)
-        log_prob = dist.log_prob(actions)
-        entropy = dist.entropy()
-        if sum_dims:
-            log_prob = log_prob.sum(-1, keepdim=True)
-            entropy = entropy.sum(-1, keepdim=True)
-        return log_prob, entropy
-
-    def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
-        return self(features).mean
-
-    def clamp_action(self, actions: torch.Tensor) -> torch.Tensor:
-        return torch.max(torch.min(actions, self.action_high), self.action_low)
+    def _mean(self, features: Sequence[torch.Tensor]) -> torch.Tensor:
+        if isinstance(features, torch.Tensor) or len(features) != len(self.heads):
+            raise ValueError(
+                f"SplitDiagGaussianActor reads one features tensor per head "
+                f"({len(self.heads)}), in action-slice order."
+            )
+        return torch.cat([head(x) for head, x in zip(self.heads, features)], dim=-1)
 
 
 def gaussian_kl_divergence(

@@ -118,4 +118,10 @@ def _dreamer_v3_algorithm_cls() -> type:
     return DreamerV3
 
 
-registry.register("dreamer_v3", DreamerV3Args, run_dreamer_v3, algorithm_cls=_dreamer_v3_algorithm_cls)
+registry.register(
+    "dreamer_v3",
+    DreamerV3Args,
+    run_dreamer_v3,
+    algorithm_cls=_dreamer_v3_algorithm_cls,
+    build_agent=build_dreamer_v3,
+)

@@ -160,4 +160,6 @@ def _drqv2_algorithm_cls() -> type:
     return DDPG
 
 
-registry.register("drqv2", DrQv2Args, run_drqv2, algorithm_cls=_drqv2_algorithm_cls)
+registry.register(
+    "drqv2", DrQv2Args, run_drqv2, algorithm_cls=_drqv2_algorithm_cls, build_agent=build_drqv2
+)

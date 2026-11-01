@@ -103,4 +103,6 @@ def _idql_algorithm_cls() -> type:
 
     return IDQL
 
-registry.register("idql", IDQLArgs, run_idql, algorithm_cls=_idql_algorithm_cls)
+registry.register(
+    "idql", IDQLArgs, run_idql, algorithm_cls=_idql_algorithm_cls, build_agent=build_idql
+)

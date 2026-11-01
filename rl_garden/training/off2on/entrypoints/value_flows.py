@@ -164,4 +164,10 @@ def _off2_on_value_flows_algorithm_cls() -> type:
 
     return Off2OnValueFlows
 
-registry.register("value_flows", ValueFlowsOff2OnArgs, run_value_flows, algorithm_cls=_off2_on_value_flows_algorithm_cls)
+registry.register(
+    "value_flows",
+    ValueFlowsOff2OnArgs,
+    run_value_flows,
+    algorithm_cls=_off2_on_value_flows_algorithm_cls,
+    build_agent=build_value_flows,
+)

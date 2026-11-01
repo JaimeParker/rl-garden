@@ -28,7 +28,7 @@ contract, network layer" -- requiring only
 ``act_with_value_and_logprob``/``evaluate_actions(..., sum_dims=False)``/
 ``predict``/``predict_values``, not any concrete policy class. A future
 policy on the same contract (e.g. a ``SequencePPO``-family policy) needs
-only a ``_POLICIES`` entry, not a wrapper change -- per
+only a ``register_policy`` call, not a wrapper change -- per
 ``docs/design/rlinf-integration.md``'s "adapters target the hook contract"
 acceptance criterion, applied one layer below algorithm selection.
 """
@@ -67,6 +67,20 @@ _POLICIES: dict[str, type[PPOPolicy]] = {
 # policy-graph mapping, see rl_garden/networks/graph/spec.py) instead of a
 # FlattenExtractor built here; the graph must be stateless.
 _GRAPH_POLICIES = frozenset({"graph_ppo"})
+
+
+def register_policy(name: str, policy_cls: type[PPOPolicy]) -> None:
+    """Make ``policy_cls`` selectable as ``cfg.actor.model.rlgarden_policy=name``.
+
+    The class must satisfy the PPO contract named in this module's docstring
+    and accept ``(observation_space, action_space, actor_extractor=...,
+    **rlgarden_policy_kwargs)`` like ``PPOPolicy``. Every RLinf worker process
+    builds the policy, so the registering module must be imported in each of
+    them. Raises ``ValueError`` for a name already taken.
+    """
+    if name in _POLICIES:
+        raise ValueError(f"RLinf PPO policy {name!r} is already registered.")
+    _POLICIES[name] = policy_cls
 
 
 def resolve_policy(name: str) -> type[PPOPolicy]:

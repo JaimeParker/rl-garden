@@ -93,6 +93,86 @@ def _diffusion_bc_kwargs(args: DiffusionBCArgs, obs_space: Any) -> dict:
     return kwargs
 
 
+def diffusion_net(args: Any) -> tuple[type, dict[str, Any] | None]:
+    """``(net_cls, net_kwargs)`` of the denoiser ``--net_backbone`` selects
+    (shared with ``consistency_distill_bc``, whose teacher is a
+    ``diffusion_bc`` checkpoint)."""
+    if args.net_backbone == "unet":
+        from rl_garden.networks import DiffusionUNet1D
+
+        return DiffusionUNet1D, dict(
+            down_dims=args.unet_down_dims,
+            kernel_size=args.unet_kernel_size,
+            n_groups=args.unet_n_groups,
+            cond_predict_scale=args.unet_cond_predict_scale,
+        )
+    from rl_garden.networks import DiffusionMLP
+
+    return DiffusionMLP, None
+
+
+def build_diffusion_bc(
+    args: DiffusionBCArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``DiffusionBC`` when ``None``) on ``env_spec``
+    from ``args``. ``extra_kwargs`` replace or extend its constructor kwargs
+    (the run passes its ``checkpoint_dir``). ``eval_env`` is unused: the
+    agent trains on its dataset alone."""
+    from rl_garden.training.inspection import construct_agent
+
+    del eval_env
+    if algorithm_cls is None:
+        from rl_garden.algorithms import DiffusionBC
+
+        algorithm_cls = DiffusionBC
+    net_cls, net_kwargs = diffusion_net(args)
+    kwargs = {
+        "env": env_spec,
+        "dataset_path": args.dataset_path,
+        "horizon_steps": args.horizon_steps,
+        "cond_steps": args.cond_steps,
+        "denoising_steps": args.denoising_steps,
+        "activation_fn": args.activation_fn,
+        "residual_style": args.residual_style,
+        "time_dim": args.time_dim,
+        "kernel_init": args.kernel_init,
+        "denoised_clip_value": args.denoised_clip_value,
+        "randn_clip_value": args.randn_clip_value,
+        "final_action_clip_value": args.final_action_clip_value,
+        "min_sampling_denoising_std": args.min_sampling_denoising_std,
+        "net_cls": net_cls,
+        "net_kwargs": net_kwargs,
+        **_diffusion_bc_kwargs(args, env_spec.single_observation_space),
+        "actor_lr": args.actor_lr,
+        "weight_decay": args.weight_decay,
+        "lr_schedule": args.lr_schedule,
+        "lr_warmup_steps": args.lr_warmup_steps,
+        "lr_decay_steps": args.lr_decay_steps,
+        "lr_min_ratio": args.lr_min_ratio,
+        "grad_clip_norm": args.grad_clip_norm,
+        "batch_size": args.batch_size,
+        "ema_decay": args.ema_decay,
+        "ema_update_every": args.ema_update_every,
+        "ema_start_step": args.ema_start_step,
+        "num_traj": args.offline_num_traj,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
+
+
 def run_diffusion_bc(args: DiffusionBCArgs) -> None:
     cleanup: list[Callable[[], None]] = []
     try:
@@ -103,9 +183,8 @@ def run_diffusion_bc(args: DiffusionBCArgs) -> None:
 
 
 def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) -> None:
-    from rl_garden.algorithms import DiffusionBC, OfflineEnvSpec
+    from rl_garden.algorithms import OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
-    from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -153,13 +232,7 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
         )
     cleanup.append(logger.close)
 
-    from rl_garden.networks import DiffusionMLP
-
-    net_cls = DiffusionMLP
-    net_kwargs = None
     if args.net_backbone == "unet":
-        from rl_garden.networks import DiffusionUNet1D
-
         warnings.warn(
             "--net_backbone unet produces a checkpoint that dppo's "
             "--bc_checkpoint cannot load (DPPOPolicy's actor is a fixed "
@@ -167,54 +240,9 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
             "consistency_distill_bc's --bc_checkpoint.",
             stacklevel=2,
         )
-        net_cls = DiffusionUNet1D
-        net_kwargs = dict(
-            down_dims=args.unet_down_dims,
-            kernel_size=args.unet_kernel_size,
-            n_groups=args.unet_n_groups,
-            cond_predict_scale=args.unet_cond_predict_scale,
-        )
 
     env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
-    agent = construct_agent(
-        DiffusionBC,
-        env=env,
-        dataset_path=args.dataset_path,
-        horizon_steps=args.horizon_steps,
-        cond_steps=args.cond_steps,
-        denoising_steps=args.denoising_steps,
-        activation_fn=args.activation_fn,
-        residual_style=args.residual_style,
-        time_dim=args.time_dim,
-        kernel_init=args.kernel_init,
-        denoised_clip_value=args.denoised_clip_value,
-        randn_clip_value=args.randn_clip_value,
-        final_action_clip_value=args.final_action_clip_value,
-        min_sampling_denoising_std=args.min_sampling_denoising_std,
-        net_cls=net_cls,
-        net_kwargs=net_kwargs,
-        **_diffusion_bc_kwargs(args, obs_space),
-        actor_lr=args.actor_lr,
-        weight_decay=args.weight_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        batch_size=args.batch_size,
-        ema_decay=args.ema_decay,
-        ema_update_every=args.ema_update_every,
-        ema_start_step=args.ema_start_step,
-        num_traj=args.offline_num_traj,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_final_checkpoint=args.save_final_checkpoint,
-    )
+    agent = build_diffusion_bc(args, env, logger, checkpoint_dir=checkpoint_dir)
 
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
@@ -272,4 +300,16 @@ def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) 
     )
 
 
-registry.register("diffusion_bc", DiffusionBCArgs, run_diffusion_bc)
+def _diffusion_bc_algorithm_cls() -> type:
+    from rl_garden.algorithms import DiffusionBC
+
+    return DiffusionBC
+
+
+registry.register(
+    "diffusion_bc",
+    DiffusionBCArgs,
+    run_diffusion_bc,
+    algorithm_cls=_diffusion_bc_algorithm_cls,
+    build_agent=build_diffusion_bc,
+)

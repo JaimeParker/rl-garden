@@ -127,4 +127,10 @@ def _off2_on_spot_algorithm_cls() -> type:
 
     return Off2OnSPOT
 
-registry.register("spot", SPOTOff2OnArgs, run_spot, algorithm_cls=_off2_on_spot_algorithm_cls)
+registry.register(
+    "spot",
+    SPOTOff2OnArgs,
+    run_spot,
+    algorithm_cls=_off2_on_spot_algorithm_cls,
+    build_agent=build_spot,
+)

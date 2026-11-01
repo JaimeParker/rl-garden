@@ -86,6 +86,10 @@ def _checkpoint_observation_has_images(observation_space_metadata: dict[str, Any
 
 class ConsistencyDistillBC(OfflineRLAlgorithm):
     _compatible_checkpoint_algorithms = ("ConsistencyDistillBC",)
+    checkpoint_eval_unsupported_reason = (
+        "its policy predicts a whole action chunk (batch, horizon_steps, action_dim) "
+        "and the class has no receding-horizon execution of it in an environment"
+    )
 
     def __init__(
         self,

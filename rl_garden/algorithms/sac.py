@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, ClassVar, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -34,6 +34,14 @@ from rl_garden.policies.sac_policy import SACPolicy
 
 
 class SAC(SACCore, OffPolicyAlgorithm):
+    """Soft actor-critic over ``SACPolicy``.
+
+    Extension points for a subclass: ``policy_class`` and ``_policy_kwargs``
+    (which policy is built and with what), ``_make_optimizers`` (the critic
+    and actor optimizers), and ``SACCore``'s update seams (``_critic_features``,
+    ``_critic_loss``, ``_critic_step`` / ``_actor_step`` / ``_alpha_step``,
+    ``_post_critic_update`` / ``_post_actor_update``)."""
+
     _compatible_checkpoint_algorithms = ("SAC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {
@@ -43,6 +51,13 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "critic_extractor_kwargs",
         }
     )
+    #: Extension point: the policy ``_build_policy`` builds, called with the
+    #: keywords of ``_policy_kwargs(observation_space)``. A ``SACPolicy``
+    #: subclass; ``q_optimizer`` trains what its
+    #: ``critic_and_encoder_parameters()`` yields and ``actor_optimizer``
+    #: what its ``actor_parameters()`` yields, so a module the policy adds is
+    #: trained only once one of the two yields it.
+    policy_class: ClassVar[type[SACPolicy]] = SACPolicy
 
     def __init__(
         self,
@@ -453,26 +468,39 @@ class SAC(SACCore, OffPolicyAlgorithm):
     def _policy_action_space(self) -> spaces.Box:
         return self.env.single_action_space
 
-    def _build_policy(self) -> SACPolicy:
-        return SACPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self._policy_action_space(),
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            critic_impl=self.critic_impl,
-            actor_use_layer_norm=self.actor_use_layer_norm,
-            critic_use_layer_norm=self.critic_use_layer_norm,
-            log_std_min=self.actor_log_std_min,
-            log_std_mode=self.actor_log_std_mode,
-            actor_feature_dim=self.actor_feature_dim,
-            critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            critic_backbone_type=self.critic_backbone_type,
+    def _policy_kwargs(self, observation_space: spaces.Space) -> dict[str, Any]:
+        """Extension point: the keywords ``_build_policy`` passes to
+        ``policy_class``, built once per ``_build_policy`` call. Building them
+        builds the observation extractors (``actor_extractor``,
+        ``critic_extractor``, ``encoder_sharing``, the last entries), so call
+        ``super()`` exactly once. A subclass adds keywords for its own
+        ``policy_class`` with ``{**super()._policy_kwargs(observation_space),
+        ...}``."""
+        return {
+            "observation_space": observation_space,
+            "action_space": self._policy_action_space(),
+            "net_arch": self.net_arch,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            "critic_impl": self.critic_impl,
+            "actor_use_layer_norm": self.actor_use_layer_norm,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "log_std_min": self.actor_log_std_min,
+            "log_std_mode": self.actor_log_std_mode,
+            "actor_feature_dim": self.actor_feature_dim,
+            "critic_spatial_emb_dim": self.critic_spatial_emb_dim,
+            "critic_backbone_type": self.critic_backbone_type,
             **self._policy_extractor_kwargs(
-                self.env.single_observation_space,
+                observation_space,
                 augmentation_seed=self._image_augmentation_seed,
             ),
-        )
+        }
+
+    def _build_policy(self) -> SACPolicy:
+        """Build the policy: ``policy_class`` called with
+        ``_policy_kwargs`` for the env's observation space. Prefer those two
+        seams to overriding this."""
+        return self.policy_class(**self._policy_kwargs(self.env.single_observation_space))
 
     @staticmethod
     def _resolve_net_arch(
@@ -510,21 +538,40 @@ class SAC(SACCore, OffPolicyAlgorithm):
 
         return [256, 256, 256]
 
-    def _setup_model(self) -> None:
-        self.policy = self._build_policy().to(self.device)
-
-        self.q_optimizer = make_optimizer(
+    def _make_optimizers(
+        self, *, exclude_bias_from_decay: bool = False
+    ) -> tuple[torch.optim.Optimizer, torch.optim.Optimizer]:
+        """Extension point: build ``(q_optimizer, actor_optimizer)`` over
+        ``policy.critic_and_encoder_parameters()`` and
+        ``policy.actor_parameters()``, in that parameter order (optimizer
+        state is saved by position). ``exclude_bias_from_decay`` puts
+        parameters with ``ndim <= 1`` in a ``weight_decay=0`` group of an
+        AdamW optimizer (see ``make_optimizer``). ``_setup_model`` calls it
+        once, after the policy is on the device and before the temperature
+        optimizer and the LR schedulers are built, and assigns the result.
+        An override changes these two optimizers through ``super()``; an
+        extra optimizer is built in ``_setup_model`` and named in
+        ``_optimizer_names``."""
+        q_optimizer = make_optimizer(
             list(self.policy.critic_and_encoder_parameters()),
             lr=self.q_lr,
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
+            exclude_bias_from_decay=exclude_bias_from_decay,
         )
-        self.actor_optimizer = make_optimizer(
+        actor_optimizer = make_optimizer(
             list(self.policy.actor_parameters()),
             lr=self.policy_lr,
             weight_decay=self.weight_decay,
             use_adamw=self.use_adamw,
+            exclude_bias_from_decay=exclude_bias_from_decay,
         )
+        return q_optimizer, actor_optimizer
+
+    def _setup_model(self) -> None:
+        self.policy = self._build_policy().to(self.device)
+
+        self.q_optimizer, self.actor_optimizer = self._make_optimizers()
 
         # Entropy coefficient (auto-tuned by default).
         self.autotune, alpha_init = parse_auto_alpha_init(self.ent_coef_init)

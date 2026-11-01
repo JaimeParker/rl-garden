@@ -23,7 +23,7 @@ from rl_garden.policies.sac_policy import SACPolicy
 
 class SACFlowPolicy(SACPolicy):
     """SACPolicy with a flow-matching actor. Flat Box observations only --
-    the caller (SACFlow._build_policy) is responsible for rejecting
+    the caller (SACFlow._policy_kwargs) is responsible for rejecting
     ``structured_feature_config() is not None`` before constructing this."""
 
     def __init__(

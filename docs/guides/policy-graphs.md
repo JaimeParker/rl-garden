@@ -1,13 +1,17 @@
 # Policy Graphs (YAML-Declared PPO Policies)
 
-A policy graph declares the network between the observation and the two PPO
-heads as a small YAML graph: which encoders read which observation keys, which
-MLP, concat or recurrent nodes sit behind them, which edges stop gradients, and
+A policy graph declares the network between the observation and the PPO heads
+as a small YAML graph: which encoders read which observation keys, which MLP,
+concat or recurrent nodes sit behind them, which edges stop gradients, and
 which extra nodes are trained with their own losses. rl-garden builds the
 modules, infers every width, and runs the graph in the rollout and in the
 update. The Gaussian actor head and the scalar value head stay the PPO contract:
-they read the inputs of two sink nodes called `actor` and `value`, and are
-configured by the usual PPO flags (`--net-arch`, `--log-std-init`, ...).
+they read the inputs of sink nodes of type `actor` and `value`, and are
+configured by the usual PPO options (`--log-std-init`, ...; the hidden widths come
+from the algorithm's `net_arch` argument, `[256, 256, 256]` by default, which the
+PPO CLI does not expose). A graph
+may have several `actor` sinks, each owning a slice of the action with its own
+mean head (see [Several actor sinks](#several-actor-sinks)).
 
 A graph subsumes the options that otherwise route the encoder:
 
@@ -19,7 +23,8 @@ A graph subsumes the options that otherwise route the encoder:
 
 It also does what those options cannot: extra nodes (a classifier head, a
 predictor) trained with a loss against a target the env reports, a skip
-connection around a recurrent node, or several stateful nodes in series.
+connection around a recurrent node, several stateful nodes in series, or
+separate mean heads for different parts of the action.
 
 Scope: the PPO family only, see [Limits](#9-limits). Source of truth for the
 format is the module docstring of `rl_garden/networks/graph/spec.py`; this guide
@@ -27,6 +32,10 @@ adds the worked examples and the behavior around checkpoints, RLinf and
 extension.
 
 ## 1. Quick start
+
+Policy graphs are the YAML route for PPO ablations; a task-specific network,
+loss or rollout detail goes through the extension contract instead
+([Extending rl-garden from your own package](extending.md)).
 
 `--policy-graph` takes one of three things:
 
@@ -96,7 +105,8 @@ that holds the node modules): `keys`, `values`, `items`, `train`, `eval`,
 
 ### Nodes
 
-Exactly one `input` node, one `actor` node and one `value` node are required.
+Exactly one `input` node, one or more `actor` nodes and exactly one `value` node
+are required.
 
 | type | fields (default) | stateful | inputs | output width |
 |---|---|---|---|---|
@@ -106,11 +116,47 @@ Exactly one `input` node, one `actor` node and one `value` node are required.
 | `concat` | none | no | one or more | sum of the input widths, concatenated in producer-name order |
 | `gru`, `lstm` | `hidden_size` (256), `num_layers` (1) | yes | one | `hidden_size` |
 | `gtrxl` | `embed_dim` (256, even), `head_dim` (64), `num_heads` (4), `num_layers` (3), `mlp_num` (2), `memory_len` (64), `dropout_rate` (0.0, in `[0, 1)`), `gru_bias` (2.0) | yes | one | `embed_dim` |
-| `actor` | none (sink: the actor head reads its input) | no | one | the input's width |
+| `actor` | `action_dims` (`[start, stop]`, the half-open slice of the action this sink's head outputs; may be omitted with one actor sink), `net_arch` (`null`: the algorithm's `pi` widths; `[]`: a single linear layer; else a list of positive widths) | no | one | the input's width |
 | `value` | none (sink: the value head reads its input) | no | one | the input's width |
 
 The actor and value heads are sized from the widths of their sinks' inputs, so
-the two sinks may be fed different widths (see [example c](#c-a-concat-skip-connection-into-the-value-sink)).
+the sinks may be fed different widths (see [example c](#c-a-concat-skip-connection-into-the-value-sink)).
+
+#### Several actor sinks
+
+A graph may declare more than one `actor` sink. Each sink owns a contiguous
+slice of the flat action vector, `action_dims: [start, stop]` (half-open), and
+gets its own mean head: its own trunk and its own linear output layer over that
+sink's input. The heads' outputs are concatenated into one action and sampled
+from one diagonal Gaussian with one `log_std` over the whole action.
+
+- With two or more sinks every sink needs `action_dims`. The slices must not
+  overlap (checked when the graph is parsed) and must cover the whole action
+  `[0, act_dim)` (checked when the policy is built, because the action width
+  comes from the env). Every error names the sinks involved.
+- The heads are ordered by `start`, never by node name.
+- With one sink, `action_dims` may be omitted; if given it must be
+  `[0, act_dim]`.
+- `net_arch` sets only the hidden widths of that sink's head. Everything else is
+  the algorithm's actor configuration, shared by all heads: `--backbone-type`,
+  the actor layer-norm, group-norm and dropout options, and `--kernel-init`.
+  `--action-mean-bias-init` is read per global action dimension (each head takes
+  its slice), `--action-mean-head-gain` initialises every head's output layer,
+  and `--log-std-init-per-dim` sets the one `log_std`. On a single sink,
+  `net_arch` replaces the `pi` widths of the algorithm's `net_arch`.
+- The usual edge rules apply per sink: a `detach: true` edge into one actor
+  sink cuts that head's gradient into its producer only.
+
+With several sinks the policy builds one `SplitDiagGaussianActor` (all heads,
+then the `log_std`) in the place of the single-sink actor, before the value
+head, through `PPOPolicy._build_actor`; no other actor is built, so the
+initialisation consumes the RNG in that order. The policy then reads one input
+per sink, so `actor_features_dim` has no single
+value (it raises `TypeError`) and `extract_actor_features` returns the tuple of
+the sinks' inputs in action order. Everything downstream of the actor sees one
+action of width `act_dim`: the rollout buffer, `sum_dims`/per-dimension
+log-probs, decision-level component masks, the adaptive-KL schedule and the
+`policy/log_std/<dim>` metrics. See [example f](#f-two-actor-sinks-one-a-linear-head-on-a-recurrent-trunk).
 
 A graph with one or more stateful nodes (`gru`, `lstm`, `gtrxl`) runs under
 `recurrent_ppo` or `transformer_ppo`; a graph without one runs under `ppo`.
@@ -162,15 +208,18 @@ Loss nodes that no sink depends on run only in the update, never during
 rollouts. On a recurrent graph the loss node is evaluated over the whole
 `(T, B)` window and flattened to `T * B` rows, T-major, exactly like its
 target. The gradient of a loss reaches every upstream node unless an edge on its
-path has `detach: true`. Each loss is logged as `losses/graph_loss/<node>`, the
+path has `detach: true`. Each loss is logged as `losses/aux/<node>`, the
 unweighted mean over the update's minibatches (a weight-0 loss is logged too).
 
 ### The canonical form
 
 `GraphSpec.to_yaml()` writes the canonical text: nodes and edges sorted by name,
 every default spelled out (`detach`, `weight`, `mask`, node parameters,
-the full `EncoderConfig` of each encoder). Two graphs that differ only in order,
-comments, or omitted defaults have equal canonical text. It is what checkpoints
+the full `EncoderConfig` of each encoder). The one exception is the optional
+`action_dims`/`net_arch` of an `actor` sink, written only when given, so a graph
+that does not use them keeps the canonical text it had before they existed. Two
+graphs that differ only in order, comments, or omitted defaults have equal
+canonical text. It is what checkpoints
 record and what `--print-config` shows, see [section 6](#6-checkpoints-and-evaluation).
 
 ### Validation rules and errors
@@ -189,7 +238,12 @@ possible, names the node, edge or loss.
 | unknown or missing node field | `has unknown field(s) [...]` / `is missing required field '<f>'` |
 | bad node field value | for example `'net_arch' must be a list of layer widths`, `'embed_dim' must be even`, `'config' has a field EncoderConfig does not know` |
 | dangling edge, repeated edge, non-boolean `detach` | `names unknown node '<n>' (dangling edge)` / `is declared twice` / `'detach' must be true or false` |
-| not exactly one `input`, `actor`, `value` node | `needs exactly one 'actor' node, found ...` |
+| not exactly one `input` or `value` node, no `actor` node | `needs exactly one 'value' node, found ...` / `needs at least one 'actor' node` |
+| `action_dims` not two integers, or not `0 <= start < stop` | `actor sink '<n>': 'action_dims' must be [start, stop], two integers` / `needs 0 <= start < stop` |
+| several actor sinks, one without `action_dims` | `policy graph has <k> actor sinks [...]: each needs 'action_dims: [start, stop]' ...; missing on [...]` |
+| two actor sinks whose slices overlap | `actor sinks '<a>' (action_dims [...]) and '<b>' (action_dims [...]) overlap` |
+| actor slices that leave a gap or pass the action width (*) | `actor sinks [...] leave action dims [i, j) uncovered between actor sinks '<a>' and '<b>'` (or `before`/`after`) / `actor sink '<n>' has action_dims [...], beyond the <d>-dim action` |
+| a single actor sink with `action_dims` other than `[0, act_dim]` (*) | `actor sink '<n>' has action_dims [...], but it is the only actor sink` |
 | a sink with an outgoing edge | `sink node '<n>' has an outgoing edge` |
 | a cycle | `has a cycle through node(s) [...]` |
 | the `input` node with an incoming edge | `input node '<n>' cannot have incoming edges` |
@@ -210,13 +264,13 @@ possible, names the node, edge or loss.
 
 `GraphSpec.parse` checks the rules without a mark; it needs no observation
 space, so the CLI preflight runs it before any environment is created. The rows
-marked (*) need node widths or the built encoders and fire when the policy is
-built. The last two rows are checked by the CLI preflight and again when the
+marked (*) need node widths, the action width or the built encoders and fire
+when the policy is built. The last two rows are checked by the CLI preflight and again when the
 algorithm is constructed.
 
 ## 3. Worked examples
 
-Examples (b) to (e) are graphs that the test suite builds into policies and runs
+Examples (b) to (f) are graphs that the test suite builds into policies and runs
 under the algorithm named beside each, with generic node names here. Example (a)
 is the short form of the graph `builtin:mlp` builds. The node sizes are small;
 scale them for real runs.
@@ -368,6 +422,35 @@ edges:
 Run with `recurrent_ppo` (any stateful graph runs under a sequence algorithm;
 the stage flags of that algorithm are ignored).
 
+### (f) Two actor sinks, one a linear head on a recurrent trunk
+
+A 3-dimensional action split in two: `arm` outputs dims 0 and 1 through a head
+with the algorithm's `pi` widths (`[256, 256, 256]` by default), `gripper` outputs dim 2
+through a single linear layer on the GRU output. Both read the GRU, so the
+policy gradient of either slice trains it; put `detach: true` on an actor edge
+to keep that head's gradient out of the GRU.
+
+```yaml
+nodes:
+  obs:     {type: input}
+  encoder: {type: encoder}
+  gru:     {type: gru, hidden_size: 8}
+  arm:     {type: actor, action_dims: [0, 2]}
+  gripper: {type: actor, action_dims: [2, 3], net_arch: []}
+  value:   {type: value}
+edges:
+  - {from: obs, to: encoder}
+  - {from: encoder, to: gru}
+  - {from: gru, to: arm}
+  - {from: gru, to: gripper}
+  - {from: gru, to: value}
+```
+
+Run with `recurrent_ppo` on an env with a 3-dimensional action; the test
+suite runs it with `--decision-level` on an env that reports per-component
+decisions (`tests/test_graph_split_actor.py`). The state-dict keys of the heads
+are `actor.heads.<i>.` in action order (`0` is `arm`, `1` is `gripper`).
+
 ## 4. Semantics that differ from the legacy policies
 
 - **Detach is whole-latent.** `detach: true` cuts the entire latent on that
@@ -402,7 +485,7 @@ the stage flags of that algorithm are ignored).
 ## 5. Metrics
 
 Each graph loss is logged next to the other update metrics as
-`losses/graph_loss/<node>`. A graph without losses logs none.
+`losses/aux/<node>`. A graph without losses logs none.
 
 ## 6. Checkpoints and evaluation
 
@@ -415,8 +498,9 @@ pins the exact graph, including the stage sizes.
 On `load`, with the default `strict=True`, the text must match exactly: a
 checkpoint with a graph needs an agent with the same graph, a checkpoint without
 one needs an agent without one, and any difference (a `detach`, an activation, a
-loss weight or mask, a node size) raises `ValueError` naming the first
-differing line, even when the parameter shapes would fit. Loading with
+loss weight or mask, a node size, an actor sink's `action_dims` or `net_arch`)
+raises `ValueError` naming the first differing line, even when the parameter
+shapes would fit. Loading with
 `strict=False` skips this check.
 
 `examples/eval_checkpoint.py` rebuilds the training arguments from the run's
@@ -440,9 +524,9 @@ implements the PPO contract without hidden state; a stateful graph raises
 `ValueError`). The actor and rollout workers each build the policy from the same
 config, so the graph mapping must be identical on both, which a single config
 guarantees (an OmegaConf mapping is accepted). The observation is the flat
-`obs_dim` state vector, and the tested graph uses a default `encoder` node. Other
-keywords in `rlgarden_policy_kwargs` are `GraphPPOPolicy` head arguments
-(`net_arch`, ...).
+`obs_dim` state vector, and the tested graphs use a default `encoder` node; one of
+them has two actor sinks. Other keywords in `rlgarden_policy_kwargs` are
+`GraphPPOPolicy` head arguments (`net_arch`, ...).
 
 ```yaml
 actor:
@@ -581,9 +665,13 @@ loss types too).
   `PPO` subclass and its CLI forwards the flag, and its discriminator reads
   the `value` sink's latent; GAIL with a graph is not rejected by any check, but
   no test covers it, so it is untested.
-- **The heads are not nodes.** The Gaussian actor head and the scalar value head
-  are the PPO contract, built from the PPO flags; a graph decides only what
-  feeds them.
+- **The heads are not nodes, but a graph may have several actor sinks.** The
+  Gaussian actor head and the scalar value head are the PPO contract, built from
+  the PPO flags; a graph decides what feeds them and, with several `actor`
+  sinks, how the action is split into mean heads (only each head's hidden
+  widths come from the graph). Every sink is part of the same diagonal
+  Gaussian: one `log_std`, one entropy coefficient and one learning rate for
+  all heads, no per-sink distribution type. There is exactly one `value` sink.
 - **No per-node learning rate** (one optimizer over the whole policy).
 - **A token-layout (ViT `token_and_prop`) encoder cannot feed a stateful node.**
   The same limit applies to `recurrent_ppo` and `transformer_ppo` without a graph.

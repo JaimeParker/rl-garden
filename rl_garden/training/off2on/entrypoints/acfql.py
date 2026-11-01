@@ -148,4 +148,6 @@ def _acfql_algorithm_cls() -> type:
 
     return ACFQL
 
-registry.register("acfql", ACFQLArgs, run_acfql, algorithm_cls=_acfql_algorithm_cls)
+registry.register(
+    "acfql", ACFQLArgs, run_acfql, algorithm_cls=_acfql_algorithm_cls, build_agent=build_acfql
+)

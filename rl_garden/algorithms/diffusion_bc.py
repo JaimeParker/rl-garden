@@ -75,6 +75,10 @@ class _EMA:
 
 class DiffusionBC(OfflineRLAlgorithm):
     _compatible_checkpoint_algorithms = ("DiffusionBC",)
+    checkpoint_eval_unsupported_reason = (
+        "its policy predicts a whole action chunk (batch, horizon_steps, action_dim) "
+        "and the class has no receding-horizon execution of it in an environment"
+    )
     # See module docstring: no critic, so extract_actor_features must never
     # stop-gradient.
     encoder_sharing = "shared"

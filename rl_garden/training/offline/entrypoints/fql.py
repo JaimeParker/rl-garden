@@ -115,4 +115,6 @@ def _fql_algorithm_cls() -> type:
 
     return FQL
 
-registry.register("fql", FQLArgs, run_fql, algorithm_cls=_fql_algorithm_cls)
+registry.register(
+    "fql", FQLArgs, run_fql, algorithm_cls=_fql_algorithm_cls, build_agent=build_fql
+)

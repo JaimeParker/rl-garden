@@ -124,4 +124,4 @@ class DAggerArgs(DAggerTrainingArgs, ObservationArgs, EnvBackendArgs):
     """DAgger with multi-env backend support."""
 
 
-registry.register("dagger", DAggerArgs, run_dagger)
+registry.register("dagger", DAggerArgs, run_dagger, build_agent=build_dagger)

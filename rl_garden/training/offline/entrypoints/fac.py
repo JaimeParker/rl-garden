@@ -126,4 +126,6 @@ def _fac_algorithm_cls() -> type:
     return FAC
 
 
-registry.register("fac", FACArgs, run_fac, algorithm_cls=_fac_algorithm_cls)
+registry.register(
+    "fac", FACArgs, run_fac, algorithm_cls=_fac_algorithm_cls, build_agent=build_fac
+)

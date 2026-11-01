@@ -5,7 +5,7 @@ into rl-garden's SAC hierarchy. RLinf's actor loss is verified identical to
 plain SAC's -- `alpha*log_pi - Q`, unmodified
 (`RLinf/rlinf/workers/actor/fsdp_sac_policy_worker.py:524`) -- so
 this subclass only swaps the actor network (`FlowMatchingActor`, see
-`rl_garden/networks/flow_actor.py`) via `_build_policy`. `SACCore` (critic
+`rl_garden/networks/flow_actor.py`) via `policy_class` / `_policy_kwargs`. `SACCore` (critic
 loss, target Q, actor loss, alpha tuning, train loop) is inherited from `SAC`
 unmodified, same shape as `SequenceSAC` swapping in a recurrent actor.
 
@@ -15,7 +15,7 @@ supported. A raw ViT token extractor is rejected below -- it installs a
 structured features extractor (`structured_feature_config() is not None`)
 that `FlowMatchingActor` (a plain features_dim-generic MLP trunk) has not
 been verified against; that combination is out of scope for this port,
-mirroring `SequenceSAC._build_policy`'s own guard shape.
+mirroring `SequenceSAC._policy_kwargs`'s own guard shape.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from rl_garden.policies.sac_flow_policy import SACFlowPolicy
 
 class SACFlow(SAC):
     _compatible_checkpoint_algorithms = ("SACFlow",)
+    policy_class = SACFlowPolicy
 
     def __init__(
         self,
@@ -40,7 +41,7 @@ class SACFlow(SAC):
         **sac_kwargs: Any,
     ) -> None:
         # Must be set before super().__init__(), which ends by calling
-        # self._setup_model() -- our _build_policy override below reads
+        # self._setup_model() -- our _policy_kwargs override below reads
         # these attributes.
         self.denoising_steps = denoising_steps
         self.noise_std = noise_std
@@ -48,9 +49,12 @@ class SACFlow(SAC):
         self.flow_use_layer_norm = flow_use_layer_norm
         super().__init__(env, eval_env, **sac_kwargs)
 
-    def _build_policy(self) -> SACFlowPolicy:
+    def _policy_kwargs(self, observation_space) -> dict[str, Any]:
+        # Not built on SAC's keywords: SACFlowPolicy has no Gaussian-actor
+        # options (log_std_*, actor_use_layer_norm, actor_feature_dim) and no
+        # critic_spatial_emb_dim / critic_backbone_type.
         extractor_kwargs = self._policy_extractor_kwargs(
-            self.env.single_observation_space,
+            observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
         if extractor_kwargs["actor_extractor"].structured_feature_config() is not None:
@@ -60,20 +64,20 @@ class SACFlow(SAC):
                 "structured (ViT token) extractor is untested against "
                 "FlowMatchingActor and not supported this round."
             )
-        return SACFlowPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self._policy_action_space(),
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            critic_use_layer_norm=self.critic_use_layer_norm,
-            critic_impl=self.critic_impl,
-            flow_hidden_dims=self.flow_hidden_dims,
-            denoising_steps=self.denoising_steps,
-            noise_std=self.noise_std,
-            flow_use_layer_norm=self.flow_use_layer_norm,
+        return {
+            "observation_space": observation_space,
+            "action_space": self._policy_action_space(),
+            "net_arch": self.net_arch,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "critic_impl": self.critic_impl,
+            "flow_hidden_dims": self.flow_hidden_dims,
+            "denoising_steps": self.denoising_steps,
+            "noise_std": self.noise_std,
+            "flow_use_layer_norm": self.flow_use_layer_norm,
             **extractor_kwargs,
-        )
+        }
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {

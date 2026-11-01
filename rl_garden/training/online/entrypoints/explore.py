@@ -179,4 +179,10 @@ def _explore_algorithm_cls() -> type:
     return ExPLORe
 
 
-registry.register("explore", ExPLOREArgs, run_explore, algorithm_cls=_explore_algorithm_cls)
+registry.register(
+    "explore",
+    ExPLOREArgs,
+    run_explore,
+    algorithm_cls=_explore_algorithm_cls,
+    build_agent=build_explore,
+)

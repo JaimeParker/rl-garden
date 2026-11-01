@@ -119,4 +119,10 @@ def _flow_ppo_algorithm_cls() -> type:
     return FlowPPO
 
 
-registry.register("flow_ppo", FlowPPOArgs, run_flow_ppo, algorithm_cls=_flow_ppo_algorithm_cls)
+registry.register(
+    "flow_ppo",
+    FlowPPOArgs,
+    run_flow_ppo,
+    algorithm_cls=_flow_ppo_algorithm_cls,
+    build_agent=build_flow_ppo,
+)

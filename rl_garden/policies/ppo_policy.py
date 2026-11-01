@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Sequence
 
 import torch
+import torch.nn as nn
 from gymnasium import spaces
 
 from rl_garden.common.types import Obs
@@ -16,6 +17,12 @@ from rl_garden.networks import (
     ValueNetwork,
 )
 from rl_garden.policies.base import BasePolicy, EncoderSharing
+
+if TYPE_CHECKING:
+    from rl_garden.buffers.rollout_buffer import ExtraSpecs
+
+#: What an evaluate method returns last when called with ``return_outputs=True``.
+EvaluationOutputs = dict[str, Any]
 
 
 def get_ppo_arch(
@@ -31,7 +38,22 @@ def get_ppo_arch(
 
 
 class PPOPolicy(BasePolicy):
-    """Continuous-action actor-critic policy used by PPO."""
+    """Continuous-action actor-critic policy used by PPO.
+
+    Extension points for a subclass (all default to plain PPO behavior):
+    ``_build_actor`` (the actor module), ``rollout_extra_specs`` (per-step
+    ``infos`` entries the rollout buffer stores) and ``evaluation_outputs``
+    (the update asks the evaluate methods for a trailing outputs dict)."""
+
+    #: Extension point: when True, ``PPO``'s update calls the evaluate
+    #: method it uses (``evaluate_actions``/``evaluate_actions_with_dist_params``,
+    #: or the ``_sequence`` pair of a recurrent policy) with
+    #: ``return_outputs=True`` and stores the trailing dict in
+    #: ``MinibatchEval.outputs``, where ``PPO._aux_loss`` reads it. The dict
+    #: of this class (and ``RecurrentPPOPolicy``) is ``{"latent": <the
+    #: features the actor reads, one row per minibatch row>}``, detached
+    #: exactly when the actor's input is (``actor_features_detached``).
+    evaluation_outputs: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -74,10 +96,10 @@ class PPOPolicy(BasePolicy):
             if self.critic_extractor is None
             else self.critic_extractor.features_dim
         )
-        self.actor = DiagGaussianActor(
+        self.actor = self._build_actor(
             fd,
             action_space,
-            hidden_dims=actor_arch,
+            actor_arch,
             log_std_init=log_std_init,
             log_std_init_per_dim=log_std_init_per_dim,
             action_mean_bias_init=action_mean_bias_init,
@@ -99,6 +121,39 @@ class PPOPolicy(BasePolicy):
             kernel_init=kernel_init,
             backbone_type=critic_backbone_type or backbone_type,
         )
+
+    def _build_actor(
+        self,
+        features_dim: int,
+        action_space: spaces.Box,
+        hidden_dims: Sequence[int],
+        **actor_options: Any,
+    ) -> nn.Module:
+        """Extension point: build the actor head. Called once from
+        ``__init__``, after the extractors and before ``value_net``, so the
+        modules it creates consume the RNG at that position. ``features_dim``
+        is the width of the features the actor reads, ``hidden_dims`` the
+        resolved ``pi`` widths, ``actor_options`` ``DiagGaussianActor``'s
+        keyword options (``log_std_init``, ``log_std_init_per_dim``,
+        ``action_mean_bias_init``, ``action_mean_head_gain``,
+        ``use_layer_norm``, ``use_group_norm``, ``num_groups``,
+        ``dropout_rate``, ``kernel_init``, ``backbone_type``). The module
+        must offer ``DiagGaussianActorBase``'s interface (``forward`` -> a
+        ``Normal``, ``action_log_prob``, ``evaluate_action_log_prob``,
+        ``deterministic_action``, ``clamp_action`` and a ``log_std``
+        parameter); every method of this class reads it as ``self.actor``."""
+        return DiagGaussianActor(features_dim, action_space, hidden_dims=hidden_dims, **actor_options)
+
+    def rollout_extra_specs(self) -> ExtraSpecs:
+        """Extension point: per-step ``infos`` entries the rollout buffer
+        stores, ``{key: (per-env shape, dtype)}``. ``PPO`` reads
+        ``infos[key]`` (a ``(num_envs, *shape)`` tensor; ``(num_envs,)`` is
+        accepted for shape ``(1,)``) on every rollout step, raising
+        ``ValueError`` when it is missing or mismatched, and each minibatch
+        carries it in ``data.extras[key]`` (rows of a flat minibatch,
+        ``(T, B, *shape)`` for a sequence minibatch). Read once, when the
+        algorithm builds its rollout buffer. Default: none."""
+        return {}
 
     @property
     def is_stateful(self) -> bool:
@@ -149,13 +204,19 @@ class PPOPolicy(BasePolicy):
         *,
         stop_gradient_actor: Optional[bool] = None,
         sum_dims: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_outputs: bool = False,
+    ) -> tuple[Any, ...]:
+        """``(values, log_prob, entropy)``; with ``return_outputs`` an
+        ``EvaluationOutputs`` dict ``{"latent": <the features the actor
+        read>}`` is appended (see ``evaluation_outputs``)."""
         actor_features = self._actor_role_features(obs, stop_gradient_actor)
         value_features = self.extract_critic_features(obs)
         log_prob, entropy = self.actor.evaluate_action_log_prob(
             actor_features, actions, sum_dims=sum_dims
         )
         values = self.value_net(value_features)
+        if return_outputs:
+            return values, log_prob, entropy, {"latent": actor_features}
         return values, log_prob, entropy
 
     def act_with_value_and_logprob(
@@ -212,12 +273,14 @@ class PPOPolicy(BasePolicy):
         *,
         stop_gradient_actor: Optional[bool] = None,
         sum_dims: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_outputs: bool = False,
+    ) -> tuple[Any, ...]:
         """Like ``evaluate_actions``, but also returns the current policy's
         ``(mean, log_std)`` -- the "new" distribution params the adaptive-KL
         LR schedule needs. Single actor forward pass, no duplicate compute.
         ``sum_dims=False`` keeps ``log_prob``/``entropy`` per action
-        dimension, ``(N, A)``."""
+        dimension, ``(N, A)``. ``return_outputs`` appends the outputs dict
+        like ``evaluate_actions``."""
         actor_features = self._actor_role_features(obs, stop_gradient_actor)
         value_features = self.extract_critic_features(obs)
         dist = self.actor(actor_features)
@@ -228,4 +291,6 @@ class PPOPolicy(BasePolicy):
             entropy = entropy.sum(-1, keepdim=True)
         values = self.value_net(value_features)
         log_std = self.actor.log_std.expand_as(dist.mean)
+        if return_outputs:
+            return values, log_prob, entropy, dist.mean, log_std, {"latent": actor_features}
         return values, log_prob, entropy, dist.mean, log_std

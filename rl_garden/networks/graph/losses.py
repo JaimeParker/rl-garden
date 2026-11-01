@@ -124,28 +124,29 @@ def info_target_specs(spec: GraphSpec, node_dims: Mapping[str, int]) -> TargetSp
 def read_info_targets(
     infos: Mapping[str, Any], specs: TargetSpecs, num_envs: int, step: int
 ) -> dict[str, torch.Tensor]:
-    """The ``info.<key>`` targets of one rollout step, checked against
-    ``specs`` with tensor metadata and host-side dict lookups only (no
-    device sync). Raises ``ValueError`` naming the key on a missing key,
+    """The per-step ``infos`` entries of one rollout step (a policy's
+    ``rollout_extra_specs``: the ``info.<key>`` targets of a graph's losses),
+    checked against ``specs`` with tensor metadata and host-side dict lookups
+    only (no device sync). Raises ``ValueError`` naming the key on a missing key,
     a non-tensor, or a wrong shape or dtype."""
     targets = {}
     for key, (shape, dtype) in specs.items():
         if key not in infos:
             raise ValueError(
-                f"graph loss target 'info.{key}' is missing from infos at rollout step "
+                f"rollout extra {key!r} is missing from infos at rollout step "
                 f"{step}; the env must report infos[{key!r}] on every step."
             )
         value = infos[key]
         if not isinstance(value, torch.Tensor):
             raise ValueError(  # noqa: TRY004
-                f"infos[{key!r}] (graph loss target) must be a torch.Tensor, got "
+                f"infos[{key!r}] (rollout extra) must be a torch.Tensor, got "
                 f"{type(value).__name__}."
             )
         expected = (num_envs, *shape)
         accepted = {expected, (num_envs,)} if shape == (1,) else {expected}
         if tuple(value.shape) not in accepted:
             raise ValueError(
-                f"infos[{key!r}] (graph loss target) must have shape {expected}, got "
+                f"infos[{key!r}] (rollout extra) must have shape {expected}, got "
                 f"{tuple(value.shape)}."
             )
         if dtype == torch.int64:
@@ -155,7 +156,7 @@ def read_info_targets(
         if not dtype_ok:
             wanted = "an integer (class index)" if dtype == torch.int64 else "a float or bool"
             raise ValueError(
-                f"infos[{key!r}] (graph loss target) must have {wanted} dtype, got "
+                f"infos[{key!r}] (rollout extra) must have {wanted} dtype, got "
                 f"{value.dtype}."
             )
         targets[key] = value

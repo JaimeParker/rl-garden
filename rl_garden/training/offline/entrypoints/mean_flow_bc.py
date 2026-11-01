@@ -95,4 +95,10 @@ def _mean_flow_bc_algorithm_cls() -> type:
 
     return MeanFlowBC
 
-registry.register("mean_flow_bc", MeanFlowBCArgs, run_mean_flow_bc, algorithm_cls=_mean_flow_bc_algorithm_cls)
+registry.register(
+    "mean_flow_bc",
+    MeanFlowBCArgs,
+    run_mean_flow_bc,
+    algorithm_cls=_mean_flow_bc_algorithm_cls,
+    build_agent=build_mean_flow_bc,
+)

@@ -402,13 +402,13 @@ def test_learn_window_with_builtin_graph_is_bit_identical(
     _assert_tensor_dicts_equal(_renamed(with_graph, stage), reference)
 
 
-# --- return_graph_outputs: the training path's evaluate calls -------------------------------
+# --- return_outputs: the training path's evaluate calls -------------------------------------
 
 
-def _evaluation_calls(policy, *, return_graph_outputs: bool) -> list:
+def _evaluation_calls(policy, *, return_outputs: bool) -> list:
     """Every evaluate method of ``policy``'s family, then the parameter grads
     of a loss over all of their outputs."""
-    flag = {"return_graph_outputs": True} if return_graph_outputs else {}
+    flag = {"return_outputs": True} if return_outputs else {}
     if policy.is_stateful:
         obs, actions = _obs(STATE_SPACE, (WINDOW, BATCH), seed=6), _actions((WINDOW, BATCH))
         sequence = (
@@ -444,17 +444,17 @@ def _evaluation_calls(policy, *, return_graph_outputs: bool) -> list:
         pytest.param(lambda: _graph_recurrent("gru", None), id="gru"),
     ],
 )
-def test_return_graph_outputs_appends_the_outputs_and_changes_nothing_else(build):
+def test_return_outputs_appends_the_graph_outputs_and_changes_nothing_else(build):
     policy = _seeded(build)
-    plain, plain_grads = _evaluation_calls(policy, return_graph_outputs=False)
-    flagged, flagged_grads = _evaluation_calls(policy, return_graph_outputs=True)
+    plain, plain_grads = _evaluation_calls(policy, return_outputs=False)
+    flagged, flagged_grads = _evaluation_calls(policy, return_outputs=True)
 
     spec = policy.graph_spec
     for plain_result, flagged_result in zip(plain, flagged):
         *evaluated, outputs = flagged_result
         _assert_same(tuple(evaluated), plain_result)
         assert isinstance(outputs, dict)
-        assert {spec.actor_sink, spec.value_sink} <= outputs.keys()
+        assert {*spec.actor_sinks, spec.value_sink} <= outputs.keys()
         rows = WINDOW * BATCH if policy.is_stateful else BATCH
         assert outputs[spec.value_sink].shape[0] == rows
     _assert_tensor_dicts_equal(flagged_grads, plain_grads)
@@ -467,7 +467,7 @@ def test_return_graph_outputs_appends_the_outputs_and_changes_nothing_else(build
         pytest.param(RecurrentPPO, {"rnn_hidden_size": 8}, "builtin:recurrent", id="gru"),
     ],
 )
-def test_minibatch_eval_carries_graph_outputs_only_for_a_graph_policy(
+def test_minibatch_eval_carries_outputs_only_for_a_graph_policy(
     agent_cls, extra_kwargs, policy_graph
 ):
     def skip_update() -> dict:
@@ -479,8 +479,8 @@ def test_minibatch_eval_carries_graph_outputs_only_for_a_graph_policy(
         _learn_one_window(agent)
         return agent._evaluate_minibatch(next(agent._iter_minibatches()))
 
-    assert first_evaluation().graph_outputs is None
-    outputs = first_evaluation(policy_graph=policy_graph).graph_outputs
+    assert first_evaluation().outputs is None
+    outputs = first_evaluation(policy_graph=policy_graph).outputs
     assert {"actor", "value"} <= outputs.keys()
     assert outputs["actor"].shape[0] == NUM_ENVS * NUM_STEPS // 2
 

@@ -142,6 +142,41 @@ def _normalize_mlp(name: str, params: dict) -> dict:
     return {"net_arch": net_arch, "output_dim": output_dim, "activation": params["activation"]}
 
 
+def _normalize_actor_sink(name: str, params: dict) -> dict:
+    """Checks the optional ``action_dims``/``net_arch`` of an ``actor`` sink
+    and keeps only the given ones, so a sink without them has the canonical
+    text it had before the fields existed."""
+    normalized = {}
+    action_dims = params["action_dims"]
+    if action_dims is not None:
+        if (
+            not isinstance(action_dims, list)
+            or len(action_dims) != 2
+            or any(isinstance(dim, bool) or not isinstance(dim, int) for dim in action_dims)
+        ):
+            raise ConfigError(
+                f"actor sink {name!r}: 'action_dims' must be [start, stop], two integers "
+                f"(the half-open slice of the action this sink's head outputs), got "
+                f"{action_dims!r}."
+            )
+        start, stop = action_dims
+        if not 0 <= start < stop:
+            raise ConfigError(
+                f"actor sink {name!r}: 'action_dims' [start, stop] needs 0 <= start < stop, "
+                f"got {action_dims!r}."
+            )
+        normalized["action_dims"] = [start, stop]
+    net_arch = params["net_arch"]
+    if net_arch is not None:
+        if not isinstance(net_arch, list):
+            raise ConfigError(
+                f"actor sink {name!r}: 'net_arch' must be a list of layer widths "
+                f"([] for a single linear layer), got {net_arch!r}."
+            )
+        normalized["net_arch"] = [_positive_int(name, "net_arch", width) for width in net_arch]
+    return normalized
+
+
 def _normalize_rnn(name: str, params: dict) -> dict:
     return {key: _positive_int(name, key, value) for key, value in params.items()}
 
@@ -201,8 +236,17 @@ def _gtrxl_factory(spec: NodeSpec, input_dim, observation_space, action_space) -
     return GTrXLLatentEncoder(input_dim=input_dim, **spec.params)
 
 
-for _role in ("input", "actor", "value"):
+for _role in ("input", "value"):
     add_graph_node_type(GraphNodeType(name=_role, factory=None, role=_role))
+add_graph_node_type(
+    GraphNodeType(
+        name="actor",
+        factory=None,
+        params={"action_dims": None, "net_arch": None},
+        normalize_params=_normalize_actor_sink,
+        role="actor",
+    )
+)
 register_graph_node(
     "encoder",
     _encoder_factory,

@@ -168,4 +168,6 @@ def _td3_algorithm_cls() -> type:
     return TD3
 
 
-registry.register("td3", TD3Args, run_td3, algorithm_cls=_td3_algorithm_cls)
+registry.register(
+    "td3", TD3Args, run_td3, algorithm_cls=_td3_algorithm_cls, build_agent=build_td3
+)

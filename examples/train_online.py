@@ -1,9 +1,13 @@
 """Online RL entry point: sac / drqv2 / flash_sac / ppo.
 
+Same CLI as the ``rl-garden-train-online`` console script
+(``rl_garden.training.cli.train_online``).
+
 To add a new algorithm: create ``rl_garden/training/online/entrypoints/<name>.py`` with an Args
 dataclass, a run function, and a package-local ``registry.register`` call.
 No other file needs to change — all public modules in ``rl_garden/training/online/entrypoints/`` are
-discovered and imported automatically at startup.
+discovered and imported automatically at startup, as are the modules other
+installed packages advertise in the ``rlgarden.algorithms`` entry-point group.
 
 Pass ``--print-config`` anywhere on the command line to print the fully resolved
 configuration as JSON and exit without creating training resources.
@@ -37,11 +41,11 @@ Usage:
 """
 from __future__ import annotations
 
-from rl_garden.training.online import registry
+from rl_garden.training.cli import train_online
 
 
 def main() -> None:
-    registry.run_cli()
+    train_online()
 
 
 if __name__ == "__main__":

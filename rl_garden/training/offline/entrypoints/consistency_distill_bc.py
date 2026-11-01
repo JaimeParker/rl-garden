@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from rl_garden.buffers.h5_dataset import infer_box_specs_from_h5
 from rl_garden.common import Logger, seed_everything
@@ -45,6 +46,65 @@ class ConsistencyDistillBCArgs(ConsistencyDistillBCTrainingArgs, ObservationArgs
     param to wire them to)."""
 
 
+def build_consistency_distill_bc(
+    args: ConsistencyDistillBCArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``ConsistencyDistillBC`` when ``None``) on
+    ``env_spec`` from ``args``. ``extra_kwargs`` replace or extend its
+    constructor kwargs (the run passes its ``checkpoint_dir``). ``eval_env``
+    is unused: the agent trains on its dataset alone."""
+    from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.offline.entrypoints.diffusion_bc import diffusion_net
+
+    del eval_env
+    if algorithm_cls is None:
+        from rl_garden.algorithms import ConsistencyDistillBC
+
+        algorithm_cls = ConsistencyDistillBC
+    net_cls, net_kwargs = diffusion_net(args)
+    kwargs = {
+        "env": env_spec,
+        "dataset_path": args.dataset_path,
+        "bc_checkpoint": args.bc_checkpoint,
+        "horizon_steps": args.horizon_steps,
+        "cond_steps": args.cond_steps,
+        "denoising_steps": args.denoising_steps,
+        "activation_fn": args.activation_fn,
+        "residual_style": args.residual_style,
+        "time_dim": args.time_dim,
+        "kernel_init": args.kernel_init,
+        "denoised_clip_value": args.denoised_clip_value,
+        "randn_clip_value": args.randn_clip_value,
+        "final_action_clip_value": args.final_action_clip_value,
+        "min_sampling_denoising_std": args.min_sampling_denoising_std,
+        "net_cls": net_cls,
+        "net_kwargs": net_kwargs,
+        "cm_lr": args.cm_lr,
+        "weight_decay": args.weight_decay,
+        "cm_ema_decay": args.cm_ema_decay,
+        "cm_grad_clip_norm": args.cm_grad_clip_norm,
+        "cm_sigma_data": args.cm_sigma_data,
+        "cm_timestep_scaling": args.cm_timestep_scaling,
+        "batch_size": args.batch_size,
+        "num_traj": args.offline_num_traj,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
+
+
 def run_consistency_distill_bc(args: ConsistencyDistillBCArgs) -> None:
     cleanup: list[Callable[[], None]] = []
     try:
@@ -57,9 +117,8 @@ def run_consistency_distill_bc(args: ConsistencyDistillBCArgs) -> None:
 def _run_consistency_distill_bc(
     args: ConsistencyDistillBCArgs, cleanup: list[Callable[[], None]]
 ) -> None:
-    from rl_garden.algorithms import ConsistencyDistillBC, OfflineEnvSpec
+    from rl_garden.algorithms import OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
-    from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -119,57 +178,8 @@ def _run_consistency_distill_bc(
         )
     cleanup.append(logger.close)
 
-    from rl_garden.networks import DiffusionMLP
-
-    net_cls = DiffusionMLP
-    net_kwargs = None
-    if args.net_backbone == "unet":
-        from rl_garden.networks import DiffusionUNet1D
-
-        net_cls = DiffusionUNet1D
-        net_kwargs = dict(
-            down_dims=args.unet_down_dims,
-            kernel_size=args.unet_kernel_size,
-            n_groups=args.unet_n_groups,
-            cond_predict_scale=args.unet_cond_predict_scale,
-        )
-
     env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
-    agent = construct_agent(
-        ConsistencyDistillBC,
-        env=env,
-        dataset_path=args.dataset_path,
-        bc_checkpoint=args.bc_checkpoint,
-        horizon_steps=args.horizon_steps,
-        cond_steps=args.cond_steps,
-        denoising_steps=args.denoising_steps,
-        activation_fn=args.activation_fn,
-        residual_style=args.residual_style,
-        time_dim=args.time_dim,
-        kernel_init=args.kernel_init,
-        denoised_clip_value=args.denoised_clip_value,
-        randn_clip_value=args.randn_clip_value,
-        final_action_clip_value=args.final_action_clip_value,
-        min_sampling_denoising_std=args.min_sampling_denoising_std,
-        net_cls=net_cls,
-        net_kwargs=net_kwargs,
-        cm_lr=args.cm_lr,
-        weight_decay=args.weight_decay,
-        cm_ema_decay=args.cm_ema_decay,
-        cm_grad_clip_norm=args.cm_grad_clip_norm,
-        cm_sigma_data=args.cm_sigma_data,
-        cm_timestep_scaling=args.cm_timestep_scaling,
-        batch_size=args.batch_size,
-        num_traj=args.offline_num_traj,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_final_checkpoint=args.save_final_checkpoint,
-    )
+    agent = build_consistency_distill_bc(args, env, logger, checkpoint_dir=checkpoint_dir)
 
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
@@ -217,4 +227,16 @@ def _run_consistency_distill_bc(
     )
 
 
-registry.register("consistency_distill_bc", ConsistencyDistillBCArgs, run_consistency_distill_bc)
+def _consistency_distill_bc_algorithm_cls() -> type:
+    from rl_garden.algorithms import ConsistencyDistillBC
+
+    return ConsistencyDistillBC
+
+
+registry.register(
+    "consistency_distill_bc",
+    ConsistencyDistillBCArgs,
+    run_consistency_distill_bc,
+    algorithm_cls=_consistency_distill_bc_algorithm_cls,
+    build_agent=build_consistency_distill_bc,
+)

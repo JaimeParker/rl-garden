@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import torch
 from gymnasium import spaces
@@ -40,6 +40,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         value_dropout_rate: Optional[float] = None,
         kernel_init: Optional[KernelInit] = None,
         backbone_type: BackboneType = "mlp",
+        critic_backbone_type: Optional[BackboneType] = None,
         critic_extractor: Optional[BaseFeaturesExtractor] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
     ) -> None:
@@ -76,6 +77,7 @@ class RecurrentPPOPolicy(PPOPolicy):
             value_dropout_rate=value_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+            critic_backbone_type=critic_backbone_type,
             encoder_sharing=encoder_sharing,
         )
         self.recurrent_encoder = recurrent_encoder
@@ -183,10 +185,13 @@ class RecurrentPPOPolicy(PPOPolicy):
         *,
         stop_gradient_actor: bool = False,
         sum_dims: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_outputs: bool = False,
+    ) -> tuple[Any, ...]:
         """BPTT update path. obs/actions: (T, B, ...). Returns (values, log_prob,
         entropy), each (T, B, 1); with ``sum_dims=False`` ``log_prob`` and
-        ``entropy`` are (T, B, A).
+        ``entropy`` are (T, B, A). ``return_outputs`` appends
+        ``{"latent": <the (T * B, D) features the actor read, T-major>}``
+        (detached when ``stop_gradient_actor``).
 
         The encoder sees no time axis (T*B flattened -> encode -> reshaped back to
         (T, B, -1)); the RNN unrolls over the (T, B, -1) latent.
@@ -213,11 +218,12 @@ class RecurrentPPOPolicy(PPOPolicy):
             flat_actor_latent, flat_actions, sum_dims=sum_dims
         )
         values = self.value_net(latent.reshape(num_steps * num_envs, -1))
-        return (
+        evaluated = (
             values.reshape(num_steps, num_envs, -1),
             log_prob.reshape(num_steps, num_envs, -1),
             entropy.reshape(num_steps, num_envs, -1),
         )
+        return (*evaluated, {"latent": flat_actor_latent}) if return_outputs else evaluated
 
     def evaluate_actions_sequence_with_dist_params(
         self,
@@ -228,12 +234,13 @@ class RecurrentPPOPolicy(PPOPolicy):
         *,
         stop_gradient_actor: bool = False,
         sum_dims: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_outputs: bool = False,
+    ) -> tuple[Any, ...]:
         """Like ``evaluate_actions_sequence``, but also returns the current
         policy's ``(mean, log_std)`` -- the "new" distribution params the
         adaptive-KL LR schedule needs. obs/actions: (T, B, ...). All returns
         are (T, B, ...)-shaped, matching ``evaluate_actions_sequence``
-        (including ``sum_dims``)."""
+        (including ``sum_dims`` and ``return_outputs``)."""
         num_steps, num_envs = actions.shape[0], actions.shape[1]
         flat_obs = flatten_leading_dims(obs)
         raw = self.extract_features(flat_obs, stop_gradient=False)
@@ -251,10 +258,11 @@ class RecurrentPPOPolicy(PPOPolicy):
             entropy = entropy.sum(-1, keepdim=True)
         values = self.value_net(latent.reshape(num_steps * num_envs, -1))
         log_std = self.actor.log_std.expand_as(dist.mean)
-        return (
+        evaluated = (
             values.reshape(num_steps, num_envs, -1),
             log_prob.reshape(num_steps, num_envs, -1),
             entropy.reshape(num_steps, num_envs, -1),
             dist.mean.reshape(num_steps, num_envs, -1),
             log_std.reshape(num_steps, num_envs, -1),
         )
+        return (*evaluated, {"latent": flat_actor_latent}) if return_outputs else evaluated

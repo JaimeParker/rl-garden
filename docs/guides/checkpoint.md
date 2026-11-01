@@ -48,6 +48,42 @@ python examples/train_online.py sac \
 `--load_replay_buffer True` (default) attempts to load the buffer; it is a
 no-op when the checkpoint has no saved buffer.
 
+## Evaluating a checkpoint
+
+`rl-garden-eval` (from a source checkout: `python examples/eval_checkpoint.py`;
+the code is `rl_garden/training/evaluation.py`) rebuilds the agent, loads the
+weights without replay or optimizer state, and runs the policy until
+`--num-eval-episodes` episodes finish:
+
+```bash
+rl-garden-eval --checkpoint-path runs/<run>/checkpoints/final.pt \
+  --num-eval-envs 16 --num-eval-episodes 50 --output-json /tmp/eval.json
+```
+
+- `--phase auto --algorithm auto` (the defaults) pick the registry entry whose
+  algorithm class is the checkpoint's `algorithm_class`; the agent is built by
+  that entry's builder, so an algorithm registered by another package is
+  evaluated the same way as an in-tree one.
+- The training args come from the run's `config.json` (default:
+  `<checkpoint dir>/../config.json`, or `--config-path`), including the env
+  backend's sub-config, then from the checkpoint's hyperparameters.
+- `--env-backend`, `--env-id` and `--control-mode` replace the run's values only
+  when passed; `--obs.*` replaces the run's observation config only when it
+  differs from the default one. Left out, the run's environment is used, so
+  evaluating a `gymnasium`-backend run needs no backend flags. A backend
+  sub-config field (e.g. `--gymnasium.device cuda:1`) replaces the run's value
+  only when set to a non-default value.
+- `strict` (on by default) rejects a checkpoint whose class, spaces or policy
+  graph do not match the rebuilt agent.
+- A checkpoint whose algorithm class sets `checkpoint_eval_unsupported_reason`
+  is refused with that reason before any environment is built. The dataset-only
+  offline stages set it: `a2a_bc`, `diffusion_bc` and `consistency_distill_bc`
+  (their policies predict whole action chunks), `hilp` and `opal` (skill
+  pretraining), `rssm_pretrain` (world-model pretraining), `tdmpc2_multitask`
+  (no multitask evaluation) and `pwm` (evaluated by its own training run in a
+  padded multitask environment). Their checkpoints still rebuild and load
+  through the registered builders.
+
 ## Compatibility
 
 Algorithm class aliases keep legacy checkpoints loadable:

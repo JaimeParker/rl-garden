@@ -40,4 +40,6 @@ def _calql_algorithm_cls() -> type:
     return CalQL
 
 
-registry.register("calql", CalQLArgs, run_calql, algorithm_cls=_calql_algorithm_cls)
+registry.register(
+    "calql", CalQLArgs, run_calql, algorithm_cls=_calql_algorithm_cls, build_agent=build_calql
+)

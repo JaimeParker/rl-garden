@@ -569,6 +569,11 @@ class SACPolicy(BasePolicy):
     # --- parameter groups for optimizers ---
 
     def critic_and_encoder_parameters(self):
+        """Extension point: the parameters ``q_optimizer`` holds, gradient-
+        clipped and DDP all-reduced after every critic backward. A subclass
+        that adds a module trained by the critic loss (an auxiliary head on
+        the critic features, say) yields ``super()``'s parameters first, then
+        the module's: optimizer state is saved by parameter position."""
         # Encoder trained via Q-loss (matches sac_rgbd.py L581-L585).
         # critic_extractor is None (falls back to actor_extractor) in the
         # (default) shared case, so this is unchanged there.
@@ -576,6 +581,9 @@ class SACPolicy(BasePolicy):
         yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def actor_parameters(self):
+        """Extension point: the parameters ``actor_optimizer`` holds, the
+        actor-side counterpart of ``critic_and_encoder_parameters`` (same
+        rules for a module a subclass adds)."""
         # actor_extractor belongs here whenever the actor loss trains it:
         # - a genuinely separate critic_extractor leaves it actor-exclusive
         #   (nothing else would ever train it);

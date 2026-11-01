@@ -510,6 +510,11 @@ class PWM(PWMCore, OfflineModelBasedAlgorithm):
     ``MultitaskPadWrapper``): ``encode(obs) -> actor mean -> tanh -> mask``."""
 
     _compatible_checkpoint_algorithms = ("PWM",)
+    checkpoint_eval_unsupported_reason = (
+        "its actor reads the multitask world model's zero-padded observations, "
+        "which only the training run's own evaluation provides (--eval_freq with "
+        "--eval_env_backend, through MultitaskPadWrapper)"
+    )
 
     def __init__(
         self,

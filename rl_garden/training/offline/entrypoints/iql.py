@@ -117,4 +117,6 @@ def _iql_algorithm_cls() -> type:
     return IQL
 
 
-registry.register("iql", IQLArgs, run_iql, algorithm_cls=_iql_algorithm_cls)
+registry.register(
+    "iql", IQLArgs, run_iql, algorithm_cls=_iql_algorithm_cls, build_agent=build_iql
+)

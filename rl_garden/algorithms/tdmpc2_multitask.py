@@ -44,6 +44,10 @@ from rl_garden.world_models.multitask_latent_consistency import MultitaskWorldMo
 
 class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
     _compatible_checkpoint_algorithms = ("TDMPC2Multitask",)
+    checkpoint_eval_unsupported_reason = (
+        "multitask evaluation is not implemented (MultitaskTDMPC2Policy.predict "
+        "raises NotImplementedError)"
+    )
 
     def __init__(
         self,

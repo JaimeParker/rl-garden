@@ -122,4 +122,4 @@ class TDMPC2Args(VisionTDMPC2TrainingArgs, EnvBackendArgs):
     """
 
 
-registry.register("tdmpc2", TDMPC2Args, run_tdmpc2)
+registry.register("tdmpc2", TDMPC2Args, run_tdmpc2, build_agent=build_tdmpc2)

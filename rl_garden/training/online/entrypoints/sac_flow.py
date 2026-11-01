@@ -142,4 +142,10 @@ def _sac_flow_algorithm_cls() -> type:
 
     return SACFlow
 
-registry.register("sac_flow", SACFlowArgs, run_sac_flow, algorithm_cls=_sac_flow_algorithm_cls)
+registry.register(
+    "sac_flow",
+    SACFlowArgs,
+    run_sac_flow,
+    algorithm_cls=_sac_flow_algorithm_cls,
+    build_agent=build_sac_flow,
+)

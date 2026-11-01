@@ -34,6 +34,8 @@ class SequenceSAC(SAC):
     # _resolve_encoder_sharing against the resolved value, and read
     # statically by algorithm_registry's preflight.
     encoder_sharing_choices: tuple = ("shared_critic_grad", "shared")
+    #: A ``RecurrentSACPolicy`` subclass: it also receives ``recurrent_encoder``.
+    policy_class = RecurrentSACPolicy
 
     def __init__(
         self,
@@ -64,7 +66,7 @@ class SequenceSAC(SAC):
                 "(learning_len, B)-shaped replay fields yet."
             )
         # Must be set before super().__init__(), which ends by calling
-        # self._setup_model() -- our _build_policy/_build_replay_buffer
+        # self._setup_model() -- our _policy_kwargs/_build_replay_buffer
         # overrides below read these attributes.
         self.burn_in_len = burn_in_len
         self.learning_len = learning_len
@@ -83,9 +85,13 @@ class SequenceSAC(SAC):
 
     # --- model construction (override existing SAC hooks, no _setup_model rewrite) ---
 
-    def _build_policy(self) -> RecurrentSACPolicy:
+    def _policy_kwargs(self, observation_space) -> dict[str, Any]:
+        # Not built on SAC's keywords: RecurrentSACPolicy takes neither
+        # actor_feature_dim, critic_spatial_emb_dim nor critic_backbone_type,
+        # and the extractors must exist before the sequence encoder is built
+        # on the actor extractor.
         extractor_kwargs = self._policy_extractor_kwargs(
-            self.env.single_observation_space,
+            observation_space,
             augmentation_seed=self._image_augmentation_seed,
         )
         actor_extractor = extractor_kwargs["actor_extractor"]
@@ -95,25 +101,25 @@ class SequenceSAC(SAC):
                 "extractors this round (ViT token_and_prop layouts untested)."
             )
         sequence_encoder = self._build_sequence_encoder(actor_extractor)
-        return RecurrentSACPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self._policy_action_space(),
-            recurrent_encoder=sequence_encoder,
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            critic_impl=self.critic_impl,
-            actor_use_layer_norm=self.actor_use_layer_norm,
-            critic_use_layer_norm=self.critic_use_layer_norm,
-            log_std_min=self.actor_log_std_min,
-            log_std_mode=self.actor_log_std_mode,
+        return {
+            "observation_space": observation_space,
+            "action_space": self._policy_action_space(),
+            "recurrent_encoder": sequence_encoder,
+            "net_arch": self.net_arch,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            "critic_impl": self.critic_impl,
+            "actor_use_layer_norm": self.actor_use_layer_norm,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "log_std_min": self.actor_log_std_min,
+            "log_std_mode": self.actor_log_std_mode,
             # Threaded through (rather than omitted) so a misconfigured
             # policy_kwargs['critic_extractor_class'] (or asymmetric
             # obs_groups/encoder_sharing="separate") raises
             # RecurrentSACPolicy's clear guard, instead of being silently
             # dropped.
             **extractor_kwargs,
-        )
+        }
 
     # --- rollout hidden-state carry (pure subclass overrides of existing hooks) ---
 

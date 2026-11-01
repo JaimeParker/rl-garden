@@ -120,4 +120,6 @@ def _spot_algorithm_cls() -> type:
 
     return SPOT
 
-registry.register("spot", SPOTArgs, run_spot, algorithm_cls=_spot_algorithm_cls)
+registry.register(
+    "spot", SPOTArgs, run_spot, algorithm_cls=_spot_algorithm_cls, build_agent=build_spot
+)

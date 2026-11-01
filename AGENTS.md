@@ -12,6 +12,9 @@ for user-facing installation, features, and quick-start documentation.
   [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
 - Before adding a new algorithm or training entrypoint, read
   [`.agents/rules/adding-algorithm.md`](.agents/rules/adding-algorithm.md).
+- Before changing algorithm registration, the in-tree builders, checkpoint
+  evaluation, or any protected method a subclass overrides, read the extension
+  contract, [`docs/guides/extending.md`](docs/guides/extending.md).
 - Before running or adding tests (lanes, markers, `scripts/test.sh`), read
   [`.agents/runbooks/testing.md`](.agents/runbooks/testing.md).
 - Before launching training or evaluation, read
@@ -56,10 +59,13 @@ entrypoints to a specific simulator.
 
 - Inspect existing patterns with `rg` before editing.
 - Maximize reuse via subclassing: override in a subclass rather than editing a
-  shared parent. Add a parent hook only if ≥2 *existing* subclasses need
+  shared parent. Add a parent hook only if ≥2 *existing* consumers need
   genuinely different behavior there (never a hypothetical future one), with a
   no-op/trivial default for the rest -- otherwise implement it in that one
-  subclass.
+  subclass. A consumer is an in-tree subclass or a downstream extension point
+  recorded in the extension contract, `docs/guides/extending.md`: downstream
+  packages extend rl-garden by subclassing and registration, so a hook that the
+  contract names counts, and must be documented there in the same commit.
 - Keep algorithm-specific fields in subclasses. If parent-side variability is
   unavoidable, prefer an overridable class attribute over `hasattr` branches.
 - Keep optimizer ownership explicit for actor, critic, encoder, entropy coefficient,

@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from rl_garden.buffers.h5_dataset import infer_box_specs_from_h5
 from rl_garden.common import Logger, seed_everything
@@ -48,11 +49,55 @@ def run_opal(args: OPALArgs) -> None:
             callback()
 
 
-def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
+def build_opal(
+    args: OPALArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``OPAL`` when ``None``) on ``env_spec`` from
+    ``args``. ``extra_kwargs`` replace or extend its constructor kwargs (the
+    run passes its ``checkpoint_dir``). ``eval_env`` is unused: the agent
+    trains on its dataset alone."""
     from rl_garden.common.cli_args import resolve_obs_groups_config
-    from rl_garden.algorithms import OPAL, OfflineEnvSpec
-    from rl_garden.algorithms.offline import run_offline_pretraining
     from rl_garden.training.inspection import construct_agent
+
+    del eval_env
+    if algorithm_cls is None:
+        from rl_garden.algorithms import OPAL
+
+        algorithm_cls = OPAL
+    kwargs = {
+        "env": env_spec,
+        "dataset_path": args.dataset_path,
+        "encoder_config": args.encoder if args.obs.is_visual else None,
+        "obs_groups": resolve_obs_groups_config(args),
+        "skill_dim": args.skill_dim,
+        "chunk_size": args.chunk_size,
+        "hidden_size": args.hidden_size,
+        "vae_hidden_dims": args.vae_hidden_dims,
+        "kl_coef": args.kl_coef,
+        "lr": args.lr,
+        "batch_size": args.batch_size,
+        "num_traj": args.offline_num_traj,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
+
+
+def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
+    from rl_garden.algorithms import OfflineEnvSpec
+    from rl_garden.algorithms.offline import run_offline_pretraining
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -111,29 +156,7 @@ def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
     cleanup.append(logger.close)
 
     env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
-    agent = construct_agent(
-        OPAL,
-        env=env,
-        dataset_path=args.dataset_path,
-        encoder_config=args.encoder if args.obs.is_visual else None,
-        obs_groups=resolve_obs_groups_config(args),
-        skill_dim=args.skill_dim,
-        chunk_size=args.chunk_size,
-        hidden_size=args.hidden_size,
-        vae_hidden_dims=args.vae_hidden_dims,
-        kl_coef=args.kl_coef,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        num_traj=args.offline_num_traj,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_final_checkpoint=args.save_final_checkpoint,
-    )
+    agent = build_opal(args, env, logger, checkpoint_dir=checkpoint_dir)
 
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=False)
@@ -181,4 +204,12 @@ def _run_opal(args: OPALArgs, cleanup: list[Callable[[], None]]) -> None:
     )
 
 
-registry.register("opal", OPALArgs, run_opal)
+def _opal_algorithm_cls() -> type:
+    from rl_garden.algorithms import OPAL
+
+    return OPAL
+
+
+registry.register(
+    "opal", OPALArgs, run_opal, algorithm_cls=_opal_algorithm_cls, build_agent=build_opal
+)

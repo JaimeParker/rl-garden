@@ -117,4 +117,6 @@ def _plas_algorithm_cls() -> type:
 
     return PLAS
 
-registry.register("plas", PLASArgs, run_plas, algorithm_cls=_plas_algorithm_cls)
+registry.register(
+    "plas", PLASArgs, run_plas, algorithm_cls=_plas_algorithm_cls, build_agent=build_plas
+)

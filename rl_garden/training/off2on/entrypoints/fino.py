@@ -147,4 +147,10 @@ def _off2_on_fino_algorithm_cls() -> type:
 
     return Off2OnFINO
 
-registry.register("fino", FINOOff2OnArgs, run_fino, algorithm_cls=_off2_on_fino_algorithm_cls)
+registry.register(
+    "fino",
+    FINOOff2OnArgs,
+    run_fino,
+    algorithm_cls=_off2_on_fino_algorithm_cls,
+    build_agent=build_fino,
+)

@@ -115,4 +115,10 @@ def _value_flows_algorithm_cls() -> type:
 
     return ValueFlows
 
-registry.register("value_flows", ValueFlowsArgs, run_value_flows, algorithm_cls=_value_flows_algorithm_cls)
+registry.register(
+    "value_flows",
+    ValueFlowsArgs,
+    run_value_flows,
+    algorithm_cls=_value_flows_algorithm_cls,
+    build_agent=build_value_flows,
+)

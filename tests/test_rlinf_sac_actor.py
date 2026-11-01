@@ -20,9 +20,11 @@ from gymnasium import spaces
 from rl_garden.algorithms import RLPD, SAC
 from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
+from rl_garden.integrations.rlinf import sac_actor
 from rl_garden.integrations.rlinf.sac_actor import (
     _ALGORITHMS,
     _TrajectoryReplayBufferShim,
+    register_algorithm,
     resolve_algorithm,
     trajectory_batch_to_sample,
 )
@@ -30,6 +32,21 @@ from rl_garden.integrations.rlinf.sac_actor import (
 
 def test_algorithm_dispatch_covers_saccore_contract():
     assert _ALGORITHMS == {"sac": SAC, "rlpd": RLPD}
+
+
+class _DownstreamSAC(SAC):
+    """Stands in for a SAC subclass defined in another package."""
+
+
+def test_register_algorithm_makes_a_sac_subclass_resolvable(monkeypatch):
+    monkeypatch.setattr(sac_actor, "_ALGORITHMS", dict(sac_actor._ALGORITHMS))
+
+    register_algorithm("downstream_sac", _DownstreamSAC)
+
+    assert resolve_algorithm("downstream_sac") is _DownstreamSAC
+    with pytest.raises(ValueError, match="already registered"):
+        register_algorithm("sac", _DownstreamSAC)
+    assert resolve_algorithm("sac") is SAC
 
 
 @pytest.mark.parametrize("name", ["sac", "rlpd"])

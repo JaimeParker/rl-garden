@@ -13,6 +13,7 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.effective_config import json_value, persist_effective_config
@@ -38,10 +39,66 @@ def run_rssm_pretrain(args: RSSMPretrainTrainingArgs) -> None:
             callback()
 
 
+def build_rssm_pretrain(
+    args: RSSMPretrainTrainingArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``RSSMPretrain`` when ``None``) on
+    ``env_spec`` from ``args``. ``extra_kwargs`` replace or extend its
+    constructor kwargs (the run passes its ``checkpoint_dir``). ``eval_env``
+    is unused: the agent trains on its dataset alone."""
+    from rl_garden.training.inspection import construct_agent
+
+    del eval_env
+    if algorithm_cls is None:
+        from rl_garden.algorithms.rssm_pretrain import RSSMPretrain
+
+        algorithm_cls = RSSMPretrain
+    kwargs = {
+        "env": env_spec,
+        "dataset_dir": args.dataset_dir,
+        "dataset_backend": args.dataset_backend,
+        "backbone": args.backbone,
+        "size": args.size,
+        "deter": args.deter,
+        "hidden": args.hidden,
+        "classes": args.classes,
+        "cnn_depth": args.cnn_depth,
+        "stoch": args.stoch,
+        "blocks": args.blocks,
+        "kl_free": args.kl_free,
+        "kl_free_mode": args.kl_free_mode,
+        "dyn_scale": args.dyn_scale,
+        "rep_scale": args.rep_scale,
+        "recon_scale": args.recon_scale,
+        "batch_size": args.batch_size,
+        "batch_length": args.batch_length,
+        "lr": args.lr,
+        "adam_eps": args.adam_eps,
+        "weight_decay": args.weight_decay,
+        "grad_clip": args.grad_clip,
+        "compute_dtype": args.compute_dtype,
+        "buffer_device": args.buffer_device,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
+
+
 def _run_rssm_pretrain(args: RSSMPretrainTrainingArgs, cleanup: list[Callable[[], None]]) -> None:
     from rl_garden.algorithms.offline import run_offline_pretraining
-    from rl_garden.algorithms.rssm_pretrain import RSSMPretrain, sequence_dataset_env_spec
-    from rl_garden.training.inspection import construct_agent
+    from rl_garden.algorithms.rssm_pretrain import sequence_dataset_env_spec
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -82,41 +139,7 @@ def _run_rssm_pretrain(args: RSSMPretrainTrainingArgs, cleanup: list[Callable[[]
         )
     cleanup.append(logger.close)
 
-    agent = construct_agent(
-        RSSMPretrain,
-        env=env,
-        dataset_dir=args.dataset_dir,
-        dataset_backend=args.dataset_backend,
-        backbone=args.backbone,
-        size=args.size,
-        deter=args.deter,
-        hidden=args.hidden,
-        classes=args.classes,
-        cnn_depth=args.cnn_depth,
-        stoch=args.stoch,
-        blocks=args.blocks,
-        kl_free=args.kl_free,
-        kl_free_mode=args.kl_free_mode,
-        dyn_scale=args.dyn_scale,
-        rep_scale=args.rep_scale,
-        recon_scale=args.recon_scale,
-        batch_size=args.batch_size,
-        batch_length=args.batch_length,
-        lr=args.lr,
-        adam_eps=args.adam_eps,
-        weight_decay=args.weight_decay,
-        grad_clip=args.grad_clip,
-        compute_dtype=args.compute_dtype,
-        buffer_device=args.buffer_device,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_final_checkpoint=args.save_final_checkpoint,
-    )
+    agent = build_rssm_pretrain(args, env, logger, checkpoint_dir=checkpoint_dir)
 
     if args.load_checkpoint is not None:
         # The dataset is re-read from --dataset_dir, never checkpointed.
@@ -159,4 +182,16 @@ def _run_rssm_pretrain(args: RSSMPretrainTrainingArgs, cleanup: list[Callable[[]
     )
 
 
-registry.register("rssm_pretrain", RSSMPretrainTrainingArgs, run_rssm_pretrain)
+def _rssm_pretrain_algorithm_cls() -> type:
+    from rl_garden.algorithms.rssm_pretrain import RSSMPretrain
+
+    return RSSMPretrain
+
+
+registry.register(
+    "rssm_pretrain",
+    RSSMPretrainTrainingArgs,
+    run_rssm_pretrain,
+    algorithm_cls=_rssm_pretrain_algorithm_cls,
+    build_agent=build_rssm_pretrain,
+)

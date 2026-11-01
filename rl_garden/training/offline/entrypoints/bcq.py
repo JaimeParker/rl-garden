@@ -113,4 +113,6 @@ def _bcq_algorithm_cls() -> type:
 
     return BCQ
 
-registry.register("bcq", BCQArgs, run_bcq, algorithm_cls=_bcq_algorithm_cls)
+registry.register(
+    "bcq", BCQArgs, run_bcq, algorithm_cls=_bcq_algorithm_cls, build_agent=build_bcq
+)

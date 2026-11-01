@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from rl_garden.common import Logger, seed_everything
 from rl_garden.common.effective_config import json_value, persist_effective_config
@@ -85,6 +86,108 @@ def load_task_episodes(buffer, dataset_dir: str, task: str, task_idx: int, obs_d
     return num_episodes * episode_length
 
 
+@dataclass(frozen=True)
+class PWMTaskLayout:
+    """The dataset's task table and what ``--task`` selects from it."""
+
+    tasks: list[str]
+    obs_dims: list[int]
+    action_dims: list[int]
+    episode_lengths: list[int]
+    task_idx: int
+    buffer_size: int
+    #: Generous cap: eval_runs episodes run in parallel, one episode each.
+    num_eval_steps: int
+
+
+def pwm_task_layout(args: PWMArgs) -> PWMTaskLayout:
+    from rl_garden.buffers.tdmpc2_multitask_dataset import infer_multitask_dataset_specs
+
+    tasks, obs_dims, action_dims, episode_lengths = infer_multitask_dataset_specs(args.dataset_dir)
+    if args.task not in tasks:
+        raise SystemExit(f"--task {args.task!r} is not in the dataset's tasks {tasks}.")
+    task_idx = tasks.index(args.task)
+    return PWMTaskLayout(
+        tasks=tasks,
+        obs_dims=obs_dims,
+        action_dims=action_dims,
+        episode_lengths=episode_lengths,
+        task_idx=task_idx,
+        buffer_size=_task_buffer_size(args.dataset_dir, args.task, task_idx),
+        num_eval_steps=2 * episode_lengths[task_idx],
+    )
+
+
+def build_pwm(
+    args: PWMArgs,
+    env_spec: Any,
+    logger: Any,
+    eval_env: Any = None,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``PWM`` when ``None``) on ``env_spec`` from
+    ``args``, evaluating in ``eval_env`` (a ``MultitaskPadWrapper``-wrapped
+    env, or ``None``). ``extra_kwargs`` replace or extend its constructor
+    kwargs: the run passes its ``mmap_dir``, ``checkpoint_dir`` and the
+    ``pwm_task_layout`` values it already read (``task_idx``,
+    ``buffer_size``, ``num_eval_steps``), which are otherwise read from
+    ``args.dataset_dir``."""
+    from rl_garden.training.inspection import construct_agent
+
+    if algorithm_cls is None:
+        from rl_garden.algorithms.pwm import PWM
+
+        algorithm_cls = PWM
+    layout_keys = ("task_idx", "buffer_size", "num_eval_steps")
+    if all(key in extra_kwargs for key in layout_keys):
+        layout = {key: extra_kwargs[key] for key in layout_keys}
+    else:
+        task_layout = pwm_task_layout(args)
+        layout = {key: getattr(task_layout, key) for key in layout_keys}
+    kwargs = {
+        "env": env_spec,
+        "world_model_checkpoint": args.world_model_checkpoint,
+        "task_idx": layout["task_idx"],
+        "mmap_dir": args.mmap_dir,
+        "mmap_mode": "create",
+        "buffer_size": layout["buffer_size"],
+        "batch_size": args.batch_size,
+        "horizon": args.horizon,
+        "gamma": args.gamma,
+        "lam": args.lam,
+        "actor_lr": args.actor_lr,
+        "critic_lr": args.critic_lr,
+        "lr_final": args.lr_final,
+        "lr_decay_steps": args.num_offline_steps,
+        "actor_grad_norm": args.actor_grad_norm,
+        "critic_grad_norm": args.critic_grad_norm,
+        "critic_iterations": args.critic_iterations,
+        "critic_batches": args.critic_batches,
+        "num_critics": args.num_critics,
+        "actor_units": args.actor_units,
+        "critic_units": args.critic_units,
+        "init_logstd": args.init_logstd,
+        "min_logstd": args.min_logstd,
+        "ret_rms": args.ret_rms,
+        "seed": args.seed,
+        "device": args.device,
+        "logger": logger,
+        "std_log": args.std_log,
+        "log_freq": args.log_freq,
+        "eval_freq": args.eval_freq,
+        "num_eval_episodes": args.eval_runs,
+        "num_eval_steps": layout["num_eval_steps"],
+        "eval_env": eval_env,
+        "checkpoint_dir": None,
+        "checkpoint_freq": args.checkpoint_freq,
+        "save_replay_buffer": args.save_replay_buffer,
+        "save_final_checkpoint": args.save_final_checkpoint,
+    }
+    return construct_agent(algorithm_cls, **{**kwargs, **extra_kwargs})
+
+
 def _make_eval_env(args: PWMArgs, *, obs_dim: int, action_dim: int, task_idx: int,
                    task_obs_dim: int, task_action_dim: int, num_eval_steps: int):
     from rl_garden.envs.backend_registry import EnvRequest, make_evaluation_env
@@ -117,9 +220,6 @@ def _run_pwm(args: PWMArgs, cleanup: list[Callable[[], None]]) -> None:
     from gymnasium import spaces
 
     from rl_garden.algorithms.offline import OfflineEnvSpec, run_offline_pretraining
-    from rl_garden.algorithms.pwm import PWM
-    from rl_garden.buffers.tdmpc2_multitask_dataset import infer_multitask_dataset_specs
-    from rl_garden.training.inspection import construct_agent
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -133,13 +233,13 @@ def _run_pwm(args: PWMArgs, cleanup: list[Callable[[], None]]) -> None:
             raise SystemExit(f"--{flag} is required for pwm.")
 
     seed_everything(args.seed)
-    tasks, obs_dims, action_dims, episode_lengths = infer_multitask_dataset_specs(args.dataset_dir)
-    if args.task not in tasks:
-        raise SystemExit(f"--task {args.task!r} is not in the dataset's tasks {tasks}.")
-    task_idx = tasks.index(args.task)
-    buffer_size = _task_buffer_size(args.dataset_dir, args.task, task_idx)
-    # Generous cap: eval_runs episodes run in parallel, one episode each.
-    num_eval_steps = 2 * episode_lengths[task_idx]
+    layout = pwm_task_layout(args)
+    tasks, obs_dims, action_dims = layout.tasks, layout.obs_dims, layout.action_dims
+    task_idx, buffer_size, num_eval_steps = (
+        layout.task_idx,
+        layout.buffer_size,
+        layout.num_eval_steps,
+    )
 
     start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     run_name = args.exp_name or f"pwm__{args.task}__{args.seed}__{int(time.time())}"
@@ -192,45 +292,16 @@ def _run_pwm(args: PWMArgs, cleanup: list[Callable[[], None]]) -> None:
         )
         cleanup.append(eval_env.close)
 
-    agent = construct_agent(
-        PWM,
-        env=env,
-        world_model_checkpoint=args.world_model_checkpoint,
+    agent = build_pwm(
+        args,
+        env,
+        logger,
+        eval_env,
         task_idx=task_idx,
         mmap_dir=mmap_dir,
-        mmap_mode="create",
         buffer_size=buffer_size,
-        batch_size=args.batch_size,
-        horizon=args.horizon,
-        gamma=args.gamma,
-        lam=args.lam,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        lr_final=args.lr_final,
-        lr_decay_steps=args.num_offline_steps,
-        actor_grad_norm=args.actor_grad_norm,
-        critic_grad_norm=args.critic_grad_norm,
-        critic_iterations=args.critic_iterations,
-        critic_batches=args.critic_batches,
-        num_critics=args.num_critics,
-        actor_units=args.actor_units,
-        critic_units=args.critic_units,
-        init_logstd=args.init_logstd,
-        min_logstd=args.min_logstd,
-        ret_rms=args.ret_rms,
-        seed=args.seed,
-        device=args.device,
-        logger=logger,
-        std_log=args.std_log,
-        log_freq=args.log_freq,
-        eval_freq=args.eval_freq,
-        num_eval_episodes=args.eval_runs,
         num_eval_steps=num_eval_steps,
-        eval_env=eval_env,
         checkpoint_dir=checkpoint_dir,
-        checkpoint_freq=args.checkpoint_freq,
-        save_replay_buffer=args.save_replay_buffer,
-        save_final_checkpoint=args.save_final_checkpoint,
     )
     from rl_garden.algorithms.pwm import validate_world_model_for_dataset
 
@@ -287,4 +358,6 @@ def _pwm_algorithm_cls() -> type:
     return PWM
 
 
-registry.register("pwm", PWMArgs, run_pwm, algorithm_cls=_pwm_algorithm_cls)
+registry.register(
+    "pwm", PWMArgs, run_pwm, algorithm_cls=_pwm_algorithm_cls, build_agent=build_pwm
+)

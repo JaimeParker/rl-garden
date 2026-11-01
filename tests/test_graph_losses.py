@@ -144,7 +144,7 @@ def _aux_grads(agent) -> dict[str, bool]:
     groups got a nonzero gradient."""
     data = _first_minibatch(agent)
     evaluation = agent._evaluate_minibatch(data)
-    aux_loss, _ = agent._graph_aux_loss(
+    aux_loss, _ = agent._aux_loss(
         data, evaluation, agent._minibatch_masks(data).get("decision_mask")
     )
     agent.policy.zero_grad(set_to_none=True)
@@ -177,7 +177,7 @@ def test_watcher_loss_decreases_over_windows(agent_cls, extra_kwargs, stateful):
         learning_rate=1e-2,
         **extra_kwargs,
     )
-    losses = [metrics["graph_loss/watcher"] for metrics in _learn(agent, windows=3)]
+    losses = [metrics["aux/watcher"] for metrics in _learn(agent, windows=3)]
     assert losses[0] > losses[1] > losses[2]
 
 
@@ -231,7 +231,7 @@ def test_info_targets_are_stored_and_sliced_with_their_observations(
         assert torch.equal(data.rewards, buffer.rewards[steps, env_ids])
         assert torch.equal(data.dones, buffer.dones[steps, env_ids])
     metrics = type(agent).train(agent)
-    assert math.isfinite(metrics["graph_loss/watcher"])
+    assert math.isfinite(metrics["aux/watcher"])
 
 
 def test_a_missing_info_target_raises_naming_the_key():
@@ -240,7 +240,9 @@ def test_a_missing_info_target_raises_naming_the_key():
         _InfoTargetEnv(drop_target_at_step=3),
         policy_graph=_graph(output_dim=4, loss={"type": "mse", "target": "info.target"}),
     )
-    with pytest.raises(ValueError, match=r"'info\.target' is missing from infos at rollout step 3"):
+    with pytest.raises(
+        ValueError, match=r"rollout extra 'target' is missing from infos at rollout step 3"
+    ):
         _learn(agent)
 
 
@@ -262,7 +264,7 @@ def test_cross_entropy_trains_on_integer_info_labels():
     )
     assert agent.rollout_buffer.extra_specs == {"label": ((), torch.int64)}
     metrics = _learn(agent)[0]
-    assert metrics["graph_loss/watcher"] > 0
+    assert metrics["aux/watcher"] > 0
     assert agent.rollout_buffer.extras["label"].dtype == torch.int64
 
 
@@ -317,15 +319,15 @@ def test_masked_loss_on_a_minibatch_without_decisions_is_a_connected_zero():
             loss={"type": "bce_with_logits", "target": "batch.dones", "mask": "decision"},
         ),
     )
-    graph_aux_loss = agent._graph_aux_loss
+    aux_loss_fn = agent._aux_loss
     recorded: list[tuple[torch.Tensor, torch.Tensor]] = []
 
-    def recording_graph_aux_loss(data, evaluation, decision_mask):
-        aux_loss, node_losses = graph_aux_loss(data, evaluation, decision_mask)
+    def recording_aux_loss(data, evaluation, decision_mask):
+        aux_loss, node_losses = aux_loss_fn(data, evaluation, decision_mask)
         recorded.append((aux_loss, node_losses["watcher"]))
         return aux_loss, node_losses
 
-    agent._graph_aux_loss = recording_graph_aux_loss
+    agent._aux_loss = recording_aux_loss
     metrics = _learn(agent, windows=2)
 
     second_window = recorded[-2 * update_epochs:]
@@ -333,7 +335,7 @@ def test_masked_loss_on_a_minibatch_without_decisions_is_a_connected_zero():
     assert len(zeros) == update_epochs
     assert all(aux.requires_grad and aux.grad_fn is not None for aux in zeros)
     assert all(node_loss > 0 for _, node_loss in recorded[: 2 * update_epochs])
-    assert math.isfinite(metrics[-1]["graph_loss/watcher"])
+    assert math.isfinite(metrics[-1]["aux/watcher"])
     assert all(torch.isfinite(param).all() for param in agent.policy.parameters())
 
 
@@ -348,9 +350,11 @@ def test_zero_weight_loss_leaves_training_bit_identical(agent_cls, extra_kwargs,
             agent_cls, policy_graph=_graph(stateful=stateful, loss=loss), **extra_kwargs
         )
         if drop_losses:
-            agent.policy.graph_spec = dataclasses.replace(agent.policy.graph_spec, losses=())
+            agent.policy_graph = agent.policy.graph_spec = dataclasses.replace(
+                agent.policy.graph_spec, losses=()
+            )
         metrics = _learn(agent)[0]
-        assert ("graph_loss/watcher" in metrics) is not drop_losses
+        assert ("aux/watcher" in metrics) is not drop_losses
         return agent.policy.state_dict()
 
     reference = trained(0.0, drop_losses=True)
@@ -370,11 +374,11 @@ def test_every_loss_node_is_logged_and_graphs_without_losses_log_none():
         extra_losses=[{"node": "probe", "type": "bce_with_logits", "target": "batch.dones"}]
     )
     metrics = _learn(_make_agent(PPO, policy_graph=graph))[0]
-    assert {"graph_loss/watcher", "graph_loss/probe"} <= metrics.keys()
-    assert all(math.isfinite(metrics[key]) for key in ("graph_loss/watcher", "graph_loss/probe"))
+    assert {"aux/watcher", "aux/probe"} <= metrics.keys()
+    assert all(math.isfinite(metrics[key]) for key in ("aux/watcher", "aux/probe"))
 
     plain = _learn(_make_agent(PPO, policy_graph="builtin:mlp"))[0]
-    assert not any(key.startswith("graph_loss/") for key in plain)
+    assert not any(key.startswith("aux/") for key in plain)
 
 
 def test_loss_nodes_run_only_in_the_update():

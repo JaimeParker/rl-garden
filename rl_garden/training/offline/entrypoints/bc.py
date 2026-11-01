@@ -90,4 +90,4 @@ def _bc_algorithm_cls() -> type:
 
     return BC
 
-registry.register("bc", BCArgs, run_bc, algorithm_cls=_bc_algorithm_cls)
+registry.register("bc", BCArgs, run_bc, algorithm_cls=_bc_algorithm_cls, build_agent=build_bc)

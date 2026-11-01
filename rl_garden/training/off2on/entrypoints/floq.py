@@ -177,4 +177,10 @@ def _off2_on_flo_q_algorithm_cls() -> type:
 
     return Off2OnFloQ
 
-registry.register("floq", FloQOff2OnArgs, run_floq, algorithm_cls=_off2_on_flo_q_algorithm_cls)
+registry.register(
+    "floq",
+    FloQOff2OnArgs,
+    run_floq,
+    algorithm_cls=_off2_on_flo_q_algorithm_cls,
+    build_agent=build_floq,
+)

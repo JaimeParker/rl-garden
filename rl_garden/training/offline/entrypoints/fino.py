@@ -109,4 +109,6 @@ def _fino_algorithm_cls() -> type:
 
     return FINO
 
-registry.register("fino", FINOArgs, run_fino, algorithm_cls=_fino_algorithm_cls)
+registry.register(
+    "fino", FINOArgs, run_fino, algorithm_cls=_fino_algorithm_cls, build_agent=build_fino
+)

@@ -185,4 +185,10 @@ def _off2_on_fac_algorithm_cls() -> type:
     return Off2OnFAC
 
 
-registry.register("fac", FACOff2OnArgs, run_fac, algorithm_cls=_off2_on_fac_algorithm_cls)
+registry.register(
+    "fac",
+    FACOff2OnArgs,
+    run_fac,
+    algorithm_cls=_off2_on_fac_algorithm_cls,
+    build_agent=build_fac,
+)

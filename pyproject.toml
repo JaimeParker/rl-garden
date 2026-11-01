@@ -19,6 +19,23 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.scripts]
+rl-garden-train-online = "rl_garden.training.cli:train_online"
+rl-garden-train-offline = "rl_garden.training.cli:train_offline"
+rl-garden-train-off2on = "rl_garden.training.cli:train_off2on"
+rl-garden-eval = "rl_garden.training.cli:eval_checkpoint"
+
+# Entry-point groups rl_garden reads (declared by OTHER packages, never here):
+#   rlgarden.algorithms   -> module registering algorithms on the phase registries
+#                            (rl_garden/training/algorithm_registry.py)
+#   rlgarden.env_backends -> module registering an env backend
+#                            (rl_garden/envs/backend_registry.py)
+#   rlgarden.graph_nodes  -> module registering policy-graph node/loss types
+#                            (rl_garden/networks/graph/registry.py)
+# e.g. in a downstream package's pyproject.toml:
+#   [project.entry-points."rlgarden.algorithms"]
+#   my_package = "my_package.registration"
+
 [project.optional-dependencies]
 maniskill = ["mani_skill"]
 robotwin = ["pillow", "pyyaml"]

@@ -124,4 +124,10 @@ def _off2_on_iql_algorithm_cls() -> type:
 
     return Off2OnIQL
 
-registry.register("iql", IQLOff2OnArgs, run_iql, algorithm_cls=_off2_on_iql_algorithm_cls)
+registry.register(
+    "iql",
+    IQLOff2OnArgs,
+    run_iql,
+    algorithm_cls=_off2_on_iql_algorithm_cls,
+    build_agent=build_iql,
+)

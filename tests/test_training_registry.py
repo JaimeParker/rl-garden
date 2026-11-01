@@ -687,3 +687,207 @@ def test_help_lists_config_inspection_controls(capsys):
     assert "--print-config" in output
     assert "--dry-run" in output
     assert "--explain-param PATH" in output
+
+
+# --- extension contract: entry points, declared builders, builder reuse --------------
+
+
+class _FakeEntryPoint:
+    def __init__(self, name, load):
+        self.name = name
+        self.value = f"external_pkg.{name}"
+        self.load = load
+
+
+def _registry_over_empty_package(tmp_path, monkeypatch, name):
+    package = tmp_path / name
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    class _ExternalRegistry(BaseAlgorithmRegistry):
+        package_name = name
+        phase_name = "external"
+
+    return _ExternalRegistry()
+
+
+def _patch_algorithm_entry_points(monkeypatch, entry_points):
+    from rl_garden.training import algorithm_registry
+
+    def fake_entry_points(*, group):
+        assert group == "rlgarden.algorithms"
+        return entry_points
+
+    monkeypatch.setattr(algorithm_registry, "_ALGORITHM_ENTRY_POINTS_LOADED", False)
+    monkeypatch.setattr(algorithm_registry.importlib.metadata, "entry_points", fake_entry_points)
+
+
+def test_algorithm_entry_point_registers_an_algorithm_the_cli_finds(tmp_path, monkeypatch):
+    registry = _registry_over_empty_package(tmp_path, monkeypatch, "ext_entrypoints_ok")
+    loads = []
+
+    def load():
+        loads.append(1)
+        registry.register("from_entry_point", _Args, lambda args: None)
+
+    _patch_algorithm_entry_points(monkeypatch, [_FakeEntryPoint("ext", load)])
+
+    command = registry.parse_command(["from_entry_point", "--value", "3"])
+
+    assert command.algorithm == "from_entry_point"
+    assert command.args == _Args(value=3)
+    # Loaded once per process, not once per registry.
+    _registry_over_empty_package(tmp_path, monkeypatch, "ext_entrypoints_other").discover()
+    assert loads == [1]
+
+
+def test_failing_algorithm_entry_point_is_reported_by_name(tmp_path, monkeypatch):
+    from rl_garden.training import algorithm_registry
+
+    registry = _registry_over_empty_package(tmp_path, monkeypatch, "ext_entrypoints_broken")
+
+    def load():
+        raise ImportError("No module named 'external_pkg'")
+
+    _patch_algorithm_entry_points(monkeypatch, [_FakeEntryPoint("broken_ext", load)])
+
+    with pytest.raises(RuntimeError, match="'broken_ext'.*No module named 'external_pkg'"):
+        registry.discover()
+    assert algorithm_registry._ALGORITHM_ENTRY_POINTS_LOADED is False
+    with pytest.raises(RuntimeError, match="'broken_ext'"):
+        registry.parse_command(["anything"])
+
+
+@pytest.mark.parametrize("phase", ["online", "offline", "off2on"])
+def test_every_in_tree_entry_declares_its_module_builder(phase):
+    import importlib
+
+    registry = importlib.import_module(f"rl_garden.training.{phase}.registry").registry
+    registry.discover()
+    for name, entry in registry.entries().items():
+        module = importlib.import_module(entry.run_fn.__module__)
+        if not module.__name__.startswith("rl_garden."):
+            continue
+        builders = [
+            value
+            for key, value in vars(module).items()
+            if key.startswith("build_")
+            and callable(value)
+            and getattr(value, "__module__", None) == module.__name__
+        ]
+        assert len(builders) <= 1, name
+        expected = builders[0] if builders else None
+        assert entry.build_agent is expected, name
+
+
+class _StubAgent:
+    pass
+
+
+_REUSABLE_BUILDERS = [
+    ("ppo", "ppo", "build_ppo"),
+    ("recurrent_ppo", "recurrent_ppo", "build_recurrent_ppo"),
+    ("transformer_ppo", "transformer_ppo", "build_transformer_ppo"),
+    ("gail", "gail", "build_gail"),
+    ("sac", "sac", "build_sac"),
+    ("recurrent_sac", "recurrent_sac", "build_recurrent_sac"),
+    ("transformer_sac", "transformer_sac", "build_transformer_sac"),
+]
+
+
+@pytest.mark.parametrize("algorithm,module_name,builder_name", _REUSABLE_BUILDERS)
+def test_builders_take_a_subclass_and_forward_extra_kwargs(
+    monkeypatch, algorithm, module_name, builder_name
+):
+    import importlib
+
+    from rl_garden.training import inspection
+    from rl_garden.training.online import registry
+
+    registry.discover()
+    module = importlib.import_module(f"rl_garden.training.online.entrypoints.{module_name}")
+    builder = getattr(module, builder_name)
+    constructed = []
+    monkeypatch.setattr(
+        inspection,
+        "construct_agent",
+        lambda cls, **kwargs: constructed.append((cls, kwargs)) or _StubAgent(),
+    )
+
+    class Subclass:
+        pass
+
+    args = registry.entries()[algorithm].args_cls()
+    builder(args, "env", "eval_env", "logger", "checkpoints")
+    builder(args, "env", "eval_env", "logger", "checkpoints", algorithm_cls=Subclass, extra_flag=7)
+
+    (default_cls, default_kwargs), (subclass, subclass_kwargs) = constructed
+    assert default_cls is registry.entries()[algorithm].algorithm_cls()
+    assert subclass is Subclass
+    assert subclass_kwargs == {**default_kwargs, "extra_flag": 7}
+    assert list(subclass_kwargs)[:-1] == list(default_kwargs)
+
+
+_RUN_FUNCTIONS = [
+    ("ppo", "run_ppo", "build_ppo"),
+    ("recurrent_ppo", "run_recurrent_ppo", "build_recurrent_ppo"),
+    ("transformer_ppo", "run_transformer_ppo", "build_transformer_ppo"),
+    ("gail", "run_gail", "build_gail"),
+    ("sac", "run_sac", "build_sac"),
+    ("recurrent_sac", "run_recurrent_sac", "build_recurrent_sac"),
+    ("transformer_sac", "run_transformer_sac", "build_transformer_sac"),
+]
+
+
+@pytest.mark.parametrize("module_name,run_name,builder_name", _RUN_FUNCTIONS)
+def test_run_functions_train_with_a_given_builder(
+    monkeypatch, module_name, run_name, builder_name
+):
+    import importlib
+
+    from rl_garden.training.online import registry
+    from rl_garden.training.online import runner as online_runner
+
+    registry.discover()
+    module = importlib.import_module(f"rl_garden.training.online.entrypoints.{module_name}")
+    used = []
+    monkeypatch.setattr(
+        online_runner, "run_online", lambda args, **kwargs: used.append(kwargs["build_agent"])
+    )
+    args = registry.entries()[module_name].args_cls()
+
+    def downstream_builder(*args, **kwargs):
+        raise AssertionError("not called")
+
+    getattr(module, run_name)(args)
+    getattr(module, run_name)(args, build_agent=downstream_builder)
+
+    assert used == [getattr(module, builder_name), downstream_builder]
+
+
+def test_console_scripts_dispatch_to_the_phase_registries_and_evaluation(monkeypatch):
+    import re
+
+    from rl_garden.training import cli, evaluation
+    from rl_garden.training.off2on import registry as off2on
+    from rl_garden.training.offline import registry as offline
+    from rl_garden.training.online import registry as online
+
+    calls = []
+    for name, registry in (("online", online), ("offline", offline), ("off2on", off2on)):
+        monkeypatch.setattr(registry, "run_cli", lambda name=name: calls.append(name))
+    monkeypatch.setattr(evaluation, "main", lambda: calls.append("eval"))
+
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    scripts = dict(re.findall(r'^(rl-garden-[\w-]+) = "rl_garden\.training\.cli:(\w+)"$', pyproject, re.M))
+    assert scripts == {
+        "rl-garden-train-online": "train_online",
+        "rl-garden-train-offline": "train_offline",
+        "rl-garden-train-off2on": "train_off2on",
+        "rl-garden-eval": "eval_checkpoint",
+    }
+    for function_name in scripts.values():
+        getattr(cli, function_name)()
+
+    assert calls == ["online", "offline", "off2on", "eval"]
