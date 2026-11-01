@@ -3,7 +3,7 @@
 ``Off2OnSO2`` adds no behavior on top of ``_SO2RolloutTrainingShell`` beyond
 a construction-time preset: offline data retained and mixed throughout
 online fine-tuning by default (matching upstream's ``concat_online_ratio``
-mixed-batch scheme -- see ``training/off2on/so2.py`` for the CLI preset).
+mixed-batch scheme -- see ``training/off2on/entrypoints/so2.py`` for the CLI preset).
 
 Only non-nstep, non-mmap SAC kwargs are exposed here; ``encoder_config``/
 ``obs_groups``/``critic_encoder_config`` are forwarded through to the
@@ -16,7 +16,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.so2 import _SO2RolloutTrainingShell
 from rl_garden.common.alpha_tuning import AlphaTuning
 from rl_garden.common.logger import Logger

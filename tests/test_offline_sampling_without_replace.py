@@ -2,7 +2,7 @@
 
 Eleven offline algorithms' `_sample_train_batch` looked up a nonexistent
 `ReplayBuffer.sample_without_replace` attribute instead of the real
-`sample_without_repeat` (rl_garden/buffers/_sampling.py). This test builds
+`sample_without_repeat` (rl_garden/buffers/sampling.py). This test builds
 tiny CPU agents for a representative subset (FQL, IQL, AWAC, TD3BC), fills
 their buffers, and drives `train()` under `offline_sampling="without_replace"`
 to confirm the fix works end-to-end, plus a direct `_sample_train_batch`

@@ -84,7 +84,7 @@ def test_rejects_unknown_task():
 
 
 def test_registry_discovers_unio4_ope():
-    from rl_garden.training.offline._registry import registry
+    from rl_garden.training.offline.registry import registry
 
     registry.discover()
     assert "unio4_ope" in registry._entries

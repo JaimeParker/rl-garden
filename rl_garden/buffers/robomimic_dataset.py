@@ -22,22 +22,22 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import (
-    _add_flat_transitions,
-    _concat,
-    _finalize_dataset_obs_space,
-    _load_success,
-    _match_obs_to_buffer,
-    _mc_returns,
-    _to_tensor,
-)
-from rl_garden.buffers._h5_common import _read_node, _require_h5py
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
 )
+from rl_garden.buffers.dataset_common import (
+    add_flat_transitions,
+    finalize_dataset_obs_space,
+    load_success,
+    match_obs_to_buffer,
+    mc_returns,
+    to_tensor,
+    tree_concat,
+)
+from rl_garden.buffers.h5_common import read_node, require_h5py
 
 # robot0_eef_quat_site is deliberately excluded: float32 (vs float64 for
 # every other key) and redundant with robot0_eef_quat (site vs body-frame
@@ -91,7 +91,7 @@ def infer_specs_from_robomimic(path: str | Path) -> tuple[spaces.Dict, spaces.Bo
     from a robomimic HDF5 file. Every key in ``ROBOMIMIC_LOW_DIM_OBS_KEYS`` is
     folded into the single ``"state"`` key (see module docstring) -- this is
     robomimic's documented producer-specific mapping onto the contract."""
-    h5py = _require_h5py()
+    h5py = require_h5py()
     path = Path(path)
     with h5py.File(path, "r") as f:
         data = _require_data_group(f, path)
@@ -102,7 +102,7 @@ def infer_specs_from_robomimic(path: str | Path) -> tuple[spaces.Dict, spaces.Bo
         obs_dim = int(sum(demo["obs"][key].shape[-1] for key in ROBOMIMIC_LOW_DIM_OBS_KEYS))
         action_dim = int(demo["actions"].shape[-1])
 
-    obs_space = _finalize_dataset_obs_space(
+    obs_space = finalize_dataset_obs_space(
         spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
     )
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32)
@@ -135,7 +135,7 @@ def load_robomimic_dataset_to_replay_buffer(
     success_threshold`` instead of the raw ``dones`` array), not be left as
     zeros.
     """
-    h5py = _require_h5py()
+    h5py = require_h5py()
     path = Path(path)
     storage_device = buffer.storage_device
     gamma = float(getattr(buffer, "gamma", 0.99))
@@ -161,21 +161,21 @@ def load_robomimic_dataset_to_replay_buffer(
             demo_keys = demo_keys[:num_traj]
 
         for key in demo_keys:
-            demo = _read_node(data[key])
-            actions = _to_tensor(demo["actions"], storage_device).float()
-            rewards = _to_tensor(demo["rewards"], storage_device).float()
-            raw_dones = _to_tensor(demo["dones"], storage_device).bool()
+            demo = read_node(data[key])
+            actions = to_tensor(demo["actions"], storage_device).float()
+            rewards = to_tensor(demo["rewards"], storage_device).float()
+            raw_dones = to_tensor(demo["dones"], storage_device).bool()
             length = actions.shape[0]
 
             if reward_scale != 1.0 or reward_bias != 0.0:
                 rewards = rewards * reward_scale + reward_bias
 
-            obs = _to_tensor(flatten_robomimic_obs(demo["obs"]), storage_device)
-            next_obs = _to_tensor(flatten_robomimic_obs(demo["next_obs"]), storage_device)
+            obs = to_tensor(flatten_robomimic_obs(demo["obs"]), storage_device)
+            next_obs = to_tensor(flatten_robomimic_obs(demo["next_obs"]), storage_device)
             zero_dones = torch.zeros(length, device=storage_device, dtype=torch.float32)
 
             if sparse_reward_mc:
-                success, inferred = _load_success(
+                success, inferred = load_success(
                     demo,
                     length,
                     storage_device,
@@ -201,14 +201,14 @@ def load_robomimic_dataset_to_replay_buffer(
             done_parts.append(zero_dones)
             episode_end_parts.append(raw_dones)
             if (not sparse_reward_mc) and hasattr(buffer, "_mc_table"):
-                mc_parts.append(_mc_returns(rewards, raw_dones.float(), gamma))
+                mc_parts.append(mc_returns(rewards, raw_dones.float(), gamma))
 
     if not action_parts:
         raise ValueError(f"No trajectories found in robomimic hdf5 file: {path}")
 
-    obs_all = _concat(obs_parts)
-    next_obs_all = _concat(next_obs_parts)
-    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
+    obs_all = tree_concat(obs_parts)
+    next_obs_all = tree_concat(next_obs_parts)
+    obs_all, next_obs_all = match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
@@ -216,7 +216,7 @@ def load_robomimic_dataset_to_replay_buffer(
     mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     success_all = torch.cat(success_parts, dim=0) if success_parts else None
 
-    return _add_flat_transitions(
+    return add_flat_transitions(
         buffer,
         obs_all,
         next_obs_all,

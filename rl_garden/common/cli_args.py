@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationConfig, ObsGroups
 
-# Duplicated (not imported) from rl_garden.algorithms._observation.EncoderSharing
+# Duplicated (not imported) from rl_garden.algorithms.observation_encoders.EncoderSharing
 # to keep this module's import graph light -- algorithms is a heavy package
 # and cli_args is imported very early by every training entrypoint.
 EncoderSharing = Literal["shared_critic_grad", "shared", "separate"]

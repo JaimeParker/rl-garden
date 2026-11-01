@@ -12,9 +12,9 @@ from typing import Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._final_obs_table import FinalObsTableMixin
-from rl_garden.buffers._nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.final_obs_table import FinalObsTableMixin
+from rl_garden.buffers.nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.replay_buffer import (
     DictArray,
     _resolve_dtype,

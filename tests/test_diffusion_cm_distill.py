@@ -157,7 +157,7 @@ def test_mro_has_no_ppo():
 
 
 def test_registry_discovers_diffusion_cm_distill_online():
-    from rl_garden.training.online._registry import registry
+    from rl_garden.training.online.registry import registry
 
     registry.discover()
     assert "diffusion_cm_distill_online" in registry._entries

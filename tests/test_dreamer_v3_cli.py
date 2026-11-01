@@ -2,7 +2,7 @@
 state and rgb configs, contdisc/compute_dtype defaults, and asymmetric
 obs_groups rejected at preflight (static, zero-instantiation -- DreamerV3
 registers an ``algorithm_cls`` factory, see
-``rl_garden/training/online/dreamer_v3.py``)."""
+``rl_garden/training/online/entrypoints/dreamer_v3.py``)."""
 from __future__ import annotations
 
 import json
@@ -118,7 +118,7 @@ def test_dreamer_v3_asymmetric_obs_groups_rejected_at_preflight():
     from rl_garden.observations.config import ObservationConfig
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.dreamer_v3 import DreamerV3Args
+    from rl_garden.training.online.entrypoints.dreamer_v3 import DreamerV3Args
 
     registry.discover()
     args = DreamerV3Args(
@@ -136,7 +136,7 @@ def test_dreamer_v3_critic_encoder_rejected_at_preflight():
     from rl_garden.encoders.config import EncoderConfig
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.dreamer_v3 import DreamerV3Args
+    from rl_garden.training.online.entrypoints.dreamer_v3 import DreamerV3Args
 
     registry.discover()
     args = DreamerV3Args(critic_encoder=EncoderConfig(features_dim=17))

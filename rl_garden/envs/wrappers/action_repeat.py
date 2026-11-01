@@ -50,7 +50,7 @@ from typing import Any
 import gymnasium as gym
 import torch
 
-from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
+from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 
 
 class ActionRepeatWrapper(gym.Wrapper):

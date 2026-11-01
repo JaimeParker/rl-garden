@@ -172,7 +172,7 @@ def test_add_without_episode_end_falls_back_to_done():
 def test_h5_loader_fills_chunked_buffer():
     """Pre-implementation check from the plan: chunked + Dict + H5-loaded
     had never existed in this repo before ChunkedReplayBuffer. Confirms
-    _add_flat_transitions/_slice's existing recursive-dict handling (already
+    add_flat_transitions/tree_slice's existing recursive-dict handling (already
     proven for MCReplayBuffer, see test_h5_dataset_loader.py's own
     test_load_dict_h5_to_dict_replay_buffer) also fills this buffer
     end-to-end, not just constructed-buffer unit tests."""

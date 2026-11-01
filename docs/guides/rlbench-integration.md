@@ -72,7 +72,7 @@ rl-garden's conventions:
 - It keeps every low-dim field as its own Dict key (`joint_velocities`,
   `gripper_open`, `gripper_pose`, ...) instead of one flattened `"state"`
   key. rl-garden's BC/vision-BC kwargs already assume a single
-  `state_key="state"` (see `rl_garden/training/offline/bc.py:_bc_kwargs`).
+  `state_key="state"` (see `rl_garden/training/offline/entrypoints/bc.py:_bc_kwargs`).
 - It names image keys `left_shoulder_rgb`/`front_rgb`/... (suffix
   `_rgb`/`_depth`) instead of rl-garden's strict `rgb_<cam>`/`depth_<cam>`
   key vocabulary (`rl_garden.observations.schema.validate_observation_space`)
@@ -130,7 +130,7 @@ Vision (`--obs.rgb <camera>`), `async` vectorization (each instance owns its
 own CoppeliaSim renderer/GL context, same reasoning the `mujoco`/`ogbench`
 backends already document for their own visual variants). `flow_bc` (like
 `bc`) resolves its encoder generically from the `Dict` observation space's
-schema (`ObservationEncoderMixin`, `rl_garden/algorithms/_observation.py`),
+schema (`ObservationEncoderMixin`, `rl_garden/algorithms/observation_encoders.py`),
 so no RLBench-specific wiring is needed there either:
 
 ```bash
@@ -142,7 +142,7 @@ python examples/pretrain_offline.py flow_bc \
 
 BC/FlowBC/A2ABC/TD3BC/BCQ (and every other algorithm in
 `rl_garden/training/offline/` that calls `run_offline`) go through the
-shared lifecycle (`rl_garden/training/offline/_runner.py`), which already
+shared lifecycle (`rl_garden/training/offline/runner.py`), which already
 builds an eval env from `--env_id`/`--env_backend` whenever one is requested
 — RLBench eval needs no extra wiring beyond registering this backend.
 `diffusion_bc` is a standalone script hardcoded to the
@@ -151,7 +151,7 @@ an eval env for *any* backend — pre-existing gaps, not RLBench-specific, so
 RLBench demos aren't consumable by it without a separate H5 conversion
 step (out of scope here).
 
-DAgger (`rl_garden/training/online/dagger.py`) is online imitation learning
+DAgger (`rl_garden/training/online/entrypoints/dagger.py`) is online imitation learning
 and goes through the standard `make_training_envs`/`EnvBackend` path like
 any other online algorithm — expected to work once this backend is
 installed, not separately re-verified in this pass.

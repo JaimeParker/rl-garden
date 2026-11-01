@@ -40,7 +40,7 @@ Dict keys (privileged vs. realistic obs groups) -- this is not the
 actor/critic asymmetry ``ObservationEncoderMixin`` models (one obs space, two
 consumer roles); it is two genuinely independent obs spaces. Only the
 student's encoder is built by this class (the teacher arrives already built
-and frozen -- see ``rl_garden/training/online/policy_distillation.py``'s
+and frozen -- see ``rl_garden/training/online/entrypoints/policy_distillation.py``'s
 ``_build_teacher_policy``), so the mixin's single actor-slot resolution
 (``self._resolve_observation_encoders`` -> ``self.observation_encoders.actor``)
 is used for the student only; no critic, no ``obs_groups``, no

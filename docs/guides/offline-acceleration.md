@@ -85,7 +85,7 @@ Callers pass `compute_info=True` only on log steps:
   `compute_info=should_log` to the online update path.
 - `rl_garden/algorithms/offline.py:run_offline_pretraining()` — passes
   `compute_info=(global_step % log_freq == 0 or global_step == final_target)`.
-- `rl_garden/training/off2on/wsrl.py:_offline_update_loop` — same pattern.
+- `rl_garden/training/off2on/entrypoints/wsrl.py:_offline_update_loop` — same pattern.
 
 This isolates the `torch.compile`-friendly hot path from the
 metrics-building path that contains `.item()` and Python-level reductions.

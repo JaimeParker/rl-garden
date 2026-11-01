@@ -173,7 +173,7 @@ def test_logging_environment_variables_are_not_configuration(monkeypatch):
 
 def test_sac_disables_eval_env_when_eval_frequency_is_zero():
     from rl_garden.common.env_args import make_env_request
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
 
     args = SACArgs(eval_freq=0)
 
@@ -456,10 +456,10 @@ def test_preflight_rejects_explicit_inactive_visual_field():
 
 
 def test_off2on_dry_run_validates_dataset_before_creating_resources(monkeypatch):
-    from rl_garden.training.off2on import _runner, registry
+    from rl_garden.training.off2on import registry, runner
 
     monkeypatch.setattr(
-        _runner,
+        runner,
         "make_training_envs",
         lambda *args: (_ for _ in ()).throw(AssertionError("env must not be created")),
     )
@@ -509,9 +509,9 @@ def test_explain_param_rejects_inactive_field():
 def test_dry_run_materializes_env_and_agent_without_learning(monkeypatch, capsys):
     import gymnasium as gym
 
-    from rl_garden.training.online import _runner as online_runner
     from rl_garden.training.online import registry
-    from rl_garden.training.online import sac as sac_module
+    from rl_garden.training.online import runner as online_runner
+    from rl_garden.training.online.entrypoints import sac as sac_module
 
     class FakeEnv:
         single_observation_space = gym.spaces.Box(-1.0, 1.0, shape=(3,))
@@ -582,8 +582,8 @@ def test_sac_dry_run_captures_exact_constructor_kwargs(
 ):
     import gymnasium as gym
 
-    from rl_garden.training.online import _runner as online_runner
     from rl_garden.training.online import registry
+    from rl_garden.training.online import runner as online_runner
 
     class FakeEnv:
         num_envs = 1

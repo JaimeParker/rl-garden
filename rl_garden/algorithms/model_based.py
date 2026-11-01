@@ -16,7 +16,7 @@ off-policy algorithm:
    does not carry any rollout state of its own yet.
 
 2. **The three-hook gradient step** (``ModelBasedStepMixin``,
-   ``rl_garden.algorithms._model_based_step``, shared with the offline host
+   ``rl_garden.algorithms.model_based_step``, shared with the offline host
    ``OfflineModelBasedAlgorithm``): ``train(gradient_steps)`` samples one
    window batch per step (``_sample_train_batch()``, default
    ``self.replay_buffer.sample(self.batch_size)``) and calls
@@ -45,7 +45,7 @@ from typing import Any
 
 import torch
 
-from rl_garden.algorithms._model_based_step import ModelBasedStepMixin
+from rl_garden.algorithms.model_based_step import ModelBasedStepMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 
 

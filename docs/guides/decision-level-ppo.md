@@ -39,7 +39,7 @@ simpler and cheaper. The two cannot be combined (see
 
 The authoritative statement is rules 9 and 10 of the episode boundary contract
 in [`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md);
-the consumer-side validation is `rl_garden/algorithms/_decision_mask.py`. In
+the consumer-side validation is `rl_garden/algorithms/decision_mask.py`. In
 short, `step()` (never `reset()`) returns one of two optional keys in `infos`:
 
 | key | dtype / shape | row `i` (column `j`) is true iff |

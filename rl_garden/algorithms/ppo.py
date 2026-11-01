@@ -11,11 +11,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from rl_garden.algorithms._decision_mask import (
+from rl_garden.algorithms.decision_mask import (
     DecisionMaskReader,
     warn_if_decision_keys_ignored,
 )
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.rollout_buffer import RolloutBuffer, RolloutBufferSample
 from rl_garden.common.ddp import allreduce_grads, allreduce_mean, is_ddp_active
@@ -79,7 +79,7 @@ class PPO(OnPolicyAlgorithm):
 
     _compatible_checkpoint_algorithms = ("PPO",)
     # decision_level=True reads the env's per-step decision keys and computes
-    # SMDP GAE over decision steps (see rl_garden/algorithms/_decision_mask.py).
+    # SMDP GAE over decision steps (see rl_garden/algorithms/decision_mask.py).
     _supports_decision_level: bool = True
     _SUPPORTED_POLICY_KWARGS = frozenset(
         {

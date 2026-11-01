@@ -245,7 +245,7 @@ def test_gail_checkpoint_round_trip(tmp_path, monkeypatch):
 
 
 def test_gail_registered_in_online_registry():
-    from rl_garden.training.online._registry import registry
+    from rl_garden.training.online.registry import registry
 
     registry.discover()
     assert "gail" in registry._entries
@@ -326,7 +326,7 @@ def _fake_asymmetric_demo_loader(buffer, env_id):
 
 def test_gail_demo_buffer_raises_for_critic_keys_the_demo_dataset_cannot_provide():
     """``demo_dataset_backend="d4rl_legacy"`` only ever supplies a flat
-    ``"state"`` key (``rl_garden.buffers._dataset_common._match_obs_to_buffer``
+    ``"state"`` key (``rl_garden.buffers.dataset_common.match_obs_to_buffer``
     wraps every flat loader output as ``{"state": ...}``); an
     ``obs_groups.critic`` asking for anything else must raise
     ``ObservationContractError`` naming it, not silently zero-fill it (see

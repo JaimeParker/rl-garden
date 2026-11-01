@@ -7,7 +7,7 @@ maintains an EMA copy; the EMA weights are what ``DPPO`` loads into its
 frozen ``actor``/trainable ``actor_ft`` for PPO fine-tuning.
 
 Handles both Box (state-only) and Dict (vision) observations through the
-schema-driven observation-encoder mixin (``rl_garden.algorithms._observation``,
+schema-driven observation-encoder mixin (``rl_garden.algorithms.observation_encoders``,
 see the observation-redesign plan docs) -- this class absorbs the former
 standalone ``VisionDiffusionBC``. ``self._policy_extractor_kwargs()``'s
 ``actor_extractor`` is always passed to ``DiffusionPolicy``: a
@@ -216,7 +216,7 @@ class DiffusionBC(OfflineRLAlgorithm):
             ),
             # DiffusionBC has no critic -- always None, unconditionally present
             # per the shared observation-encoder checkpoint-metadata shape
-            # (see rl_garden/algorithms/_observation.py).
+            # (see rl_garden/algorithms/observation_encoders.py).
             "critic_encoder_config": None,
             "image_augmentation_seed": self._image_augmentation_seed,
         }

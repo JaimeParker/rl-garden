@@ -286,7 +286,7 @@ def test_recurrent_sac_rejects_separate_encoder_sharing():
     encoder and both actor/critic heads, so there is no way to route a
     second, independently-trained critic_extractor's output through it.
     ObservationEncoderMixin._resolve_encoder_sharing (rl_garden/algorithms/
-    _observation.py) checks the resolved value against that tuple and
+    observation_encoders.py) checks the resolved value against that tuple and
     raises before a policy is ever built; RecurrentSACPolicy.__init__ keeps
     the same guard for the direct-construction / policy_kwargs override case
     (see test_recurrent_sac_rejects_critic_extractor_kwargs_override below)."""

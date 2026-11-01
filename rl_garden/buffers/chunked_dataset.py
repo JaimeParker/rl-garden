@@ -18,8 +18,8 @@ from pathlib import Path
 
 import torch
 
-from rl_garden.buffers._dataset_common import _concat
-from rl_garden.buffers._h5_common import _read_node, _require_h5py
+from rl_garden.buffers.dataset_common import tree_concat
+from rl_garden.buffers.h5_common import read_node, require_h5py
 from rl_garden.buffers.h5_dataset import _load_traj_transitions
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
@@ -43,7 +43,7 @@ def load_h5_dataset_as_chunks(
         raise ValueError(f"horizon_steps must be >= 1, got {horizon_steps}.")
     if cond_steps < 1:
         raise ValueError(f"cond_steps must be >= 1, got {cond_steps}.")
-    h5py = _require_h5py()
+    h5py = require_h5py()
     path = Path(path)
     device = torch.device(device)
 
@@ -60,7 +60,7 @@ def load_h5_dataset_as_chunks(
         if num_traj is not None:
             keys = keys[:num_traj]
         for key in keys:
-            traj = _read_node(f[key])
+            traj = read_node(f[key])
             if not isinstance(traj, dict):
                 continue
             obs, _next_obs, actions, _rewards, _dones, _episode_ends = _load_traj_transitions(
@@ -80,7 +80,7 @@ def load_h5_dataset_as_chunks(
         raise ValueError(
             f"No trajectory in {path} is long enough for horizon_steps={horizon_steps}."
         )
-    obs_history = _concat(obs_hist_parts)
+    obs_history = tree_concat(obs_hist_parts)
     if not isinstance(obs_history, dict):
         # Strict observation contract: state-only H5 files store ``obs`` as a
         # flat Dataset (not a Group), so ``_load_traj_transitions`` returns a

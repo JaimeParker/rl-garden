@@ -6,7 +6,7 @@ from pathlib import Path
 from _cli import run_entry
 
 from rl_garden.common.effective_config import apply_strict_mapping, load_preset
-from rl_garden.training.off2on.calql import CalQLOff2OnArgs
+from rl_garden.training.off2on.entrypoints.calql import CalQLOff2OnArgs
 
 
 def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):

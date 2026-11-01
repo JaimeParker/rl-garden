@@ -383,7 +383,7 @@ agent = SAC(
 `rl_garden.encoders.build_observation_encoder(observation_space,
 encoder_config, schema=...)` is the lower-level Layer B entry point algorithms
 call internally (via `ObservationEncoderMixin`,
-`rl_garden/algorithms/_observation.py`) to build the actual
+`rl_garden/algorithms/observation_encoders.py`) to build the actual
 `FlattenExtractor`/`CombinedExtractor` feature extractor.
 
 ## Robot Infrastructure and Reward Models

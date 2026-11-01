@@ -14,13 +14,13 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._sampling import WithoutReplaceSamplerMixin
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.mmap_storage import (
     MmapMode,
     MmapTensorStore,
     space_metadata,
 )
+from rl_garden.buffers.sampling import WithoutReplaceSamplerMixin
 from rl_garden.common.types import (
     GraspPenaltyReplayBufferSample,
     ReplayBufferSample,

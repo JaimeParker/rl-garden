@@ -521,7 +521,7 @@ def test_checkpoint_roundtrip_preserves_phase_state():
 
 
 def test_registry_discovers_bppo():
-    from rl_garden.training.offline._registry import registry
+    from rl_garden.training.offline.registry import registry
 
     registry.discover()
     assert "bppo" in registry._entries

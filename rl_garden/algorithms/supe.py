@@ -4,7 +4,7 @@ over OPAL's learned skill space instead of raw actions, with a frozen OPAL
 decoder mapping ``(obs, skill) -> raw action`` inside a macro-action env wrapper
 (``rl_garden/envs/wrappers/skill_action_wrapper.py::SkillActionWrapper``,
 applied at env-construction time in the training entrypoint -- see
-``rl_garden/training/online/supe.py`` -- exactly like ``DPPO``'s
+``rl_garden/training/online/entrypoints/supe.py`` -- exactly like ``DPPO``'s
 ``ActionChunkWrapper`` wiring, not inside this class).
 
 ``SUPE`` adds no new online-training logic: `RewardMaskRelabeler`/`RNDBonus`
@@ -26,7 +26,7 @@ reproducing upstream `ChunkDataset.create`'s exact aggregation
 discounted reward sum zeroed past the window's first termination, OR-of-dones
 over the window, one relabeled row per valid window (a full, deterministic
 pass -- not a random subsample), inserted directly as tensors via
-`_add_flat_transitions` (no intermediate H5 write).
+`add_flat_transitions` (no intermediate H5 write).
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms.explore import ExPLORe
-from rl_garden.buffers._dataset_common import _add_flat_transitions, _match_obs_to_buffer
+from rl_garden.buffers.dataset_common import add_flat_transitions, match_obs_to_buffer
 from rl_garden.buffers.windowed_trajectory_dataset import WindowedTrajectoryDataset
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.networks.opal_vae import OPALVAE
@@ -141,10 +141,10 @@ class SUPE(ExPLORe):
                 )
                 rewards = seq_rewards.sum(dim=-1)
                 dones = (batch.done_window.sum(dim=-1) > 0).float()
-                window_obs, next_obs = _match_obs_to_buffer(
+                window_obs, next_obs = match_obs_to_buffer(
                     self.offline_replay_buffer, batch.obs_window[:, 0], batch.next_obs
                 )
-                loaded += _add_flat_transitions(
+                loaded += add_flat_transitions(
                     self.offline_replay_buffer,
                     window_obs,
                     next_obs,

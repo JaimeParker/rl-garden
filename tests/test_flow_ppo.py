@@ -151,7 +151,7 @@ def test_mro_has_no_dppo_or_ppo():
 
 
 def test_registry_discovers_flow_ppo():
-    from rl_garden.training.online._registry import registry
+    from rl_garden.training.online.registry import registry
 
     registry.discover()
     assert "flow_ppo" in registry._entries

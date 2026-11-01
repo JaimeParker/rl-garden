@@ -18,16 +18,16 @@ from rl_garden.common.effective_config import (
 )
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationConfig
-from rl_garden.training.off2on._args import (
+from rl_garden.training.off2on.args import (
     WSRLTrainingArgs,
     initial_training_phase_from_args,
     warn_if_off2on_warmup_uses_uninitialized_policy,
 )
-from rl_garden.training.off2on.awac import AWACOff2OnArgs
-from rl_garden.training.offline._args import TDMPC2MultitaskTrainingArgs
-from rl_garden.training.offline.awac import AWACArgs
-from rl_garden.training.offline.td3_bc import TD3BCArgs
-from rl_garden.training.online._args import (
+from rl_garden.training.off2on.entrypoints.awac import AWACOff2OnArgs
+from rl_garden.training.offline.args import TDMPC2MultitaskTrainingArgs
+from rl_garden.training.offline.entrypoints.awac import AWACArgs
+from rl_garden.training.offline.entrypoints.td3_bc import TD3BCArgs
+from rl_garden.training.online.args import (
     FlashSACTrainingArgs,
     SACTrainingArgs,
     TDMPC2TrainingArgs,
@@ -181,7 +181,7 @@ def test_state_sac_defaults_match_existing_cli() -> None:
 
 
 def test_sac_args_defaults_match_existing_cli() -> None:
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
     args = SACArgs()
 
     assert args.env_id == "PickCube-v1"
@@ -285,8 +285,8 @@ def test_wsrl_uninitialized_warmup_warning_describes_actual_behavior() -> None:
 
 
 def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
-    from rl_garden.training.off2on._runner import _switch_to_online_mode
-    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+    from rl_garden.training.off2on.entrypoints.wsrl import WSRLOff2OnArgs
+    from rl_garden.training.off2on.runner import _switch_to_online_mode
 
     args = WSRLOff2OnArgs(
         num_offline_steps=0,
@@ -950,7 +950,7 @@ def test_state_wsrl_defaults_match_existing_cli() -> None:
 
 
 def test_wsrl_off2on_args_defaults_match_existing_cli() -> None:
-    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+    from rl_garden.training.off2on.entrypoints.wsrl import WSRLOff2OnArgs
 
     args = WSRLOff2OnArgs()
 
@@ -971,8 +971,8 @@ def test_wsrl_args_does_not_expose_calql_only_parity_fields() -> None:
     """
     from dataclasses import fields as dataclass_fields
 
-    from rl_garden.training.off2on.calql import CalQLOff2OnArgs
-    from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
+    from rl_garden.training.off2on.entrypoints.calql import CalQLOff2OnArgs
+    from rl_garden.training.off2on.entrypoints.wsrl import WSRLOff2OnArgs
 
     wsrl_consumed_fields = {
         "hidden_dim",
@@ -1007,7 +1007,7 @@ def test_build_calql_forwards_stats_window_size_from_args_to_agent() -> None:
 
     from gymnasium import spaces
 
-    from rl_garden.training.off2on.calql import CalQLOff2OnArgs, build_calql
+    from rl_garden.training.off2on.entrypoints.calql import CalQLOff2OnArgs, build_calql
 
     env = MagicMock()
     env.num_envs = 2
@@ -1027,7 +1027,7 @@ def test_build_iql_forwards_actor_distribution_and_actor_lr_schedule_from_args()
     from gymnasium import spaces
 
     from rl_garden.algorithms import OfflineEnvSpec
-    from rl_garden.training.offline.iql import IQLArgs, build_iql
+    from rl_garden.training.offline.entrypoints.iql import IQLArgs, build_iql
 
     env_spec = OfflineEnvSpec(
         spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32),
@@ -1050,12 +1050,12 @@ def test_build_iql_forwards_actor_distribution_and_actor_lr_schedule_from_args()
 def test_build_iql_off2on_forwards_actor_distribution_and_actor_lr_schedule_from_args() -> (
     None
 ):
-    """Same regression, off2on entrypoint (rl_garden/training/off2on/iql.py)."""
+    """Same regression, off2on entrypoint (rl_garden/training/off2on/entrypoints/iql.py)."""
     from unittest.mock import MagicMock
 
     from gymnasium import spaces
 
-    from rl_garden.training.off2on.iql import IQLOff2OnArgs, build_iql
+    from rl_garden.training.off2on.entrypoints.iql import IQLOff2OnArgs, build_iql
 
     env = MagicMock()
     env.num_envs = 2
@@ -1116,7 +1116,7 @@ def test_encoder_config_factory_returns_callable_for_each_backbone() -> None:
 
 
 def test_critic_encoder_inactive_without_override() -> None:
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
 
     args = SACArgs(obs=ObservationConfig(rgb=("base_camera",)))
     inactive = inactive_config_paths(args)
@@ -1125,7 +1125,7 @@ def test_critic_encoder_inactive_without_override() -> None:
 
 
 def test_critic_encoder_active_once_overridden() -> None:
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
 
     args = SACArgs(
         obs=ObservationConfig(rgb=("base_camera",)),
@@ -1227,12 +1227,12 @@ def test_static_preflight_infers_separate_for_asymmetric_obs_groups_via_algorith
     encoder_sharing is inferred to "separate" (the only value that can build
     two independent encoders), not checked against the algorithm's own
     "shared_critic_grad" class default. SAC registers an ``algorithm_cls``
-    factory (see rl_garden/training/online/sac.py's ``_sac_algorithm_cls``),
+    factory (see rl_garden/training/online/entrypoints/sac.py's ``_sac_algorithm_cls``),
     so this is a static, zero-instantiation resolution."""
     from rl_garden.observations import ObsGroups
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
 
     registry.discover()
     args = SACArgs(
@@ -1255,7 +1255,7 @@ def test_static_preflight_rejects_explicit_contradicting_encoder_sharing():
     from rl_garden.observations import ObsGroups
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
 
     registry.discover()
     args = SACArgs(
@@ -1275,7 +1275,7 @@ def test_static_preflight_infers_separate_from_critic_encoder_alone():
     from rl_garden.encoders.config import EncoderConfig
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.sac import SACArgs
+    from rl_garden.training.online.entrypoints.sac import SACArgs
 
     registry.discover()
     args = SACArgs(critic_encoder=EncoderConfig(features_dim=17))
@@ -1289,7 +1289,7 @@ def test_static_preflight_infers_separate_from_critic_encoder_alone():
 
 def test_static_preflight_rejects_asymmetric_obs_groups_for_recurrent_sac():
     """encoder-sharing-inference.md item 3: RecurrentSAC (registered with an
-    ``algorithm_cls`` factory, rl_garden/training/online/recurrent_sac.py)
+    ``algorithm_cls`` factory, rl_garden/training/online/entrypoints/recurrent_sac.py)
     has encoder_sharing_choices == ("shared_critic_grad", "shared")
     (rl_garden/algorithms/sequence_sac.py) -- asymmetric --obs-groups infers
     "separate", which isn't in that tuple, so this now fails statically at
@@ -1298,7 +1298,7 @@ def test_static_preflight_rejects_asymmetric_obs_groups_for_recurrent_sac():
     from rl_garden.observations import ObsGroups
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.recurrent_sac import RecurrentSACArgs
+    from rl_garden.training.online.entrypoints.recurrent_sac import RecurrentSACArgs
 
     registry.discover()
     args = RecurrentSACArgs(
@@ -1366,7 +1366,7 @@ def test_static_preflight_skips_algorithms_without_a_registered_class_factory():
     from rl_garden.observations import ObsGroups
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.dagger import DAggerArgs
+    from rl_garden.training.online.entrypoints.dagger import DAggerArgs
 
     registry.discover()
     entry = registry._entries["dagger"]

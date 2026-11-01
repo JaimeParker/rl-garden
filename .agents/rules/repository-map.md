@@ -4,13 +4,13 @@ Top-level layout of `rl-garden`. Read `AGENTS.md` first for the project-level
 agent rules; this file is a plain orientation reference, not a rules doc.
 
 - `rl_garden/algorithms/` — online, offline, and off-to-online algorithms.
-  `_observation.py` holds `ObservationEncoderMixin` (Layer C: turns an
+  `observation_encoders.py` holds `ObservationEncoderMixin` (Layer C: turns an
   algorithm's `encoder_config`/`obs_groups`/`critic_encoder_config`/
   `encoder_sharing` into built feature extractors via `_policy_extractor_kwargs()`).
   `model_based.py` holds `ModelBasedAlgorithm` (`OffPolicyAlgorithm` subclass;
   TD-MPC2/DreamerV3's online base) and `offline_model_based.py` holds
   `OfflineModelBasedAlgorithm` (`OfflineRLAlgorithm` subclass; offline base);
-  both share the three-hook gradient step in `_model_based_step.py`
+  both share the three-hook gradient step in `model_based_step.py`
   (`ModelBasedStepMixin`) — see `.agents/rules/adding-algorithm.md`'s
   "model-based algorithms" section. Flat modules `tdmpc2.py` (`TDMPC2Core` +
   `TDMPC2`)/`tdmpc2_multitask.py`/`dreamer_v3.py`, no sub-package.
@@ -83,9 +83,10 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   observations/actions of one task to a multitask model's dims (PWM evaluation).
 - `rl_garden/models/` — ACT and reward models.
 - `rl_garden/training/` — registry base and independent `online/`, `offline/`, and
-  `off2on/` packages.
-  New entrypoints: `online/ncrl.py` (`ncrl`), `offline/pwm.py` (`pwm`) and
-  `offline/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
+  `off2on/` packages; each holds `args.py`, `registry.py`, `runner.py`, and an `entrypoints/`
+  package with one module per algorithm (all imported by the registry).
+  New entrypoints: `online/entrypoints/ncrl.py` (`ncrl`), `offline/entrypoints/pwm.py` (`pwm`) and
+  `offline/entrypoints/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
 - `robot_infra/` — optional submodule ([rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra)):
   controllers, teleoperation, real-robot support. No dependency on `rl_garden`.
 - Real-robot actor/learner loops, the `franka_real` env backend, and
@@ -124,3 +125,20 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   do not edit unless explicitly requested. `Cal-QL`, `wsrl`, and
   `implicit_q_learning` are registered as real git submodules (see
   `baselines/baselines.yaml`); the rest are untracked reference clones.
+
+## Module Naming Convention
+
+- Module names are plain and descriptive. There are no underscore-prefixed
+  modules in `rl_garden/`: a private helper lives next to its single user, and
+  a helper used by several modules lives in `common/` under a plain name.
+  Underscore prefixes belong to functions, classes, and attributes inside a
+  module, not to file names.
+- The only `pkgutil`-scanned directories are `rl_garden/training/<phase>/entrypoints/`
+  (mirrored by `rl_garden_real_world/training/entrypoints/` in the real-world
+  repo) and `rl_garden/envs/backends/`. Every module in those directories is
+  imported by its registry, so put only registering modules there; the
+  registries skip `_`-prefixed names as a safety valve, not as a way to
+  place infrastructure next to entry modules.
+- Phase infrastructure (`args.py`, `registry.py`, `runner.py`, `demo_loading.py`
+  in the real-world mirror) sits one level above `entrypoints/`, where discovery
+  never sees it.

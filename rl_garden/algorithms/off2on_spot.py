@@ -14,7 +14,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.spot import _SPOTRolloutTrainingShell
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType

@@ -1,8 +1,8 @@
 """Online RL entry point: sac / drqv2 / flash_sac / ppo.
 
-To add a new algorithm: create ``rl_garden/training/online/<name>.py`` with an Args
+To add a new algorithm: create ``rl_garden/training/online/entrypoints/<name>.py`` with an Args
 dataclass, a run function, and a package-local ``registry.register`` call.
-No other file needs to change — all public modules in ``rl_garden/training/online/`` are
+No other file needs to change — all public modules in ``rl_garden/training/online/entrypoints/`` are
 discovered and imported automatically at startup.
 
 Pass ``--print-config`` anywhere on the command line to print the fully resolved

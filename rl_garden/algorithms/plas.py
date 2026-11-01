@@ -80,7 +80,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger

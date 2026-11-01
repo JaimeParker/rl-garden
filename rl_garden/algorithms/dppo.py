@@ -37,7 +37,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.diffusion_chain_buffer import DiffusionChainBuffer
 from rl_garden.buffers.rollout_buffer import RolloutBuffer

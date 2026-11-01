@@ -26,8 +26,8 @@ from typing import Any, Iterator, Optional
 
 import torch
 
-from rl_garden.buffers._dataset_common import _concat, _transition_done
-from rl_garden.buffers._h5_common import _read_node, _require_h5py
+from rl_garden.buffers.dataset_common import transition_done, tree_concat
+from rl_garden.buffers.h5_common import read_node, require_h5py
 from rl_garden.buffers.h5_dataset import _load_traj_transitions
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
@@ -78,7 +78,7 @@ class WindowedTrajectoryDataset:
         self.chunk_size = chunk_size
         self.device = torch.device(device)
 
-        h5py = _require_h5py()
+        h5py = require_h5py()
         path = Path(path)
         obs_parts: list[Obs] = []
         next_obs_parts: list[Obs] = []
@@ -97,7 +97,7 @@ class WindowedTrajectoryDataset:
             if num_traj is not None:
                 keys = keys[:num_traj]
             for key in keys:
-                traj = _read_node(f[key])
+                traj = read_node(f[key])
                 if not isinstance(traj, dict):
                     continue
                 obs, next_obs, actions, rewards, _dones, _episode_ends = (
@@ -109,7 +109,7 @@ class WindowedTrajectoryDataset:
                     continue
                 # `done_window` wants the combined boundary (terminated OR
                 # truncated, see `WindowedTrajectorySample`'s docstring),
-                # byte-identical to the pre-fix `_transition_done`'s single
+                # byte-identical to the pre-fix `transition_done`'s single
                 # OR-everything return value in every key shape. It is
                 # *not* sourced from `_load_traj_transitions`'s `dones`
                 # (now TD-only, excludes truncation) or its `episode_ends`
@@ -117,9 +117,9 @@ class WindowedTrajectoryDataset:
                 # H5 has one -- e.g. a converted Adroit-binary file's
                 # `episode_end=success`, a success flag that is not this
                 # dataset's episode boundary). So it's computed directly
-                # from `_transition_done`'s own `(done, truncated)` pair,
+                # from `transition_done`'s own `(done, truncated)` pair,
                 # ignoring any explicit `episode_end` key entirely.
-                done_raw, truncated = _transition_done(traj, length, self.device)
+                done_raw, truncated = transition_done(traj, length, self.device)
                 combined = done_raw.bool()
                 if truncated is not None:
                     combined = combined | truncated
@@ -142,8 +142,8 @@ class WindowedTrajectoryDataset:
                 f"No trajectory in {path} is long enough for chunk_size={chunk_size}."
             )
 
-        self._obs = _concat(obs_parts)
-        self._next_obs = _concat(next_obs_parts)
+        self._obs = tree_concat(obs_parts)
+        self._next_obs = tree_concat(next_obs_parts)
         self._actions = torch.cat(action_parts, dim=0)
         self._rewards = torch.cat(reward_parts, dim=0)
         self._dones = torch.cat(done_parts, dim=0)

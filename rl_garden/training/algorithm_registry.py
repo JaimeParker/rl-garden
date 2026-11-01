@@ -89,6 +89,8 @@ class BaseAlgorithmRegistry:
     def discover(self) -> None:
         if self._discovered:
             return
+        # package_name is the phase's ``entrypoints`` package: every module in it
+        # is an algorithm; the underscore guard only skips private helpers.
         package = importlib.import_module(self.package_name)
         for info in pkgutil.iter_modules(package.__path__):
             if not info.name.startswith("_"):
@@ -314,7 +316,7 @@ class BaseAlgorithmRegistry:
                     )
         # encoder_sharing preflight: the same resolve_encoder_sharing rule
         # ObservationEncoderMixin._resolve_encoder_sharing applies at
-        # algorithm-construction time (rl_garden/algorithms/_observation.py),
+        # algorithm-construction time (rl_garden/algorithms/observation_encoders.py),
         # so a config never needs to spell out `--encoder-sharing separate`
         # when it is already implied by asymmetric --obs-groups or a
         # distinct --critic-encoder. Runs for every algorithm exposing

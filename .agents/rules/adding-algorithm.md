@@ -2,7 +2,7 @@
 
 This document is the authoritative guide for adding a new RL/IL algorithm to
 rl-garden. Read it before touching `rl_garden/algorithms/`, any
-`rl_garden/training/{online,offline,off2on}/` file, or any `_args.py`.
+`rl_garden/training/{online,offline,off2on}/` file, or any phase `args.py`.
 
 ## Overview
 
@@ -10,18 +10,18 @@ An algorithm lives in two places:
 
 ```
 rl_garden/algorithms/my_algo.py                 ← learning logic (networks, update rule)
-rl_garden/training/<phase>/my_algo.py           ← CLI wiring, env/dataset construction, registration
+rl_garden/training/<phase>/entrypoints/my_algo.py ← CLI wiring, env/dataset construction, registration
 ```
 
 The training file is auto-discovered by the phase registry (`discover()` imports
-every non-`_`-prefixed module in the package); no other file needs to change to
+every non-`_`-prefixed module in the `entrypoints` package); no other file needs to change to
 get a working `--algorithm my_algo` CLI, beyond the checklist in part 6.
 
 | Phase | Runner | Registry package | Example file |
 |---|---|---|---|
-| online | `run_online(args, *, obs_tag, make_env_request, build_agent, post_learn=None)` | `rl_garden/training/online/` | `online/sac.py` |
-| offline | `run_offline(args, *, build_agent)` | `rl_garden/training/offline/` | `offline/iql.py` |
-| off2on | `run_off2on(args, *, build_agent, algorithm)` | `rl_garden/training/off2on/` | `off2on/iql.py` |
+| online | `run_online(args, *, obs_tag, make_env_request, build_agent, post_learn=None)` | `rl_garden/training/online/` | `online/entrypoints/sac.py` |
+| offline | `run_offline(args, *, build_agent)` | `rl_garden/training/offline/` | `offline/entrypoints/iql.py` |
+| off2on | `run_off2on(args, *, build_agent, algorithm)` | `rl_garden/training/off2on/` | `off2on/entrypoints/iql.py` |
 
 Algorithm families, by base class:
 
@@ -191,7 +191,7 @@ are the same object. Every policy consumer picks a role:
   unrelated reasons (frozen-encoder training, eval-only reads); never to
   express the encoder-sharing rule.
 
-**Algorithm setup** (`rl_garden/algorithms/_observation.py`):
+**Algorithm setup** (`rl_garden/algorithms/observation_encoders.py`):
 
 `ObservationEncoderMixin` sits on `BaseAlgorithm`, so every algorithm gets it
 for free. A concrete algorithm opts in by:
@@ -269,7 +269,7 @@ docstring). A world-model-based policy's actor (policy prior / amortized
 policy head) and critic (value function) are separate modules owned by the
 policy, never by the world model — `rl_garden/networks/q_ensemble.py`,
 `rl_garden/networks/running_scale.py`, and TD-MPC2's own actor helpers
-(`rl_garden/policies/_tdmpc2_math.py`) are the reusable pieces. TD-MPC2 uses
+(`rl_garden/common/tdmpc2_math.py`) are the reusable pieces. TD-MPC2 uses
 decision-time planning (CEM/MPPI) injected into the policy; DreamerV3 uses
 an amortized actor-critic trained within imagination and needs no planner.
 
@@ -278,7 +278,7 @@ an amortized actor-critic trained within imagination and needs no planner.
 **`OfflineModelBasedAlgorithm`** (`rl_garden/algorithms/offline_model_based.py`,
 `OfflineRLAlgorithm` subclass) is the offline (dataset-driven) base. Both take
 their gradient step from `ModelBasedStepMixin`
-(`rl_garden/algorithms/_model_based_step.py`): `_sample_train_batch()`
+(`rl_garden/algorithms/model_based_step.py`): `_sample_train_batch()`
 (default `self.replay_buffer.sample(self.batch_size)`), then the three hooks
 below. Override exactly those three hooks, never `train()`/`_gradient_step()`
 themselves (both are shared). TD-MPC2's shared losses and optimizers
@@ -293,7 +293,7 @@ and `RSSMPretrain` (`rl_garden/algorithms/rssm_pretrain.py`) are further offline
 hosts of the same base; `NCRL(DreamerV3)` (`rl_garden/algorithms/ncrl.py`) is an
 online subclass of `DreamerV3`. Registered names: `pwm` and `rssm_pretrain`
 (offline, bespoke runners, `training/offline/{pwm,rssm_pretrain}.py`) and `ncrl`
-(online, `training/online/ncrl.py`). See `docs/guides/ncrl.md`.
+(online, `training/online/entrypoints/ncrl.py`). See `docs/guides/ncrl.md`.
 
 - `_update_model(batch) -> (metrics, posterior)` — trains the world model
   (and, for TD-MPC2, the critic in the same backward — a TD-MPC2-specific
@@ -350,9 +350,9 @@ Add one line to `rl_garden/algorithms/__init__.py` (flat eager import list +
 
 ## Part B — Online training registration (`rl_garden/training/online/`)
 
-Create `rl_garden/training/online/my_algo.py`. Functions are defined first;
+Create `rl_garden/training/online/entrypoints/my_algo.py`. Functions are defined first;
 imports plus the `Args` dataclass and `registry.register(...)` go at the
-**bottom** of the file, in that order — see `online/sac.py`. Ruff has E402
+**bottom** of the file, in that order — see `online/entrypoints/sac.py`. Ruff has E402
 disabled repo-wide, so no `# noqa: E402` comments are needed there.
 
 ```python
@@ -379,7 +379,7 @@ def build_my_algo(args, env, eval_env, logger, checkpoint_dir):
 
 def run_my_algo(args: "MyAlgoArgs") -> None:
     from rl_garden.common.env_args import make_env_request
-    from rl_garden.training.online._runner import run_online
+    from rl_garden.training.online.runner import run_online
     run_online(args, obs_tag="rgbd" if args.obs.is_visual else "state",
                make_env_request=make_env_request, build_agent=build_my_algo)
                # post_learn=lambda agent: ...  # optional cleanup after learn()
@@ -390,8 +390,8 @@ def run_my_algo(args: "MyAlgoArgs") -> None:
 from dataclasses import dataclass
 
 from rl_garden.common.env_args import EnvBackendArgs
-from rl_garden.training.online._args import MyAlgoTrainingArgs
-from rl_garden.training.online._registry import registry
+from rl_garden.training.online.args import MyAlgoTrainingArgs
+from rl_garden.training.online.registry import registry
 
 @dataclass
 class MyAlgoArgs(MyAlgoTrainingArgs, EnvBackendArgs):
@@ -412,9 +412,9 @@ registry.register("my_algo", MyAlgoArgs, run_my_algo, algorithm_cls=_my_algo_alg
 reusing another algorithm's `Args` dataclass fails at import time, so give
 `MyAlgoArgs` its own class even with no new fields.
 
-### `MyAlgoTrainingArgs` in `_args.py`
+### `MyAlgoTrainingArgs` in `args.py`
 
-Hyperparameters belong in `rl_garden/training/online/_args.py`, not inline in
+Hyperparameters belong in `rl_garden/training/online/args.py`, not inline in
 the run file (unless the algorithm is a one-off). Any algorithm that accepts
 observations mixes in `ObservationArgs` (`rl_garden/common/cli_args.py`,
 adds `obs`/`encoder`/`obs_groups`/`critic_encoder`/`encoder_sharing`):
@@ -437,17 +437,17 @@ into the one `MyAlgoTrainingArgs`. Final composition:
 Two shapes. Pick generic unless the algorithm has no replay buffer (the
 chunked-dataset imitation family).
 
-### Generic-runner shape (`offline/iql.py`)
+### Generic-runner shape (`offline/entrypoints/iql.py`)
 
 Imports and the `Args` dataclass go at the **top** of the file, functions after,
 `registry.register(...)` last.
 
 ```python
-# rl_garden/training/offline/my_algo.py
+# rl_garden/training/offline/entrypoints/my_algo.py
 from dataclasses import dataclass
 
-from rl_garden.training.offline._args import MyAlgoOfflineArgs, OfflineCommonArgs
-from rl_garden.training.offline._registry import registry
+from rl_garden.training.offline.args import MyAlgoOfflineArgs, OfflineCommonArgs
+from rl_garden.training.offline.registry import registry
 
 @dataclass
 class MyAlgoArgs(OfflineCommonArgs, MyAlgoOfflineArgs):
@@ -467,7 +467,7 @@ def build_my_algo(args, env_spec, logger, eval_env=None):
     )
 
 def run_my_algo(args: MyAlgoArgs) -> None:
-    from rl_garden.training.offline._runner import run_offline
+    from rl_garden.training.offline.runner import run_offline
 
     run_offline(args, build_agent=build_my_algo)
 
@@ -479,7 +479,7 @@ def _my_algo_algorithm_cls() -> type:
 registry.register("my_algo", MyAlgoArgs, run_my_algo, algorithm_cls=_my_algo_algorithm_cls)
 ```
 
-`OfflineCommonArgs` (`offline/_args.py`) already composes `LoggingArgs,
+`OfflineCommonArgs` (`offline/args.py`) already composes `LoggingArgs,
 CheckpointArgs, EnvBackendArgs` plus the offline
 eval/vision/dataset/replay/optimization mixins — put only algorithm-specific
 hyperparameters in `MyAlgoOfflineArgs`. `run_offline(args, *, build_agent)`
@@ -487,7 +487,7 @@ calls `build_agent(args, env_spec, logger, eval_env)`; it loads the dataset into
 `agent.replay_buffer` via `load_offline_dataset` and, when `args.env_id is not
 None and should_create_eval_env(args)`, builds an optional eval env.
 
-### Bespoke-runner shape (`offline/diffusion_bc.py`)
+### Bespoke-runner shape (`offline/entrypoints/diffusion_bc.py`)
 
 For algorithms with **no replay buffer** — the chunked-dataset imitation family
 (`diffusion_bc`, `consistency_distill_bc`, `a2a_bc`,
@@ -498,7 +498,7 @@ otherwise do, then calls `run_offline_pretraining` directly. Args compose only
 `(CheckpointArgs, LoggingArgs)` — no `OfflineCommonArgs`.
 
 ```python
-# rl_garden/training/offline/my_bc.py — trimmed shape
+# rl_garden/training/offline/entrypoints/my_bc.py — trimmed shape
 def _run_my_bc(args, cleanup):
     from rl_garden.algorithms import MyBC, OfflineEnvSpec
     from rl_garden.algorithms.offline import run_offline_pretraining
@@ -506,7 +506,7 @@ def _run_my_bc(args, cleanup):
         config_session, emit_materialized_config, has_config_session,
         is_dry_run, materialize_config, prepare_standalone,
     )
-    from rl_garden.training.offline._registry import registry
+    from rl_garden.training.offline.registry import registry
 
     if not has_config_session():
         normalized_args, preflight = prepare_standalone(
@@ -556,19 +556,19 @@ add its name to that five-element tuple.
 
 ```python
 def run_my_algo(args: "MyAlgoOff2OnArgs") -> None:
-    from rl_garden.training.off2on._runner import run_off2on
+    from rl_garden.training.off2on.runner import run_off2on
     run_off2on(args, build_agent=build_my_algo, algorithm="my_algo")
 ```
 
 `run_off2on(args, *, build_agent, algorithm)` calls `build_agent(args, env,
 eval_env, logger, checkpoint_dir)`; `algorithm` is passed through for
 config/logging and is **not** cross-checked against the registry name.
-`Off2OnCommonArgs` (`off2on/_args.py`, composes `EnvRunArgs, CheckpointArgs`)
+`Off2OnCommonArgs` (`off2on/args.py`, composes `EnvRunArgs, CheckpointArgs`)
 holds orchestration fields generic across off2on families; compose it with an
 algorithm-specific hyperparameter mixin (reusing the offline one where it
 exists, e.g. `IQLOff2OnTrainingArgs(Off2OnCommonArgs, OfflineIQLArgs,
 OfflineValueArgs)`) and a `Vision...` layer, then `EnvBackendArgs` — see
-`off2on/iql.py`.
+`off2on/entrypoints/iql.py`.
 
 ### The Core / Shell / Off2On class pattern
 
@@ -616,9 +616,9 @@ python -c "from rl_garden.algorithms import Off2OnMyAlgo; print([c.__name__ for 
    use `"shared_critic_grad"` for most, `"shared"` for IDQL/QGF, restrict to
    `("shared_critic_grad", "shared")` for recurrent/transformer variants).
 2. `rl_garden/algorithms/__init__.py` — one import line (+ `__all__` entry).
-3. The phase `_args.py` (`training/{online,offline,off2on}/_args.py`) —
+3. The phase `args.py` (`training/{online,offline,off2on}/args.py`) —
    hyperparameter dataclass(es).
-4. `rl_garden/training/<phase>/my_algo.py` — the run module (env/dataset
+4. `rl_garden/training/<phase>/entrypoints/my_algo.py` — the run module (env/dataset
    request, `build_my_algo`, `run_my_algo`, `Args`, `registry.register`).
    **Required:** pass `algorithm_cls=_my_algo_algorithm_cls` to `registry.register()`
    (see Part B/C for the pattern).
@@ -636,9 +636,9 @@ python -c "from rl_garden.algorithms import Off2OnMyAlgo; print([c.__name__ for 
 ## Verification
 
 ```bash
-# Registry discovery (same pattern for rl_garden.training.{offline,off2on}._registry):
+# Registry discovery (same pattern for rl_garden.training.{offline,off2on}.registry):
 python -c "
-from rl_garden.training.online._registry import registry
+from rl_garden.training.online.registry import registry
 registry.discover()
 print(sorted(registry.entries()))
 "

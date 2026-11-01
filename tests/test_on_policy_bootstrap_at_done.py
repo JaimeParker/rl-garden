@@ -194,19 +194,19 @@ def test_recurrent_final_values_with_cpu_env_and_cuda_policy():
 @pytest.mark.parametrize(
     "algorithm,module,builder",
     [
-        ("ppo", "rl_garden.training.online.ppo", "build_ppo"),
-        ("recurrent_ppo", "rl_garden.training.online.recurrent_ppo", "build_recurrent_ppo"),
+        ("ppo", "rl_garden.training.online.entrypoints.ppo", "build_ppo"),
+        ("recurrent_ppo", "rl_garden.training.online.entrypoints.recurrent_ppo", "build_recurrent_ppo"),
         (
             "transformer_ppo",
-            "rl_garden.training.online.transformer_ppo",
+            "rl_garden.training.online.entrypoints.transformer_ppo",
             "build_transformer_ppo",
         ),
-        ("gail", "rl_garden.training.online.gail", "build_gail"),
-        ("dppo", "rl_garden.training.online.dppo", "build_dppo"),
-        ("flow_ppo", "rl_garden.training.online.flow_ppo", "build_flow_ppo"),
+        ("gail", "rl_garden.training.online.entrypoints.gail", "build_gail"),
+        ("dppo", "rl_garden.training.online.entrypoints.dppo", "build_dppo"),
+        ("flow_ppo", "rl_garden.training.online.entrypoints.flow_ppo", "build_flow_ppo"),
         (
             "diffusion_cm_distill_online",
-            "rl_garden.training.online.diffusion_cm_distill",
+            "rl_garden.training.online.entrypoints.diffusion_cm_distill",
             "build_diffusion_cm_distill",
         ),
     ],

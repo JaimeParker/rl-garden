@@ -175,7 +175,7 @@ def _validate_state_box(space: spaces.Box, *, key: str) -> None:
         )
     # Any float dtype is accepted here (plain gymnasium envs are commonly
     # float64); every backend/dataset loader casts to float32 itself before
-    # data reaches a buffer or encoder (see e.g. _dataset_common._to_tensor).
+    # data reaches a buffer or encoder (see e.g. dataset_common.to_tensor).
     if not np.issubdtype(space.dtype, np.floating):
         raise ObservationContractError(
             f"{key!r} must be a float dtype, got {space.dtype}"

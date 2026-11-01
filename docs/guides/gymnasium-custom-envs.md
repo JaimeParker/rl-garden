@@ -316,7 +316,7 @@ from dataclasses import dataclass, field
 
 from my_pkg.backend import MyBackendConfig  # backend registered with config_field="my_backend"
 from rl_garden.training.online import registry
-from rl_garden.training.online.sac import SACArgs, run_sac
+from rl_garden.training.online.entrypoints.sac import SACArgs, run_sac
 
 
 @dataclass

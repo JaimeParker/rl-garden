@@ -30,10 +30,10 @@ _ALGORITHM_CLASSES = [
 ]
 
 _ARGS_CLASSES = [
-    ("rl_garden.training.off2on.iql", "IQLOff2OnArgs"),
-    ("rl_garden.training.off2on.calql", "CalQLOff2OnArgs"),
-    ("rl_garden.training.off2on.wsrl", "WSRLOff2OnArgs"),
-    ("rl_garden.training.off2on.so2", "SO2Off2OnArgs"),
+    ("rl_garden.training.off2on.entrypoints.iql", "IQLOff2OnArgs"),
+    ("rl_garden.training.off2on.entrypoints.calql", "CalQLOff2OnArgs"),
+    ("rl_garden.training.off2on.entrypoints.wsrl", "WSRLOff2OnArgs"),
+    ("rl_garden.training.off2on.entrypoints.so2", "SO2Off2OnArgs"),
 ]
 
 

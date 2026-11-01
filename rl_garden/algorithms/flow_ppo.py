@@ -78,7 +78,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
 from rl_garden.buffers.diffusion_chain_buffer import DiffusionChainBuffer

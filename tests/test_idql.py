@@ -8,7 +8,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import IDQL, OfflineEnvSpec
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.policies._diffusion_process import DiffusionProcess
+from rl_garden.policies.diffusion_process import DiffusionProcess
 
 # Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
 # images without PlainConv's flatten-layer size mismatch. Mirrors

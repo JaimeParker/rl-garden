@@ -130,7 +130,7 @@ def test_asymmetric_actor_images_critic_state_only_does_not_raise():
     image fields must be judged against the full space, not that subset, or
     an asymmetric actor(images)/critic(state-only) split would incorrectly
     raise on the critic's own call."""
-    from rl_garden.algorithms._observation import resolve_observation_encoders
+    from rl_garden.algorithms.observation_encoders import resolve_observation_encoders
     from rl_garden.observations import ObsGroups
 
     space = _rgb_state_space()
@@ -174,7 +174,7 @@ def test_combined_extractor_proprio_branch_concatenates_state_keys():
 
 
 def test_asymmetric_critic_sees_extra_state_actor_does_not():
-    from rl_garden.algorithms._observation import resolve_observation_encoders
+    from rl_garden.algorithms.observation_encoders import resolve_observation_encoders
     from rl_garden.observations import ObsGroups
 
     space = spaces.Dict(

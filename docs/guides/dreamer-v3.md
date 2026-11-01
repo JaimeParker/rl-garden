@@ -32,7 +32,7 @@ GPU's memory on its own -- see the config file's header comment for the math.
 
 ## Configuration and Hyperparameters
 
-Key hyperparameters (see `rl_garden/training/online/_args.py::DreamerV3TrainingArgs`):
+Key hyperparameters (see `rl_garden/training/online/args.py::DreamerV3TrainingArgs`):
 
 | Parameter | Default | Description |
 |---|---|---|

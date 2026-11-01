@@ -375,9 +375,9 @@ is not possible today.
 - **Gap 1 (blocking — hard error).** Two independent structural mismatches
   between the offline-pretrained checkpoint and the off2on-constructed
   model:
-  - `rl_garden/training/off2on/_args.py`'s `CQLOff2OnArgs` has no
+  - `rl_garden/training/off2on/args.py`'s `CQLOff2OnArgs` has no
     `policy_log_std_multiplier` / `policy_log_std_offset` fields, and
-    `off2on/calql.py` / `off2on/wsrl.py`'s `build_calql` / `build_wsrl`
+    `off2on/entrypoints/calql.py` / `off2on/entrypoints/wsrl.py`'s `build_calql` / `build_wsrl`
     never pass them through to `Off2OnCalQL(...)` / `WSRL(...)`. A
     JAX/CORL-aligned offline actor has trainable `log_std_multiplier` /
     `log_std_offset` parameters in its `state_dict`; the off2on-constructed
@@ -561,7 +561,7 @@ env = make_maniskill_env(env_cfg)
 
 # Create WSRL agent -- encoder_config/obs_groups/encoder_sharing are the
 # observation-agnostic surface every algorithm accepts (ObservationEncoderMixin,
-# rl_garden/algorithms/_observation.py); the algorithm never branches on
+# rl_garden/algorithms/observation_encoders.py); the algorithm never branches on
 # Box vs Dict observation spaces.
 agent = WSRL(
     env=env,

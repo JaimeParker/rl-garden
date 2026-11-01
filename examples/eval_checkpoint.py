@@ -135,7 +135,7 @@ def _algorithm_from_class(algorithm_class: Any) -> str | None:
 
 
 def _registry_for_phase(phase: str):
-    module = importlib.import_module(f"rl_garden.training.{phase}._registry")
+    module = importlib.import_module(f"rl_garden.training.{phase}.registry")
     registry = module.registry
     registry.discover()
     return registry
@@ -341,7 +341,7 @@ def _env_request(args: Any, eval_args: EvalCheckpointArgs) -> EnvRequest:
 
 def _training_module(phase: str, algorithm: str):
     return importlib.import_module(
-        f"rl_garden.training.{phase}.{algorithm.replace('-', '_')}"
+        f"rl_garden.training.{phase}.entrypoints.{algorithm.replace('-', '_')}"
     )
 
 

@@ -22,6 +22,12 @@ from __future__ import annotations
 
 import torch
 
+from rl_garden.common.tdmpc2_math import (
+    critic_with_detached_params,
+    gaussian_logprob,
+    log_std,
+    squash,
+)
 from rl_garden.common.types import Obs
 from rl_garden.common.utils import polyak_update
 from rl_garden.networks import init as net_init
@@ -29,12 +35,6 @@ from rl_garden.networks.normed_mlp import mlp
 from rl_garden.networks.q_ensemble import QEnsemble
 from rl_garden.networks.running_scale import RunningScale
 from rl_garden.networks.twohot import two_hot_inv
-from rl_garden.policies._tdmpc2_math import (
-    critic_with_detached_params,
-    gaussian_logprob,
-    log_std,
-    squash,
-)
 from rl_garden.policies.base import BasePolicy
 from rl_garden.world_models.multitask_latent_consistency import MultitaskWorldModel
 

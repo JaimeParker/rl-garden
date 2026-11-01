@@ -47,7 +47,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.td3_bc import TD3BCCore
 from rl_garden.buffers.rebrac_replay_buffer import ReBRACReplayBuffer

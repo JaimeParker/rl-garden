@@ -18,7 +18,7 @@ from typing import Any, Literal, Optional, Sequence
 
 import torch
 
-from rl_garden.algorithms._observation import ObservationEncoderMixin
+from rl_garden.algorithms.observation_encoders import ObservationEncoderMixin
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.logger import Logger
@@ -35,7 +35,7 @@ class A2ABC(OfflineRLAlgorithm):
 
     ``_resolve_observation_encoders`` and the other observation-encoder
     helpers come from ``ObservationEncoderMixin`` via ``BaseAlgorithm``
-    (see ``rl_garden/algorithms/_observation.py``); no direct inheritance
+    (see ``rl_garden/algorithms/observation_encoders.py``); no direct inheritance
     needed here."""
 
     _compatible_checkpoint_algorithms = ("A2ABC",)

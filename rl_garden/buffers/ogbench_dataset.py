@@ -31,18 +31,18 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import (
-    _add_flat_transitions,
-    _finalize_dataset_obs_space,
-    _match_obs_to_buffer,
-    _mc_returns,
-    _to_tensor,
-)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
+)
+from rl_garden.buffers.dataset_common import (
+    add_flat_transitions,
+    finalize_dataset_obs_space,
+    match_obs_to_buffer,
+    mc_returns,
+    to_tensor,
 )
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 from rl_garden.observations.schema import validate_observation_space
@@ -84,7 +84,7 @@ def infer_specs_from_ogbench(
             obs_space = spaces.Dict({_OGBENCH_VISUAL_KEY: space})
             validate_observation_space(obs_space)
         else:
-            obs_space = _finalize_dataset_obs_space(space)
+            obs_space = finalize_dataset_obs_space(space)
         return obs_space, env.action_space
     finally:
         env.close()
@@ -131,36 +131,36 @@ def load_ogbench_dataset_to_replay_buffer(
             )
         dataset = _truncate_to_num_traj(train_dataset, num_traj)
 
-        rewards = _to_tensor(dataset["rewards"], storage_device).float()
+        rewards = to_tensor(dataset["rewards"], storage_device).float()
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
-        dones = 1.0 - _to_tensor(dataset["masks"], storage_device).float()
-        episode_ends = _to_tensor(dataset["terminals"], storage_device).bool()
-        obs = _to_tensor(dataset["observations"], storage_device)
-        next_obs = _to_tensor(dataset["next_observations"], storage_device)
-        actions = _to_tensor(dataset["actions"], storage_device).float()
+        dones = 1.0 - to_tensor(dataset["masks"], storage_device).float()
+        episode_ends = to_tensor(dataset["terminals"], storage_device).bool()
+        obs = to_tensor(dataset["observations"], storage_device)
+        next_obs = to_tensor(dataset["next_observations"], storage_device)
+        actions = to_tensor(dataset["actions"], storage_device).float()
         # Mirror the official FQL/floq loaders' `action_clip_eps=1e-5`.
         low = torch.as_tensor(env.action_space.low, dtype=actions.dtype, device=actions.device)
         high = torch.as_tensor(env.action_space.high, dtype=actions.dtype, device=actions.device)
         actions = actions.clamp(low + 1e-5, high - 1e-5)
-        obs, next_obs = _match_obs_to_buffer(buffer, obs, next_obs)
+        obs, next_obs = match_obs_to_buffer(buffer, obs, next_obs)
 
         successes = dones if hasattr(buffer, "_step_success") else None
         mc_boundary = dones.bool() | episode_ends
-        mc_returns = (
-            _mc_returns(rewards, mc_boundary.float(), float(buffer.gamma))
+        mc_returns_all = (
+            mc_returns(rewards, mc_boundary.float(), float(buffer.gamma))
             if hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma")
             else None
         )
 
-        return _add_flat_transitions(
+        return add_flat_transitions(
             buffer,
             obs,
             next_obs,
             actions,
             rewards,
             dones,
-            mc_returns,
+            mc_returns_all,
             successes,
             episode_ends=episode_ends,
         )

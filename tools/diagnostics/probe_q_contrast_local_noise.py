@@ -33,9 +33,9 @@ from rl_garden.algorithms import OfflineEnvSpec
 from rl_garden.common import seed_everything
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObservationConfig
-from rl_garden.training._dataset import infer_offline_dataset_specs
-from rl_garden.training.offline.calql import CalQLArgs, build_calql
-from rl_garden.training.offline.iql import IQLArgs, build_iql
+from rl_garden.training.offline.entrypoints.calql import CalQLArgs, build_calql
+from rl_garden.training.offline.entrypoints.iql import IQLArgs, build_iql
+from rl_garden.training.offline_dataset import infer_offline_dataset_specs
 
 Algorithm = Literal["calql", "iql"]
 AnchorGroup = Literal["dataset_action", "actor_det_action"]

@@ -147,7 +147,7 @@ def test_missing_dataset_dir_rejected():
     from rl_garden.common.effective_config import ConfigError
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.offline import registry
-    from rl_garden.training.offline._args import RSSMPretrainTrainingArgs
+    from rl_garden.training.offline.args import RSSMPretrainTrainingArgs
 
     registry.discover()
     command = ParsedCommand(RSSMPretrainTrainingArgs(), "rssm_pretrain", "print_config", None, {}, (), {})

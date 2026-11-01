@@ -54,8 +54,8 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn as nn
 
-from rl_garden.algorithms._observation import EncoderSharing
 from rl_garden.algorithms.bppo import BPPOCriticMixin
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import (
     OfflineEnvSpec,
     OfflineRLAlgorithm,

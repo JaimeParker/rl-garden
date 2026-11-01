@@ -72,9 +72,9 @@ from typing import Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._final_obs_table import FinalObsTableMixin
-from rl_garden.buffers._recurrent_sampling import RecurrentSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.final_obs_table import FinalObsTableMixin
+from rl_garden.buffers.recurrent_sampling import RecurrentSamplingMixin
 from rl_garden.buffers.replay_buffer import DictArray, _tree_to_device
 from rl_garden.buffers.sum_tree import SumTree
 from rl_garden.common.obs_utils import index_obs

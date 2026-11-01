@@ -1,0 +1,363 @@
+"""Shared offline-to-online training orchestration.
+
+Backs the ``wsrl``, ``calql``, and ``iql`` off2on entrypoints via
+``run_off2on(args, build_agent=..., algorithm=...)``: env/dataset setup, the
+offline gradient-step loop, the offline->online mode switch, and the online
+``learn()`` call are algorithm-agnostic. Each entrypoint supplies its own
+``build_<algo>(args, env, eval_env, logger, checkpoint_dir)`` callback that
+constructs its agent class from ``args`` (mirroring the
+``build_<algo>`` convention already used by ``rl_garden/training/online/entrypoints/*.py``),
+including any ``--load_checkpoint`` handling.
+
+Usage:
+    # State observations (the default)
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --buffer_size 1000000 --batch_size 256 --utd 4.0
+
+    # RGB observations with plain_conv encoder
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --obs.rgb base_camera --encoder.backbone plain_conv
+
+    # RGBD observations with ResNet encoder
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --obs.rgb base_camera --obs.depth base_camera --encoder.backbone resnet10
+
+    # Online-only (no offline pre-training)
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 --num_offline_steps 0
+
+    # Offline→online from a ManiSkill trajectory H5
+    python examples/train_off2on.py wsrl --env_id PickCube-v1 \\
+        --offline_dataset demos/pickcube.h5 --num_offline_steps 100000
+
+    # Minari offline pretrain -> online continuation on the recovered live env
+    python examples/train_off2on.py wsrl --dataset_backend minari \\
+        --offline_dataset "D4RL/antmaze/umaze-v1" --env_backend minari \\
+        --num_offline_steps 100000 --num_online_steps 500000
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+from gymnasium import spaces
+
+from rl_garden.algorithms.offline import _log_eval_stdout, run_offline_pretraining
+from rl_garden.common import Logger, enable_fast_math, seed_everything
+from rl_garden.common.cli_args import resolve_checkpoint_dir, warn_if_eval_budget_undersized
+from rl_garden.common.effective_config import json_value, persist_effective_config
+from rl_garden.common.env_args import make_env_request
+from rl_garden.envs.backend_registry import make_training_envs, should_create_eval_env
+from rl_garden.training.inspection import (
+    config_session,
+    emit_materialized_config,
+    has_config_session,
+    is_dry_run,
+    materialize_config,
+    prepare_standalone,
+    run_preflight,
+)
+from rl_garden.training.off2on.args import (
+    Off2OnCommonArgs,
+    warn_if_off2on_warmup_uses_uninitialized_policy,
+)
+from rl_garden.training.offline_dataset import load_offline_dataset
+
+BuildAgent = Callable[[Any, Any, Any, Logger, "str | None"], Any]
+
+
+def _offline_update_loop(
+    agent: Any,
+    steps: int,
+    logger: Logger,
+    log_freq: int,
+    std_log: bool,
+    *,
+    eval_freq: int | None = None,
+) -> None:
+    # `eval_freq` here is in *gradient-update* units (this loop takes exactly
+    # one gradient step per `step`), independent of the online phase's
+    # env-step-unit `eval_freq` (see `OffPolicyAlgorithm.learn()`). `None`
+    # preserves the pre-existing behavior of reading `agent.eval_freq`.
+    offline_eval_freq = agent.eval_freq if eval_freq is None else eval_freq
+    run_offline_pretraining(
+        agent,
+        num_steps=steps,
+        gradient_steps=1,
+        checkpoint_dir=getattr(agent, "checkpoint_dir", None),
+        checkpoint_freq=getattr(agent, "checkpoint_freq", 0),
+        # off2on saves its own offline_final.pt separately via
+        # `_save_offline_checkpoint` right after this loop returns.
+        save_final_checkpoint=False,
+        save_replay_buffer=getattr(agent, "save_replay_buffer", False),
+        log_freq=log_freq,
+        std_log=std_log,
+        eval_freq=offline_eval_freq,
+        desc="offline",
+    )
+
+
+def _evaluate_offline_end(agent: Any, logger: Logger, step: int, std_log: bool) -> None:
+    metrics = agent._evaluate()
+    if not metrics:
+        return
+    agent._log_eval_metrics(metrics, step)
+    for key, value in agent.canonical_eval_metrics(metrics).items():
+        logger.add_summary(f"off2on/offline_final_eval/{key}", value)
+    if std_log:
+        _log_eval_stdout(agent, metrics, step)
+
+
+def _save_offline_checkpoint(
+    agent: Any,
+    checkpoint_dir: str | None,
+    *,
+    include_replay_buffer: bool,
+    std_log: bool,
+) -> None:
+    if checkpoint_dir is None:
+        return
+    path = agent.save(
+        Path(checkpoint_dir) / "offline_final.pt",
+        include_replay_buffer=include_replay_buffer,
+    )
+    if std_log:
+        print(f"[offline] saved_checkpoint={path}", flush=True)
+
+
+def _set_offline_probe(agent: Any, logger: Logger, std_log: bool) -> None:
+    probe_size = min(agent.batch_size, agent.replay_buffer.sampleable_size)
+    if probe_size <= 0:
+        logger.add_summary("off2on/offline_probe_size", 0)
+        return
+    agent.set_offline_probe_batch(agent.replay_buffer.sample(probe_size))
+    logger.add_summary("off2on/offline_probe_size", probe_size)
+    if std_log:
+        print(f"[offline] probe_size={probe_size}", flush=True)
+
+
+def _require_continuous_action_space(env, args: Off2OnCommonArgs) -> None:
+    if not isinstance(env.single_action_space, spaces.Box):
+        raise ValueError(  # noqa: TRY004 - invalid environment configuration value
+            f"env_backend={args.env_backend!r} env_id={args.env_id!r} has a "
+            f"{type(env.single_action_space).__name__} action space; off2on "
+            "training only supports continuous (Box) actions."
+        )
+
+
+def _resolve_env_id(args: Off2OnCommonArgs) -> str:
+    """Return the live env id implied by a Minari dataset when not overridden."""
+    if args.dataset_backend == "minari" and args.env_id == "PickCube-v1":
+        return args.offline_dataset
+    return args.env_id
+
+
+def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
+    if args.num_offline_steps == 0:
+        warn_if_off2on_warmup_uses_uninitialized_policy(args)
+        if args.load_checkpoint is not None and args.offline_dataset is not None:
+            loaded = load_offline_dataset(agent.replay_buffer, args)
+            logger.add_summary("off2on/offline_loaded_transitions", loaded)
+            if hasattr(agent, "fit_obs_normalizer"):
+                agent.fit_obs_normalizer()
+            if hasattr(agent, "pretrain_vae"):
+                agent.pretrain_vae()
+            _set_offline_probe(agent, logger, args.std_log)
+    agent.switch_to_online_mode(
+        online_replay_mode=args.online_replay_mode,
+        offline_data_ratio=args.offline_data_ratio,
+    )
+    if args.std_log:
+        print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+
+
+def _apply_online_eval_freq(agent: Any, args: Off2OnCommonArgs) -> None:
+    """Switch ``agent.eval_freq`` to the online (env-step-unit) cadence.
+
+    ``OffPolicyAlgorithm.learn()`` (the online rollout loop) reads
+    ``agent.eval_freq`` directly, in env-step units -- distinct from the
+    offline phase's gradient-update-unit cadence (see
+    ``_offline_update_loop``'s ``eval_freq`` param). A missing/``None``
+    ``online_eval_freq`` (e.g. non-Cal-QL off2on algorithms, which don't
+    expose this field) leaves ``agent.eval_freq`` as already configured.
+    """
+    online_eval_freq = getattr(args, "online_eval_freq", None)
+    if online_eval_freq is not None:
+        agent.eval_freq = online_eval_freq
+
+
+def run_off2on(
+    args: Off2OnCommonArgs, *, build_agent: BuildAgent, algorithm: str
+) -> None:
+    resources: list[Any] = []
+    try:
+        _run_off2on(
+            args,
+            build_agent=build_agent,
+            algorithm=algorithm,
+            resources=resources,
+        )
+    finally:
+        for resource in reversed(resources):
+            resource.close()
+
+
+def _run_off2on(
+    args: Off2OnCommonArgs,
+    *,
+    build_agent: BuildAgent,
+    algorithm: str,
+    resources: list[Any],
+) -> None:
+    if not has_config_session():
+        from rl_garden.training.off2on.registry import registry
+
+        registry.entry_for_args(args)
+        normalized_args, preflight = prepare_standalone(
+            args,
+            registry=registry,
+            training_phase="off2on",
+            algorithm=algorithm,
+        )
+        with config_session(preflight, dry_run=False):
+            return _run_off2on(
+                normalized_args,
+                build_agent=build_agent,
+                algorithm=algorithm,
+                resources=resources,
+            )
+
+    seed_everything(args.seed)
+    enable_fast_math()
+
+    num_eval_episodes = getattr(args, "num_eval_episodes", None)
+    warn_if_eval_budget_undersized(
+        num_eval_steps=args.num_eval_steps,
+        num_eval_episodes=num_eval_episodes,
+        eval_episode_horizon=args.eval_episode_horizon,
+    )
+
+    # getattr: a handful of off2on algorithms (AWAC, SPOT, SO2) are Box-only
+    # and never mix in ObservationArgs at all, so args has no .obs/.encoder.
+    obs = getattr(args, "obs", None)
+    is_visual = obs.is_visual if obs is not None else False
+    obs_label = f"rgbd_{args.encoder.backbone}" if is_visual else "state"
+    start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    run_name = (
+        args.exp_name
+        or f"{args.env_id}__{algorithm}_{obs_label}__{args.seed}__{int(time.time())}"
+    )
+    checkpoint_dir = resolve_checkpoint_dir(args, run_name)
+    dry_run = is_dry_run()
+    if dry_run:
+        logger = Logger(log_type="none")
+    else:
+        config_path = Path(args.log_dir) / run_name / "config.json"
+        preflight_config = run_preflight(
+            {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
+        )
+        persist_effective_config(preflight_config, config_path)
+        resolved_config = json_value(preflight_config)
+        logger = Logger.create(
+            log_type=args.log_type,
+            log_dir=args.log_dir,
+            run_name=run_name,
+            config=resolved_config,
+            start_time=start_time,
+            log_keywords=args.log_keywords,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            log_group=args.log_group or args.env_id,
+        )
+    resources.append(logger)
+    logger.add_text(
+        "hyperparameters",
+        "|param|value|\n|-|-|\n"
+        + "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()),
+    )
+
+    if should_create_eval_env(args) and args.num_eval_envs <= 0:
+        raise SystemExit(
+            "--eval_freq, --offline_eval_freq, or --online_eval_freq > 0 requires "
+            "--num_eval_envs > 0 to provide an eval environment."
+        )
+
+    req = make_env_request(args, run_name)
+    if dry_run:
+        req = replace(req, capture_video=False, eval_record_dir=None)
+    env, eval_env = make_training_envs(args.env_backend, req)
+    resources.append(env)
+    if eval_env is not None:
+        resources.append(eval_env)
+    _require_continuous_action_space(env, args)
+
+    agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
+    materialized_derived = {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
+    if dry_run:
+        materialized_derived["dry_run_resource_overrides"] = {
+            "capture_video": False,
+            "eval_record_dir": None,
+        }
+    if dry_run:
+        emit_materialized_config(
+            env_request=req,
+            env=env,
+            eval_env=eval_env,
+            agent=agent,
+            derived=materialized_derived,
+        )
+        return
+    materialized = materialize_config(
+        env_request=req,
+        env=env,
+        eval_env=eval_env,
+        agent=agent,
+        derived=materialized_derived,
+    )
+    persist_effective_config(materialized, config_path)
+    logger.update_config(json_value(materialized))
+
+    # Offline training phase
+    if args.num_offline_steps > 0:
+        if args.offline_dataset is None:
+            raise ValueError(
+                "--offline_dataset is required when --num_offline_steps > 0."
+            )
+        loaded = load_offline_dataset(agent.replay_buffer, args)
+        offline_start_step = agent._global_step
+        logger.add_summary("off2on/offline_loaded_transitions", loaded)
+        logger.add_summary("off2on/offline_start_step", offline_start_step)
+        if hasattr(agent, "fit_obs_normalizer"):
+            agent.fit_obs_normalizer()
+        if hasattr(agent, "pretrain_vae"):
+            agent.pretrain_vae()
+        _offline_update_loop(
+            agent,
+            args.num_offline_steps,
+            logger,
+            args.log_freq,
+            args.std_log,
+            eval_freq=getattr(args, "offline_eval_freq", None),
+        )
+        offline_end_step = offline_start_step + args.num_offline_steps
+        _evaluate_offline_end(agent, logger, offline_end_step, args.std_log)
+        _save_offline_checkpoint(
+            agent,
+            checkpoint_dir,
+            include_replay_buffer=args.save_replay_buffer,
+            std_log=args.std_log,
+        )
+        _set_offline_probe(agent, logger, args.std_log)
+
+    _switch_to_online_mode(agent, args, logger)
+    _apply_online_eval_freq(agent, args)
+
+    # Online training phase
+    if args.num_online_steps > 0:
+        online_target_step = agent._global_step + args.num_online_steps
+        agent.learn(total_timesteps=online_target_step)
+    elif agent.checkpoint_dir is not None and agent.save_final_checkpoint:
+        agent._save_checkpoint("final.pt")

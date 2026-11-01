@@ -6,7 +6,7 @@ from typing import Literal, Optional
 
 from rl_garden.observations.schema import ObservationContractError, ObservationSchema
 
-# Duplicated (not imported) from rl_garden.algorithms._observation.EncoderSharing
+# Duplicated (not imported) from rl_garden.algorithms.observation_encoders.EncoderSharing
 # to keep this module's import graph light -- same rationale as
 # rl_garden.common.cli_args's copy: rl_garden.algorithms is a heavy package
 # and rl_garden.observations sits well below it.

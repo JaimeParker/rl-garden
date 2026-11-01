@@ -1,4 +1,4 @@
-"""Tests for rl_garden/algorithms/_observation.py: the Layer C observation-
+"""Tests for rl_garden/algorithms/observation_encoders.py: the Layer C observation-
 encoder mixin every algorithm inherits from BaseAlgorithm (see the
 observation-redesign plan and .claude/plans/observation-redesign-phase2-
 recipe.md). Covers the three encoder_sharing modes, the asymmetric-obs-
@@ -15,7 +15,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import SAC
-from rl_garden.algorithms._observation import (
+from rl_garden.algorithms.observation_encoders import (
     ObservationEncoderMixin,
     ObservationEncoders,
     resolve_observation_encoders,

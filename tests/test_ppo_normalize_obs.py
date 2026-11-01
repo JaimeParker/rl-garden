@@ -174,7 +174,7 @@ def test_normalize_obs_reaches_extractor_through_cli_args_entrypoint():
     construct_agent(PPO, ...) unfiltered, not just PPO(normalize_obs=...)
     called directly (every other test in this file bypasses the CLI args
     layer)."""
-    from rl_garden.training.online.ppo import PPOArgs, build_ppo
+    from rl_garden.training.online.entrypoints.ppo import PPOArgs, build_ppo
 
     env = _FakeBoxEnv()
     args = PPOArgs(

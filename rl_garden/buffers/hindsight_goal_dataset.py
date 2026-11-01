@@ -28,8 +28,8 @@ from typing import Optional
 import torch
 from dataclasses import dataclass
 
-from rl_garden.buffers._dataset_common import _concat
-from rl_garden.buffers._h5_common import _read_node, _require_h5py
+from rl_garden.buffers.dataset_common import tree_concat
+from rl_garden.buffers.h5_common import read_node, require_h5py
 from rl_garden.buffers.h5_dataset import _load_traj_transitions
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
@@ -67,7 +67,7 @@ class HindsightGoalDataset:
         self.discount = discount
         self.device = torch.device(device)
 
-        h5py = _require_h5py()
+        h5py = require_h5py()
         path = Path(path)
         obs_parts: list[Obs] = []
         next_obs_parts: list[Obs] = []
@@ -83,7 +83,7 @@ class HindsightGoalDataset:
             if num_traj is not None:
                 keys = keys[:num_traj]
             for key in keys:
-                traj = _read_node(f[key])
+                traj = read_node(f[key])
                 if not isinstance(traj, dict):
                     continue
                 obs, next_obs, actions, _rewards, _dones, _episode_ends = (
@@ -106,8 +106,8 @@ class HindsightGoalDataset:
         if not action_parts:
             raise ValueError(f"No usable trajectories found in {path}.")
 
-        self._obs = _concat(obs_parts)
-        self._next_obs = _concat(next_obs_parts)
+        self._obs = tree_concat(obs_parts)
+        self._next_obs = tree_concat(next_obs_parts)
         self._actions = torch.cat(action_parts, dim=0)
         self.size = running_total
         self.terminal_locs = torch.tensor(

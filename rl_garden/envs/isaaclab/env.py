@@ -70,10 +70,10 @@ import torch
 from gymnasium.vector import AutoresetMode
 from gymnasium.vector.utils import batch_space
 
+from rl_garden.common.obs_utils import tree_where
 from rl_garden.envs.episode_statistics import EpisodeStatistics
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
 from rl_garden.envs.isaaclab.detect import generation
-from rl_garden.envs.wrappers._batch_utils import _tree_where
 from rl_garden.observations.schema import ObservationContractError
 
 
@@ -304,7 +304,7 @@ class _IsaacLabVecEnvAdapter(gym.Env):
         if final_obs is not None:
             # Isaac Lab keeps the last final_obs in extras on steps without
             # resets, so non-done rows must not keep its stale values.
-            info["final_observation"] = _tree_where(done, self._extract_obs(final_obs), self._last_obs)
+            info["final_observation"] = tree_where(done, self._extract_obs(final_obs), self._last_obs)
         log = info.pop("log", None)
         if log is not None and log is not self._last_forwarded_log:
             info["log"] = log

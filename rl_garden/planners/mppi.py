@@ -39,10 +39,11 @@ from rl_garden.world_models.base import State, WorldModel
 def _gumbel_softmax_sample(p: torch.Tensor, temperature: float = 1.0, dim: int = 0) -> torch.Tensor:
     """Sample an index from the Gumbel-Softmax distribution over
     probabilities ``p``, ported from ``3rd_party/tdmpc2/tdmpc2/common
-    /math.py`` (moved here, not imported from ``rl_garden.policies
-    ._tdmpc2_math`` where the rest of the TD-MPC2 math helpers live --
-    planners must not import from policies, see module docstring; this is
-    the planner's only consumer of this function)."""
+    /math.py`` (defined here rather than in ``rl_garden.common.tdmpc2_math``
+    with the rest of the TD-MPC2 math helpers: that module began as
+    ``rl_garden.policies``-private and planners must not import from policies,
+    see module docstring; this is the planner's only consumer of this
+    function)."""
     logits = p.log()
     gumbels = (
         -torch.empty_like(logits, memory_format=torch.legacy_contiguous_format).exponential_().log()

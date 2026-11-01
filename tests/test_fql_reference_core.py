@@ -12,18 +12,18 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import FQL, Off2OnFQL, OfflineEnvSpec
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.policies._fql_networks import FQLMLP
+from rl_garden.networks.fql_networks import FQLMLP
 
 
 @pytest.mark.parametrize(
     ("module_name", "args_name", "kwargs_name"),
     [
-        ("rl_garden.training.offline.fql", "FQLArgs", "_fql_kwargs"),
-        ("rl_garden.training.offline.floq", "FloQArgs", "_floq_kwargs"),
-        ("rl_garden.training.offline.fino", "FINOArgs", "_fino_kwargs"),
-        ("rl_garden.training.offline.fac", "FACArgs", "_fac_kwargs"),
+        ("rl_garden.training.offline.entrypoints.fql", "FQLArgs", "_fql_kwargs"),
+        ("rl_garden.training.offline.entrypoints.floq", "FloQArgs", "_floq_kwargs"),
+        ("rl_garden.training.offline.entrypoints.fino", "FINOArgs", "_fino_kwargs"),
+        ("rl_garden.training.offline.entrypoints.fac", "FACArgs", "_fac_kwargs"),
         (
-            "rl_garden.training.offline.value_flows",
+            "rl_garden.training.offline.entrypoints.value_flows",
             "ValueFlowsArgs",
             "_value_flows_kwargs",
         ),
@@ -32,7 +32,7 @@ from rl_garden.policies._fql_networks import FQLMLP
 def test_fql_family_inherits_and_forwards_shared_net_arch(
     module_name, args_name, kwargs_name
 ):
-    from rl_garden.training.offline._args import OfflineFQLArgs
+    from rl_garden.training.offline.args import OfflineFQLArgs
 
     module = importlib.import_module(module_name)
     args_class = getattr(module, args_name)
@@ -135,7 +135,7 @@ def test_reference_mode_rejects_image_schema_without_explicit_encoder_config():
 
 def test_offline_builder_configures_precision_only_for_reference_recipe(monkeypatch):
     from rl_garden.training import inspection
-    from rl_garden.training.offline import fql as offline_fql
+    from rl_garden.training.offline.entrypoints import fql as offline_fql
 
     precision: list[str] = []
     monkeypatch.setattr(torch, "set_float32_matmul_precision", precision.append)

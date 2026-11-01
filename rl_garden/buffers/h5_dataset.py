@@ -10,26 +10,26 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import (
-    _add_flat_transitions,
-    _concat,
-    _finalize_dataset_obs_space,
-    _first_existing,
-    _length,
-    _load_success,
-    _match_obs_to_buffer,
-    _mc_returns,
-    _slice,
-    _to_tensor,
-    _transition_done,
-)
-from rl_garden.buffers._h5_common import _read_node, _require_h5py
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
 )
+from rl_garden.buffers.dataset_common import (
+    add_flat_transitions,
+    finalize_dataset_obs_space,
+    first_existing,
+    load_success,
+    match_obs_to_buffer,
+    mc_returns,
+    to_tensor,
+    transition_done,
+    tree_concat,
+    tree_length,
+    tree_slice,
+)
+from rl_garden.buffers.h5_common import read_node, require_h5py
 from rl_garden.common.types import Obs
 from rl_garden.observations.schema import ObservationContractError, key_modality
 
@@ -49,7 +49,7 @@ def _space_from_obs_node(node: Any, h5py: Any) -> spaces.Box | spaces.Dict:
     """Map an H5 ``obs``/``observations`` node onto the strict contract.
 
     A ``Dataset`` node is a state-only source (wrapped into
-    ``Dict({"state": Box})`` by ``_finalize_dataset_obs_space`` below). A
+    ``Dict({"state": Box})`` by ``finalize_dataset_obs_space`` below). A
     ``Group`` node's child keys must already be exactly ``"state"``,
     ``"state_<name>"``, ``"rgb_<cam>"``, or ``"depth_<cam>"`` -- this generic
     loader does no renaming of its own (see module docstring); a producer
@@ -97,7 +97,7 @@ def infer_specs_from_h5(
     """Infer the strict-contract Dict observation space and action space from
     a trajectory H5 file. See ``_space_from_obs_node`` for the key-mapping
     rules enforced on the ``obs``/``observations`` group."""
-    h5py = _require_h5py()
+    h5py = require_h5py()
 
     path = Path(path)
     with h5py.File(path, "r") as f:
@@ -128,7 +128,7 @@ def infer_specs_from_h5(
         shape=action_shape,
         dtype=np.float32,
     )
-    return _finalize_dataset_obs_space(obs_space), action_space
+    return finalize_dataset_obs_space(obs_space), action_space
 
 
 def infer_box_specs_from_h5(
@@ -160,31 +160,31 @@ def _load_traj_transitions(
     traj: dict[str, Any],
     device: torch.device,
 ) -> tuple[Obs, Obs, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    actions = _to_tensor(_first_existing(traj, ("actions", "action")), device).float()
-    rewards = _to_tensor(_first_existing(traj, ("rewards", "reward")), device).float()
-    obs_raw = _first_existing(traj, ("obs", "observations"))
+    actions = to_tensor(first_existing(traj, ("actions", "action")), device).float()
+    rewards = to_tensor(first_existing(traj, ("rewards", "reward")), device).float()
+    obs_raw = first_existing(traj, ("obs", "observations"))
     length = min(actions.shape[0], rewards.shape[0])
 
     if "next_obs" in traj:
         next_obs_raw = traj["next_obs"]
-        obs = _to_tensor(_slice(obs_raw, 0, length), device)
-        next_obs = _to_tensor(_slice(next_obs_raw, 0, length), device)
+        obs = to_tensor(tree_slice(obs_raw, 0, length), device)
+        next_obs = to_tensor(tree_slice(next_obs_raw, 0, length), device)
     elif "next_observations" in traj:
         next_obs_raw = traj["next_observations"]
-        obs = _to_tensor(_slice(obs_raw, 0, length), device)
-        next_obs = _to_tensor(_slice(next_obs_raw, 0, length), device)
-    elif _length(obs_raw) >= length + 1:
-        obs = _to_tensor(_slice(obs_raw, 0, length), device)
-        next_obs = _to_tensor(_slice(obs_raw, 1, length + 1), device)
+        obs = to_tensor(tree_slice(obs_raw, 0, length), device)
+        next_obs = to_tensor(tree_slice(next_obs_raw, 0, length), device)
+    elif tree_length(obs_raw) >= length + 1:
+        obs = to_tensor(tree_slice(obs_raw, 0, length), device)
+        next_obs = to_tensor(tree_slice(obs_raw, 1, length + 1), device)
     else:
         raise ValueError(
             "H5 trajectory must contain obs with length actions+1 "
             "or explicit next_obs/next_observations."
         )
 
-    dones, truncated = _transition_done(traj, length, device)
+    dones, truncated = transition_done(traj, length, device)
     if "episode_end" in traj:
-        episode_ends = _to_tensor(traj["episode_end"], device).bool()[:length]
+        episode_ends = to_tensor(traj["episode_end"], device).bool()[:length]
     elif truncated is not None:
         # No explicit boundary key: the true episode boundary is every TD
         # done plus every truncation, e.g. a WSRL-style H5 that writes
@@ -225,7 +225,7 @@ def load_h5_dataset_to_replay_buffer(
     loaded reward. Use the same values as ``RewardScaleBiasWrapper`` so that
     offline and online rewards live on the same scale.
     """
-    h5py = _require_h5py()
+    h5py = require_h5py()
     path = Path(path)
     storage_device = buffer.storage_device
 
@@ -248,7 +248,7 @@ def load_h5_dataset_to_replay_buffer(
         if num_traj is not None:
             keys = keys[:num_traj]
         for key in keys:
-            traj = _read_node(f[key])
+            traj = read_node(f[key])
             if not isinstance(traj, dict):
                 continue
             obs, next_obs, actions, rewards, dones, episode_ends = _load_traj_transitions(
@@ -257,7 +257,7 @@ def load_h5_dataset_to_replay_buffer(
             if reward_scale != 1.0 or reward_bias != 0.0:
                 rewards = rewards * reward_scale + reward_bias
             if sparse_reward_mc:
-                success, inferred = _load_success(
+                success, inferred = load_success(
                     traj,
                     rewards.shape[0],
                     storage_device,
@@ -291,22 +291,22 @@ def load_h5_dataset_to_replay_buffer(
                 # stop the backward sweep, or a later episode's rewards
                 # bleed (discounted) into this one's returns.
                 mc_parts.append(
-                    _mc_returns(rewards, episode_ends.float(), float(buffer.gamma))
+                    mc_returns(rewards, episode_ends.float(), float(buffer.gamma))
                 )
 
     if not action_parts:
         raise ValueError(f"No trajectories found in H5 file: {path}")
 
-    obs_all = _concat(obs_parts)
-    next_obs_all = _concat(next_obs_parts)
-    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
+    obs_all = tree_concat(obs_parts)
+    next_obs_all = tree_concat(next_obs_parts)
+    obs_all, next_obs_all = match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
     episode_ends_all = torch.cat(episode_end_parts, dim=0)
     mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     success_all = torch.cat(success_parts, dim=0) if success_parts else None
-    return _add_flat_transitions(
+    return add_flat_transitions(
         buffer,
         obs_all,
         next_obs_all,

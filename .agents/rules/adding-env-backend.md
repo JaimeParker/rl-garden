@@ -13,7 +13,7 @@ simulator-specific calls.
 ```
 run_online(args, make_env_request=..., build_agent=...)
     │
-    ├─ make_env_request(args, run_name) → EnvRequest   ← training/online/my_algo.py
+    ├─ make_env_request(args, run_name) → EnvRequest   ← training/online/entrypoints/my_algo.py
     │
     └─ make_training_envs(args.env_backend, req)
            │
@@ -290,7 +290,7 @@ rules; `tests/test_episode_boundary_contract.py` checks them across backends.
    ended. The first step of every episode must be a decision; this is a
    documented requirement covered by tests, not checked per step by
    consumers. Consumers validate dtype, shape and key-set consistency
-   (`rl_garden/algorithms/_decision_mask.py`); adapters add no logic. Isaac
+   (`rl_garden/algorithms/decision_mask.py`); adapters add no logic. Isaac
    Lab reuses `extras` across steps, so a task that emits the key must write
    it on every step.
 10. `infos["decision_components"]` is optional and the per-component
@@ -385,7 +385,7 @@ backend shouldn't know about:
 
 | Wrapper | When to use |
 |---------|-------------|
-| `ActionChunkWrapper` | Action-chunking algorithms (e.g. `rl_garden/training/online/dppo.py`'s `build_dppo`) |
+| `ActionChunkWrapper` | Action-chunking algorithms (e.g. `rl_garden/training/online/entrypoints/dppo.py`'s `build_dppo`) |
 | `SkillActionWrapper` | Skill-conditioned action spaces |
 
 Other reusable wrappers under `rl_garden/envs/wrappers/`, by name only:
@@ -467,7 +467,7 @@ Offline algorithms (`OfflineRLAlgorithm`) never build a train env from a backend
 `OfflineEnvSpec(observation_space, action_space, num_envs)`
 (`rl_garden/algorithms/offline.py`), which has no `reset`/`step`. The backend is
 touched only for an optional live eval env, gated on both
-(`rl_garden/training/offline/_runner.py`):
+(`rl_garden/training/offline/runner.py`):
 
 ```python
 if args.env_id is not None and should_create_eval_env(args):

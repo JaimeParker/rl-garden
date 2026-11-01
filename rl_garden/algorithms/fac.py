@@ -68,7 +68,7 @@ Deviations from the reference:
   need sample indices to gather from ``self._logp_table``, so they require
   ``offline_sampling="with_replace"`` (``FACCore`` draws its own indices, the
   same distribution as ``ReplayBuffer.sample``,
-  ``rl_garden/buffers/_sampling.py:91-95``). ``dataset_wide_constant`` needs
+  ``rl_garden/buffers/sampling.py:91-95``). ``dataset_wide_constant`` needs
   no per-sample indices and works under either sampling mode.
   ``_init_fac_params`` raises ``ValueError`` for the unsupported combination.
 - Eval during the BC-pretrain phase reports an untrained one-step actor (the
@@ -153,7 +153,7 @@ class FACCore(FQLCore):
     # "separate" sharing mode is exactly that layout, so it is the default
     # here (overriding FQLCore's own inherited "shared_critic_grad", which
     # comes from ObservationEncoderMixin's base default,
-    # rl_garden/algorithms/_observation.py:147). This is not just fidelity:
+    # rl_garden/algorithms/observation_encoders.py:147). This is not just fidelity:
     # under a shared mode the critic keeps training the shared encoder
     # throughout Phase B while the (frozen) bc_flow's cached `_logp_table`
     # was built from features taken at the transition step -- the table

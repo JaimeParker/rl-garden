@@ -29,19 +29,19 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import (
-    _add_flat_transitions,
-    _concat,
-    _finalize_dataset_obs_space,
-    _match_obs_to_buffer,
-    _mc_returns,
-    _to_tensor,
-)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
+)
+from rl_garden.buffers.dataset_common import (
+    add_flat_transitions,
+    finalize_dataset_obs_space,
+    match_obs_to_buffer,
+    mc_returns,
+    to_tensor,
+    tree_concat,
 )
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
@@ -69,7 +69,7 @@ def infer_specs_from_metaworld(task_name: str) -> tuple[spaces.Dict, spaces.Box]
     env = gym.make("Meta-World/MT1", env_name=task_name)
     try:
         space = canonicalize_floating_observation_space(env.observation_space)
-        return _finalize_dataset_obs_space(space), env.action_space
+        return finalize_dataset_obs_space(space), env.action_space
     finally:
         env.close()
 
@@ -149,25 +149,25 @@ def load_metaworld_dataset_to_replay_buffer(
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
 
-        obs_parts.append(_to_tensor(obs_stack, storage_device))
-        next_obs_parts.append(_to_tensor(next_obs_stack, storage_device))
-        action_parts.append(_to_tensor(actions, storage_device).float())
+        obs_parts.append(to_tensor(obs_stack, storage_device))
+        next_obs_parts.append(to_tensor(next_obs_stack, storage_device))
+        action_parts.append(to_tensor(actions, storage_device).float())
         reward_parts.append(rewards)
         done_parts.append(dones)
         if hasattr(buffer, "_mc_table"):
-            mc_parts.append(_mc_returns(rewards, dones, gamma))
+            mc_parts.append(mc_returns(rewards, dones, gamma))
         collected += 1
 
-    obs_all = _concat(obs_parts)
-    next_obs_all = _concat(next_obs_parts)
-    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
+    obs_all = tree_concat(obs_parts)
+    next_obs_all = tree_concat(next_obs_parts)
+    obs_all, next_obs_all = match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
     mc_returns_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     successes_all = dones_all if hasattr(buffer, "_step_success") else None
 
-    return _add_flat_transitions(
+    return add_flat_transitions(
         buffer,
         obs_all,
         next_obs_all,

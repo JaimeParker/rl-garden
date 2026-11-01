@@ -278,7 +278,7 @@ def _build_sac_worker(rank: int, world_size: int, init_method: str, tmp_dir: str
     import os
     from unittest.mock import patch
 
-    from rl_garden.training.online.sac import SACArgs, build_sac
+    from rl_garden.training.online.entrypoints.sac import SACArgs, build_sac
 
     # construct_agent(target, **kwargs) just calls target(**kwargs); patching
     # it to capture (target, kwargs) instead of actually constructing a real
@@ -326,7 +326,7 @@ def test_build_sac_selects_ddp_class_and_rank_salts_mmap_dir(tmp_path):
 
 
 def test_build_sac_selects_plain_sac_outside_ddp():
-    from rl_garden.training.online.sac import SACArgs, build_sac
+    from rl_garden.training.online.entrypoints.sac import SACArgs, build_sac
 
     args = SACArgs(
         eval_freq=0, log_freq=0, buffer_device="cpu",

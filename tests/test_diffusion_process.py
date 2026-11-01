@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from rl_garden.policies._diffusion_process import (
+from rl_garden.policies.diffusion_process import (
     DiffusionProcess,
     _cosine_beta_schedule,
 )

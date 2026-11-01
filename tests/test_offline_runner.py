@@ -1,12 +1,12 @@
-"""Tests for offline/_runner.py's resource lifecycle."""
+"""Tests for offline/runner.py's resource lifecycle."""
 
 from types import SimpleNamespace
 
 import pytest
 from gymnasium import spaces
 
-from rl_garden.training.offline import _runner
-from rl_garden.training.offline.bc import BCArgs
+from rl_garden.training.offline import runner
+from rl_garden.training.offline.entrypoints.bc import BCArgs
 
 
 def test_run_offline_closes_resources_when_builder_fails(monkeypatch, tmp_path):
@@ -28,10 +28,10 @@ def test_run_offline_closes_resources_when_builder_fails(monkeypatch, tmp_path):
         return SimpleNamespace(close=lambda: closed.__setitem__("eval_env", True))
 
     monkeypatch.setattr(
-        _runner, "infer_offline_dataset_specs", fake_infer_offline_dataset_specs
+        runner, "infer_offline_dataset_specs", fake_infer_offline_dataset_specs
     )
-    monkeypatch.setattr(_runner, "should_create_eval_env", fake_should_create_eval_env)
-    monkeypatch.setattr(_runner, "make_evaluation_env", fake_make_evaluation_env)
+    monkeypatch.setattr(runner, "should_create_eval_env", fake_should_create_eval_env)
+    monkeypatch.setattr(runner, "make_evaluation_env", fake_make_evaluation_env)
 
     args = BCArgs(
         log_type="none",
@@ -45,7 +45,7 @@ def test_run_offline_closes_resources_when_builder_fails(monkeypatch, tmp_path):
         raise RuntimeError("builder failed")
 
     with pytest.raises(RuntimeError, match="builder failed"):
-        _runner.run_offline(args, build_agent=failing_builder)
+        runner.run_offline(args, build_agent=failing_builder)
 
     assert closed == {"eval_env": True}
 
@@ -81,11 +81,11 @@ def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
         events.append("run_offline_pretraining")
 
     monkeypatch.setattr(
-        _runner, "infer_offline_dataset_specs", fake_infer_offline_dataset_specs
+        runner, "infer_offline_dataset_specs", fake_infer_offline_dataset_specs
     )
-    monkeypatch.setattr(_runner, "load_offline_dataset", fake_load_offline_dataset)
+    monkeypatch.setattr(runner, "load_offline_dataset", fake_load_offline_dataset)
     monkeypatch.setattr(
-        _runner, "run_offline_pretraining", fake_run_offline_pretraining
+        runner, "run_offline_pretraining", fake_run_offline_pretraining
     )
 
     checkpoint_path = tmp_path / "checkpoint.pt"
@@ -105,7 +105,7 @@ def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
 
         return construct_agent(FakeAgent)
 
-    _runner.run_offline(args, build_agent=build_fake_agent)
+    runner.run_offline(args, build_agent=build_fake_agent)
 
     assert events == [
         "load_offline_dataset",
@@ -129,16 +129,16 @@ def test_run_offline_respects_load_replay_buffer_false(monkeypatch, tmp_path):
             calls.append((path, load_replay_buffer))
 
     monkeypatch.setattr(
-        _runner,
+        runner,
         "infer_offline_dataset_specs",
         lambda args: (
             spaces.Box(-1, 1, shape=(3,), dtype="float32"),
             spaces.Box(-1, 1, shape=(2,), dtype="float32"),
         ),
     )
-    monkeypatch.setattr(_runner, "load_offline_dataset", lambda replay_buffer, args: 0)
+    monkeypatch.setattr(runner, "load_offline_dataset", lambda replay_buffer, args: 0)
     monkeypatch.setattr(
-        _runner, "run_offline_pretraining", lambda *unused, **unused_kw: None
+        runner, "run_offline_pretraining", lambda *unused, **unused_kw: None
     )
 
     checkpoint_path = tmp_path / "checkpoint.pt"
@@ -158,7 +158,7 @@ def test_run_offline_respects_load_replay_buffer_false(monkeypatch, tmp_path):
 
         return construct_agent(FakeAgent)
 
-    _runner.run_offline(args, build_agent=build_fake_agent)
+    runner.run_offline(args, build_agent=build_fake_agent)
 
     assert calls == [(str(checkpoint_path), False)]
 
@@ -166,8 +166,8 @@ def test_run_offline_respects_load_replay_buffer_false(monkeypatch, tmp_path):
 def test_run_offline_dry_run_loads_checkpoint_without_replay_buffer(
     monkeypatch, tmp_path
 ):
-    from rl_garden.training.offline import bc as bc_module
     from rl_garden.training.offline import registry as offline_registry
+    from rl_garden.training.offline.entrypoints import bc as bc_module
 
     calls: list[tuple[str, bool]] = []
 
@@ -191,7 +191,7 @@ def test_run_offline_dry_run_loads_checkpoint_without_replay_buffer(
         return construct_agent(FakeAgent)
 
     monkeypatch.setattr(
-        _runner, "infer_offline_dataset_specs", fake_infer_offline_dataset_specs
+        runner, "infer_offline_dataset_specs", fake_infer_offline_dataset_specs
     )
     monkeypatch.setattr(bc_module, "build_bc", fake_build_bc)
 

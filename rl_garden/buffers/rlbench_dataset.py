@@ -16,7 +16,7 @@ Two renaming/derivation choices are load-bearing, not stylistic:
   (``rl_garden/observations/schema.py``) requires exactly ``rgb_<cam>``/
   ``depth_<cam>`` (prefix) -- every image key here is renamed accordingly.
   This is RLBench's documented producer-specific mapping onto the contract
-  (see ``rl_garden/buffers/_dataset_common.py::_finalize_dataset_obs_space``).
+  (see ``rl_garden/buffers/dataset_common.py::finalize_dataset_obs_space``).
 - RLBench's own README imitation-learning example derives a ground-truth
   action from a *single* stored ``Observation`` (not a pair):
   ``ground_truth_actions = [obs.joint_velocities for obs in batch]``. For
@@ -50,19 +50,19 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import (
-    _add_flat_transitions,
-    _concat,
-    _finalize_dataset_obs_space,
-    _match_obs_to_buffer,
-    _mc_returns,
-    _to_tensor,
-)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
+)
+from rl_garden.buffers.dataset_common import (
+    add_flat_transitions,
+    finalize_dataset_obs_space,
+    match_obs_to_buffer,
+    mc_returns,
+    to_tensor,
+    tree_concat,
 )
 from rl_garden.observations.schema import ObservationContractError
 
@@ -147,7 +147,7 @@ def build_rlbench_observation(
     (``"state"`` plus ``rgb_<camera>``/``depth_<camera>`` keys per camera)
     otherwise -- matching every other backend's own state-is-flat-Box/
     vision-is-Dict convention (see e.g.
-    ``rl_garden/training/offline/bc.py:_bc_kwargs``'s
+    ``rl_garden/training/offline/entrypoints/bc.py:_bc_kwargs``'s
     ``isinstance(obs_space, spaces.Dict)`` branch)."""
     state = flatten_rlbench_state(obs)
     if not cameras:
@@ -212,7 +212,7 @@ def infer_specs_from_rlbench(
     if not demos or len(demos[0]) == 0:
         raise ValueError(f"No stored demo found for RLBench task at {path!r}.")
     obs = demos[0][0]
-    obs_space = _finalize_dataset_obs_space(
+    obs_space = finalize_dataset_obs_space(
         _obs_space_from_observation(build_rlbench_observation(obs, cameras=cameras))
     )
     action_dim = flatten_rlbench_action(obs).shape[0]
@@ -304,27 +304,27 @@ def load_rlbench_dataset_to_replay_buffer(
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
 
-        obs_parts.append(_to_tensor(obs_stack, storage_device))
-        next_obs_parts.append(_to_tensor(next_obs_stack, storage_device))
-        action_parts.append(_to_tensor(actions, storage_device).float())
+        obs_parts.append(to_tensor(obs_stack, storage_device))
+        next_obs_parts.append(to_tensor(next_obs_stack, storage_device))
+        action_parts.append(to_tensor(actions, storage_device).float())
         reward_parts.append(rewards)
         done_parts.append(dones)
         if hasattr(buffer, "_mc_table"):
-            mc_parts.append(_mc_returns(rewards, dones, gamma))
+            mc_parts.append(mc_returns(rewards, dones, gamma))
 
     if not action_parts:
         raise ValueError(f"No usable RLBench demos found for task {task_name!r} at {path!r}.")
 
-    obs_all = _concat(obs_parts)
-    next_obs_all = _concat(next_obs_parts)
-    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
+    obs_all = tree_concat(obs_parts)
+    next_obs_all = tree_concat(next_obs_parts)
+    obs_all, next_obs_all = match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
     mc_returns_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     successes_all = dones_all if hasattr(buffer, "_step_success") else None
 
-    return _add_flat_transitions(
+    return add_flat_transitions(
         buffer,
         obs_all,
         next_obs_all,

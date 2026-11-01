@@ -158,7 +158,7 @@ def test_apply_mapping_to_args_replaces_frozen_dataclass():
     assert args.obs.frame_stack == 1
     assert not hasattr(args.obs, "unknown")
 
-    from rl_garden.training.off2on._registry import registry as off2on_registry
+    from rl_garden.training.off2on.registry import registry as off2on_registry
 
     off2on_registry.discover()
     calql_args_cls = off2on_registry.entries()["calql"].args_cls
@@ -175,7 +175,7 @@ def test_apply_mapping_to_args_skips_none_for_dataclass_field():
     ``obs_groups: None``, then resolve_obs_groups_config dereferencing
     ``.actor`` on ``None``)."""
     from rl_garden.observations import ObsGroups
-    from rl_garden.training.off2on._registry import registry as off2on_registry
+    from rl_garden.training.off2on.registry import registry as off2on_registry
 
     off2on_registry.discover()
     calql_args = off2on_registry.entries()["calql"].args_cls()
@@ -196,7 +196,7 @@ def test_apply_mapping_to_args_converts_json_float_sentinels():
     encoding, or a float-typed field ends up holding a Python str and
     rl_garden/algorithms/cql.py's `_cql_regularizer` crashes with
     `TypeError: clamp() received (Tensor, str, str)`."""
-    from rl_garden.training.off2on._registry import registry as off2on_registry
+    from rl_garden.training.off2on.registry import registry as off2on_registry
 
     off2on_registry.discover()
     calql_args = off2on_registry.entries()["calql"].args_cls()

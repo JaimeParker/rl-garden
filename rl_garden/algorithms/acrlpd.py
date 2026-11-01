@@ -56,7 +56,7 @@ as a literal float to ``SAC.__init__`` -- NOT ``"auto"``, which would compute
 a different multiplier (1.0) than QC's own default (0.5).
 
 Rollout: no env wrapper. ``ChunkedRolloutMixin`` handles the
-receding-horizon action queue (see ``_chunked_rollout.py``); the raw env's
+receding-horizon action queue (see ``chunked_rollout.py``); the raw env's
 ``env.step()`` stays exactly 1:1 with ``OffPolicyAlgorithm.learn()``'s
 existing per-step loop, matching QC's own single-env-step rollout
 (``main_online.py:179-190``) rather than an atomic multi-step wrapper.
@@ -70,7 +70,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms._chunked_rollout import ChunkedRolloutMixin
+from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.observations import (

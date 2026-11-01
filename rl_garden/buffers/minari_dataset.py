@@ -8,21 +8,21 @@ import warnings
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._dataset_common import (
-    _add_flat_transitions,
-    _concat,
-    _finalize_dataset_obs_space,
-    _load_success,
-    _match_obs_to_buffer,
-    _mc_returns,
-    _slice,
-    _to_tensor,
-)
 from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.buffers.dataset_backend_registry import (
     DatasetBackend,
     DatasetRequest,
     register_dataset_backend,
+)
+from rl_garden.buffers.dataset_common import (
+    add_flat_transitions,
+    finalize_dataset_obs_space,
+    load_success,
+    match_obs_to_buffer,
+    mc_returns,
+    to_tensor,
+    tree_concat,
+    tree_slice,
 )
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
@@ -35,7 +35,7 @@ def _sparse_mc_returns(
     sparse_negative_reward: float,
 ) -> torch.Tensor:
     if bool((success > 0.5).any()):
-        return _mc_returns(rewards, dones, gamma)
+        return mc_returns(rewards, dones, gamma)
     return torch.full_like(rewards, sparse_negative_reward / (1.0 - gamma))
 
 
@@ -60,7 +60,7 @@ def infer_specs_from_minari(dataset_id: str) -> tuple[spaces.Dict, spaces.Space]
     minari = _require_minari()
     dataset = minari.load_dataset(dataset_id, download=True)
     space = canonicalize_floating_observation_space(dataset.observation_space)
-    return _finalize_dataset_obs_space(space), dataset.action_space
+    return finalize_dataset_obs_space(space), dataset.action_space
 
 
 def load_minari_dataset_to_replay_buffer(
@@ -78,7 +78,7 @@ def load_minari_dataset_to_replay_buffer(
     (timeouts) are intentionally excluded so the Bellman target keeps
     bootstrapping through artificial episode cutoffs, the offline-RL-standard
     convention D4RL's ``timeouts`` field was introduced to support. This
-    differs from ``h5.py``'s ``_transition_done``, which ORs every
+    differs from ``h5.py``'s ``transition_done``, which ORs every
     terminal-like field together.
 
     ``reward_scale``/``reward_bias`` apply ``r := scale * r + bias`` to each
@@ -104,11 +104,11 @@ def load_minari_dataset_to_replay_buffer(
     warned_success_fallback = False
 
     for episode in dataset.iterate_episodes(episode_indices):
-        actions = _to_tensor(episode.actions, storage_device).float()
-        rewards = _to_tensor(episode.rewards, storage_device).float()
+        actions = to_tensor(episode.actions, storage_device).float()
+        rewards = to_tensor(episode.rewards, storage_device).float()
         if reward_scale != 1.0 or reward_bias != 0.0:
             rewards = rewards * reward_scale + reward_bias
-        dones = _to_tensor(episode.terminations, storage_device).float()
+        dones = to_tensor(episode.terminations, storage_device).float()
         # Unlike `dones` (terminations only, for TD bootstrap-through-timeout),
         # the MC recursion boundary is the true episode end: this episode's
         # last stored step, regardless of whether it closed via termination or
@@ -117,13 +117,13 @@ def load_minari_dataset_to_replay_buffer(
         episode_end[-1] = True
         length = actions.shape[0]
 
-        obs = _to_tensor(_slice(episode.observations, 0, length), storage_device)
-        next_obs = _to_tensor(
-            _slice(episode.observations, 1, length + 1), storage_device
+        obs = to_tensor(tree_slice(episode.observations, 0, length), storage_device)
+        next_obs = to_tensor(
+            tree_slice(episode.observations, 1, length + 1), storage_device
         )
 
         if sparse_reward_mc:
-            success, inferred = _load_success(
+            success, inferred = load_success(
                 {"infos": episode.infos or {}},
                 length,
                 storage_device,
@@ -151,7 +151,7 @@ def load_minari_dataset_to_replay_buffer(
                 )
                 warned_success_fallback = True
         elif hasattr(buffer, "_mc_table") and hasattr(buffer, "gamma"):
-            mc_parts.append(_mc_returns(rewards, dones, float(buffer.gamma)))
+            mc_parts.append(mc_returns(rewards, dones, float(buffer.gamma)))
 
         obs_parts.append(obs)
         next_obs_parts.append(next_obs)
@@ -163,16 +163,16 @@ def load_minari_dataset_to_replay_buffer(
     if not action_parts:
         raise ValueError(f"No episodes found in Minari dataset: {dataset_id!r}")
 
-    obs_all = _concat(obs_parts)
-    next_obs_all = _concat(next_obs_parts)
-    obs_all, next_obs_all = _match_obs_to_buffer(buffer, obs_all, next_obs_all)
+    obs_all = tree_concat(obs_parts)
+    next_obs_all = tree_concat(next_obs_parts)
+    obs_all, next_obs_all = match_obs_to_buffer(buffer, obs_all, next_obs_all)
     actions_all = torch.cat(action_parts, dim=0)
     rewards_all = torch.cat(reward_parts, dim=0)
     dones_all = torch.cat(done_parts, dim=0)
     episode_end_all = torch.cat(episode_end_parts, dim=0)
     mc_all = torch.cat(mc_parts, dim=0) if mc_parts else None
     success_all = torch.cat(success_parts, dim=0) if success_parts else None
-    return _add_flat_transitions(
+    return add_flat_transitions(
         buffer,
         obs_all,
         next_obs_all,

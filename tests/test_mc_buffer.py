@@ -557,14 +557,14 @@ def test_sample_raises_when_no_complete_trajectory(obs_space, action_space):
 def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
     obs_space, action_space
 ):
-    """Regression for the codex review's claim #1: `_add_flat_transitions`
+    """Regression for the codex review's claim #1: `add_flat_transitions`
     stripes a flat, sequentially-ordered offline dataset across `num_envs`
     buffer columns, so a naive per-column MC recursion sees fake time series
     and both undercounts `sampleable_size` and can miscompute MC values.
     Loader-provided rows must be trusted (`_externally_valid`) instead of
     being recomputed from that fake column structure.
     """
-    from rl_garden.buffers._dataset_common import _add_flat_transitions
+    from rl_garden.buffers.dataset_common import add_flat_transitions
 
     buf = MCReplayBuffer(
         observation_space=obs_space,
@@ -576,7 +576,7 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
         sample_device="cpu",
     )
     # Two flat, sequential 3-step episodes (as an offline loader would
-    # produce), striped across num_envs=2 columns by _add_flat_transitions.
+    # produce), striped across num_envs=2 columns by add_flat_transitions.
     n = 6
     obs = {"state": torch.zeros(n, 4)}
     next_obs = {"state": torch.zeros(n, 4)}
@@ -588,7 +588,7 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
         [1 + 0.9 + 0.81, 1 + 0.9, 1.0, 1 + 0.9 + 0.81, 1 + 0.9, 1.0]
     )
 
-    n_loaded = _add_flat_transitions(
+    n_loaded = add_flat_transitions(
         buf, obs, next_obs, actions, rewards, dones, mc_returns, None,
         episode_ends=episode_end,
     )

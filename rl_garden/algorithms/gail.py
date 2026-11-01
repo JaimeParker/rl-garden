@@ -24,7 +24,7 @@ observation, so it is schema-agnostic (Box, Dict/image via
 ``CombinedExtractor``, or a ``state_<name>``-augmented ``obs_groups.critic``
 all reduce to the same flat vector by the time they reach
 ``GAILDiscriminator``) -- see ``GAILDiscriminator``'s own docstring.
-``build_gail`` (``rl_garden/training/online/gail.py``) does not currently
+``build_gail`` (``rl_garden/training/online/entrypoints/gail.py``) does not currently
 forward ``--obs.rgb``/``--obs_groups.*``/``--encoder.*`` from the CLI, so
 GAIL stays state-only in practice when driven through the CLI; direct
 construction with ``obs_groups``/``critic_encoder_config`` (PPO's existing
@@ -34,7 +34,7 @@ Expert demonstrations are loaded once at construction time into a plain
 ``ReplayBuffer`` via the existing
 ``rl_garden.buffers.d4rl_legacy_dataset.load_d4rl_legacy_dataset_to_replay_buffer``
 -- no new dataset-loading code. That loader only ever fills the buffer's
-``"state"`` key (``rl_garden.buffers._dataset_common._match_obs_to_buffer``
+``"state"`` key (``rl_garden.buffers.dataset_common.match_obs_to_buffer``
 wraps every flat loader output as ``{"state": ...}``). ``_build_demo_buffer``
 checks the discriminator's critic-role schema (``obs_groups.critic``, or the
 full schema when unset) against that ``{"state"}`` limit and raises
@@ -137,7 +137,7 @@ class GAIL(PPO):
                 f"'d4rl_legacy', got {self.demo_dataset_backend!r}."
             )
         # d4rl_legacy only ever supplies a flat "state" observation (see
-        # rl_garden.buffers._dataset_common._match_obs_to_buffer); honor the
+        # rl_garden.buffers.dataset_common.match_obs_to_buffer); honor the
         # discriminator's critic-role schema or raise, rather than silently
         # zero-filling any other key it asks for on the expert side while
         # the generator side has real data (this module's docstring's

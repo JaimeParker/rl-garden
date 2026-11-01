@@ -14,7 +14,7 @@ from typing import Any, Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms._observation import ObservationEncoderMixin
+from rl_garden.algorithms.observation_encoders import ObservationEncoderMixin
 from rl_garden.common.checkpoint import (
     checkpoint_dict,
     load_checkpoint_file,

@@ -1,0 +1,106 @@
+"""FlashSAC run function.
+
+``FlashSAC`` is state-only by design (see its module docstring and
+``ObservationContractError`` guard) -- ``FlashSACPolicy`` has no encoder
+mixin/Dict handling. ``FlashSACArgs`` still carries ``ObservationArgs`` for
+CLI/config uniformity (``--obs.state`` parses), but ``build_flash_sac`` never
+wires an encoder; ``--obs.rgb``/``--obs.depth`` reach the env, then fail fast
+at agent construction rather than being silently ignored.
+"""
+
+from __future__ import annotations
+
+
+def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.algorithms.flash_sac import FlashSAC
+    from rl_garden.training.inspection import construct_agent
+
+    agent = construct_agent(
+        FlashSAC,
+        env=env,
+        eval_env=eval_env,
+        buffer_size=args.buffer_size,
+        buffer_device=args.buffer_device,
+        learning_starts=args.learning_starts,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        tau=args.tau,
+        training_freq=args.training_freq,
+        utd=args.utd,
+        n_step=args.n_step,
+        actor_hidden_dim=args.actor_hidden_dim,
+        actor_num_blocks=args.actor_num_blocks,
+        critic_hidden_dim=args.critic_hidden_dim,
+        critic_num_blocks=args.critic_num_blocks,
+        num_bins=args.num_bins,
+        min_v=args.min_v,
+        max_v=args.max_v,
+        asymmetric_obs_dim=args.asymmetric_obs_dim,
+        actor_lr=args.actor_lr,
+        critic_lr=args.critic_lr,
+        alpha_lr=args.alpha_lr,
+        actor_update_period=args.actor_update_period,
+        grad_clip_norm=args.grad_clip_norm,
+        temp_initial_value=args.temp_initial_value,
+        target_entropy=args.target_entropy,
+        actor_noise_zeta_mu=args.actor_noise_zeta_mu,
+        actor_noise_zeta_max=args.actor_noise_zeta_max,
+        normalize_reward=args.normalize_reward,
+        normalized_g_max=args.normalized_g_max,
+        bc_alpha=args.bc_alpha,
+        use_compile=args.use_compile,
+        compile_mode=args.compile_mode,
+        use_amp=args.use_amp,
+        seed=args.seed,
+        logger=logger,
+        std_log=args.std_log,
+        log_freq=args.log_freq,
+        eval_freq=args.eval_freq,
+        num_eval_steps=args.num_eval_steps,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=args.checkpoint_freq,
+        save_replay_buffer=args.save_replay_buffer,
+        save_final_checkpoint=args.save_final_checkpoint,
+    )
+    if args.load_checkpoint is not None:
+        agent.load(args.load_checkpoint)
+    return agent
+
+
+def run_flash_sac(args: FlashSACArgs) -> None:
+    from rl_garden.common.env_args import make_env_request
+    from rl_garden.training.online.runner import run_online
+
+    run_online(
+        args,
+        obs_tag="state",
+        make_env_request=make_env_request,
+        build_agent=build_flash_sac,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Args + registration
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+from rl_garden.common.cli_args import ObservationArgs
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.training.online.args import FlashSACTrainingArgs
+from rl_garden.training.online.registry import registry
+
+
+@dataclass
+class FlashSACArgs(FlashSACTrainingArgs, ObservationArgs, EnvBackendArgs):
+    """FlashSAC with multi-env backend support (state-only by design).
+
+    ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.
+    """
+
+
+registry.register(
+    "flash_sac",
+    FlashSACArgs,
+    run_flash_sac,
+)

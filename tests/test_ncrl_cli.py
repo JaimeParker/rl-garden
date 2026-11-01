@@ -56,7 +56,7 @@ def test_ablation_flags_parse():
 def _validate(**fields):
     from rl_garden.training.algorithm_registry import ParsedCommand
     from rl_garden.training.online import registry
-    from rl_garden.training.online.ncrl import NCRLArgs
+    from rl_garden.training.online.entrypoints.ncrl import NCRLArgs
 
     registry.discover()
     command = ParsedCommand(NCRLArgs(**fields), "ncrl", "print_config", None, {}, (), {})

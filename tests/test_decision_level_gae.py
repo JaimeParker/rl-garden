@@ -24,15 +24,15 @@ from test_frame_stack_wrapper import _FakeBatchedEnv
 from test_vector_env_contract import _TinyEnv
 
 from rl_garden.algorithms import PPO, RecurrentPPO
-from rl_garden.algorithms._decision_mask import DecisionMaskReader
+from rl_garden.algorithms.decision_mask import DecisionMaskReader
 from rl_garden.algorithms.gail import GAIL
 from rl_garden.buffers import RolloutBuffer
 from rl_garden.buffers.gae import compute_gae
 from rl_garden.buffers.recurrent_rollout_buffer import RecurrentRolloutBuffer
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
 from rl_garden.envs.wrappers import ActionRepeatWrapper, ImageFrameStackWrapper
-from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
 from rl_garden.envs.wrappers.action_chunk import ActionChunkWrapper
+from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 
 GAMMA = 0.9
 GAE_LAMBDA = 0.8

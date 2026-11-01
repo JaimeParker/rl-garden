@@ -680,7 +680,7 @@ def test_build_drqv2_warns_when_encoder_overridden(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import rl_garden.algorithms.ddpg as ddpg_module
-    from rl_garden.training.online.drqv2 import build_drqv2
+    from rl_garden.training.online.entrypoints.drqv2 import build_drqv2
 
     captured_kwargs: dict = {}
 
@@ -701,7 +701,7 @@ def test_build_drqv2_default_encoder_does_not_warn(
     monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
 ) -> None:
     import rl_garden.algorithms.ddpg as ddpg_module
-    from rl_garden.training.online.drqv2 import build_drqv2
+    from rl_garden.training.online.entrypoints.drqv2 import build_drqv2
 
     class _FakeDDPG:
         def __init__(self, **kwargs):

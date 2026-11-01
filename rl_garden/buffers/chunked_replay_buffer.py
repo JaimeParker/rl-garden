@@ -42,8 +42,8 @@ from typing import Optional
 import torch
 from gymnasium import spaces
 
-from rl_garden.buffers._nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.buffers.nstep_sampling import NStepSamplingMixin
 from rl_garden.buffers.replay_buffer import DictArray, _tree_to_device
 from rl_garden.common.types import ChunkedReplayBufferSample, TensorDict
 

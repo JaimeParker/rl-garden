@@ -5,7 +5,7 @@ maximum log-likelihood. Inherits ``OfflineRLAlgorithm`` and is wired into
 the same ``run_offline_pretraining`` loop as IQL/CQL/CalQL.
 
 Observation encoding (Box state-only vs. Dict/RGBD) is resolved by the
-shared ``ObservationEncoderMixin`` (see ``rl_garden/algorithms/_observation.py``)
+shared ``ObservationEncoderMixin`` (see ``rl_garden/algorithms/observation_encoders.py``)
 from ``encoder_config``/``obs_groups``, matching the IQL convention so BC can
 be used as a drop-in baseline on the same datasets. BC has no critic, so only
 the actor-role encoder (``self.observation_encoders.actor``) is ever built.

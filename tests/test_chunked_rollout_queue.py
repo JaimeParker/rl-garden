@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms._chunked_rollout import ChunkedRolloutMixin
+from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 
 
 class _BaseHarness:

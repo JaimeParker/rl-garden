@@ -20,7 +20,7 @@ from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common import Logger
 from rl_garden.encoders.combined import CombinedExtractor
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.training.offline.cql import CQLArgs, _cql_kwargs
+from rl_garden.training.offline.entrypoints.cql import CQLArgs, _cql_kwargs
 
 
 class DummyVecEnv:

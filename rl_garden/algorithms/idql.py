@@ -8,7 +8,7 @@ which is just a dict-key label, not a raw-obs assumption), and
 per role, reusing each tensor across the N-sample repeat-interleave and
 every denoising step. Encoder selection is the shared observation-redesign
 mixin (``encoder_config``/``obs_groups``/``critic_encoder_config``,
-``rl_garden/algorithms/_observation.py``) -- default ``encoder_sharing`` is
+``rl_garden/algorithms/observation_encoders.py``) -- default ``encoder_sharing`` is
 ``"shared"`` (one encoder trained by every loss term; see the class
 attribute below), and ``encoder_sharing="separate"`` with an asymmetric
 ``obs_groups`` or a distinct ``critic_encoder_config`` gives value/critic
@@ -51,7 +51,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
@@ -66,7 +66,7 @@ ActorObjective = Literal["bc", "soft_adv", "hard_adv", "exp_adv"]
 class IDQL(OfflineRLAlgorithm):
     _compatible_checkpoint_algorithms = ("IDQL",)
     # Class-level default (read by algorithm_registry's static preflight,
-    # see rl_garden/algorithms/_observation.py), overridable via the
+    # see rl_garden/algorithms/observation_encoders.py), overridable via the
     # `encoder_sharing` constructor kwarg below. Under the default "shared"
     # (not the mixin's inherited "shared_critic_grad"): `_compute_losses`/
     # `diffusion_loss` extract features via `extract_critic_features`/

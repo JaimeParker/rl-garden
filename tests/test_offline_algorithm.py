@@ -307,8 +307,8 @@ def test_run_offline_pretraining_can_skip_final_checkpoint(tmp_path):
 
 def test_offline_registry_builders_create_wsrl_and_iql():
     from rl_garden.algorithms import IQL, WSRL, OfflineEnvSpec
-    from rl_garden.training.offline.iql import IQLArgs, build_iql
-    from rl_garden.training.offline.wsrl import WSRLOfflineArgs, build_wsrl
+    from rl_garden.training.offline.entrypoints.iql import IQLArgs, build_iql
+    from rl_garden.training.offline.entrypoints.wsrl import WSRLOfflineArgs, build_wsrl
 
     obs_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -362,8 +362,8 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
     per-camera RGB+state Dict observation spaces.
     """
     from rl_garden.observations import ObservationConfig
-    from rl_garden.training.offline._runner import _eval_env_request
-    from rl_garden.training.offline.bc import BCArgs
+    from rl_garden.training.offline.entrypoints.bc import BCArgs
+    from rl_garden.training.offline.runner import _eval_env_request
 
     args = BCArgs(
         offline_dataset="/tmp/unused.h5",
@@ -388,8 +388,8 @@ def test_eval_env_config_carries_dict_obs_vision_fields():
 def test_offline_eval_step_cap_derives_from_episode_horizon():
     # Deliberately not minari/antmaze -- the mechanism must be backend/env
     # independent, unlike the old _is_minari_antmaze special case.
-    from rl_garden.training.offline._runner import _eval_env_request
-    from rl_garden.training.offline.bc import BCArgs
+    from rl_garden.training.offline.entrypoints.bc import BCArgs
+    from rl_garden.training.offline.runner import _eval_env_request
 
     args = BCArgs(
         dataset_backend="h5",
@@ -407,8 +407,8 @@ def test_offline_eval_step_cap_derives_from_episode_horizon():
 
 def test_explicit_num_eval_steps_wins_and_warns_when_below_derived_budget():
     from rl_garden.common.cli_args import warn_if_eval_budget_undersized
-    from rl_garden.training.offline._runner import _eval_env_request
-    from rl_garden.training.offline.bc import BCArgs
+    from rl_garden.training.offline.entrypoints.bc import BCArgs
+    from rl_garden.training.offline.runner import _eval_env_request
 
     args = BCArgs(
         dataset_backend="h5",

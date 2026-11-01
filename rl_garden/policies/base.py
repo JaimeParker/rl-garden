@@ -22,7 +22,7 @@ from gymnasium import spaces
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 
-# Mirrors rl_garden.algorithms._observation.EncoderSharing (the algorithm
+# Mirrors rl_garden.algorithms.observation_encoders.EncoderSharing (the algorithm
 # layer's own copy of this Literal) without importing the algorithms layer
 # from policies -- policies sit below algorithms; see
 # .agents/rules/repository-map.md.

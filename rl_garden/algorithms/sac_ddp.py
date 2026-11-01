@@ -11,7 +11,7 @@ identically to plain ``SAC`` -- e.g. loading a checkpoint saved by
 v1 scope: plain ``SAC`` only (not ``SequenceSAC``/``RecurrentSAC``/
 ``TransformerSAC``/``SACFlow``/``RLPD``/``RLPDHybrid``/``FlashSAC``/
 ``DDPG``/``TD3``). Never constructed directly from the CLI -- selected
-transparently by ``rl_garden.training.online.sac.build_sac`` when
+transparently by ``rl_garden.training.online.entrypoints.sac.build_sac`` when
 ``is_ddp_active()``.
 
 KNOWN LIMITATION under multi-GPU DDP: each rank's replay buffer is

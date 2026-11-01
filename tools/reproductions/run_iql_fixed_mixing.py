@@ -25,9 +25,9 @@ STATE_CAPTURE_SCRIPT = REPO_ROOT / "tools" / "reproductions" / "capture_experime
 STATE_HASH_PATHS = [
     "rl_garden/algorithms/iql.py",
     "rl_garden/algorithms/off2on_iql.py",
-    "rl_garden/training/off2on/iql.py",
-    "rl_garden/training/off2on/_args.py",
-    "rl_garden/training/off2on/_runner.py",
+    "rl_garden/training/off2on/entrypoints/iql.py",
+    "rl_garden/training/off2on/args.py",
+    "rl_garden/training/off2on/runner.py",
     "tools/reproductions/run_iql_fixed_mixing.py",
     "tools/reproductions/iql_fixed_mixing.patch",
 ]

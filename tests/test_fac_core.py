@@ -153,7 +153,7 @@ def test_without_replace_and_dataset_wide_constant_trains_one_call():
     # dataset_wide_constant needs no per-sample cached-logp gather, so it is
     # the one fac_threshold allowed under offline_sampling="without_replace"
     # (see FACCore's module docstring, "Deviations"). FQLCore._sample_train_batch's
-    # sample_without_repeat lookup (rl_garden/buffers/_sampling.py) is now
+    # sample_without_repeat lookup (rl_garden/buffers/sampling.py) is now
     # fixed upstream, so this drives a full train() call end to end instead
     # of only checking construction-time validation.
     agent = _make_agent(

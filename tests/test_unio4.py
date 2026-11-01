@@ -224,7 +224,7 @@ def test_multi_key_state_observation_trains_one_step_per_phase():
 
 
 def test_registry_discovers_unio4():
-    from rl_garden.training.offline._registry import registry
+    from rl_garden.training.offline.registry import registry
 
     registry.discover()
     assert "unio4" in registry._entries

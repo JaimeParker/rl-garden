@@ -43,8 +43,8 @@ from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import Activation, DiffusionMLP, KernelInit, build_diffusion_mlp_head
 from rl_garden.networks.mlp import _apply_kernel_init, resolve_activation
-from rl_garden.policies._diffusion_process import DiffusionProcess
 from rl_garden.policies.base import BasePolicy, EncoderSharing
+from rl_garden.policies.diffusion_process import DiffusionProcess
 
 
 class _CriticObs(nn.Module):

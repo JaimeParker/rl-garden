@@ -1,7 +1,7 @@
 """Tests for the shared offline dataset dispatcher used by offline and off2on.
 
 Dispatch itself goes through ``rl_garden.buffers.dataset_backend_registry``
-(no more if/elif in ``rl_garden.training._dataset``), so most of these tests
+(no more if/elif in ``rl_garden.training.offline_dataset``), so most of these tests
 register a small fake backend directly in the registry (via
 ``monkeypatch.setitem`` on its module-global dict, auto-reverted after each
 test) rather than monkeypatching per-format functions ``_dataset.py`` no
@@ -21,7 +21,7 @@ from gymnasium import spaces
 from rl_garden.buffers import dataset_backend_registry
 from rl_garden.buffers.dataset_backend_registry import DatasetBackend, DatasetRequest
 from rl_garden.observations import ObservationConfig
-from rl_garden.training._dataset import (
+from rl_garden.training.offline_dataset import (
     infer_offline_dataset_specs,
     load_offline_dataset,
 )

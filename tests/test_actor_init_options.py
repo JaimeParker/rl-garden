@@ -290,15 +290,15 @@ def test_checkpoint_metadata_defaults_are_none(agent_cls, extra_kwargs):
 @pytest.mark.parametrize(
     "algorithm,module,builder",
     [
-        ("ppo", "rl_garden.training.online.ppo", "build_ppo"),
+        ("ppo", "rl_garden.training.online.entrypoints.ppo", "build_ppo"),
         (
             "recurrent_ppo",
-            "rl_garden.training.online.recurrent_ppo",
+            "rl_garden.training.online.entrypoints.recurrent_ppo",
             "build_recurrent_ppo",
         ),
         (
             "transformer_ppo",
-            "rl_garden.training.online.transformer_ppo",
+            "rl_garden.training.online.entrypoints.transformer_ppo",
             "build_transformer_ppo",
         ),
     ],

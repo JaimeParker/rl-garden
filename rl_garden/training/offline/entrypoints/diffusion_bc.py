@@ -1,0 +1,275 @@
+"""Diffusion BC pretraining run function (DPPO phase 1).
+
+Does not reuse ``rl_garden.training.offline.runner.run_offline``: that
+runner populates ``agent.replay_buffer`` via ``load_offline_dataset``, but
+``DiffusionBC`` has no replay buffer -- its dataset is a fixed set of
+``(obs_history, action_chunk)`` windows loaded directly in the constructor
+(see ``rl_garden.buffers.chunked_dataset``). Mirrors
+``tdmpc2_multitask.py``'s bespoke-runner shape (same reasoning: a
+non-replay-buffer dataset doesn't fit the shared runner), but simpler since
+there is no separate dataset-loading step to run after agent construction.
+
+Handles both Box and Dict (vision) H5 datasets -- ``DiffusionBC`` itself
+absorbed the former standalone ``VisionDiffusionBC``, and this entrypoint
+follows suit: ``infer_specs_from_h5`` (not the Box-only
+``infer_box_specs_from_h5``) infers the observation space from the dataset
+(not gated by ``--obs``, which only governs live-env backends -- the H5's
+own stored keys decide what's Dict-shaped here), and the Dict-only
+``encoder_config``/``obs_groups`` kwargs are built by ``_diffusion_bc_kwargs``
+below, forwarding ``args.encoder`` to the schema-driven observation-encoder
+mixin (see ``rl_garden.algorithms.observation_encoders``).
+"""
+
+from __future__ import annotations
+
+import time
+import warnings
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from rl_garden.buffers.h5_dataset import infer_specs_from_h5
+from rl_garden.common import Logger, seed_everything
+from rl_garden.common.effective_config import json_value, persist_effective_config
+from rl_garden.training.inspection import (
+    config_session,
+    emit_materialized_config,
+    has_config_session,
+    is_dry_run,
+    materialize_config,
+    prepare_standalone,
+    run_preflight,
+)
+from rl_garden.training.offline.args import DiffusionBCTrainingArgs
+from rl_garden.training.offline.registry import registry
+
+
+@dataclass
+class DiffusionBCArgs(DiffusionBCTrainingArgs):
+    """Diffusion BC pretraining (DPPO phase 1). Requires ``--dataset_path``
+    (H5 trajectory file, Box state-only or Dict vision). With the default
+    ``--net_backbone mlp``, a Box-obs run produces the EMA checkpoint that
+    ``dppo``'s ``--bc_checkpoint`` loads into ``actor``/``actor_ft``.
+    ``--net_backbone unet`` is NOT compatible with that path -- ``DPPOPolicy``'s
+    actor is a fixed ``DiffusionMLP``, so loading a unet-backbone checkpoint
+    there raises a state-dict key-mismatch ``RuntimeError``; use
+    ``--net_backbone unet`` only for standalone
+    ``diffusion_bc``/``consistency_distill_bc`` use, not as a DPPO teacher.
+    A Dict (vision) obs run is likewise never a valid ``dppo``/
+    ``consistency_distill_bc`` ``--bc_checkpoint`` teacher (both require a
+    Box-trained checkpoint; see the guards in ``DPPO.__init__``/
+    ``ConsistencyDistillBC._setup_model``). Most ``--encoder``/``--obs-groups``
+    fields are no-ops for a Box-shaped dataset."""
+
+
+def _diffusion_bc_kwargs(args: DiffusionBCArgs, obs_space: Any) -> dict:
+    """``encoder_config``/``obs_groups`` for a Dict (vision) obs space; a
+    no-op for a Box (state-only) obs space (both stay unset, resolved by the
+    schema-driven mixin to a plain ``FlattenExtractor``).
+
+    ``args.obs`` does not gate this dataset's shape (the H5 file's own
+    stored keys decide it, via ``infer_specs_from_h5`` above -- unlike a
+    live env backend, there is no ``ObservationConfig`` contract to honor
+    here); ``args.obs.state`` is instead read as "exclude the state key from
+    ``obs_groups`` even when the dataset has one".
+    """
+    if not hasattr(obs_space, "spaces"):
+        return {}
+
+    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.observations import ObsGroups, ObservationSchema
+
+    kwargs: dict = {"encoder_config": args.encoder}
+    if not args.obs.state:
+        # Exclude "state" even when present in the dataset's obs space: an
+        # obs_groups actor/critic subset that omits it.
+        image_keys = ObservationSchema.from_space(obs_space).image_keys
+        kwargs["obs_groups"] = ObsGroups(actor=image_keys, critic=image_keys)
+    else:
+        obs_groups = resolve_obs_groups_config(args)
+        if obs_groups is not None:
+            kwargs["obs_groups"] = obs_groups
+    return kwargs
+
+
+def run_diffusion_bc(args: DiffusionBCArgs) -> None:
+    cleanup: list[Callable[[], None]] = []
+    try:
+        _run_diffusion_bc(args, cleanup)
+    finally:
+        for callback in reversed(cleanup):
+            callback()
+
+
+def _run_diffusion_bc(args: DiffusionBCArgs, cleanup: list[Callable[[], None]]) -> None:
+    from rl_garden.algorithms import DiffusionBC, OfflineEnvSpec
+    from rl_garden.algorithms.offline import run_offline_pretraining
+    from rl_garden.training.inspection import construct_agent
+
+    if not has_config_session():
+        normalized_args, preflight = prepare_standalone(
+            args, registry=registry, training_phase="offline", algorithm="diffusion_bc"
+        )
+        with config_session(preflight, dry_run=False):
+            return _run_diffusion_bc(normalized_args, cleanup)
+
+    if not args.dataset_path:
+        raise SystemExit("--dataset_path is required for diffusion_bc.")
+    if args.num_offline_steps <= 0:
+        raise SystemExit("--num_offline_steps must be positive.")
+
+    seed_everything(args.seed)
+
+    obs_space, action_space = infer_specs_from_h5(args.dataset_path)
+
+    start_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    run_name = args.exp_name or f"diffusion_bc__{args.seed}__{int(time.time())}"
+    checkpoint_dir = None
+    if args.checkpoint_dir is not None:
+        checkpoint_dir = args.checkpoint_dir
+    elif args.save_final_checkpoint or args.checkpoint_freq > 0:
+        checkpoint_dir = str(Path(args.log_dir) / run_name / "checkpoints")
+
+    dry_run = is_dry_run()
+    config_path = Path(args.log_dir) / run_name / "config.json"
+    if dry_run:
+        logger = Logger(log_type="none")
+    else:
+        preflight_config = run_preflight(
+            {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
+        )
+        persist_effective_config(preflight_config, config_path)
+        logger = Logger.create(
+            log_type=args.log_type,
+            log_dir=args.log_dir,
+            run_name=run_name,
+            config=json_value(preflight_config),
+            start_time=start_time,
+            log_keywords=args.log_keywords,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            log_group=args.log_group or "diffusion_bc",
+        )
+    cleanup.append(logger.close)
+
+    from rl_garden.networks import DiffusionMLP
+
+    net_cls = DiffusionMLP
+    net_kwargs = None
+    if args.net_backbone == "unet":
+        from rl_garden.networks import DiffusionUNet1D
+
+        warnings.warn(
+            "--net_backbone unet produces a checkpoint that dppo's "
+            "--bc_checkpoint cannot load (DPPOPolicy's actor is a fixed "
+            "DiffusionMLP) -- only use this checkpoint standalone or with "
+            "consistency_distill_bc's --bc_checkpoint.",
+            stacklevel=2,
+        )
+        net_cls = DiffusionUNet1D
+        net_kwargs = dict(
+            down_dims=args.unet_down_dims,
+            kernel_size=args.unet_kernel_size,
+            n_groups=args.unet_n_groups,
+            cond_predict_scale=args.unet_cond_predict_scale,
+        )
+
+    env = OfflineEnvSpec(observation_space=obs_space, action_space=action_space, num_envs=1)
+    agent = construct_agent(
+        DiffusionBC,
+        env=env,
+        dataset_path=args.dataset_path,
+        horizon_steps=args.horizon_steps,
+        cond_steps=args.cond_steps,
+        denoising_steps=args.denoising_steps,
+        activation_fn=args.activation_fn,
+        residual_style=args.residual_style,
+        time_dim=args.time_dim,
+        kernel_init=args.kernel_init,
+        denoised_clip_value=args.denoised_clip_value,
+        randn_clip_value=args.randn_clip_value,
+        final_action_clip_value=args.final_action_clip_value,
+        min_sampling_denoising_std=args.min_sampling_denoising_std,
+        net_cls=net_cls,
+        net_kwargs=net_kwargs,
+        **_diffusion_bc_kwargs(args, obs_space),
+        actor_lr=args.actor_lr,
+        weight_decay=args.weight_decay,
+        lr_schedule=args.lr_schedule,
+        lr_warmup_steps=args.lr_warmup_steps,
+        lr_decay_steps=args.lr_decay_steps,
+        lr_min_ratio=args.lr_min_ratio,
+        grad_clip_norm=args.grad_clip_norm,
+        batch_size=args.batch_size,
+        ema_decay=args.ema_decay,
+        ema_update_every=args.ema_update_every,
+        ema_start_step=args.ema_start_step,
+        num_traj=args.offline_num_traj,
+        seed=args.seed,
+        device=args.device,
+        logger=logger,
+        std_log=args.std_log,
+        log_freq=args.log_freq,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=args.checkpoint_freq,
+        save_final_checkpoint=args.save_final_checkpoint,
+    )
+
+    if args.load_checkpoint is not None:
+        agent.load(args.load_checkpoint, load_replay_buffer=False)
+        if args.std_log:
+            print(f"[diffusion_bc] resumed_from={args.load_checkpoint}", flush=True)
+
+    materialized_derived = {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
+    if dry_run:
+        emit_materialized_config(
+            env_request={"dataset_path": args.dataset_path},
+            env=env,
+            eval_env=None,
+            agent=agent,
+            derived=materialized_derived,
+        )
+        return
+    materialized = materialize_config(
+        env_request={"dataset_path": args.dataset_path},
+        env=env,
+        eval_env=None,
+        agent=agent,
+        derived=materialized_derived,
+    )
+    persist_effective_config(materialized, config_path)
+    logger.update_config(json_value(materialized))
+    if args.std_log:
+        if hasattr(obs_space, "spaces"):
+            from rl_garden.observations import ObservationSchema
+
+            schema_image_keys = ObservationSchema.from_space(obs_space).image_keys
+            print(
+                f"[diffusion_bc] dataset_size={agent._dataset_size} "
+                f"images={schema_image_keys} action={action_space.shape}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[diffusion_bc] dataset_size={agent._dataset_size} "
+                f"obs={obs_space.shape} action={action_space.shape}",
+                flush=True,
+            )
+
+    run_offline_pretraining(
+        agent,
+        num_steps=args.num_offline_steps,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=args.checkpoint_freq,
+        save_filename="diffusion_bc_offline_pretrained.pt",
+        save_replay_buffer=False,
+        save_final_checkpoint=args.save_final_checkpoint,
+        log_freq=args.log_freq,
+        std_log=args.std_log,
+        eval_freq=0,
+        desc="diffusion-bc-offline",
+    )
+
+
+registry.register("diffusion_bc", DiffusionBCArgs, run_diffusion_bc)

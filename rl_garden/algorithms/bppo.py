@@ -39,7 +39,7 @@ from typing import Any, Literal, Optional, Sequence
 import torch
 import torch.nn.functional as F
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
 from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer

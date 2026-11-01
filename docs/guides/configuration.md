@@ -296,7 +296,7 @@ does not recursively serialize arbitrary third-party simulator internals.
 ## Adding or changing parameters
 
 Place algorithm parameters in the relevant dataclass under
-`rl_garden/training/{online,offline,off2on}/_args.py`; keep algorithm-specific
+`rl_garden/training/{online,offline,off2on}/args.py`; keep algorithm-specific
 fields in the public algorithm Args subclass. Environment fields belong in
 `rl_garden/common/env_args.py`, and shared logging/checkpoint fields belong in
 `rl_garden/common/cli_args.py`.

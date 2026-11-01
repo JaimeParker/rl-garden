@@ -151,7 +151,7 @@ def _pin_backend_device_via_cli_entrypoint_worker(rank: int, world_size: int, in
     dataclass or another mutability obstacle on the real call path."""
     _init_gloo(rank, world_size, init_method)
     from rl_garden.common.env_args import make_env_request
-    from rl_garden.training.online.ppo import PPOArgs
+    from rl_garden.training.online.entrypoints.ppo import PPOArgs
 
     args = PPOArgs(
         env_backend="isaaclab", eval_freq=0, log_freq=0,

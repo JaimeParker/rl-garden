@@ -9,9 +9,9 @@ algorithm registration, environment backends, or replay/device behavior.
   `examples/train_off2on.py` are thin registry dispatchers. Do not edit them to add
   an algorithm.
 - Add a public algorithm module under the appropriate
-  `rl_garden/training/{online,offline,off2on}/` package. It must define the final
+  `rl_garden/training/{online,offline,off2on}/entrypoints/` package. It must define the final
   Args composition, run function, and package-local registry call.
-- Put parameters shared by algorithms in the phase-local `_args.py`. Keep only
+- Put parameters shared by algorithms in the phase-local `args.py`. Keep only
   genuinely cross-phase CLI primitives and helpers in `rl_garden/common/cli_args.py`.
 - `EnvRunArgs` and backend configuration are cross-phase environment concerns and
   belong in `rl_garden/common/env_args.py`.
@@ -56,7 +56,7 @@ algorithm registration, environment backends, or replay/device behavior.
 - Never branch on `isinstance(obs_space, spaces.Box/Dict)` in an algorithm or
   policy. Observation space is always `spaces.Dict` (state-only normalizes to
   `Dict({"state": Box})`); resolve encoders through `ObservationEncoderMixin`
-  (`rl_garden/algorithms/_observation.py`) — see
+  (`rl_garden/algorithms/observation_encoders.py`) — see
   [`.agents/rules/adding-algorithm.md`](adding-algorithm.md) §5.
 - Add focused tests for construction, one update step, shapes/devices, and relevant
   edge cases. CPU tests validate compatibility behavior, not the preferred path.

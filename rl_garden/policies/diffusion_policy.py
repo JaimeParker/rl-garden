@@ -12,7 +12,7 @@ before any policy ever sees it), mirroring ``SACPolicy`` (see
 ``rl_garden/policies/sac_policy.py``) -- this class absorbs the former
 standalone ``VisionDiffusionPolicy``. The caller (``DiffusionBC``) always
 builds the extractor via the schema-driven observation-encoder mixin
-(``rl_garden.algorithms._observation``): a ``FlattenExtractor`` (no
+(``rl_garden.algorithms.observation_encoders``): a ``FlattenExtractor`` (no
 learnable parameters) for a state-only schema, or a ``CombinedExtractor``
 (image+proprio fusion) for one with images. Because ``FlattenExtractor`` has
 no parameters, ``net.*`` state-dict keys and ``cond_dim`` stay byte-identical
@@ -51,8 +51,8 @@ from rl_garden.common.obs_utils import flatten_leading_dims
 from rl_garden.common.types import Obs
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import Activation, DiffusionMLP, KernelInit
-from rl_garden.policies._diffusion_process import DiffusionProcess
 from rl_garden.policies.base import BasePolicy, EncoderSharing
+from rl_garden.policies.diffusion_process import DiffusionProcess
 
 
 def build_diffusion_net(

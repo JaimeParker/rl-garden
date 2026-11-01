@@ -8,7 +8,7 @@ with ``FlowBCPolicy`` (``ActorVectorField``-based) swapped in for the
 Gaussian actor.
 
 The observation space is resolved through the shared observation-encoder
-mixin (``rl_garden.algorithms._observation``): a state-only space builds a
+mixin (``rl_garden.algorithms.observation_encoders``): a state-only space builds a
 ``FlattenExtractor`` and a Dict space builds a ``CombinedExtractor``,
 selected by ``EncoderConfig``/``ObsGroups`` rather than an in-class
 ``isinstance`` branch.

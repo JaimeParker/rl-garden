@@ -1,5 +1,7 @@
-"""Shared helpers for flattening/indexing ``Obs`` values with leading (T, N) axes."""
+"""Shared helpers for flattening/indexing/merging ``Obs`` values (nested-dict trees of tensors)."""
 from __future__ import annotations
+
+from typing import Any
 
 import torch
 
@@ -25,3 +27,22 @@ def index_obs(obs: Obs, indices: torch.Tensor) -> Obs:
     if isinstance(obs, dict):
         return {key: index_obs(value, indices) for key, value in obs.items()}
     return obs[indices]
+
+
+def tree_where(mask: torch.Tensor, new: Obs, old: Obs) -> Obs:
+    if isinstance(new, dict):
+        return {key: tree_where(mask, new[key], old[key]) for key in new}
+    view_shape = (mask.shape[0],) + (1,) * (new.dim() - 1)
+    return torch.where(mask.view(view_shape), new, old)
+
+
+def tree_clone(tree: Any) -> Any:
+    if isinstance(tree, dict):
+        return {key: tree_clone(value) for key, value in tree.items()}
+    return tree.clone()
+
+
+def tree_structure(tree: Any) -> Any:
+    if isinstance(tree, dict):
+        return {key: tree_structure(value) for key, value in tree.items()}
+    return None

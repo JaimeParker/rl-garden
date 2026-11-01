@@ -14,7 +14,7 @@ from typing import Any, Literal, Optional
 import torch
 import torch.nn.functional as F
 
-from rl_garden.algorithms._observation import EncoderSharing
+from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.buffers.nstep_buffer import (
     LazyNextNStepReplayBuffer,

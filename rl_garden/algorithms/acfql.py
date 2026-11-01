@@ -9,12 +9,12 @@ an online off2on phase" -- ``FQL`` itself is ``OfflineRLAlgorithm``-based (no
 rollout loop at all), so ACFQL cannot simply subclass it; it reuses
 ``FQLCore``'s network/loss *shape* while wiring into the online-capable
 ``OffPolicyAlgorithm`` shell instead. The CLI entrypoint reuses the
-already-generic ``run_off2on`` runner (``rl_garden/training/off2on/_runner.py``)
+already-generic ``run_off2on`` runner (``rl_garden/training/off2on/runner.py``)
 unmodified -- it already does exactly what QC's own ``main.py`` does (load an
 offline dataset into ``agent.replay_buffer``, run offline gradient steps,
 switch to online mode, continue via ``learn()``), so no new CLI orchestration
 is needed, only a ``build_acfql`` callback (see
-``rl_garden/training/off2on/acfql.py``).
+``rl_garden/training/off2on/entrypoints/acfql.py``).
 
 ``FQLCore.train()`` is fully monolithic (no SACCore-style hook seams to
 override individually -- confirmed by reading it directly), so
@@ -61,7 +61,7 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
-from rl_garden.algorithms._chunked_rollout import ChunkedRolloutMixin
+from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.fql import FQLCore
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm

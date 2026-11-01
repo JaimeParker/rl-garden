@@ -27,7 +27,7 @@ from test_rollout_episode_metrics import _RecordingLogger
 
 import rl_garden.algorithms.ppo as ppo_module
 from rl_garden.algorithms import PPO, RecurrentPPO
-from rl_garden.algorithms._decision_mask import DecisionMaskReader
+from rl_garden.algorithms.decision_mask import DecisionMaskReader
 from rl_garden.buffers import RolloutBuffer
 from rl_garden.buffers.gae import compute_gae
 from rl_garden.buffers.recurrent_rollout_buffer import RecurrentRolloutBuffer

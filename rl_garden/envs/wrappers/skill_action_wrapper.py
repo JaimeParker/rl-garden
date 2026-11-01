@@ -27,7 +27,7 @@ instances (``train_finetuning_supe.py:185-203``); its own ``eval`` flag
 only toggles reward-discount handling, never action determinism. The
 deterministic path (``eval_skill_actions``, ``opal.py:454-460``) exists
 upstream but is used only by OPAL's own standalone pretraining eval loop,
-never by SUPE's online rollout -- so ``rl_garden/training/online/supe.py``
+never by SUPE's online rollout -- so ``rl_garden/training/online/entrypoints/supe.py``
 constructs both the train and eval wrapper with ``deterministic=False``,
 matching upstream exactly. This parameter stays available as a general
 capability of the wrapper, not because SUPE's own pipeline uses ``True``.
@@ -58,7 +58,7 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.common.types import Obs
-from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
+from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 from rl_garden.networks.actor_critic import UnsquashedGaussianActor
 
 

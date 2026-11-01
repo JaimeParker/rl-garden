@@ -40,8 +40,8 @@ from rl_garden.networks import (
     KernelInit,
     ValueNetwork,
 )
-from rl_garden.policies._diffusion_process import DiffusionProcess
 from rl_garden.policies.base import BasePolicy, EncoderSharing
+from rl_garden.policies.diffusion_process import DiffusionProcess
 
 
 class IDQLPolicy(DiffusionProcess, BasePolicy):

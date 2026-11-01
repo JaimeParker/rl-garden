@@ -60,20 +60,20 @@ from rl_garden.networks import (
     EnsembleQCritic,
     KernelInit,
 )
-from rl_garden.policies._fql_networks import (
+from rl_garden.networks.fql_networks import (
     FQLEnsembleCritic,
     FQLVectorField,
 )
 from rl_garden.policies.base import BasePolicy
 
 # This family only implements two of the mixin's three values (see
-# rl_garden.algorithms._observation.EncoderSharing) -- "shared" (both losses
+# rl_garden.algorithms.observation_encoders.EncoderSharing) -- "shared" (both losses
 # train one encoder, no detach) has no implementation here; see __init__'s
 # validation below. Kept as a local Literal, not imported from
-# rl_garden.algorithms._observation: rl_garden/policies/*.py must not import
+# rl_garden.algorithms.observation_encoders: rl_garden/policies/*.py must not import
 # from rl_garden.algorithms.* at module scope (importing any submodule of
 # rl_garden.algorithms runs algorithms/__init__.py, which eagerly imports
-# fql.py -> this module, i.e. import rl_garden.algorithms._observation from
+# fql.py -> this module, i.e. import rl_garden.algorithms.observation_encoders from
 # here IS a circular import, confirmed empirically -- not just theoretical).
 EncoderSharing = Literal["shared_critic_grad", "separate"]
 

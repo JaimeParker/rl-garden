@@ -3,7 +3,7 @@
 A WSRL-style H5 file writes ``terminated`` and ``truncated`` as two separate
 datasets (``rl_garden/datasets/wsrl_generation.py``'s
 ``WSRLTrajectoryWriter.write_episode``). Before this fix,
-``_transition_done`` ORed every terminal-like field -- including
+``transition_done`` ORed every terminal-like field -- including
 ``truncated``/``truncations`` -- into the TD ``done`` used for Bellman
 bootstrapping, so an artificial ``max_episode_steps`` cutoff wrongly stopped
 bootstrap the same way a true termination does. Online rollouts never do
@@ -43,7 +43,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import MCReplayBuffer, load_h5_dataset_to_replay_buffer
-from rl_garden.buffers._dataset_common import _transition_done
+from rl_garden.buffers.dataset_common import transition_done
 
 
 def _make_buffer(num_envs: int, buffer_size: int, gamma: float = 0.9) -> MCReplayBuffer:
@@ -61,7 +61,7 @@ def _make_buffer(num_envs: int, buffer_size: int, gamma: float = 0.9) -> MCRepla
 
 
 # ---------------------------------------------------------------------------
-# Direct unit tests of `_transition_done`.
+# Direct unit tests of `transition_done`.
 # ---------------------------------------------------------------------------
 
 
@@ -70,7 +70,7 @@ def test_transition_done_excludes_truncation_from_td_done():
         "terminated": np.array([False, True, False]),
         "truncated": np.array([False, False, True]),
     }
-    done, truncated = _transition_done(traj, 3, torch.device("cpu"))
+    done, truncated = transition_done(traj, 3, torch.device("cpu"))
     assert done.tolist() == [0.0, 1.0, 0.0]
     assert truncated is not None
     assert truncated.tolist() == [False, False, True]
@@ -82,7 +82,7 @@ def test_transition_done_truncation_only_is_not_last_step_fallback():
     the truncation key already carries a real (non-bootstrap-stopping)
     boundary signal."""
     traj = {"truncated": np.array([False, False, True])}
-    done, truncated = _transition_done(traj, 3, torch.device("cpu"))
+    done, truncated = transition_done(traj, 3, torch.device("cpu"))
     assert done.tolist() == [0.0, 0.0, 0.0]
     assert truncated is not None
     assert truncated.tolist() == [False, False, True]
@@ -91,7 +91,7 @@ def test_transition_done_truncation_only_is_not_last_step_fallback():
 def test_transition_done_no_signal_at_all_falls_back_to_last_step():
     """Neither family of keys exists: keep the pre-existing degenerate
     fallback (mark only the final transition done)."""
-    done, truncated = _transition_done({}, 3, torch.device("cpu"))
+    done, truncated = transition_done({}, 3, torch.device("cpu"))
     assert done.tolist() == [0.0, 0.0, 1.0]
     assert truncated is None
 

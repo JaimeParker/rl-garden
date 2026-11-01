@@ -1,4 +1,4 @@
-"""Tests for off2on/_runner.py's Minari wiring helpers."""
+"""Tests for off2on/runner.py's Minari wiring helpers."""
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -8,17 +8,17 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.training.off2on import _runner
-from rl_garden.training.off2on._runner import (
+from rl_garden.training.off2on import runner
+from rl_garden.training.off2on.entrypoints.calql import CalQLOff2OnArgs
+from rl_garden.training.off2on.entrypoints.iql import IQLOff2OnArgs
+from rl_garden.training.off2on.entrypoints.wsrl import WSRLOff2OnArgs
+from rl_garden.training.off2on.runner import (
     _apply_online_eval_freq,
     _offline_update_loop,
     _require_continuous_action_space,
     _resolve_env_id,
     _set_offline_probe,
 )
-from rl_garden.training.off2on.calql import CalQLOff2OnArgs
-from rl_garden.training.off2on.iql import IQLOff2OnArgs
-from rl_garden.training.off2on.wsrl import WSRLOff2OnArgs
 
 
 def _args(**overrides):
@@ -85,7 +85,7 @@ def _run_off2on_and_capture_create_eval_env(monkeypatch, tmp_path, **arg_overrid
         eval_env = SimpleNamespace(close=lambda: None) if req.create_eval_env else None
         return env, eval_env
 
-    monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
+    monkeypatch.setattr(runner, "make_training_envs", fake_make_training_envs)
 
     def build_agent(args, env, eval_env, logger, checkpoint_dir):
         from rl_garden.training.inspection import construct_agent
@@ -104,7 +104,7 @@ def _run_off2on_and_capture_create_eval_env(monkeypatch, tmp_path, **arg_overrid
         save_final_checkpoint=False,
         **arg_overrides,
     )
-    _runner.run_off2on(args, build_agent=build_agent, algorithm="wsrl")
+    runner.run_off2on(args, build_agent=build_agent, algorithm="wsrl")
     return captured["create_eval_env"]
 
 
@@ -159,7 +159,7 @@ def test_run_off2on_closes_envs_when_builder_fails(monkeypatch, tmp_path):
         )
         return train_env, eval_env
 
-    monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
+    monkeypatch.setattr(runner, "make_training_envs", fake_make_training_envs)
     args = WSRLOff2OnArgs(
         log_type="none",
         log_dir=str(tmp_path),
@@ -174,7 +174,7 @@ def test_run_off2on_closes_envs_when_builder_fails(monkeypatch, tmp_path):
         raise RuntimeError("builder failed")
 
     with pytest.raises(RuntimeError, match="builder failed"):
-        _runner.run_off2on(
+        runner.run_off2on(
             args,
             build_agent=failing_builder,
             algorithm="wsrl",
@@ -200,7 +200,7 @@ def _run_off2on_and_capture_num_eval_steps(
         eval_env = SimpleNamespace(close=lambda: None) if req.create_eval_env else None
         return env, eval_env
 
-    monkeypatch.setattr(_runner, "make_training_envs", fake_make_training_envs)
+    monkeypatch.setattr(runner, "make_training_envs", fake_make_training_envs)
 
     def build_agent(args, env, eval_env, logger, checkpoint_dir):
         from rl_garden.training.inspection import construct_agent
@@ -219,7 +219,7 @@ def _run_off2on_and_capture_num_eval_steps(
         save_final_checkpoint=False,
         **arg_overrides,
     )
-    _runner.run_off2on(args, build_agent=build_agent, algorithm=algorithm)
+    runner.run_off2on(args, build_agent=build_agent, algorithm=algorithm)
     return captured["num_eval_steps"]
 
 

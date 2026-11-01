@@ -27,7 +27,7 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
-from rl_garden.envs.wrappers._batch_utils import ChunkAccumulator
+from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 
 
 def _repeat_bound(bound: np.ndarray, n: int) -> np.ndarray:
