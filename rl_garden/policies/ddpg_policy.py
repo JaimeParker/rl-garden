@@ -22,6 +22,12 @@ class DDPGPolicy(BasePolicy):
     * **No learnable std**.  Actor std comes from an external schedule.
     * **No log-prob**.  ``predict()`` returns only the action.
     * Critic target does **not** subtract ``alpha * log_prob``.
+
+    Under ``encoder_sharing="shared"`` both optimizers hold the shared
+    extractor (``critic_and_encoder_parameters`` and ``actor_parameters`` both
+    yield it): the critic optimizer applies the Q-loss gradient and the actor
+    optimizer the actor-loss gradient, each with its own Adam state and
+    learning rate.
     """
 
     def __init__(
@@ -187,12 +193,17 @@ class DDPGPolicy(BasePolicy):
         yield from (self.critic_extractor or self.actor_extractor).parameters()
 
     def actor_parameters(self):
-        # Actor-only; the shared-encoder case trains the encoder via
-        # critic_and_encoder_parameters' Q-loss instead (actor path is
-        # stop-gradiented under "shared_critic_grad"). When critic_extractor
-        # is genuinely separate, actor_extractor is actor-exclusive --
-        # nothing else would ever train it -- so it belongs on this
-        # optimizer instead.
-        if self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor:
+        # actor_extractor belongs here whenever the actor loss trains it:
+        # - a genuinely separate critic_extractor leaves it actor-exclusive
+        #   (nothing else would ever train it);
+        # - "shared" trains the one extractor from both losses, so
+        #   critic_and_encoder_parameters yields it too and each optimizer
+        #   applies its own loss's gradient with its own Adam state and lr.
+        # Under "shared_critic_grad" the actor path is stop-gradiented
+        # (extract_actor_features) and only the Q-loss trains the extractor.
+        actor_extractor_is_actor_exclusive = (
+            self.critic_extractor is not None and self.critic_extractor is not self.actor_extractor
+        )
+        if actor_extractor_is_actor_exclusive or self.encoder_sharing == "shared":
             yield from self.actor_extractor.parameters()
         yield from self.actor.parameters()

@@ -6,6 +6,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import RecurrentSAC
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 
@@ -192,6 +193,48 @@ def test_recurrent_sac_actor_loss_does_not_train_encoder_or_rnn_when_stop_gradie
         assert param.grad is None or torch.all(param.grad == 0), f"encoder param {name} got actor grad"
     for name, param in agent.policy.recurrent_encoder.named_parameters():
         assert param.grad is None or torch.all(param.grad == 0), f"RNN param {name} got actor grad"
+
+
+def _clone_parameters(*modules: torch.nn.Module) -> list[torch.Tensor]:
+    return [p.detach().clone() for module in modules for p in module.parameters()]
+
+
+def _any_parameter_changed(before: list[torch.Tensor], *modules: torch.nn.Module) -> bool:
+    after = [p for module in modules for p in module.parameters()]
+    return any(not torch.equal(old, new) for old, new in zip(before, after, strict=True))
+
+
+@pytest.mark.parametrize("rnn_type", ["lstm", "gru"])
+def test_recurrent_sac_critic_updates_train_the_rnn(rnn_type):
+    env = DummyVecEnv(_state_space(), _action_space())
+    agent = RecurrentSAC(env=env, rnn_type=rnn_type, **_recurrent_sac_kwargs())
+    rnn_before = _clone_parameters(agent.policy.recurrent_encoder)
+
+    agent.learn(total_timesteps=40)
+
+    assert agent._global_update > 0
+    assert _any_parameter_changed(rnn_before, agent.policy.recurrent_encoder)
+
+
+def test_recurrent_sac_frozen_encoder_phase_also_freezes_the_rnn():
+    env = DummyVecEnv(_dict_space(), _action_space())
+    agent = RecurrentSAC(
+        env=env,
+        encoder_config=_test_encoder_config,
+        initial_training_phase=InitialTrainingPhase(
+            duration_steps=1_000, update_actor=False, update_critic=True, update_encoder=False
+        ),
+        **_recurrent_sac_kwargs(),
+    )
+    policy = agent.policy
+    trunk_before = _clone_parameters(policy.actor_extractor, policy.recurrent_encoder)
+    critic_before = _clone_parameters(policy.critic)
+
+    agent.learn(total_timesteps=40)
+
+    assert agent._global_update > 0
+    assert not _any_parameter_changed(trunk_before, policy.actor_extractor, policy.recurrent_encoder)
+    assert _any_parameter_changed(critic_before, policy.critic)
 
 
 def test_recurrent_sac_eval_resets_hidden_state_only_at_episode_boundary():

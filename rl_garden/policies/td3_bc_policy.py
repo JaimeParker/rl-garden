@@ -31,7 +31,14 @@ from rl_garden.policies.base import BasePolicy, EncoderSharing
 
 
 class TD3BCPolicy(ObsNormalizingMixin, BasePolicy):
-    """Deterministic actor + twin-Q critic, both with target copies."""
+    """Deterministic actor + twin-Q critic, both with target copies.
+
+    Under ``encoder_sharing="shared"`` both optimizers hold the shared
+    extractor (``critic_and_encoder_parameters`` and ``actor_parameters`` both
+    yield it): the critic optimizer applies the Q-loss gradient and the actor
+    optimizer the actor-loss gradient, each with its own Adam state and
+    learning rate.
+    """
 
     def __init__(
         self,
@@ -196,10 +203,13 @@ class TD3BCPolicy(ObsNormalizingMixin, BasePolicy):
         return self.q_values_all(features, actions, target=target).min(dim=0).values
 
     def actor_parameters(self):
-        # actor_extractor is trained via critic_and_encoder_parameters' Q-loss
-        # in the shared case; when critic_extractor is genuinely separate,
-        # nothing else would ever train actor_extractor, so it belongs here.
-        if self.critic_extractor is not None:
+        # actor_extractor belongs here whenever the actor loss trains it: a
+        # genuinely separate critic_extractor leaves it actor-exclusive, and
+        # "shared" trains the one extractor from both losses (so
+        # critic_and_encoder_parameters yields it too, and each optimizer
+        # applies its own loss's gradient with its own Adam state and lr).
+        # Under "shared_critic_grad" only the Q-loss trains it.
+        if self.critic_extractor is not None or self.encoder_sharing == "shared":
             yield from self.actor_extractor.parameters()
         yield from self.actor.parameters()
 

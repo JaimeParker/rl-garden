@@ -45,7 +45,10 @@ from rl_garden.observations import (
 #   critic loss trains it (off-policy default -- SAC/CQL/IQL's existing RGBD
 #   convention).
 # "shared": one encoder; both actor and critic losses train it (on-policy
-#   default -- PPO).
+#   default -- PPO). In off-policy actor-critic algorithms with separate
+#   actor and critic optimizers (the SAC and the DDPG/TD3/TD3+BC families),
+#   both optimizers hold the encoder and any sequence trunk behind it, each
+#   applying its own loss's gradient with its own state and lr.
 # "separate": two encoders (actor's own + critic's own), each trained only
 #   by its own loss. Required whenever obs_groups.actor != obs_groups.critic
 #   or a distinct critic_encoder_config is given.

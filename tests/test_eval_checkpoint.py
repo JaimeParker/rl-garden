@@ -403,3 +403,210 @@ def test_policy_graph_round_trips_through_eval_checkpoint(
     assert any(key.startswith("graph_nodes.") for key in expected)
     for key, value in expected.items():
         assert torch.equal(actual[key].cpu(), value.cpu()), key
+
+
+@pytest.mark.parametrize(
+    "algorithm_class,expected",
+    [
+        ("RecurrentPPO", ("online", "recurrent_ppo")),
+        ("TransformerPPO", ("online", "transformer_ppo")),
+        ("SACFlow", ("online", "sac_flow")),
+    ],
+)
+def test_resolve_auto_matches_registered_algorithm_class_names(algorithm_class, expected):
+    checkpoint = {"metadata": {"algorithm_class": algorithm_class}}
+
+    assert (
+        eval_checkpoint._resolve_phase_and_algorithm("auto", "auto", checkpoint)
+        == expected
+    )
+
+
+def test_resolve_auto_falls_back_to_name_table_without_registered_class(monkeypatch):
+    class _Registry:
+        def __init__(self, entries):
+            self._entries = entries
+
+        def discover(self):
+            pass
+
+        def entries(self):
+            return self._entries
+
+    registries = {
+        "online": _Registry({}),
+        "offline": _Registry({}),
+        "off2on": _Registry({"iql": SimpleNamespace(algorithm_cls=None)}),
+    }
+    monkeypatch.setattr(
+        eval_checkpoint, "_registry_for_phase", lambda phase: registries[phase]
+    )
+
+    checkpoint = {"metadata": {"algorithm_class": "Off2OnIQL"}}
+
+    assert eval_checkpoint._resolve_phase_and_algorithm("auto", "auto", checkpoint) == (
+        "off2on",
+        "iql",
+    )
+
+
+def _save_run_config(run_dir, args, *, algorithm: str = "ppo"):
+    from rl_garden.common.effective_config import (
+        effective_config_json,
+        resolve_active_environment,
+        resolve_effective_config,
+    )
+
+    config = resolve_effective_config(
+        args,
+        training_phase="online",
+        algorithm=algorithm,
+        sources={},
+        active_environment=resolve_active_environment(args),
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.json").write_text(effective_config_json(config))
+
+
+def _ppo_run_args(**backend_sections):
+    from rl_garden.training.online.registry import registry
+
+    registry.discover()
+    args = registry.entries()["ppo"].args_cls()
+    for name, value in backend_sections.items():
+        setattr(args, name, value)
+    return args
+
+
+def _restored_args(tmp_path, run_args, **eval_kwargs):
+    run_dir = tmp_path / "run"
+    _save_run_config(run_dir, run_args)
+    eval_args = eval_checkpoint.EvalCheckpointArgs(
+        checkpoint_path=str(run_dir / "checkpoints" / "checkpoint.pt"), **eval_kwargs
+    )
+    args = eval_checkpoint._load_training_args("online", "ppo", eval_args, {"metadata": {}})
+    return args, eval_args
+
+
+def test_eval_rebuilds_gymnasium_backend_config_from_the_run(tmp_path):
+    from rl_garden.common.env_args import GymnasiumConfig
+
+    run_args = _ppo_run_args(
+        env_backend="gymnasium",
+        gymnasium=GymnasiumConfig(
+            import_modules=("my_pkg.envs",),
+            vector_env_factory="my_pkg.envs:make_vector_env",
+            vector_env_returns_torch=True,
+            device="cuda:0",
+        ),
+    )
+
+    args, eval_args = _restored_args(tmp_path, run_args, env_backend="gymnasium")
+
+    assert args.env_backend == "gymnasium"
+    assert tuple(args.gymnasium.import_modules) == ("my_pkg.envs",)
+    assert args.gymnasium.vector_env_factory == "my_pkg.envs:make_vector_env"
+    assert args.gymnasium.vector_env_returns_torch is True
+    assert args.gymnasium.device == "cuda:0"
+    backend_config = eval_checkpoint._env_request(args, eval_args).backend_config
+    assert backend_config.vector_env_factory == "my_pkg.envs:make_vector_env"
+
+
+def test_eval_cli_backend_override_wins_only_for_changed_fields(tmp_path):
+    from rl_garden.common.env_args import GymnasiumConfig
+
+    run_args = _ppo_run_args(
+        env_backend="gymnasium",
+        gymnasium=GymnasiumConfig(
+            import_modules=("my_pkg.envs",),
+            vector_env_factory="my_pkg.envs:make_vector_env",
+            device="cuda:0",
+        ),
+    )
+
+    args, _ = _restored_args(
+        tmp_path,
+        run_args,
+        env_backend="gymnasium",
+        gymnasium=GymnasiumConfig(device="cuda:1"),
+    )
+
+    assert args.gymnasium.device == "cuda:1"
+    assert args.gymnasium.vector_env_factory == "my_pkg.envs:make_vector_env"
+    assert tuple(args.gymnasium.import_modules) == ("my_pkg.envs",)
+
+
+def test_eval_restores_maniskill_run_config_and_applies_cli_override(tmp_path):
+    from rl_garden.common.env_args import ManiSkillConfig
+
+    run_args = _ppo_run_args(
+        maniskill=ManiSkillConfig(sim_backend="physx_cpu", reward_mode="dense")
+    )
+
+    args, _ = _restored_args(tmp_path, run_args)
+    assert args.maniskill.sim_backend == "physx_cpu"
+    assert args.maniskill.reward_mode == "dense"
+
+    args, _ = _restored_args(
+        tmp_path, run_args, maniskill=ManiSkillConfig(render_backend="cpu")
+    )
+    assert args.maniskill.sim_backend == "physx_cpu"
+    assert args.maniskill.reward_mode == "dense"
+    assert args.maniskill.render_backend == "cpu"
+
+
+def test_eval_env_count_need_not_divide_by_the_run_num_minibatches(
+    tmp_path, monkeypatch
+):
+    """A RecurrentPPO run trained with ``num_minibatches=2`` evaluates with
+    ``--num-eval-envs 3``: eval never updates, so the minibatch count must not
+    constrain the eval env count."""
+    from _decision_fakes import _FixedHoldVecEnv
+
+    from rl_garden.common.checkpoint import load_checkpoint_file
+    from rl_garden.training.online import registry
+
+    builder = eval_checkpoint._builder_from_module(
+        eval_checkpoint._training_module("online", "recurrent_ppo"), "recurrent_ppo"
+    )
+    args = registry.parse_args(
+        [
+            "recurrent_ppo",
+            "--num-minibatches",
+            "2",
+            "--rnn-type",
+            "gru",
+            "--rnn-hidden-size",
+            "8",
+            "--log-type",
+            "none",
+        ]
+    )
+    trained = builder(args, _FixedHoldVecEnv(emit_decisions=False), None, None, None)
+    path = trained.save(tmp_path / "run" / "checkpoints" / "checkpoint.pt")
+    checkpoint = load_checkpoint_file(path, map_location="cpu")
+    assert checkpoint["metadata"]["hyperparameters"]["num_minibatches"] == 2
+
+    def make_three_env_pair(env_backend, request):
+        del env_backend, request
+        return (
+            _FixedHoldVecEnv(emit_decisions=False, holds=(1, 2, 3)),
+            _FixedHoldVecEnv(emit_decisions=False, holds=(1, 2, 3)),
+        )
+
+    monkeypatch.setattr(eval_checkpoint, "make_training_envs", make_three_env_pair)
+
+    result = eval_checkpoint.evaluate_checkpoint(
+        eval_checkpoint.EvalCheckpointArgs(
+            checkpoint_path=str(path),
+            config_path=str(tmp_path / "missing.json"),
+            num_eval_envs=3,
+            num_eval_episodes=2,
+            max_eval_steps=20,
+            device="cpu",
+        )
+    )
+
+    assert result["algorithm"] == "recurrent_ppo"
+    assert result["num_eval_envs"] == 3
+    assert result["metrics"]["episodes_completed"] == 2.0

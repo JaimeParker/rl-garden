@@ -42,7 +42,8 @@ class DDPG(OffPolicyAlgorithm):
     Parameters
     ----------
     policy_lr : float
-        Learning rate for actor (encoder is trained by critic loss).
+        Learning rate for actor (the encoder is trained by the critic loss,
+        and also by the actor loss under ``encoder_sharing="shared"``).
     q_lr : float
         Learning rate for critic + encoder.
     feature_dim : int

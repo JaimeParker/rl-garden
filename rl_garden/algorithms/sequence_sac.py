@@ -201,6 +201,10 @@ class SequenceSAC(SAC):
             data.obs, initial_hidden, data.episode_starts, self.burn_in_len,
             stop_gradient=stop_gradient,
         )
+        if stop_gradient:
+            # A frozen-encoder phase also freezes the sequence trunk, which
+            # q_optimizer owns alongside the extractor.
+            tail = tail.detach()
         online = tail[: self.learning_len]
         # Explicit .detach() (NOT a torch.no_grad() around the whole unroll --
         # that would also kill the online slice's gradient to the encoder/RNN,

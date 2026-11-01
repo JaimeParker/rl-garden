@@ -132,7 +132,7 @@ them; extend only through these hooks:
 | `_training_state_dict()` / `_load_training_state_dict()` | `{}` / no-op | loop-level counters |
 | `_checkpoint_includes_replay_buffer()` | `False` | `True` if a real replay buffer should persist |
 | `_ddp_extra_broadcast_modules()` | `[]` | state outside `self.policy` DDP must broadcast (e.g. `SAC`'s `alpha_tuner`) |
-| class attr `_compatible_checkpoint_algorithms` | `()` | resuming from a differently-named checkpoint (e.g. `OfflineSAC` from `SAC`) |
+| class attr `_compatible_checkpoint_algorithms` | `()` | other class names a checkpoint may carry besides your own (e.g. `OfflineSAC` from `SAC`); `load()` always accepts `type(self).__name__`, so a bare subclass needs no entry |
 
 `_checkpoint_metadata()` feeds `checkpoint["metadata"]["hyperparameters"]`.
 On-disk layout (`checkpoint.py`, `checkpoint_dict()`): `metadata` =

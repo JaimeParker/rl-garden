@@ -58,9 +58,10 @@ Algorithm class aliases keep legacy checkpoints loadable:
 | `OfflineCalQL` | `CalQL` |
 | `WSRL` | `WSRL` (also accepts `CalQL`, `CQL`) |
 
-Each algorithm class declares which checkpoints it accepts via
-`_compatible_checkpoint_algorithms`. Mismatched checkpoints raise a `ValueError`
-describing the incompatibility.
+An algorithm class always loads checkpoints saved under its own class name
+(including a bare subclass of a registered algorithm) and declares any other
+accepted names via `_compatible_checkpoint_algorithms`. Mismatched checkpoints
+raise a `ValueError` describing the incompatibility.
 
 Checkpoints saved before the unified observation/encoder redesign (`obs`/
 `encoder`/`obs_groups`, `rl_garden/observations/`) are **not supported**.

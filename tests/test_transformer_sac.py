@@ -188,6 +188,22 @@ def test_transformer_sac_actor_loss_does_not_train_encoder_or_gtrxl_when_stop_gr
         assert param.grad is None or torch.all(param.grad == 0), f"GTrXL param {name} got actor grad"
 
 
+def test_transformer_sac_critic_updates_train_the_gtrxl():
+    env = DummyVecEnv(_state_space(), _action_space())
+    agent = TransformerSAC(env=env, **_transformer_sac_kwargs())
+    gtrxl_before = [p.detach().clone() for p in agent.policy.recurrent_encoder.parameters()]
+
+    agent.learn(total_timesteps=40)
+
+    assert agent._global_update > 0
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(
+            gtrxl_before, agent.policy.recurrent_encoder.parameters(), strict=True
+        )
+    )
+
+
 def test_transformer_sac_eval_resets_hidden_state_only_at_episode_boundary():
     env = DummyVecEnv(_state_space(), _action_space())
     eval_env = TransformerDoneVecEnv(_state_space(), _action_space(), done_at_step=3)

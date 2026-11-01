@@ -563,3 +563,45 @@ def test_observation_metadata_float64_matches_runtime_float32():
         action_space=action_space,
         strict=True,
     )
+
+
+def _ppo_kwargs() -> dict[str, object]:
+    return {
+        "device": "cpu",
+        "num_steps": 2,
+        "num_minibatches": 1,
+        "update_epochs": 1,
+        "eval_freq": 0,
+        "log_freq": 0,
+        "target_kl": None,
+        "net_arch": [16],
+    }
+
+
+def test_bare_subclass_loads_its_own_checkpoint_under_strict(tmp_path):
+    from rl_garden.algorithms import PPO
+
+    class BareSubclassPPO(PPO):
+        pass
+
+    agent = BareSubclassPPO(env=_state_env(), **_ppo_kwargs())
+    path = agent.save(tmp_path / "subclass.pt")
+
+    loaded = BareSubclassPPO(env=_state_env(), **_ppo_kwargs())
+    loaded.load(path, strict=True)
+
+    _assert_state_dict_equal(agent.policy.state_dict(), loaded.policy.state_dict())
+
+
+def test_load_still_rejects_a_checkpoint_from_an_unlisted_class(tmp_path):
+    from rl_garden.algorithms import PPO
+
+    class BareSubclassPPO(PPO):
+        pass
+
+    path = BareSubclassPPO(env=_state_env(), **_ppo_kwargs()).save(tmp_path / "subclass.pt")
+
+    with pytest.raises(ValueError, match="algorithm mismatch"):
+        PPO(env=_state_env(), **_ppo_kwargs()).load(path, strict=True)
+    with pytest.raises(ValueError, match="algorithm mismatch"):
+        SAC(env=_state_env(), **_sac_kwargs()).load(path, strict=True)

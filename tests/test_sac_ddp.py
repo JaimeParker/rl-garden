@@ -22,6 +22,7 @@ from gymnasium import spaces
 from rl_garden.algorithms import SAC
 from rl_garden.algorithms.sac_ddp import SACDDP
 from rl_garden.common.ddp import allreduce_param_grads, broadcast_module_state
+from rl_garden.encoders.config import EncoderConfig
 
 
 pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("ddp")]
@@ -266,6 +267,102 @@ def _plain_sac_contrast_worker(rank: int, world_size: int, init_method: str) -> 
 
 def test_plain_sac_does_not_converge_across_ranks_under_ddp():
     _spawn(_plain_sac_contrast_worker, world_size=2)
+
+
+# ---------------------------------------------------------------------------
+# encoder_sharing="shared": q_optimizer and actor_optimizer both hold the
+# extractor; each backward must all-reduce it exactly once.
+# ---------------------------------------------------------------------------
+
+
+class _ImageDummyVecEnv(_DummyVecEnv):
+    def __init__(self, num_envs: int = 2) -> None:
+        super().__init__(num_envs)
+        self.single_observation_space = spaces.Dict(
+            {
+                "rgb_cam": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+                "state": spaces.Box(-1.0, 1.0, (4,), dtype=np.float32),
+            }
+        )
+
+    def _obs(self) -> dict[str, torch.Tensor]:
+        return {
+            "rgb_cam": torch.randint(0, 256, (self.num_envs, 64, 64, 3), dtype=torch.uint8),
+            "state": torch.randn(self.num_envs, 4),
+        }
+
+    def reset(self, seed: int | None = None):
+        del seed
+        return self._obs(), {}
+
+    def step(self, actions):
+        _, rewards, terminations, truncations, infos = super().step(actions)
+        return self._obs(), rewards, terminations, truncations, infos
+
+
+def _make_shared_image_agent(cls, seed: int = 0, **overrides):
+    return _make_agent(
+        cls,
+        seed=seed,
+        env=_ImageDummyVecEnv(),
+        encoder_config=EncoderConfig(features_dim=8, plain_conv_pooling="gap", proprio_latent_dim=4),
+        encoder_sharing="shared",
+        **overrides,
+    )
+
+
+class _ParamRecordingSACDDP(SACDDP):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.synced_param_ids: list[list[int]] = []
+
+    def _sync_ddp_grads(self, params: list) -> None:
+        self.synced_param_ids.append([id(p) for p in params])
+
+
+def test_shared_extractor_is_synced_once_by_each_backward():
+    agent = _make_shared_image_agent(_ParamRecordingSACDDP, utd=0.5)
+    agent.learn(total_timesteps=8)
+    agent.synced_param_ids.clear()
+
+    agent.train(gradient_steps=1, compute_info=False)
+
+    critic_ids, actor_ids, _ = agent.synced_param_ids
+    extractor_ids = {id(p) for p in agent.policy.actor_extractor.parameters()}
+    assert extractor_ids
+    for ids in agent.synced_param_ids:
+        assert len(ids) == len(set(ids))
+    assert extractor_ids <= set(critic_ids)
+    assert extractor_ids <= set(actor_ids)
+
+
+def _shared_extractor_e2e_worker(rank: int, world_size: int, init_method: str) -> None:
+    _init_gloo(rank, world_size, init_method)
+    agent = _make_shared_image_agent(SACDDP, seed=7 + rank, utd=0.5)
+    broadcast_module_state(agent.policy, src=0)
+    for module in agent._ddp_extra_broadcast_modules():
+        broadcast_module_state(module, src=0)
+    extractor_before = torch.cat(
+        [p.detach().reshape(-1).clone() for p in agent.policy.actor_extractor.parameters()]
+    )
+
+    agent.learn(total_timesteps=32)
+
+    extractor_after = torch.cat(
+        [p.detach().reshape(-1) for p in agent.policy.actor_extractor.parameters()]
+    )
+    assert not torch.equal(extractor_before, extractor_after)
+    policy_gathered = _gather_flat_params(agent.policy, rank, world_size)
+    if rank == 0:
+        for other in policy_gathered[1:]:
+            assert torch.allclose(policy_gathered[0], other, atol=1e-5), (
+                "SACDDP weights diverged across ranks under encoder_sharing='shared'."
+            )
+    _destroy_gloo()
+
+
+def test_sac_ddp_shared_extractor_weights_converge_across_ranks():
+    _spawn(_shared_extractor_e2e_worker, world_size=2)
 
 
 # ---------------------------------------------------------------------------

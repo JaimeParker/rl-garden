@@ -81,14 +81,6 @@ class EDAC(OfflineSAC):
             raise ValueError(f"eta must be >= 0, got {eta}.")
         super().__init__(env=env, n_critics=n_critics, **kwargs)
         self.eta = eta
-        # OfflineSAC.__init__ never sets self.backup_entropy, which
-        # SACCore._backup_entropy_enabled() requires (a pre-existing gap in
-        # OfflineSAC itself, not touched here -- see this session's report).
-        # EDAC's own reference entropy-corrects its critic target
-        # (edac.py:415, `q_next - alpha*next_log_prob`), so this is also the
-        # numerically correct value for EDAC specifically, not just a
-        # workaround.
-        self.backup_entropy = True
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {**super()._checkpoint_metadata(), "eta": self.eta}

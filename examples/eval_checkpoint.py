@@ -12,6 +12,14 @@ Example:
       --env-id PickCube-v1 \
       --num-eval-envs 16 --num-eval-episodes 50 \
       --capture-video false --output-json /tmp/calql_eval.json
+
+Training args are rebuilt in layers, each overriding the previous: the run's
+``config.json`` (``inputs``, then the selected backend's sub-config from
+``active_environment``), the checkpoint's hyperparameters, the eval CLI's
+environment/device fields, and finally any backend sub-config field set on
+the eval CLI to a non-default value (e.g. ``--gymnasium.device cuda:1``).
+Backend sub-config fields left at their default on the eval CLI keep the
+run's values.
 """
 
 from __future__ import annotations
@@ -141,37 +149,69 @@ def _registry_for_phase(phase: str):
     return registry
 
 
+def _registered_by_class_name(
+    phases: tuple[str, ...], algorithm_class: Any
+) -> list[tuple[str, str]]:
+    """``(phase, name)`` of every registered entry whose algorithm class is
+    named ``algorithm_class``; entries without an ``algorithm_cls`` factory
+    cannot be matched this way."""
+    if not isinstance(algorithm_class, str):
+        return []
+    class_name = _canonical_algorithm_class(algorithm_class)
+    matches: list[tuple[str, str]] = []
+    for phase in phases:
+        for name, entry in _registry_for_phase(phase).entries().items():
+            algorithm_cls = getattr(entry, "algorithm_cls", None)
+            if algorithm_cls is not None and algorithm_cls().__name__ == class_name:
+                matches.append((phase, name))
+    return matches
+
+
 def _resolve_phase_and_algorithm(
     requested_phase: str,
     requested_algorithm: str,
     checkpoint: Mapping[str, Any],
 ) -> tuple[str, str]:
-    metadata = checkpoint.get("metadata", {})
-    inferred_algorithm = _algorithm_from_class(metadata.get("algorithm_class"))
-    algorithm = (
-        requested_algorithm if requested_algorithm != "auto" else inferred_algorithm
-    )
-    if algorithm is None:
-        raise SystemExit(
-            "Could not infer algorithm from checkpoint metadata; pass --algorithm."
-        )
+    """Pick the registry entry that rebuilds the checkpoint's agent.
 
+    With ``--algorithm auto`` the checkpoint's ``algorithm_class`` is matched
+    against the class each registered entry builds; only when no entry
+    declares that class does the name table in ``_algorithm_from_class``
+    apply.
+    """
+    algorithm_class = checkpoint.get("metadata", {}).get("algorithm_class")
     phases = _PHASES if requested_phase == "auto" else (requested_phase,)
-    matches: list[tuple[str, str]] = []
-    for phase in phases:
-        registry = _registry_for_phase(phase)
-        if algorithm in registry.entries():
-            matches.append((phase, algorithm))
+
+    if requested_algorithm != "auto":
+        algorithm = requested_algorithm
+        matches = [
+            (phase, algorithm)
+            for phase in phases
+            if algorithm in _registry_for_phase(phase).entries()
+        ]
+    else:
+        matches = _registered_by_class_name(phases, algorithm_class)
+        algorithm = matches[0][1] if matches else _algorithm_from_class(algorithm_class)
+        if algorithm is None:
+            raise SystemExit(
+                "Could not infer algorithm from checkpoint metadata; pass --algorithm."
+            )
+        if not matches:
+            matches = [
+                (phase, algorithm)
+                for phase in phases
+                if algorithm in _registry_for_phase(phase).entries()
+            ]
 
     if not matches:
         raise SystemExit(
             f"Algorithm {algorithm!r} is not registered for phase {requested_phase!r}."
         )
-    if requested_phase == "auto" and len(matches) > 1:
+    if len(matches) > 1:
         choices = ", ".join(f"{phase}:{alg}" for phase, alg in matches)
         raise SystemExit(
-            f"Checkpoint algorithm {algorithm!r} is ambiguous across phases "
-            f"({choices}); pass --phase explicitly."
+            f"Checkpoint algorithm {algorithm!r} is ambiguous across registered "
+            f"entries ({choices}); pass --phase and --algorithm explicitly."
         )
     return matches[0]
 
@@ -238,6 +278,47 @@ def _config_args(config_path: Path) -> Mapping[str, Any]:
     return args
 
 
+def _config_backend_section(config_path: Path) -> dict[str, Mapping[str, Any]]:
+    """The run's env-backend sub-config as ``{section name: values}``.
+
+    ``inputs`` in config.json drops every backend sub-config; the selected
+    backend's values live under ``active_environment``. Configs without that
+    block (older or hand-written ones) yield nothing.
+    """
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    active_environment = config.get("active_environment")
+    if not isinstance(active_environment, Mapping):
+        return {}
+    backend = active_environment.get("backend")
+    values = active_environment.get("config")
+    if not isinstance(backend, str) or not isinstance(values, Mapping):
+        return {}
+    return {backend: values}
+
+
+def _backend_overrides_from_cli(
+    eval_args: EvalCheckpointArgs,
+) -> dict[str, dict[str, Any]]:
+    """Per backend sub-config, only the fields that differ from the dataclass
+    default, so a sub-config left untouched on the eval CLI does not overwrite
+    what the run used. A value set on the CLI equal to the dataclass default
+    cannot override the run's non-default one."""
+    overrides: dict[str, dict[str, Any]] = {}
+    for backend_field in fields(EnvBackendArgs):
+        if backend_field.name == "env_backend":
+            continue
+        value = getattr(eval_args, backend_field.name)
+        default = backend_field.default_factory()
+        changed = {
+            f.name: getattr(value, f.name)
+            for f in fields(value)
+            if getattr(value, f.name) != getattr(default, f.name)
+        }
+        if changed:
+            overrides[backend_field.name] = changed
+    return overrides
+
+
 def _default_config_path(checkpoint_path: Path) -> Path:
     return checkpoint_path.parent.parent / "config.json"
 
@@ -259,6 +340,7 @@ def _load_training_args(
     )
     if config_path.exists():
         _apply_mapping_to_args(args, _config_args(config_path))
+        _apply_mapping_to_args(args, _config_backend_section(config_path))
 
     metadata = checkpoint.get("metadata", {})
     hyperparameters = metadata.get("hyperparameters", {})
@@ -273,6 +355,9 @@ def _load_training_args(
         "render_mode": eval_args.render_mode,
         "num_envs": eval_args.num_eval_envs,
         "num_eval_envs": eval_args.num_eval_envs,
+        # Eval never updates, and a sequence PPO requires num_envs to be
+        # divisible by num_minibatches, which num_eval_envs need not be.
+        "num_minibatches": 1,
         "num_eval_steps": eval_args.max_eval_steps
         or max(eval_args.num_eval_episodes * 1000, 1),
         "seed": eval_args.seed,
@@ -296,16 +381,7 @@ def _load_training_args(
     if eval_args.guidance_weight is not None:
         overrides["guidance_weight"] = eval_args.guidance_weight
     _apply_mapping_to_args(args, overrides)
-    _apply_mapping_to_args(
-        args,
-        {
-            "maniskill": eval_args.maniskill,
-            "robotwin": eval_args.robotwin,
-            "minari": eval_args.minari,
-            "mujoco": eval_args.mujoco,
-            "mujoco_warp": eval_args.mujoco_warp,
-        },
-    )
+    _apply_mapping_to_args(args, _backend_overrides_from_cli(eval_args))
     return args
 
 

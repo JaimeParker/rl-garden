@@ -166,13 +166,6 @@ class SO2(SO2Core, OfflineSAC):
             target_smoothing_noise_clip_min=target_smoothing_noise_clip_min,
             target_smoothing_noise_clip_max=target_smoothing_noise_clip_max,
         )
-        # OfflineSAC.__init__ never sets self.backup_entropy, which
-        # SACCore._backup_entropy_enabled() requires (a pre-existing gap in
-        # OfflineSAC itself -- see EDAC's identical fix/comment in edac.py).
-        # SO2's own reference entropy-corrects its critic target
-        # (edac.py:356 on origin/code, `target_q_value - alpha*next_log_prob`),
-        # so this is also the numerically correct value for SO2 specifically.
-        self.backup_entropy = True
 
 
 class _SO2RolloutTrainingShell(Off2OnReplayMixin, SO2Core, SAC):

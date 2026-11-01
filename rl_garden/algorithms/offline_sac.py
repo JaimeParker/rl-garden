@@ -59,6 +59,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
         critic_hidden_dims: Optional[Sequence[int]] = None,
         n_critics: int = 2,
         critic_subsample_size: Optional[int] = None,
+        backup_entropy: bool = True,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -116,6 +117,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
         )
         self.n_critics = n_critics
         self.critic_subsample_size = critic_subsample_size
+        self.backup_entropy = backup_entropy
         self.encoder_sharing = encoder_sharing
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -145,6 +147,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
             "net_arch": self.net_arch,
             "n_critics": self.n_critics,
             "critic_subsample_size": self.critic_subsample_size,
+            "backup_entropy": self.backup_entropy,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (

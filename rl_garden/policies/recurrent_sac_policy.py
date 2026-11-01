@@ -128,3 +128,19 @@ class RecurrentSACPolicy(SACPolicy):
             raw, initial_hidden, episode_starts_window, burn_in_len
         )
         return tail
+
+    # --- parameter groups for optimizers ---
+
+    def critic_and_encoder_parameters(self):
+        # The sequence trunk feeds both heads but, like the extractor in
+        # front of it, is owned by the critic optimizer: the Q-loss trains it.
+        yield from super().critic_and_encoder_parameters()
+        yield from self.recurrent_encoder.parameters()
+
+    def actor_parameters(self):
+        yield from super().actor_parameters()
+        if self.encoder_sharing == "shared":
+            # The actor loss trains the whole trunk under "shared", so the
+            # actor optimizer holds the sequence trunk too (as it does the
+            # extractor -- see SACPolicy.actor_parameters).
+            yield from self.recurrent_encoder.parameters()

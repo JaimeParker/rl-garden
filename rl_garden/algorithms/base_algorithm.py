@@ -53,9 +53,10 @@ def _normalize_env_observation_space(env: Any) -> Any:
 class BaseAlgorithm(ObservationEncoderMixin, ABC):
     policy: BasePolicy
 
-    # Subclasses may list parent algorithm class names whose checkpoints are
-    # safe to load.  ``validate_checkpoint_metadata`` will accept a stored
-    # algorithm_class that matches *any* entry in this tuple.
+    # Other algorithm class names whose checkpoints are safe to load, besides
+    # the class's own name (``load`` always accepts that one).
+    # ``validate_checkpoint_metadata`` accepts a stored algorithm_class that
+    # matches the class's own name or *any* entry in this tuple.
     _compatible_checkpoint_algorithms: tuple[str, ...] = ()
     #: Canonical text of the policy graph the policy was built from (set by
     #: the PPO family when a ``policy_graph`` is given); checkpoints must
@@ -379,7 +380,10 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         validate_checkpoint_metadata(
             checkpoint,
             algorithm_class=type(self).__name__,
-            compatible_algorithms=self._compatible_checkpoint_algorithms,
+            compatible_algorithms=(
+                type(self).__name__,
+                *self._compatible_checkpoint_algorithms,
+            ),
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             strict=strict,

@@ -56,9 +56,9 @@ def test_default_n_critics_is_ten():
     assert default_agent.n_critics == 10
 
 
-def test_backup_entropy_is_set_true():
-    """OfflineSAC.__init__ never sets self.backup_entropy (a pre-existing
-    gap); EDAC must provide it itself so SACCore._target_q doesn't crash."""
+def test_backup_entropy_is_true_by_default():
+    """EDAC inherits OfflineSAC's entropy-corrected target (the reference's
+    `q_next - alpha*next_log_prob`)."""
     agent = _make_agent()
     assert agent.backup_entropy is True
 
