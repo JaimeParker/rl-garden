@@ -70,6 +70,7 @@ from rl_garden.algorithms.so2 import SO2
 from rl_garden.algorithms.off2on_so2 import Off2OnSO2
 from rl_garden.algorithms.spot import SPOT
 from rl_garden.algorithms.supe import SUPE
+from rl_garden.algorithms.supermimic import SuperMimic, SuperMimicPolicy
 from rl_garden.algorithms.td3 import TD3
 from rl_garden.algorithms.td3_bc import TD3BC
 from rl_garden.algorithms.tdmpc2 import TDMPC2, TDMPC2Core
@@ -153,6 +154,8 @@ __all__ = [
     "Off2OnSO2",
     "SPOT",
     "SUPE",
+    "SuperMimic",
+    "SuperMimicPolicy",
     "TD3",
     "TD3BC",
     "TDMPC2",

@@ -106,6 +106,7 @@ def test_phase_registries_discover_expected_algorithms():
         "tdmpc2",
         "dreamer_v3",
         "ncrl",
+        "supermimic",
         "dagger",
         "policy_distillation",
         "gail",

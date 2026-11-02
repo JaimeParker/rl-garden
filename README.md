@@ -17,7 +17,7 @@ platforms can be integrated without creating platform-specific training entrypoi
 ## Capabilities
 
 - **Online RL:** SAC, PPO, RLPD, RLPD-Hybrid, ExPLORe, SUPE, JSRL, TD3, DrQ-v2,
-  FlashSAC, TDMPC2, DreamerV3, NCRL, DPPO, FlowPPO, online consistency
+  FlashSAC, TDMPC2, DreamerV3, NCRL, SuperMimic, DPPO, FlowPPO, online consistency
   distillation of a diffusion policy, SACFlow, ACRLPD, plus recurrent and
   transformer SAC/PPO variants. PPO has a decision-level (semi-Markov) mode for
   envs whose actions take effect on some steps only, see
@@ -56,9 +56,11 @@ platforms can be integrated without creating platform-specific training entrypoi
 - **Model-based RL:** world model base class, imagine rollout, MPPI planner, and
   `ModelBasedAlgorithm` base for learning + planning models (TD-MPC2, DreamerV3
   for state and pixels; see [`docs/guides/dreamer-v3.md`](docs/guides/dreamer-v3.md)),
-  PWM, and NCRL (pretrained-RSSM
+  PWM, NCRL (pretrained-RSSM
   Dreamer fine-tuning with rehearsal and guidance;
-  see [`docs/guides/ncrl.md`](docs/guides/ncrl.md)).
+  see [`docs/guides/ncrl.md`](docs/guides/ncrl.md)), and SuperMimic
+  (policy learning by backpropagation through an explicit-state world model;
+  see [`docs/guides/supermimic.md`](docs/guides/supermimic.md)).
 - **Environment backends:** a registry-based interface with 13 simulator and
   dataset backends: ManiSkill, IsaacLab (Isaac Lab 3.0 and 2.3.x, auto-detected),
   MuJoCo Warp (GPU), MuJoCo, Gymnasium, dm_control (see
@@ -128,7 +130,7 @@ argument selects the algorithm:
 
 | Stage | Entrypoint | Registered algorithms |
 |---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `explore`, `supe`, `jsrl`, `tdmpc2`, `dreamer_v3`, `ncrl`, `dppo`, `flow_ppo`, `diffusion_cm_distill_online`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `gail`, `policy_distillation` |
+| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `explore`, `supe`, `jsrl`, `tdmpc2`, `dreamer_v3`, `ncrl`, `supermimic`, `dppo`, `flow_ppo`, `diffusion_cm_distill_online`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `gail`, `policy_distillation` |
 | Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `mean_flow_bc`, `consistency_distill_bc`, `a2a_bc`, `iql`, `idql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `td3_bc`, `awac`, `fql`, `floq`, `fino`, `value_flows`, `fac`, `qgf`, `qam`, `bppo`, `unio4`, `unio4_ope`, `hilp`, `opal`, `wsrl`, `tdmpc2_multitask`, `pwm`, `rssm_pretrain` |
 | Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `fql`, `floq`, `fino`, `value_flows`, `fac`, `so2`, `acfql` |
 

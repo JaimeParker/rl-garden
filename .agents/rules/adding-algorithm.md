@@ -28,7 +28,7 @@ Algorithm families, by base class:
 | Family | Base class(es) | Examples |
 |---|---|---|
 | Online RL (rollout + replay/buffer) | `OffPolicyAlgorithm` / `OnPolicyAlgorithm` | SAC, PPO, TD3 |
-| Model-based online RL (world model + planner/policy) | `ModelBasedAlgorithm(OffPolicyAlgorithm)` | TD-MPC2, DreamerV3, NCRL (`NCRL(DreamerV3)`) |
+| Model-based online RL (world model + planner/policy) | `ModelBasedAlgorithm(OffPolicyAlgorithm)` | TD-MPC2, DreamerV3, NCRL (`NCRL(DreamerV3)`), SuperMimic |
 | Model-based offline RL (dataset-driven world model) | `OfflineModelBasedAlgorithm(OfflineRLAlgorithm)` | TD-MPC2 multitask, PWM, RSSMPretrain |
 | Offline RL with a replay buffer | `OfflineRLAlgorithm` (+ `run_offline`) | IQL, CQL, AWAC |
 | Off2on (offline pretrain, then online) | `<Algo>Core` / `<Algo>(Core, OfflineRLAlgorithm)` / `_<Algo>RolloutTrainingShell(Off2OnReplayMixin, Core, OffPolicyAlgorithm)` / `Off2On<Algo>(Shell)` | IQL, AWAC (canonical) |
@@ -252,6 +252,12 @@ The following policy classes do not follow the contract above:
   normalizer) over frozen world-model latents: no observation space,
   `actor_extractor` or `encoder_sharing` (no observation encoder is trained);
   see `rl_garden/algorithms/pwm.py`'s docstring.
+- `SuperMimicPolicy` — plain `nn.Module` (goal encoder + observation-history
+  decoder + `V` critic + input normalizers, holding the world model): the
+  critic reads the world model's explicit state features rather than an
+  observation, the actor's imagined observations come from the world model's
+  analytic or learned observation head, and no observation encoder is
+  trained; see `rl_garden/algorithms/supermimic.py`'s docstring.
 
 The FQL family (`FQLPolicy`, `FloQPolicy`, `ValueFlowsPolicy`, `FINOPolicy`)
 is an in-contract exception: under `encoder_sharing="separate"`, it keeps an
@@ -298,9 +304,13 @@ shared by `TDMPC2(TDMPC2Core, ModelBasedAlgorithm)` and
 `PWM` (`PWM(PWMCore, OfflineModelBasedAlgorithm)`, `rl_garden/algorithms/pwm.py`)
 and `RSSMPretrain` (`rl_garden/algorithms/rssm_pretrain.py`) are further offline
 hosts of the same base; `NCRL(DreamerV3)` (`rl_garden/algorithms/ncrl.py`) is an
-online subclass of `DreamerV3`. Registered names: `pwm` and `rssm_pretrain`
-(offline, bespoke runners, `training/offline/{pwm,rssm_pretrain}.py`) and `ncrl`
-(online, `training/online/entrypoints/ncrl.py`). See `docs/guides/ncrl.md`.
+online subclass of `DreamerV3`; `SuperMimic(SuperMimicCore, ModelBasedAlgorithm)`
+(`rl_garden/algorithms/supermimic.py`) is an online host over an explicit-state world
+model. Registered names: `pwm` and `rssm_pretrain` (offline, bespoke runners,
+`training/offline/{pwm,rssm_pretrain}.py`), `ncrl` (online,
+`training/online/entrypoints/ncrl.py`) and `supermimic` (online,
+`training/online/entrypoints/supermimic.py`). See `docs/guides/ncrl.md` and
+`docs/guides/supermimic.md`.
 
 - `_update_model(batch) -> (metrics, posterior)` — trains the world model
   (and, for TD-MPC2, the critic in the same backward — a TD-MPC2-specific

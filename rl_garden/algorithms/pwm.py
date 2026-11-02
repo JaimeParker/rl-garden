@@ -50,6 +50,7 @@ from rl_garden.buffers.mmap_storage import MmapMode
 from rl_garden.common.checkpoint import load_filtered_state_dict
 from rl_garden.common.logger import Logger
 from rl_garden.networks.returns import lambda_return
+from rl_garden.networks.running_norm import RunningNorm
 from rl_garden.world_models.base import State, WorldModel
 from rl_garden.world_models.bound_task import BoundTaskWorldModel
 from rl_garden.world_models.imagine import imagine
@@ -255,33 +256,6 @@ class PWMCritic(nn.Module):
         return torch.stack([critic(z) for critic in self.critics], dim=0)
 
 
-class ReturnRunningMeanStd(nn.Module):
-    """Running mean/var of per-sample actor losses (PWM's
-    ``utils/running_mean_std.py``, count initialized to ``epsilon``). Buffers,
-    so the statistics are checkpointed with the policy. Not
-    ``rl_garden.common.reward_normalizer.RunningMeanStd``: that one is
-    ``torch.compile``d and starts from count 0."""
-
-    def __init__(self, epsilon: float = 1e-4) -> None:
-        super().__init__()
-        self.register_buffer("mean", torch.zeros(()))
-        self.register_buffer("var", torch.ones(()))
-        self.register_buffer("count", torch.tensor(float(epsilon)))
-
-    @torch.no_grad()
-    def update(self, x: torch.Tensor) -> None:
-        batch_mean = x.mean()
-        batch_var = x.var(unbiased=False)
-        batch_count = x.numel()
-        delta = batch_mean - self.mean
-        total = self.count + batch_count
-        new_mean = self.mean + delta * batch_count / total
-        m2 = self.var * self.count + batch_var * batch_count + delta.square() * self.count * batch_count / total
-        self.mean.copy_(new_mean)
-        self.var.copy_(m2 / total)
-        self.count.copy_(total)
-
-
 class PWMPolicy(nn.Module):
     """Actor + critic ensemble + return normalizer over world-model latents.
     Out of the ``BasePolicy`` contract (see module docstring)."""
@@ -300,7 +274,7 @@ class PWMPolicy(nn.Module):
         super().__init__()
         self.actor = PWMActor(latent_dim, action_dim, actor_units, init_logstd, min_logstd)
         self.critic = PWMCritic(latent_dim, critic_units, num_critics)
-        self.ret_rms = ReturnRunningMeanStd()
+        self.ret_rms = RunningNorm(shape=(), epsilon=1e-4)
 
 
 # ---------------------------------------------------------------------------

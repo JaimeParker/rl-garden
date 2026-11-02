@@ -325,6 +325,69 @@ class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
 
 
 @dataclass
+class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
+    """SuperMimic (``rl_garden.algorithms.supermimic``): backpropagation
+    through imagined rollouts of an explicit-state world model. Defaults are
+    the paper's appendix hyperparameter table (Table A.5) and the
+    ``SuperMimic`` constructor's.
+
+    Privileged quantities travel as observation keys: declare them with
+    ``--obs.extra_state sim ctx goal time`` and the env must emit
+    ``state_sim`` (modeled simulator state), ``state_ctx`` (per-episode
+    context), ``state_goal`` and ``state_time`` (reference time index). Each is
+    optional; the default observation uses only ``state``. ``--heads analytic``
+    needs the env to expose ``analytic_mdp`` and to emit ``state_time``. The
+    state codec is a Python-API argument of ``SuperMimic`` (``codec``) and has
+    no flag.
+
+    ``encoder``, ``obs_groups``, ``critic_encoder`` and ``encoder_sharing``
+    (from ``ObservationArgs``) have no effect here: the policy trains no
+    observation encoder, and the builder does not read them.
+
+    ``sim_steps_per_iteration`` and ``updates_per_iteration`` express the
+    update-to-data ratio (paper: 0.4 updates per vectorized env step = 2
+    updates per 5 steps); ``learning_starts=None`` means
+    ``(wm_window + 2) * num_envs`` transitions. ``warmup_updates`` updates
+    train only the world model.
+    """
+
+    total_timesteps: int = 1_000_000
+    heads: Literal["learned", "analytic"] = "learned"
+    sim_steps_per_iteration: int = 5
+    updates_per_iteration: int = 2
+    buffer_size: int = 4_096_000
+    buffer_device: str = "cuda"
+    learning_starts: Optional[int] = None
+    wm_hidden_dims: tuple[int, ...] = (2048, 2048, 2048)
+    head_hidden_dims: tuple[int, ...] = (256, 256)
+    latent_dim: int = 32
+    goal_encoder_dims: tuple[int, ...] = (2048, 1024, 512, 256)
+    decoder_dims: tuple[int, ...] = (2048, 1024, 512, 256)
+    critic_dims: tuple[int, ...] = (256, 128)
+    horizon: int = 32
+    wm_window: int = 8
+    wm_batches: int = 10
+    wm_batch_size: int = 2048
+    imagination_batch: int = 4096
+    gamma: float = 0.99
+    lam: float = 0.95
+    lr: float = 2e-4
+    lr_final_ratio: float = 0.03
+    lr_decay_updates: int = 250_000
+    actor_betas: tuple[float, float] = (0.9, 0.95)
+    wm_grad_norm: float = 1.0
+    actor_grad_norm: float = 1.0
+    actor_grad_value: float = 0.1
+    critic_grad_norm: float = 1.0
+    critic_epochs: int = 5
+    critic_minibatches: int = 4
+    action_noise_std: float = 0.1
+    obs_history_len: int = 1
+    warmup_updates: int = 500
+    amp_dtype: Optional[Literal["bf16"]] = None
+
+
+@dataclass
 class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     total_timesteps: int = 10_000_000
     num_steps: int = 50

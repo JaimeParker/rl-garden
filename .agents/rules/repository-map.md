@@ -16,9 +16,11 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `TDMPC2`)/`tdmpc2_multitask.py`/`dreamer_v3.py`, no sub-package.
   Also flat: `pwm.py` (`PWMCore`/`PWM`, SHAC-style actor-critic on a frozen
   multitask world model; offline host subclass), `rssm_pretrain.py`
-  (`RSSMPretrain`, reward-free RSSM pretraining; offline host subclass), and
+  (`RSSMPretrain`, reward-free RSSM pretraining; offline host subclass),
   `ncrl.py` (`NCRL(DreamerV3)`, online fine-tuning with rehearsal and BC
-  guidance).
+  guidance), and `supermimic.py` (`SuperMimicCore`/`SuperMimic`, online
+  BPTT actor through an explicit-state `StateSpaceWorldModel` with a
+  lambda-return critic on the imagined trajectory; `SuperMimicPolicy`).
 - `rl_garden/observations/` — the observation composition contract (Layer A):
   `ObservationConfig` ("what is observed" — state/rgb/depth cameras/extra_state
   auxiliary keys, image size, frame stacking), `ObservationSchema`/`Modality`/
@@ -42,6 +44,10 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `cross_episode=False`) and boundary-tolerant windows
   (`RecurrentReplayBuffer`/`TransformerReplayBuffer`, `cross_episode=True`)
   are both built from.
+  `state_sequence_replay_buffer.py` holds `StateSequenceReplayBuffer`
+  (strict `SequenceReplayBuffer` plus `sample_history`: in-episode
+  observation history with first-frame replication, SuperMimic's
+  imagination starts).
   `rehearsal_sequence_buffer.py` holds `RehearsalSequenceBuffer` (online + retrieved
   prior episodes mixed per batch, NCRL); `sequence_dataset.py` reads the on-disk
   image sequence-dataset format (`MmapSequenceDataset`, used by `rssm_pretrain`).
@@ -55,7 +61,8 @@ agent rules; this file is a plain orientation reference, not a rules doc.
 - `rl_garden/networks/` — actor, critic, value, and MLP backbone builders,
   plus model-based-RL numeric primitives shared across world-model
   implementations (`symlog.py`, `twohot.py`, `normed_mlp.py`,
-  `running_scale.py`, `q_ensemble.py`, `returns.py`'s `lambda_return`,
+  `running_scale.py`, `running_norm.py` (`RunningNorm`, exact-merge running
+  mean/var buffers), `q_ensemble.py`, `returns.py`'s `lambda_return`,
   `init.py`).
   `networks/graph/` holds the YAML policy-graph machinery for the PPO family:
   `spec.py` (`GraphSpec`, validation, canonical form, the YAML reference in its
@@ -73,7 +80,9 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `MultitaskWorldModel` (`multitask_latent_consistency.py`),
   `BoundTaskWorldModel` (`bound_task.py`, a multitask model with one task id
   bound, usable by `imagine()`/the planner), and DreamerV3's `RSSM`
-  (`rssm.py`) with its `ObservationDecoder` (`decoder.py`). A world
+  (`rssm.py`) with its `ObservationDecoder` (`decoder.py`), and
+  `StateSpaceWorldModel` (`state_space.py`, an explicit-simulator-state model
+  with pluggable `StateCodec`/`AnalyticMDP` and learned-or-analytic heads). A world
   model owns encoder/dynamics/reward/(optional termination) only — actor
   and critic live on the owning `BasePolicy` (see `rl_garden/policies/`
   below and `.agents/rules/adding-algorithm.md`'s "model-based algorithms"
@@ -100,7 +109,8 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   console-script mains. Extension contract for algorithms in other packages:
   [`docs/guides/extending.md`](../../docs/guides/extending.md), reference package
   `tests/fixtures/downstream_extension/`.
-  New entrypoints: `online/entrypoints/ncrl.py` (`ncrl`), `offline/entrypoints/pwm.py` (`pwm`) and
+  New entrypoints: `online/entrypoints/ncrl.py` (`ncrl`), `online/entrypoints/supermimic.py`
+  (`supermimic`), `offline/entrypoints/pwm.py` (`pwm`) and
   `offline/entrypoints/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
 - `robot_infra/` — optional submodule ([rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra)):
   controllers, teleoperation, real-robot support. No dependency on `rl_garden`.
@@ -136,7 +146,7 @@ agent rules; this file is a plain orientation reference, not a rules doc.
 - `docs/` — public documentation, split into `guides/` (operational how-to),
   `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
   notes).
-  World-model docs: `guides/{ncrl,dm-control-integration}.md`.
+  World-model docs: `guides/{ncrl,supermimic,dm-control-integration}.md`.
 - `3rd_party/` — vendored reference submodules and external clones; read-only,
   do not edit unless explicitly requested. `Cal-QL`, `wsrl`, and
   `implicit_q_learning` are registered as real git submodules (see
