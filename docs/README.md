@@ -32,9 +32,10 @@ Architecture and rationale behind specific subsystems.
 
 ## Robot Infra and Real-World RL
 
-Split out into their own repos, added back as optional git submodules
-(`robot_infra/`, `real_world/`) — see the "Robot Infrastructure and Reward
-Models" section in the top-level [README.md](../README.md).
+Both live in the separate downstream repository `rlgarden-real-world`
+(`rl_garden_real_world/` and its `robot_infra/` device layer), which carries
+rl-garden as a submodule under `rl-garden/`; see the "Robot Infrastructure and
+Reward Models" section in the top-level [README.md](../README.md).
 
-- [Robot Infra Roadmap](https://github.com/JaimeParker/rlgarden-robot-infra/blob/main/docs/robot-infra-roadmap.md)
+- [Robot Infra Roadmap](https://github.com/JaimeParker/rlgarden-real-world/blob/main/robot_infra/docs/robot-infra-roadmap.md)
 - [HIL-SERL Roadmap](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/hil-serl-roadmap.md)

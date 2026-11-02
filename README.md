@@ -66,8 +66,9 @@ platforms can be integrated without creating platform-specific training entrypoi
   MuJoCo Warp (GPU), MuJoCo, Gymnasium, dm_control (see
   [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)),
   Meta-World, RLBench, RoboTwin, robomimic, OGBench, Minari, and legacy
-  D4RL/Adroit/Kitchen. A real-robot Franka backend comes from an optional
-  submodule, and a template backend shows how to add further platforms. Every
+  D4RL/Adroit/Kitchen. A real-robot Franka backend comes from the downstream
+  `rlgarden-real-world` repository, and a template backend shows how to add
+  further platforms. Every
   backend follows the episode boundary contract in
   [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
 - **Robot integration:** EE twist/impedance control, teleoperation, demonstration
@@ -92,8 +93,6 @@ rl_garden/
 ├── policies/      # Algorithm policy composition
 ├── training/      # Registered online, offline, and off2on training packages
 └── world_models/  # World model base, imagination, latent consistency (TD-MPC2)
-real_world/        # Optional submodule (rlgarden-real-world): real-robot loops, backends, teleop,
-                   # HIL-SERL/residual/SiLRI entrypoints; its robot_infra/ is the torch-free device layer
 examples/          # Thin dispatchers and specialized experiment entrypoints
 scripts/           # Launchers with experiment defaults
 tests/             # Unit and backend/accelerator integration tests
@@ -103,13 +102,18 @@ docs/              # Guides, design docs, and roadmaps (see docs/README.md)
 
 ## Installation
 
-Clone the repository and initialize its submodules:
+Clone the repository:
 
 ```bash
 git clone <your-repo-url>
 cd rl-garden
-git submodule update --init --recursive
 ```
+
+For real-robot work, clone
+[rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world)
+instead: it is the top-level repository and carries rl-garden as a submodule
+under `rl-garden/` (see [Robot Infrastructure and Reward
+Models](#robot-infrastructure-and-reward-models)).
 
 Install the package and the extras needed for your workflow:
 
@@ -261,7 +265,7 @@ Other registered `--env-backend` values: `maniskill` (default for most examples)
 [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)), and
 `gymnasium` (any registered `gymnasium.Env` from your own package, see
 [Training on Your Own Gymnasium Envs](docs/guides/gymnasium-custom-envs.md)).
-`franka_real` is added by the optional `rlgarden-real-world` submodule for
+`franka_real` is added by the downstream `rlgarden-real-world` repository for
 real-robot training.
 
 To train on your own `gymnasium.Env` you do not need to fork rl-garden or write a
@@ -396,17 +400,29 @@ call internally (via `ObservationEncoderMixin`,
 ## Robot Infrastructure and Reward Models
 
 Robot hardware/communication/control and real-world RL orchestration live in
-two separate repos, added back as optional git submodules:
+the separate downstream repository
+[rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world). It is
+the top level for real-robot work and carries rl-garden as a git submodule under
+`rl-garden/`, pinned to the commit its tests pass against:
 
-- [rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra) --
-  EE twist and impedance controllers, the Franka bridge, teleop devices.
-- [rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world) --
-  `ActorLoop`/`LearnerLoop`, the `franka_real` env backend, SERL/HIL-SERL
-  training loops, teleoperation demo/recording scripts, and the [teleop
+- `rl_garden_real_world/` -- `ActorLoop`/`LearnerLoop`, the `franka_real` and
+  `real_robot` env backends, SERL/HIL-SERL/residual/SiLRI training loops,
+  teleoperation demo/recording scripts, and the [teleop
   guide](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md).
+- `robot_infra/` -- the torch-free device layer: EE twist and impedance
+  controllers, the Franka bridge, teleop devices.
 
-Neither is required for simulation-only use; `git submodule update --init` to
-pull them in.
+It imports `rl_garden` as a library and extends it only through the contract in
+[Extending rl-garden from Your Own Package](docs/guides/extending.md). Neither
+part is required for simulation-only use. Its tests run from its own root:
+
+```bash
+git clone --recurse-submodules https://github.com/JaimeParker/rlgarden-real-world.git
+cd rlgarden-real-world
+pip install -e rl-garden -e robot_infra -e .
+python -m pytest tests robot_infra/tests -q
+# or, without installing: PYTHONPATH=.:rl-garden:robot_infra python -m pytest tests robot_infra/tests -q
+```
 
 ## Testing
 

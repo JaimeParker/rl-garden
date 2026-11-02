@@ -380,7 +380,8 @@ own `_policy_kwargs`. A class that overrides `_build_policy` itself ignores
 ### Off-policy loop and replay seams
 
 These are stable contract points from now on: the real-world package
-(`rl_garden_real_world`) subclasses `SAC`, `RLPD` and `RLPDHybrid` through
+(`rl_garden_real_world`, in the downstream `rlgarden-real-world` repository,
+which carries rl-garden as a submodule) subclasses `SAC`, `RLPD` and `RLPDHybrid` through
 them, so a change to a signature or to when the loop calls a hook updates this
 table and `tests/test_off_policy_seams.py` in the same commit. `learn()` runs,
 per environment step: `_rollout_action`, `env.step`, `_replay_buffer_add_kwargs`

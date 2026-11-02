@@ -112,16 +112,19 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   New entrypoints: `online/entrypoints/ncrl.py` (`ncrl`), `online/entrypoints/supermimic.py`
   (`supermimic`), `offline/entrypoints/pwm.py` (`pwm`) and
   `offline/entrypoints/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
-- `real_world/` — optional submodule
-  ([rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world)):
-  real-robot actor/learner loops, the `franka_real`/`real_robot` env backends,
-  the teleop source layer, and the SERL / HIL-SERL / residual / SiLRI
-  training entrypoints. It imports `rl_garden` as a library and registers its
-  backends and algorithms through the `rlgarden.env_backends` and
-  `rlgarden.algorithms` entry-point groups. Its `robot_infra/` directory is the
-  torch-free device layer (`rlgarden-robot-infra`: devices, daemon,
-  teleoperation hardware), a second distribution of the same repository with no
-  dependency on `rl_garden`.
+- Real-robot code is not in this repository. The downstream repository
+  [rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world) is
+  the top level for real-robot work and carries rl-garden as a git submodule
+  under `rl-garden/`, pinned to the commit its tests pass against. Its package
+  `rl_garden_real_world/` holds the real-robot actor/learner loops, the
+  `franka_real`/`real_robot` env backends, the teleop source layer, and the
+  SERL / HIL-SERL / residual / SiLRI training entrypoints. It imports
+  `rl_garden` as a library and registers its backends and algorithms through
+  the `rlgarden.env_backends` and `rlgarden.algorithms` entry-point groups. Its
+  `robot_infra/` directory is the torch-free device layer
+  (`rlgarden-robot-infra`: devices, daemon, teleoperation hardware), a second
+  distribution of the same repository with no dependency on `rl_garden`. Its
+  tests run from its own root, not from here (see the testing runbook).
 - `examples/` — thin training dispatchers (wrappers of `rl_garden/training/cli.py`) and
   specialized experiment entrypoints.
 - `configs/` — reusable preset configs for training.
