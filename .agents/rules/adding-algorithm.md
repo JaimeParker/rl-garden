@@ -365,6 +365,13 @@ through these hooks rather than copying `_build_policy`, `_setup_model` or
 | `_critic_step(data)` / `_actor_step(data)` / `_alpha_step(log_prob)` | one optimizer step each, called by `train` and `train_high_utd` | wrapping a step; keep `super()` |
 | `_post_critic_update(data, info)` / `_post_actor_update(data)` | no-op / `{}` | per-step side effects (priorities, a Lagrange multiplier) and actor-side metrics |
 
+The rollout, replay-write, evaluation, sampling and demo-buffer hooks of the
+off-policy loop (`_rollout_action`, `_replay_buffer_add_kwargs`,
+`_build_replay_buffer`, `_sample_train_batch`, `_build_prior_data_buffer`, and
+the rest) are in the "Off-policy loop and replay seams" table of the same guide;
+they are contract points, so change one only together with that table and
+`tests/test_off_policy_seams.py`.
+
 See `SAC` and `PPO` (`rl_garden/algorithms/sac.py`, `ppo.py`) for the
 reference implementations. There is no separate vision-specific wiring path
 and no `Vision*` sibling class — a `Dict` observation with

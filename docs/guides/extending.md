@@ -122,11 +122,15 @@ def run_aux_split_rppo(args):
 ```
 
 The in-tree builders `build_ppo`, `build_recurrent_ppo`,
-`build_transformer_ppo`, `build_gail`, `build_sac`, `build_recurrent_sac` and
-`build_transformer_sac` take keyword-only `algorithm_cls` (the in-tree class
-when omitted; `build_sac` picks `SACDDP` under multi-GPU DDP only then) and
-forward any other keyword to the constructor. Their `run_*` functions take
-`build_agent=` (the module's builder when omitted).
+`build_transformer_ppo`, `build_gail`, `build_sac`, `build_rlpd`,
+`build_rlpd_hybrid`, `build_recurrent_sac` and `build_transformer_sac` take
+keyword-only `algorithm_cls` (the in-tree class when omitted; `build_sac`
+picks `SACDDP` under multi-GPU DDP only then) and forward any other keyword to
+the constructor; `build_rlpd` and `build_rlpd_hybrid` merge those keywords
+after the ones they read from `args`, so one of them replaces the value taken
+from `args` (for example `use_grasp_penalty` or `memory_efficient_buffer`).
+The `run_*` functions of the other builders take `build_agent=` (the module's
+builder when omitted); `run_rlpd` and `run_rlpd_hybrid` do not.
 
 A builder written from scratch maps Args to constructor kwargs with the public
 helpers `ppo_common_kwargs` / `ppo_observation_kwargs`
@@ -372,6 +376,38 @@ and then one actor step on the full batch. The seams, at this version:
 policies take a different keyword set, so a subclass of either extends their
 own `_policy_kwargs`. A class that overrides `_build_policy` itself ignores
 `policy_class`; no in-tree SAC subclass does.
+
+### Off-policy loop and replay seams
+
+These are stable contract points from now on: the real-world package
+(`rl_garden_real_world`) subclasses `SAC`, `RLPD` and `RLPDHybrid` through
+them, so a change to a signature or to when the loop calls a hook updates this
+table and `tests/test_off_policy_seams.py` in the same commit. `learn()` runs,
+per environment step: `_rollout_action`, `env.step`, `_replay_buffer_add_kwargs`
+and `_replay_buffer_step_kwargs` (merged into one `replay_buffer.add(obs,
+real_next_obs, replay_action, rewards, stop_bootstrap, **kwargs)` call), then
+`_post_rollout_step`.
+
+| Hook | Signature | What the base does | In-tree overriders |
+|---|---|---|---|
+| `OffPolicyAlgorithm._rollout_action` | `(obs, learning_has_started: bool) -> (replay_action, env_action, action_context)` | `_policy_action(obs)` mixed with `_explore_action(obs)` at `random_action_prob` while an initial training phase is active; otherwise `_explore_action` before `learning_starts` and `_policy_action` after; returns `(actions, actions, None)`. `replay_action` is stored in the buffer, `env_action` goes to `env.step`, `action_context` (a dict or `None`) reaches `_replay_buffer_add_kwargs` and `_post_rollout_step` of the same step | `DDPG`, `FlashSAC`, `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `NCRL`, `SuperMimic`, `_SPOTRolloutTrainingShell` |
+| `OffPolicyAlgorithm._explore_action` | `(obs) -> Tensor` | uniform in `[-1, 1]`, shaped like `env.action_space` (all envs), on the algorithm's device | `NCRL`, `SuperMimic` |
+| `OffPolicyAlgorithm._replay_buffer_add_kwargs` | `(action_context, obs, next_obs, real_next_obs, infos, need_final_obs) -> dict` | `{}`; the dict is passed as extra keywords to `replay_buffer.add` | `RLPDHybrid` (`grasp_penalty` from `infos`), `SequenceSAC`, `TransformerSAC`, `DreamerV3`, `SuperMimic` |
+| `OffPolicyAlgorithm._replay_buffer_step_kwargs` | `(terminations, truncations) -> dict` | `{}` (`SAC`: `{"episode_end": terminations \| truncations}` when `nstep > 1`); merged after the add keywords, so a key present in both takes this value | `SAC`, `DDPG`, `FlashSAC`, `SequenceSAC`, `RLPDHybrid`, `ACRLPDCore`, `_CalQLRolloutTrainingShell`, `ModelBasedAlgorithm` |
+| `OffPolicyAlgorithm._on_env_reset` | `(obs) -> None` | no-op; called once by `learn()` right after its `env.reset(seed=...)` (later resets happen inside `env.step`, see `terminations` / `truncations` in `_post_rollout_step`) | `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `NCRL`, `SuperMimic` |
+| `OffPolicyAlgorithm._post_rollout_step` | `(action_context, terminations, truncations, infos) -> None` | no-op; runs after the replay write and before `obs = next_obs` | `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `SuperMimic` |
+| `BaseAlgorithm._eval_action` | `(obs) -> Tensor` | `policy.predict(obs, deterministic=True)` under `no_grad`, observations moved to the policy device | `JSRL`, `PWM`, `PolicyDistillation`, `SuperMimic`, `OnPolicyAlgorithm` |
+| `BaseAlgorithm._eval_action_and_critic_action` | `(obs) -> (env_action, critic_action)` | `(a, a)` with `a = _eval_action(obs)`; the first is executed, the second is what the critic scores | `SequenceSAC`, `JSRL`, `DreamerV3`, `NCRL`, `SequencePPO` |
+| `BaseAlgorithm._eval_start_hook` | `() -> None` | no-op; called once after `eval_env.reset()`, before the eval loop (`SACCore` resets its Q-vs-MC bookkeeping here) | `SACCore`, `SequenceSAC` (does not call `super()`), `JSRL`, `TDMPC2`, `DreamerV3`, `SuperMimic`, `SequencePPO` |
+| `BaseAlgorithm._eval_step_hook` | `(obs_before, critic_action, rewards, terminations, truncations, infos) -> None` | no-op; called after every eval `env.step` (`SACCore` accumulates Q-vs-MC when `q_mc_diagnostics`) | same classes as `_eval_start_hook` |
+| `SAC._build_replay_buffer` | `() -> BaseReplayBuffer` | `NStepReplayBuffer` when `nstep > 1`, else `ReplayBuffer` over `num_envs` envs; called once in `_setup_model` | `RecurrentSAC`, `TransformerSAC`, `RLPDHybrid`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `SO2Core`, `CalQLCore` |
+| `SAC._policy_action_space` | `() -> spaces.Box` | `env.single_action_space`; read by `_policy_kwargs` and by the buffer builders of the overriders | `ACRLPDCore`, `QAMCore`, `QGFCore`, `ACFQLCore` |
+| `SACCore._sample_train_batch` | `(batch_size) -> sample` | `replay_buffer.sample(batch_size)`; called once per gradient step (once per group under high UTD). The sample is a dataclass with `obs`, `next_obs`, `actions`, `rewards`, `dones` and the fields named by `_extra_batch_slice_keys` | `PriorDataReplayMixin` (mixes in the prior-data buffer), `Off2OnReplayMixin`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `OfflineSAC`, `CQL` |
+| `SACCore._target_action_log_prob` | `(data) -> (next_action, next_log_prob, next_actor_features)` | `_actor_action_log_prob(data.next_obs)`; the TD target's next action under the current actor | `SO2Core` |
+| `SACCore._actor_loss_from_batch` | `(data) -> (loss, detached log_prob)` | `_actor_loss(data.obs)` | `SequenceSAC`, `ACRLPDCore` |
+| `SACCore._extra_batch_slice_keys` (class attribute) | `tuple[str, ...]` | `()`; the sample fields `_slice_batch` copies into each high-UTD minibatch, which it rebuilds as `type(batch)(**kwargs)`: a sample field with no default that is not listed here fails the slice with a `TypeError`. Extend with `(*self._extra_batch_slice_keys, "field")` | `SAC` (`"discounts"` when `nstep > 1`), `RLPDHybrid` (`"grasp_penalty"`), `ACRLPDCore`, `CalQLCore` |
+| `PriorDataReplayMixin._build_prior_data_buffer` | `(buffer_size) -> buffer` | a single-env buffer, sized independently (`NStepReplayBuffer` when `nstep > 1`, else `ReplayBuffer`); used by `load_offline_replay_buffer` and `DemoInterventionMixin.init_demo_buffer`. It must sample the same dataclass as `replay_buffer`, because the two samples are concatenated | `RLPDHybrid` (adds the `grasp_penalty` column under `use_grasp_penalty`), `ACRLPDCore`, `DAgger` |
+| `DemoInterventionMixin.init_demo_buffer` / `add_demo_transition` | `(buffer_size, demo_data_ratio=0.5)` / `(obs, next_obs, action, reward, done, **extra)` | `init_demo_buffer` builds an empty buffer through `_build_prior_data_buffer` into the `offline_replay_buffer` slot and sets `offline_data_ratio` (it raises if the slot is already populated); `add_demo_transition` forwards to that buffer's `add`, `**extra` included | `RLPDHybrid`, `DAgger` (mixin users) |
 
 ### Metrics
 

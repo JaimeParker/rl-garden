@@ -83,6 +83,21 @@ def test_reward_scale_bias_wrapper_works_with_tensor_reward():
     torch.testing.assert_close(r, torch.tensor([1.5, 2.0]))
 
 
+def test_reward_scale_bias_wrapper_forwards_env_attributes():
+    class _BatchOfOneEnv(_DummyEnv):
+        num_envs = 1
+
+        @property
+        def single_observation_space(self):
+            return self.observation_space
+
+    env = RewardScaleBiasWrapper(_BatchOfOneEnv([0.0]), scale=2.0)
+    assert env.num_envs == 1
+    assert env.single_observation_space.shape == (2,)
+    with pytest.raises(AttributeError):
+        env.not_an_attribute
+
+
 def test_reward_scale_bias_vector_wrapper_applies_transform():
     from gymnasium.vector import AutoresetMode, SyncVectorEnv
 

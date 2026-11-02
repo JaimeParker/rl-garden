@@ -792,6 +792,8 @@ _REUSABLE_BUILDERS = [
     ("transformer_ppo", "transformer_ppo", "build_transformer_ppo"),
     ("gail", "gail", "build_gail"),
     ("sac", "sac", "build_sac"),
+    ("rlpd", "rlpd", "build_rlpd"),
+    ("rlpd_hybrid", "rlpd_hybrid", "build_rlpd_hybrid"),
     ("recurrent_sac", "recurrent_sac", "build_recurrent_sac"),
     ("transformer_sac", "transformer_sac", "build_transformer_sac"),
 ]
@@ -828,6 +830,74 @@ def test_builders_take_a_subclass_and_forward_extra_kwargs(
     assert subclass is Subclass
     assert subclass_kwargs == {**default_kwargs, "extra_flag": 7}
     assert list(subclass_kwargs)[:-1] == list(default_kwargs)
+
+
+_RLPD_BUILDERS = [
+    ("rlpd", "build_rlpd", "RLPD"),
+    ("rlpd_hybrid", "build_rlpd_hybrid", "RLPDHybrid"),
+]
+_CPU_AGENT_KWARGS = {"device": "cpu", "buffer_device": "cpu", "buffer_size": 32}
+
+
+@pytest.mark.parametrize("module_name,builder_name,class_name", _RLPD_BUILDERS)
+def test_rlpd_builders_construct_the_given_subclass_with_extra_kwargs_overriding_args(
+    module_name, builder_name, class_name
+):
+    import importlib
+
+    from test_optimizer_ownership import TinyVecEnv
+
+    from rl_garden.training.online import registry
+
+    registry.discover()
+    module = importlib.import_module(f"rl_garden.training.online.entrypoints.{module_name}")
+    builder = getattr(module, builder_name)
+    base_cls = getattr(importlib.import_module("rl_garden.algorithms"), class_name)
+    subclass = type(f"My{class_name}", (base_cls,), {})
+    args = registry.entries()[module_name].args_cls()
+    assert args.batch_size != 7
+
+    default_agent = builder(
+        args, TinyVecEnv(action_dim=3), None, None, None, **_CPU_AGENT_KWARGS
+    )
+    agent = builder(
+        args,
+        TinyVecEnv(action_dim=3),
+        None,
+        None,
+        None,
+        algorithm_cls=subclass,
+        batch_size=7,
+        **_CPU_AGENT_KWARGS,
+    )
+
+    assert type(default_agent) is base_cls
+    assert type(agent) is subclass
+    assert agent.batch_size == 7
+
+
+def test_build_rlpd_hybrid_extra_kwargs_reach_the_constructor_beyond_args():
+    from test_optimizer_ownership import TinyVecEnv
+
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.entrypoints.rlpd_hybrid import build_rlpd_hybrid
+
+    registry.discover()
+    args = registry.entries()["rlpd_hybrid"].args_cls()
+    assert not hasattr(args, "use_grasp_penalty")
+
+    agent = build_rlpd_hybrid(
+        args,
+        TinyVecEnv(action_dim=3),
+        None,
+        None,
+        None,
+        use_grasp_penalty=True,
+        **_CPU_AGENT_KWARGS,
+    )
+
+    assert agent.use_grasp_penalty is True
+    assert agent.replay_buffer.store_grasp_penalty is True
 
 
 _RUN_FUNCTIONS = [

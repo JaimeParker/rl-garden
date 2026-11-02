@@ -31,6 +31,15 @@ class RewardScaleBiasWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, info
 
+    def __getattr__(self, name: str):
+        # gymnasium >= 1.0 stopped forwarding unknown attributes through
+        # gym.Wrapper; batch-of-1 torch envs (the real-robot envs) expose
+        # num_envs/single_observation_space/action_contract that callers
+        # above this wrapper read.
+        if name == "env":  # not yet set during gym.Wrapper.__init__
+            raise AttributeError(name)
+        return getattr(self.env, name)
+
 
 class RewardScaleBiasVectorWrapper(_VectorWrapperBase):
     """Multiply reward by ``scale`` and add ``bias`` on each step, for vector envs.

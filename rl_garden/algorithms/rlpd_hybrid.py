@@ -17,11 +17,14 @@ import torch.nn.functional as F
 
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.buffers.demo_intervention import DemoInterventionMixin
-from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
+from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.policies.rlpd_hybrid_policy import _DISCRETE_ACTION_VALUES, RLPDHybridPolicy
+from rl_garden.policies.rlpd_hybrid_policy import (
+    _DISCRETE_ACTION_VALUES,
+    RLPDHybridPolicy,
+)
 
 
 def _discrete_labels_from_actions(actions: torch.Tensor) -> torch.Tensor:
@@ -100,6 +103,22 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             sample_device=self.device,
             mmap_dir=self.mmap_dir,
             mmap_mode=self.mmap_mode,
+            store_grasp_penalty=True,
+        )
+
+    def _build_prior_data_buffer(self, buffer_size: int):
+        # The online buffer samples ``GraspPenaltyReplayBufferSample`` under
+        # ``use_grasp_penalty``; mixing needs the demo buffer to sample the
+        # same dataclass (nstep == 1 is already enforced by the online buffer).
+        if not self.use_grasp_penalty:
+            return super()._build_prior_data_buffer(buffer_size)
+        return ReplayBuffer(
+            observation_space=self.env.single_observation_space,
+            action_space=self.env.single_action_space,
+            num_envs=1,
+            buffer_size=buffer_size,
+            storage_device=self.buffer_device,
+            sample_device=self.device,
             store_grasp_penalty=True,
         )
 

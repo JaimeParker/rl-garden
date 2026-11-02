@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 
-def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
+def build_rlpd(
+    args,
+    env,
+    eval_env,
+    logger,
+    checkpoint_dir,
+    *,
+    algorithm_cls: type | None = None,
+    **extra_kwargs: Any,
+):
+    """Build ``algorithm_cls`` (``RLPD`` when ``None``) from ``args``.
+    ``extra_kwargs`` are merged into its constructor call after the keywords
+    derived from ``args`` and win over them."""
     from rl_garden.algorithms import RLPD
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
@@ -25,8 +40,9 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
     if args.encoder_sharing is not None:
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
-    agent = construct_agent(
-        RLPD,
+    if algorithm_cls is None:
+        algorithm_cls = RLPD
+    agent_kwargs: dict[str, Any] = dict(
         env=env,
         eval_env=eval_env,
         mmap_dir=args.mmap_dir,
@@ -86,6 +102,8 @@ def build_rlpd(args, env, eval_env, logger, checkpoint_dir):
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
     )
+    agent_kwargs.update(extra_kwargs)
+    agent = construct_agent(algorithm_cls, **agent_kwargs)
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     if args.offline_dataset is not None:
