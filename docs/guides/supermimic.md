@@ -59,8 +59,9 @@ Keep `state_sim` to the minimal sufficient state: it grows replay memory as `(T,
 | `state_time` | Reference time index, an integer-valued float | only for `--heads analytic` | none |
 
 Episode ends follow the repository's standard boundary contract (`final_observation`,
-`terminated` versus `truncated`). Bootstrapping stops at terminations only. Every episode
-end keeps its pre-reset observation, so the last window target is the true final state.
+`terminated` versus `truncated`). Bootstrapping stops at terminations only. Like every
+off-policy algorithm, replay keeps the pre-reset observation on every episode end, so the
+last window target is the true final state.
 
 `--heads learned` (default) trains the reward, termination and, if `state_sim` is present,
 observation heads as small MLPs. With only `state`, the observation head is the identity.
@@ -191,9 +192,9 @@ policy trains no observation encoder.
   fresh noise, and only when an `AnalyticMDP` provides `obs_noise`.
 - A learned observation head is trained on the noisy `state` observation, so it learns the
   zero-mean noise's mean.
-- Episode ends of any kind keep their pre-reset observation in replay (the base class would
-  keep it for truncations only); the world model's last window target needs the true final
-  state on terminations too. Bootstrapping is unchanged.
+- Episode ends of any kind keep their pre-reset observation in replay (the off-policy base
+  class does this for every algorithm), so the world model's last window target is the true
+  final state on terminations too. Bootstrapping still stops at terminations only.
 - Imagined actions are clamped to the env's action bounds, so out-of-range actions receive
   zero gradient and the model sees the action distribution it was trained on.
 - `heads="analytic"` requires `state_time`; without it the time index would be zero

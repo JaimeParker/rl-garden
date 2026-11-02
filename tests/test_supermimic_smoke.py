@@ -175,7 +175,10 @@ def test_update_to_data_mapping():
 
 
 def test_terminated_steps_keep_the_pre_reset_observation():
+    """The off-policy base class stores the pre-reset observation on every
+    episode end; SuperMimic's strict windows read it from the final-obs table."""
     agent = trained_agent()
+    assert agent.bootstrap_at_done == "truncated"
     buffer, mdp = agent.replay_buffer, agent.env.unwrapped.analytic_mdp
     terminal = buffer.episode_ends & buffer.dones & (buffer._final_slot_ids >= 0)
     assert bool(terminal.any())

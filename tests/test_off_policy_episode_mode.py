@@ -271,34 +271,23 @@ def _replayed_next_state(agent, monkeypatch) -> list[torch.Tensor]:
     return captured
 
 
-def test_bootstrap_at_done_never_stops_every_done_and_reads_no_final_obs():
+def test_bootstrap_at_done_never_stops_every_done_and_reads_final_obs_on_done_rows():
     agent = _agent(_ScriptedVecEnv(episode_len=[1, 1_000]), bootstrap_at_done="never")
     terminations = torch.tensor([True, False])
     truncations = torch.tensor([False, False])
 
     need_final_obs, stop_bootstrap = agent._compute_done_masks(terminations, truncations)
 
-    assert need_final_obs.tolist() == [False, False]
+    assert need_final_obs.tolist() == [True, False]
     assert stop_bootstrap.tolist() == [True, False]
 
 
-def test_bootstrap_at_done_never_does_not_rewrite_replayed_next_obs(monkeypatch):
+@pytest.mark.parametrize("bootstrap_at_done", ["always", "never", "truncated"])
+def test_bootstrap_at_done_rewrites_only_done_rows(monkeypatch, bootstrap_at_done):
+    """Every mode stores ``final_observation`` on done rows (env 0 terminates
+    every step) and leaves the other rows' returned obs untouched."""
     env = _StaleFinalObservationVecEnv(episode_len=[1, 1_000])
-    agent = _agent(env, bootstrap_at_done="never")
-    _stub_train(agent, monkeypatch)
-    replayed = _replayed_next_state(agent, monkeypatch)
-
-    agent.learn(total_timesteps=agent.num_envs * agent.steps_per_env)
-
-    assert replayed
-    for next_obs in replayed:
-        assert torch.equal(next_obs, torch.zeros_like(next_obs))
-
-
-def test_bootstrap_at_done_always_still_rewrites_only_done_rows(monkeypatch):
-    """Contrast case: the other modes still take ``final_observation`` rows."""
-    env = _StaleFinalObservationVecEnv(episode_len=[1, 1_000])
-    agent = _agent(env, bootstrap_at_done="always")
+    agent = _agent(env, bootstrap_at_done=bootstrap_at_done)
     _stub_train(agent, monkeypatch)
     replayed = _replayed_next_state(agent, monkeypatch)
 

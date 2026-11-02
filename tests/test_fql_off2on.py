@@ -144,8 +144,7 @@ def test_first_online_update_preserves_final_observation_and_done_mask(
 
     assert agent._global_update == 1
     assert len(agent.replay_buffer) == 4
-    expected_next_obs = torch.zeros(3) if terminated else torch.full((3,), 7.0)
-    assert torch.equal(agent.replay_buffer.next_obs["state"][3, 0], expected_next_obs)
+    assert torch.equal(agent.replay_buffer.next_obs["state"][3, 0], torch.full((3,), 7.0))
     assert agent.replay_buffer.dones[3, 0].item() == expected_done
 
 

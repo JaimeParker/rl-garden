@@ -21,8 +21,8 @@ from rl_garden.buffers.base import BaseReplayBuffer
 from rl_garden.common.eval_metrics import masked_episode_metrics
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import (
-    InitialTrainingPhase,
     STANDARD_UPDATE_MASK,
+    InitialTrainingPhase,
     TrainingUpdateMask,
 )
 
@@ -240,16 +240,23 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def _compute_done_masks(
         self, terminations: torch.Tensor, truncations: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(need_final_obs, stop_bootstrap)`` for one vectorized step.
+
+        Replay always stores the observation the step actually produced:
+        every ended row takes ``final_observation`` (the pre-reset
+        observation) in every mode, so models trained on
+        ``(obs, action, next_obs)`` never see a reset state as a successor.
+        ``bootstrap_at_done`` decides only the bootstrap flag; a TD target
+        masks ``next_obs`` out on ``stop_bootstrap`` rows. When the backend
+        reports no ``final_observation``, ``_write_final_obs`` leaves the
+        returned (post-reset) observation in place.
+        """
+        need_final_obs = truncations | terminations
         if self.bootstrap_at_done == "never":
-            # Every done stops bootstrapping, so next_obs never enters the target
-            # and the post-reset obs is a valid placeholder at done rows.
-            need_final_obs = torch.zeros_like(terminations, dtype=torch.bool)
             stop_bootstrap = truncations | terminations
         elif self.bootstrap_at_done == "always":
-            need_final_obs = truncations | terminations
             stop_bootstrap = torch.zeros_like(terminations, dtype=torch.bool)
         else:  # "truncated"
-            need_final_obs = truncations & (~terminations)
             stop_bootstrap = terminations
         return need_final_obs, stop_bootstrap
 

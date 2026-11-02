@@ -744,15 +744,6 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
     # Rollout
     # ------------------------------------------------------------------
 
-    def _compute_done_masks(
-        self, terminations: torch.Tensor, truncations: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Bootstrapping stops at terminations only (``"truncated"``), but every
-        episode end keeps its pre-reset observation: the world model's last
-        window target and the normalizers need the true final state on
-        terminated steps too."""
-        return terminations | truncations, terminations
-
     def _policy_goal(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         state = obs[OBS_KEY]
         if self.policy.goal_dim == 0:
