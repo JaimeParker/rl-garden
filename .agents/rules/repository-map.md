@@ -112,14 +112,16 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   New entrypoints: `online/entrypoints/ncrl.py` (`ncrl`), `online/entrypoints/supermimic.py`
   (`supermimic`), `offline/entrypoints/pwm.py` (`pwm`) and
   `offline/entrypoints/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
-- `robot_infra/` — optional submodule ([rlgarden-robot-infra](https://github.com/JaimeParker/rlgarden-robot-infra)):
-  controllers, teleoperation, real-robot support. No dependency on `rl_garden`.
-- Real-robot actor/learner loops, the `franka_real` env backend, and
-  HIL-SERL/SERL integration live in a separate repo,
-  [rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world) —
-  not under `rl_garden/` at all. It imports `rl_garden` as a library and
-  registers `franka_real` through the `rlgarden.env_backends` entry-point
-  group (`rl_garden/envs/backend_registry.py`).
+- `real_world/` — optional submodule
+  ([rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world)):
+  real-robot actor/learner loops, the `franka_real`/`real_robot` env backends,
+  the teleop source layer, and the SERL / HIL-SERL / residual / SiLRI
+  training entrypoints. It imports `rl_garden` as a library and registers its
+  backends and algorithms through the `rlgarden.env_backends` and
+  `rlgarden.algorithms` entry-point groups. Its `robot_infra/` directory is the
+  torch-free device layer (`rlgarden-robot-infra`: devices, daemon,
+  teleoperation hardware), a second distribution of the same repository with no
+  dependency on `rl_garden`.
 - `examples/` — thin training dispatchers (wrappers of `rl_garden/training/cli.py`) and
   specialized experiment entrypoints.
 - `configs/` — reusable preset configs for training.

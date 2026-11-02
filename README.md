@@ -92,8 +92,8 @@ rl_garden/
 ├── policies/      # Algorithm policy composition
 ├── training/      # Registered online, offline, and off2on training packages
 └── world_models/  # World model base, imagination, latent consistency (TD-MPC2)
-robot_infra/       # Optional submodule (rlgarden-robot-infra): controllers, teleoperation
-real_world/        # Optional submodule (rlgarden-real-world): ActorLoop/LearnerLoop, franka_real backend
+real_world/        # Optional submodule (rlgarden-real-world): real-robot loops, backends, teleop,
+                   # HIL-SERL/residual/SiLRI entrypoints; its robot_infra/ is the torch-free device layer
 examples/          # Thin dispatchers and specialized experiment entrypoints
 scripts/           # Launchers with experiment defaults
 tests/             # Unit and backend/accelerator integration tests

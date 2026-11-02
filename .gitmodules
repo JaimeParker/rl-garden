@@ -1,6 +1,3 @@
 [submodule "real_world"]
 	path = real_world
 	url = https://github.com/JaimeParker/rlgarden-real-world.git
-[submodule "robot_infra"]
-	path = robot_infra
-	url = https://github.com/JaimeParker/rlgarden-robot-infra.git
