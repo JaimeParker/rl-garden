@@ -17,7 +17,8 @@ def build_rlpd_hybrid(
 ):
     """Build ``algorithm_cls`` (``RLPDHybrid`` when ``None``) from ``args``.
     ``extra_kwargs`` are merged into its constructor call after the keywords
-    derived from ``args`` and win over them."""
+    derived from ``args`` and win over them; ``num_grippers`` (the number of
+    trailing gripper action dims, 1 when omitted) is passed this way."""
     from rl_garden.algorithms import RLPDHybrid
     from rl_garden.common.cli_args import (
         resolve_critic_encoder_config,
@@ -172,7 +173,8 @@ class RLPDHybridArgs(VisionSACTrainingArgs, EnvBackendArgs):
     """RLPDHybrid -- RLPD with an independent discrete Double-DQN head for a
     hybrid continuous-arm + discrete-gripper action space (HIL-SERL's
     ``sac_hybrid_single``). The last action dim is treated as the discrete
-    gripper choice; the continuous actor/critic only see the remaining dims.
+    gripper choice (the last ``num_grippers`` dims when the builder is given
+    ``num_grippers``); the continuous actor/critic only see the remaining dims.
     """
 
     n_critics: int = 10

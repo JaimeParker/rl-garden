@@ -390,3 +390,156 @@ def test_checkpoint_round_trips_discrete_critic_and_dqn_optimizer():
     fresh = _agent()
     fresh.policy.load_state_dict(state["policy"])
     fresh.dqn_optimizer.load_state_dict(state["optimizers"]["dqn_optimizer"])
+
+
+# --- num_grippers: the last k action dims are grippers ---------------------------------
+
+
+def test_one_gripper_labels_keep_the_nearest_of_three_mapping():
+    from rl_garden.algorithms.rlpd_hybrid import _discrete_labels_from_actions
+    from rl_garden.policies.rlpd_hybrid_policy import encode_gripper_labels
+
+    gripper = torch.tensor([-1.0, -0.6, -0.5, -0.2, 0.0, 0.3, 0.5, 0.7, 1.0, 2.0, -3.0])
+    actions = torch.zeros(gripper.shape[0], 3)
+    actions[:, -1] = gripper
+    expected = [0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 0]  # ties go to the lower value
+
+    nearest_of_three = (actions[..., -1:] - torch.tensor([-1.0, 0.0, 1.0])).abs().argmin(dim=-1)
+    assert nearest_of_three.tolist() == expected
+    labels = _discrete_labels_from_actions(actions)
+    assert labels.tolist() == expected and labels.dtype == torch.int64
+    assert encode_gripper_labels(actions[..., -1:]).tolist() == expected
+
+
+def test_two_gripper_labels_round_trip_all_nine_joint_actions():
+    from rl_garden.policies.rlpd_hybrid_policy import (
+        decode_gripper_index,
+        encode_gripper_labels,
+    )
+
+    index = torch.arange(9)
+    values = decode_gripper_index(index, 2)
+    assert values.shape == (9, 2)
+    expected = [(a, b) for a in (-1.0, 0.0, 1.0) for b in (-1.0, 0.0, 1.0)]  # first gripper most significant
+    assert [tuple(row) for row in values.tolist()] == expected
+    assert encode_gripper_labels(values).tolist() == index.tolist()
+    # Non-exact gripper actions map to the nearest values per gripper.
+    assert encode_gripper_labels(torch.tensor([[0.9, -0.2], [-0.7, 0.6]])).tolist() == [7, 2]
+
+
+def test_one_gripper_decode_is_the_value_table():
+    from rl_garden.policies.rlpd_hybrid_policy import decode_gripper_index
+
+    decoded = decode_gripper_index(torch.tensor([0, 1, 2]), 1)
+    assert decoded.shape == (3, 1)
+    assert decoded.reshape(-1).tolist() == [-1.0, 0.0, 1.0]
+
+
+class TwoGripperVecEnv(DummyVecEnv):
+    """6D action space: two 2-D arm blocks, then the left and right grippers."""
+
+    ACTION_DIM = 6
+
+    def __init__(self, num_envs: int = 2) -> None:
+        super().__init__(num_envs)
+        dim = self.ACTION_DIM
+        self.single_action_space = spaces.Box(-1.0, 1.0, (dim,), dtype=np.float32)
+        self.action_space = spaces.Box(
+            low=np.broadcast_to(self.single_action_space.low, (num_envs, dim)),
+            high=np.broadcast_to(self.single_action_space.high, (num_envs, dim)),
+            dtype=np.float32,
+        )
+
+
+def test_one_gripper_head_width_policy_kwargs_and_metadata_are_unchanged():
+    agent = _agent()
+    assert agent.num_grippers == 1 and agent.policy.num_grippers == 1
+    assert agent.policy.discrete_critic(torch.zeros(1, agent.policy.critic_features_dim)).shape == (1, 3)
+    assert agent.policy.action_space.shape == (2,)
+    assert "num_grippers" not in agent._policy_kwargs(agent.env.single_observation_space)
+    assert agent._checkpoint_metadata()["num_grippers"] == 1
+
+
+def test_two_grippers_set_head_width_continuous_dims_and_metadata():
+    agent = _agent(env=TwoGripperVecEnv(), num_grippers=2)
+    policy = agent.policy
+    assert policy.num_grippers == 2
+    assert policy.action_space.shape == (4,)
+    assert policy.discrete_critic(torch.zeros(1, policy.critic_features_dim)).shape == (1, 9)
+    assert policy.discrete_target_critic(torch.zeros(1, policy.critic_features_dim)).shape == (1, 9)
+    assert agent._checkpoint_metadata()["num_grippers"] == 2
+
+
+def test_two_gripper_predict_appends_the_decoded_grippers_after_the_continuous_dims():
+    agent = _agent(env=TwoGripperVecEnv(), num_grippers=2)
+    q_values = torch.zeros(2, 9)
+    q_values[:, 5] = 1.0  # digits (1, 2): left hold, right open
+    agent.policy.discrete_critic = _ConstQ(q_values)
+
+    action = agent.policy.predict({"state": torch.zeros(2, 4)}, deterministic=True)
+
+    assert action.shape == (2, TwoGripperVecEnv.ACTION_DIM)
+    torch.testing.assert_close(action[:, -2:], torch.tensor([[0.0, 1.0], [0.0, 1.0]]))
+    assert bool((action[:, :4].abs() <= 1.0).all())
+
+
+def test_two_gripper_discrete_critic_is_trained_on_the_joint_label_of_the_last_two_dims():
+    import rl_garden.algorithms.rlpd_hybrid as rlpd_hybrid_module
+
+    actions = torch.zeros(4, TwoGripperVecEnv.ACTION_DIM)
+    actions[:, -2:] = torch.tensor([[-1.0, -1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    batch = types.SimpleNamespace(
+        obs={"state": torch.zeros(4, 4)},
+        next_obs={"state": torch.zeros(4, 4)},
+        actions=actions,
+        rewards=torch.zeros(4),
+        dones=torch.zeros(4),
+    )
+    agent = _agent(env=TwoGripperVecEnv(), num_grippers=2)
+    agent._sample_train_batch = lambda n: batch
+    # Q(s, j) = j, so the gathered prediction is the label itself.
+    agent.policy.discrete_critic = _ConstQ(torch.arange(9.0).repeat(4, 1), requires_grad=True)
+    agent.policy.discrete_target_critic = _ConstQ(torch.zeros(4, 9))
+
+    captured = []
+    real_mse_loss = rlpd_hybrid_module.F.mse_loss
+
+    def spying_mse_loss(q_pred, target):
+        captured.append(q_pred.detach().clone())
+        return real_mse_loss(q_pred, target)
+
+    rlpd_hybrid_module.F.mse_loss = spying_mse_loss
+    try:
+        agent._train_discrete_critic(1)
+    finally:
+        rlpd_hybrid_module.F.mse_loss = real_mse_loss
+
+    assert captured[0].tolist() == [0.0, 7.0, 5.0, 8.0]
+
+
+def test_two_gripper_critic_scores_the_continuous_dims_and_the_agent_learns():
+    agent = _agent(env=TwoGripperVecEnv(), num_grippers=2)
+    obs = {"state": torch.zeros(3, 4)}
+    actions = torch.rand(3, TwoGripperVecEnv.ACTION_DIM) * 2 - 1
+    with torch.no_grad():
+        q_full = agent._critic_forward(obs, actions)
+        q_continuous = super(RLPDHybrid, agent)._critic_forward(obs, actions[..., :4])
+    torch.testing.assert_close(q_full, q_continuous)
+
+    agent.learn(total_timesteps=16)
+    assert agent._global_step == 16
+
+
+@pytest.mark.parametrize("num_grippers", [0, -1])
+def test_num_grippers_below_one_is_rejected(num_grippers):
+    with pytest.raises(ValueError, match="num_grippers"):
+        _agent(num_grippers=num_grippers)
+
+
+def test_n_discrete_actions_must_match_the_gripper_count():
+    from rl_garden.policies.rlpd_hybrid_policy import RLPDHybridPolicy
+
+    agent = _agent(env=TwoGripperVecEnv(), num_grippers=2)
+    kwargs = agent._policy_kwargs(agent.env.single_observation_space)
+    with pytest.raises(ValueError, match="n_discrete_actions must be 9"):
+        RLPDHybridPolicy(**{**kwargs, "n_discrete_actions": 3})

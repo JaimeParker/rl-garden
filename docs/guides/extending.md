@@ -129,6 +129,11 @@ picks `SACDDP` under multi-GPU DDP only then) and forward any other keyword to
 the constructor; `build_rlpd` and `build_rlpd_hybrid` merge those keywords
 after the ones they read from `args`, so one of them replaces the value taken
 from `args` (for example `use_grasp_penalty` or `memory_efficient_buffer`).
+`RLPDHybrid`'s `num_grippers` (1 by default) reaches it this way: the last
+`num_grippers` action dims are the grippers, in order, and its DQN head picks
+one of `3 ** num_grippers` joint gripper actions, labelled and decoded by
+`encode_gripper_labels` / `decode_gripper_index` in
+`rl_garden.policies.rlpd_hybrid_policy`.
 The `run_*` functions of the other builders take `build_agent=` (the module's
 builder when omitted); `run_rlpd` and `run_rlpd_hybrid` do not.
 

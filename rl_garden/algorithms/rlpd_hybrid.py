@@ -1,6 +1,8 @@
 """RLPDHybrid: RLPD's continuous ee-pose actor/critic unchanged, plus an
 independent discrete Double-DQN head for a hybrid continuous+discrete
-gripper action space (HIL-SERL's ``sac_hybrid_single``). No existing
+gripper action space (HIL-SERL's ``sac_hybrid_single``). The last
+``num_grippers`` action dims are the grippers (``RLPDHybridPolicy``'s layout);
+the DQN head picks one of ``3 ** num_grippers`` joint gripper actions. No existing
 algorithm in this repo adds a brand-new network+optimizer via subclassing
 (RLPD-over-SAC and TD3-over-DDPG only add hooks/hyperparameters onto
 networks the parent already owns), so this follows ``AGENTS.md``'s
@@ -22,17 +24,15 @@ from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.policies.rlpd_hybrid_policy import (
-    _DISCRETE_ACTION_VALUES,
     RLPDHybridPolicy,
+    encode_gripper_labels,
 )
 
 
-def _discrete_labels_from_actions(actions: torch.Tensor) -> torch.Tensor:
-    """Map the recorded gripper action (last action dim, one of
-    ``_DISCRETE_ACTION_VALUES``) back to its discrete index."""
-    values = actions.new_tensor(_DISCRETE_ACTION_VALUES)
-    gripper = actions[..., -1:]
-    return (gripper - values).abs().argmin(dim=-1)
+def _discrete_labels_from_actions(actions: torch.Tensor, num_grippers: int = 1) -> torch.Tensor:
+    """The joint discrete index of the recorded gripper actions (the last
+    ``num_grippers`` action dims); see ``encode_gripper_labels``."""
+    return encode_gripper_labels(actions[..., -num_grippers:])
 
 
 class RLPDHybrid(DemoInterventionMixin, RLPD):
@@ -50,8 +50,10 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
         use_grasp_penalty: bool = False,
         memory_efficient_buffer: bool = False,
         memory_efficient_frame_stack: int = 1,
+        num_grippers: int = 1,
         **rlpd_kwargs: Any,
     ) -> None:
+        self.num_grippers = int(num_grippers)
         self.discrete_hidden_dim = discrete_hidden_dim
         self.discrete_lr = discrete_lr
         self._discrete_tau = discrete_tau
@@ -63,10 +65,14 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "grasp_penalty")
 
     def _policy_kwargs(self, observation_space) -> dict[str, Any]:
-        return {
+        kwargs = {
             **super()._policy_kwargs(observation_space),
             "discrete_hidden_dims": (self.discrete_hidden_dim,),
         }
+        # Single-gripper policies keep the policy's default and their keyword set.
+        if self.num_grippers != 1:
+            kwargs["num_grippers"] = self.num_grippers
+        return kwargs
 
     def _build_replay_buffer(self):
         if not self.use_grasp_penalty and not self.memory_efficient_buffer:
@@ -153,13 +159,13 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
 
     def _critic_forward(self, obs, actions, target: bool = False):
         # The continuous critic was built for the non-gripper action dims
-        # only (RLPDHybridPolicy strips the last dim); ``actions`` here is
+        # only (RLPDHybridPolicy strips the last num_grippers dims); ``actions`` here is
         # always a raw recorded action from the replay buffer (full env
         # action width), never an actor-generated sample -- SACCore only
         # calls this from `_critic_loss`, and the actor-loss path goes
         # through `policy.min_q_value` with the actor's own (already
         # correctly-shaped) continuous sample instead.
-        return super()._critic_forward(obs, actions[..., :-1], target=target)
+        return super()._critic_forward(obs, actions[..., : -self.num_grippers], target=target)
 
     @property
     def _discrete_tau_value(self) -> float:
@@ -169,7 +175,7 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
         for _ in range(gradient_steps):
             data = self._sample_train_batch(self.batch_size)
             self.policy.prepare_batch_all(data.obs, data.next_obs)
-            labels = _discrete_labels_from_actions(data.actions)
+            labels = _discrete_labels_from_actions(data.actions, self.num_grippers)
 
             features = self.policy.extract_critic_features(data.obs, stop_gradient=True)
             q_pred = self.policy.discrete_critic(features).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
@@ -207,4 +213,5 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
             **super()._checkpoint_metadata(),
             "discrete_hidden_dim": self.discrete_hidden_dim,
             "discrete_lr": self.discrete_lr,
+            "num_grippers": self.num_grippers,
         }
