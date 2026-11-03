@@ -67,7 +67,7 @@ platforms can be integrated without creating platform-specific training entrypoi
   [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)),
   Meta-World, RLBench, RoboTwin, robomimic, OGBench, Minari, and legacy
   D4RL/Adroit/Kitchen. A real-robot Franka backend comes from the downstream
-  `rlgarden-real-world` repository, and a template backend shows how to add
+  `real-world-rl` repository, and a template backend shows how to add
   further platforms. Every
   backend follows the episode boundary contract in
   [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
@@ -110,7 +110,7 @@ cd rl-garden
 ```
 
 For real-robot work, clone
-[rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world)
+[real-world-rl](https://github.com/JaimeParker/real-world-rl)
 instead: it is the top-level repository and carries rl-garden as a submodule
 under `rl-garden/` (see [Robot Infrastructure and Reward
 Models](#robot-infrastructure-and-reward-models)).
@@ -265,7 +265,7 @@ Other registered `--env-backend` values: `maniskill` (default for most examples)
 [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)), and
 `gymnasium` (any registered `gymnasium.Env` from your own package, see
 [Training on Your Own Gymnasium Envs](docs/guides/gymnasium-custom-envs.md)).
-`franka_real` is added by the downstream `rlgarden-real-world` repository for
+`franka_real` is added by the downstream `real-world-rl` repository for
 real-robot training.
 
 To train on your own `gymnasium.Env` you do not need to fork rl-garden or write a
@@ -401,14 +401,14 @@ call internally (via `ObservationEncoderMixin`,
 
 Robot hardware/communication/control and real-world RL orchestration live in
 the separate downstream repository
-[rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world). It is
+[real-world-rl](https://github.com/JaimeParker/real-world-rl). It is
 the top level for real-robot work and carries rl-garden as a git submodule under
 `rl-garden/`, pinned to the commit its tests pass against:
 
-- `rl_garden_real_world/` -- `ActorLoop`/`LearnerLoop`, the `franka_real` and
+- `real_world_rl/` -- `ActorLoop`/`LearnerLoop`, the `franka_real` and
   `real_robot` env backends, SERL/HIL-SERL/residual/SiLRI training loops,
   teleoperation demo/recording scripts, and the [teleop
-  guide](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md).
+  guide](https://github.com/JaimeParker/real-world-rl/blob/main/docs/teleop.md).
 - `robot_infra/` -- the torch-free device layer: EE twist and impedance
   controllers, the Franka bridge, teleop devices.
 
@@ -417,8 +417,8 @@ It imports `rl_garden` as a library and extends it only through the contract in
 part is required for simulation-only use. Its tests run from its own root:
 
 ```bash
-git clone --recurse-submodules https://github.com/JaimeParker/rlgarden-real-world.git
-cd rlgarden-real-world
+git clone --recurse-submodules https://github.com/JaimeParker/real-world-rl.git
+cd real-world-rl
 pip install -e rl-garden -e robot_infra -e .
 python -m pytest tests robot_infra/tests -q
 # or, without installing: PYTHONPATH=.:rl-garden:robot_infra python -m pytest tests robot_infra/tests -q
@@ -458,7 +458,7 @@ See [docs/README.md](docs/README.md) for the full index. Highlights:
 - [Offline Training Acceleration](docs/guides/offline-acceleration.md)
 - [Policy Graphs (YAML-Declared PPO Policies)](docs/guides/policy-graphs.md)
 - [RoboTwin Integration](docs/guides/robotwin.md)
-- [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
+- [Teleoperation and Recording](https://github.com/JaimeParker/real-world-rl/blob/main/docs/teleop.md) (in `real-world-rl`)
 - [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
 - [IQL Overview](docs/design/iql-overview.md)
 - [RLinf Integration](docs/design/rlinf-integration.md)

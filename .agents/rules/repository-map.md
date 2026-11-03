@@ -113,10 +113,10 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   (`supermimic`), `offline/entrypoints/pwm.py` (`pwm`) and
   `offline/entrypoints/rssm_pretrain.py` (`rssm_pretrain`); the latter two are bespoke runners.
 - Real-robot code is not in this repository. The downstream repository
-  [rlgarden-real-world](https://github.com/JaimeParker/rlgarden-real-world) is
+  [real-world-rl](https://github.com/JaimeParker/real-world-rl) is
   the top level for real-robot work and carries rl-garden as a git submodule
   under `rl-garden/`, pinned to the commit its tests pass against. Its package
-  `rl_garden_real_world/` holds the real-robot actor/learner loops, the
+  `real_world_rl/` holds the real-robot actor/learner loops, the
   `franka_real`/`real_robot` env backends, the teleop source layer, and the
   SERL / HIL-SERL / residual / SiLRI training entrypoints. It imports
   `rl_garden` as a library and registers its backends and algorithms through
@@ -165,7 +165,7 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   Underscore prefixes belong to functions, classes, and attributes inside a
   module, not to file names.
 - The only `pkgutil`-scanned directories are `rl_garden/training/<phase>/entrypoints/`
-  (mirrored by `rl_garden_real_world/training/entrypoints/` in the real-world
+  (mirrored by `real_world_rl/training/entrypoints/` in the real-world
   repo) and `rl_garden/envs/backends/`. Every module in those directories is
   imported by its registry, so put only registering modules there; the
   registries skip `_`-prefixed names as a safety valve, not as a way to

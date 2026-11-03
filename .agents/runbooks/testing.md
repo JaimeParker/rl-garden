@@ -53,9 +53,9 @@ test, and pins torch threads to 1 inside xdist workers.
 - GPU and sim lanes are serial and use one card at a time; choose a free card
   with `CUDA_VISIBLE_DEVICES`. Set `MUJOCO_GL=egl` for dm_control/mujoco.
 
-## Downstream: rlgarden-real-world
+## Downstream: real-world-rl
 
-`rlgarden-real-world` is a separate repository that carries rl-garden as a
+`real-world-rl` is a separate repository that carries rl-garden as a
 submodule under `rl-garden/`; none of its tests run from this repository or
 through `scripts/test.sh`. Run them from its root, after an editable install of
 all three distributions (`pip install -e rl-garden -e robot_infra -e .`) or with

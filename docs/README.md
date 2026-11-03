@@ -18,7 +18,7 @@ Operational how-to for running and configuring the framework.
 - [RLBench Integration](guides/rlbench-integration.md)
 - [robomimic Integration](guides/robomimic-integration.md)
 - [RoboTwin Integration](guides/robotwin.md)
-- [Teleoperation and Recording](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/teleop.md) (in `rlgarden-real-world`)
+- [Teleoperation and Recording](https://github.com/JaimeParker/real-world-rl/blob/main/docs/teleop.md) (in `real-world-rl`)
 - [WSRL Reproduction](guides/wsrl-reproduction.md)
 
 ## Design
@@ -32,10 +32,10 @@ Architecture and rationale behind specific subsystems.
 
 ## Robot Infra and Real-World RL
 
-Both live in the separate downstream repository `rlgarden-real-world`
-(`rl_garden_real_world/` and its `robot_infra/` device layer), which carries
+Both live in the separate downstream repository `real-world-rl`
+(`real_world_rl/` and its `robot_infra/` device layer), which carries
 rl-garden as a submodule under `rl-garden/`; see the "Robot Infrastructure and
 Reward Models" section in the top-level [README.md](../README.md).
 
-- [Robot Infra Roadmap](https://github.com/JaimeParker/rlgarden-real-world/blob/main/robot_infra/docs/robot-infra-roadmap.md)
-- [HIL-SERL Roadmap](https://github.com/JaimeParker/rlgarden-real-world/blob/main/docs/hil-serl-roadmap.md)
+- [Robot Infra Roadmap](https://github.com/JaimeParker/real-world-rl/blob/main/robot_infra/docs/robot-infra-roadmap.md)
+- [HIL-SERL Roadmap](https://github.com/JaimeParker/real-world-rl/blob/main/docs/hil-serl-roadmap.md)

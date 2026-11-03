@@ -40,16 +40,16 @@ the first `make_training_envs` / `make_evaluation_env` call and does two things:
 2. `importlib.metadata.entry_points(group="rlgarden.env_backends")` loads every
    entry point in that group, letting a backend live entirely outside
    `rl_garden` — the real example is `franka_real`, registered by the separate
-   `rlgarden-real-world` repo (see
+   `real-world-rl` repo (see
    [`.agents/rules/repository-map.md`](repository-map.md)) via its own
    `pyproject.toml`:
 
 ```toml
 [project.entry-points."rlgarden.env_backends"]
-franka_real = "rlgarden_real_world.backend_module"
+franka_real = "real_world_rl.envs.backends.franka_real"
 ```
 
-`rlgarden_real_world.backend_module` calls `register_env_backend(...)` at import
+`real_world_rl.envs.backends.franka_real` calls `register_env_backend(...)` at import
 time, same as an in-tree module does. Use this path only when the backend
 depends on hardware or code that must not live in `rl_garden` itself; otherwise
 add an in-tree module as in Step 1.
@@ -539,5 +539,5 @@ they enforce the lazy-import invariant across every backend.
 | `rlbench` | [`docs/guides/rlbench-integration.md`](../../docs/guides/rlbench-integration.md) |
 | `robomimic` | [`docs/guides/robomimic-integration.md`](../../docs/guides/robomimic-integration.md) |
 | `robotwin` | [`docs/guides/robotwin.md`](../../docs/guides/robotwin.md) |
-| `franka_real` (external, `rlgarden-real-world` repo, entry-point registered) | — |
+| `franka_real` (external, `real-world-rl` repo, entry-point registered) | — |
 
