@@ -13,7 +13,7 @@ This wrapper only tracks and reports the active direction via
 ``info["fwbw_direction"]`` -- actually running two different policies and
 routing transitions to two different learners is the actor process's job:
 ``FWBWActorLoop`` (in the separate ``rlgarden-real-world`` repo's
-``rl_garden_real_world.actor_loop``) reads this info key each
+``rl_garden_real_world.loops.actor``) reads this info key each
 step to decide which of its two (policy, learner-sync-client) pairs to use,
 since that coordination needs two full pairs and can't be owned by a single
 env wrapper.
