@@ -100,7 +100,7 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   `env.py`, `tasks.py`, `custom_tasks/` for NCRL's custom tasks), registered by
   `envs/backends/dm_control.py`; `envs/wrappers/multitask_pad.py` pads
   observations/actions of one task to a multitask model's dims (PWM evaluation).
-- `rl_garden/models/` — ACT and reward models.
+- `rl_garden/models/` — ACT and reward models; `models/act/train_trajectories.py` trains ACT from transition pkls (no simulator) into checkpoints `ACTBaseActionProvider` loads.
 - `rl_garden/training/` — registry base and independent `online/`, `offline/`, and
   `off2on/` packages; each holds `args.py`, `registry.py`, `runner.py`, and an `entrypoints/`
   package with one module per algorithm (all imported by the registry, followed by the

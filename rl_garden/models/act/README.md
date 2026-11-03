@@ -35,6 +35,35 @@ python train.py --env-id PickCube-v1 \
   --track # track training on wandb
 ```
 
+## Training from trajectory pkls
+
+`train_trajectories.py` trains ACT from pickled transition lists without a simulator or
+ManiSkill (for example teleoperated demos recorded on a real robot). Run it from the repo root:
+
+```bash
+python -m rl_garden.models.act.train_trajectories \
+  --demo-paths "demos/*.pkl" \
+  --total-iters 50000 --batch-size 256 --num-queries 30 \
+  --exp-name act-my-task
+```
+
+- Data: each pkl holds a list of transition dicts in time order with `obs`, `action` and
+  `done` (optionally `next_obs`, `truncated`); a leading batch-of-1 axis is accepted.
+  `obs["state"]` is the `(D,)` state; each `rgb_<camera>` key (`(H, W, 3)` uint8, one size for
+  all cameras) becomes a camera of a visual policy. `--no-use-cameras` trains on the state alone.
+  A bare tensor `obs` is treated as the state.
+- Episodes end at `done` or `truncated`, and where a transition's `next_obs` differs from the
+  next transition's `obs` (`--no-split-on-observation-gaps` turns that off). Action chunks never
+  cross an episode end: entries past it are padded and left out of the L1 loss.
+- States and actions are standardised with statistics computed from the data; images are
+  resized to `--image-size` and ImageNet-normalised. `--backbone-weights` initialises the
+  ResNet: `imagenet` (default, downloads torchvision's `IMAGENET1K_V1`), `none`, or a
+  torchvision state-dict path for offline machines.
+- Output: `runs/<exp-name>/checkpoints/final.pt` (plus `<iter>.pt` every `--save-freq`
+  iterations), holding `agent`, `ema_agent`, `norm_stats` and the full `act_config`.
+  `ACTBaseActionProvider.from_checkpoint(ckpt_path=...)` loads it with the EMA weights by
+  default. There is no evaluation during training.
+
 ## Citation
 
 If you use this baseline please cite the following

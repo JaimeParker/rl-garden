@@ -14,8 +14,8 @@ from gymnasium import spaces
 from rl_garden.models.act.config import (
     ACTCheckpointSpec,
     ACTConfig,
-    infer_act_config,
     resolve_act_checkpoint_path,
+    resolve_act_config,
     select_act_state_dict,
 )
 
@@ -264,7 +264,7 @@ class ACTBaseActionProvider(nn.Module):
         if not isinstance(checkpoint, dict):
             raise TypeError(f"ACT checkpoint at {path} is not a dict.")
         state_dict = select_act_state_dict(checkpoint, state_dict_key=state_dict_key)
-        config, spec = infer_act_config(state_dict)
+        config, spec = resolve_act_config(checkpoint, state_dict)
         state_obs_dim = None
         auto_state_obs_getter = False
         if state_obs_getter is None and env is not None:

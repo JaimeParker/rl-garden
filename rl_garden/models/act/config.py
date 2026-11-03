@@ -1,14 +1,14 @@
 """Configuration and checkpoint helpers for ACT base policies."""
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import torch
-
 
 DEFAULT_ACT_CHECKPOINT = "act-peg-only"
 
@@ -160,4 +160,52 @@ def infer_act_config(state_dict: dict[str, torch.Tensor]) -> tuple[ACTConfig, AC
         action_dim=action_dim,
         visual=visual,
     )
+    return config, spec
+
+
+# Checkpoint key holding ``dataclasses.asdict(ACTConfig)``, written by trainers that know the
+# full architecture (``rl_garden.models.act.train_trajectories``).
+ACT_CONFIG_CHECKPOINT_KEY = "act_config"
+# ACTConfig fields ``infer_act_config`` reads off the weight shapes.
+_SHAPE_DERIVED_FIELDS = (
+    "hidden_dim",
+    "num_queries",
+    "enc_layers",
+    "dec_layers",
+    "dim_feedforward",
+    "include_depth",
+)
+
+
+def resolve_act_config(
+    checkpoint: dict[str, Any],
+    state_dict: dict[str, torch.Tensor],
+) -> tuple[ACTConfig, ACTCheckpointSpec]:
+    """ACT architecture of a checkpoint.
+
+    Without a stored ``act_config`` this is ``infer_act_config(state_dict)``. With one, the
+    stored config also supplies the fields weight shapes cannot reveal (``nheads``,
+    ``image_size``, ``backbone``, ``pre_norm``, ...); the shape-derived fields must agree with
+    the weights.
+    """
+
+    inferred, spec = infer_act_config(state_dict)
+    stored = checkpoint.get(ACT_CONFIG_CHECKPOINT_KEY)
+    if stored is None:
+        return inferred, spec
+    known_fields = {field.name for field in dataclasses.fields(ACTConfig)}
+    unknown = sorted(set(stored) - known_fields)
+    if unknown:
+        raise ValueError(f"ACT checkpoint {ACT_CONFIG_CHECKPOINT_KEY!r} has unknown fields {unknown}.")
+    config = ACTConfig(**stored)
+    mismatched = {
+        name: (getattr(config, name), getattr(inferred, name))
+        for name in _SHAPE_DERIVED_FIELDS
+        if getattr(config, name) != getattr(inferred, name)
+    }
+    if mismatched:
+        raise ValueError(
+            f"ACT checkpoint {ACT_CONFIG_CHECKPOINT_KEY!r} disagrees with its weights "
+            f"(stored, from weights): {mismatched}."
+        )
     return config, spec
