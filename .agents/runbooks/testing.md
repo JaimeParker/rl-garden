@@ -57,10 +57,14 @@ test, and pins torch threads to 1 inside xdist workers.
 
 `real-world-rl` is a separate repository that carries rl-garden as a
 submodule under `rl-garden/`; none of its tests run from this repository or
-through `scripts/test.sh`. Run them from its root, after an editable install of
-all three distributions (`pip install -e rl-garden -e robot_infra -e .`) or with
-`PYTHONPATH=.:rl-garden:robot_infra`:
-`python -m pytest tests robot_infra/tests -q -p no:cacheprovider`. A change to a
+through `scripts/test.sh`. All downstream tests live under `tests/`, including
+device tests under `tests/devices/`. The remote gate runs from its root:
+
+```bash
+cd /workspace/rl-garden/real_world && PYTHONPATH=/workspace/rl-garden:/workspace/rl-garden/real_world python -m pytest tests -q
+```
+
+A change to a
 contract point it uses (see [`docs/guides/extending.md`](../../docs/guides/extending.md))
 should be checked against that suite as well.
 

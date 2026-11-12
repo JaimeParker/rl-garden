@@ -99,4 +99,5 @@ markers = [
 
 [tool.setuptools.packages.find]
 include = ["rl_garden*"]
+# The legacy device-subproject pattern below is a historical defensive exclusion.
 exclude = ["3rd_party*", "tests*", "examples*", "robot_infra*"]

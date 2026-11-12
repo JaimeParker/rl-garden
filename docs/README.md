@@ -33,9 +33,13 @@ Architecture and rationale behind specific subsystems.
 ## Robot Infra and Real-World RL
 
 Both live in the separate downstream repository `real-world-rl`
-(`real_world_rl/` and its `robot_infra/` device layer), which carries
+(`real_world_rl/`, including the device layer under
+`real_world_rl/{devices,server,discovery,setup,supervise,doctor}` and teleop under
+`real_world_rl/teleop/<device>/`), which carries
 rl-garden as a submodule under `rl-garden/`; see the "Robot Infrastructure and
 Reward Models" section in the top-level [README.md](../README.md).
 
-- [Robot Infra Roadmap](https://github.com/JaimeParker/real-world-rl/blob/main/robot_infra/docs/robot-infra-roadmap.md)
+- [Installation](https://github.com/JaimeParker/real-world-rl/blob/main/docs/tutorial/01-install.md) (`real-world-rl` 0.1.0, `[learning]` extra)
+- [rwrl Command Reference](https://github.com/JaimeParker/real-world-rl/blob/main/docs/cli.md)
+- [Device Layer Roadmap](https://github.com/JaimeParker/real-world-rl/blob/main/docs/devices/robot-infra-roadmap.md)
 - [HIL-SERL Roadmap](https://github.com/JaimeParker/real-world-rl/blob/main/docs/hil-serl-roadmap.md)

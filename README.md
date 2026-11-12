@@ -409,19 +409,28 @@ the top level for real-robot work and carries rl-garden as a git submodule under
   `real_robot` env backends, SERL/HIL-SERL/residual/SiLRI training loops,
   teleoperation demo/recording scripts, and the [teleop
   guide](https://github.com/JaimeParker/real-world-rl/blob/main/docs/teleop.md).
-- `robot_infra/` -- the torch-free device layer: EE twist and impedance
-  controllers, the Franka bridge, teleop devices.
+- `real_world_rl/{devices,server,discovery,setup,supervise,doctor}` -- the
+  torch-free device layer: arms, grippers, cameras and teleop parts, the robot
+  daemon, setup and doctor. Teleop devices live under
+  `real_world_rl/teleop/<device>/` (`spacemouse`, `gello`, `pico`, `keyboard`,
+  `leader`), with shared `core/`; the EE twist/impedance controllers and the
+  ROS Franka bridge are kept under `real_world_rl/legacy/`.
+
+The downstream distribution is `real-world-rl` 0.1.0, with learning dependencies
+in its `[learning]` extra and one command, `rwrl`. For installation, follow the
+[installation tutorial](https://github.com/JaimeParker/real-world-rl/blob/main/docs/tutorial/01-install.md);
+daemon-only hosts use `bash scripts/install.sh --daemon-only`.
 
 It imports `rl_garden` as a library and extends it only through the contract in
 [Extending rl-garden from Your Own Package](docs/guides/extending.md). Neither
-part is required for simulation-only use. Its tests run from its own root:
+part is required for simulation-only use. Its tests all live under `tests/`
+(device tests under `tests/devices/`) and run from its own root:
 
 ```bash
 git clone --recurse-submodules https://github.com/JaimeParker/real-world-rl.git
 cd real-world-rl
-pip install -e rl-garden -e robot_infra -e .
-python -m pytest tests robot_infra/tests -q
-# or, without installing: PYTHONPATH=.:rl-garden:robot_infra python -m pytest tests robot_infra/tests -q
+python -m pytest tests -q
+# or, without installing: PYTHONPATH=.:rl-garden python -m pytest tests -q
 ```
 
 ## Testing

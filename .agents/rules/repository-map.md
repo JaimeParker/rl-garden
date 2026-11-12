@@ -121,10 +121,14 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   SERL / HIL-SERL / residual / SiLRI training entrypoints. It imports
   `rl_garden` as a library and registers its backends and algorithms through
   the `rlgarden.env_backends` and `rlgarden.algorithms` entry-point groups. Its
-  `robot_infra/` directory is the torch-free device layer
-  (`rlgarden-robot-infra`: devices, daemon, teleoperation hardware), a second
-  distribution of the same repository with no dependency on `rl_garden`. Its
-  tests run from its own root, not from here (see the testing runbook).
+  torch-free device layer lives under
+  `real_world_rl/{devices,server,discovery,setup,supervise,doctor}`, with teleop
+  hardware under `real_world_rl/teleop/<device>/` and legacy code under
+  `real_world_rl/legacy/`. It ships as one distribution, `real-world-rl` 0.1.0,
+  with a `[learning]` extra and one command, `rwrl`; daemon-only hosts use
+  `bash scripts/install.sh --daemon-only`. Its tests all live under `tests/`
+  (device tests under `tests/devices/`) and run from its own root, not from
+  here (see the testing runbook).
 - `examples/` — thin training dispatchers (wrappers of `rl_garden/training/cli.py`) and
   specialized experiment entrypoints.
 - `configs/` — reusable preset configs for training.
