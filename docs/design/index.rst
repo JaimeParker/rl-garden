@@ -1,10 +1,6 @@
 Design and contracts
 ====================
 
-:doc:`autoreset-modes` explains SAME_STEP episode boundaries, where terminal
-observations are consumed, and what a switch to NEXT_STEP would require.
-Read it before changing wrappers that retain state across steps.
-
 :doc:`iql-overview` compares the IQL implementation with its reference
 algorithms. It records the expectile and actor objectives, reference-specific
 configuration choices and known gaps.
@@ -29,7 +25,6 @@ to the tested downstream fixture. Use it alongside
 .. toctree::
    :maxdepth: 2
 
-   autoreset-modes
    iql-overview
    wsrl-overview
    rlinf-integration

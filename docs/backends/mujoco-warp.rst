@@ -75,4 +75,5 @@ A camera task needs an explicit camera in its model; there is no free-camera
 fallback. The CPU scaffold's raw depth convention is different.
 
 This command validates configuration only; it does not exercise CUDA physics.
-Read :doc:`/design/autoreset-modes` when implementing another native task.
+Run ``tests/test_episode_boundary_contract.py`` against another native task
+before registering it.

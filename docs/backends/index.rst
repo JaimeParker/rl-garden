@@ -40,8 +40,9 @@ The replay storage device and algorithm device are separate choices.
 The CPU factories use SAME_STEP autoreset. The adapter translates Gymnasium's
 terminal observation into ``infos["final_observation"]`` and preserves
 terminal episode statistics. GPU-native backends implement this contract
-without that translation. Read :doc:`/design/autoreset-modes` before writing
-a wrapper that changes episode boundaries.
+without that translation. ``tests/test_episode_boundary_contract.py`` is the
+executable contract; run it before writing a wrapper that changes episode
+boundaries.
 
 Register an environment or write a backend
 ------------------------------------------

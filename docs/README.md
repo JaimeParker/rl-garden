@@ -41,7 +41,6 @@ docs/backends/maniskill.rst
 docs/backends/minari.rst
 docs/backends/mujoco-warp.rst
 docs/backends/mujoco.rst
-docs/design/autoreset-modes.md
 docs/design/index.rst
 docs/design/iql-overview.md
 docs/design/rlinf-integration.md
