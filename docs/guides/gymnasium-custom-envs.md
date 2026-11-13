@@ -7,7 +7,7 @@ fork rl-garden and you do not write a backend. The backend calls
 itself, and adapts them to rl-garden's torch env contract.
 
 Write a dedicated backend (see
-[`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md))
+`.agents/rules/adding-env-backend.md`)
 only when the simulator is already batched (GPU sims), needs process-global
 state such as one app per process, or needs named, cross-task CLI knobs.
 

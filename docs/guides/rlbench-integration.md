@@ -4,7 +4,7 @@ This guide covers installing the `rlbench` env backend, the design choices
 behind it, and how to train/eval rl-garden's imitation-learning algorithms
 (BC, DiffusionBC, FlowBC, A2ABC, DAgger; TD3BC/BCQ ride the same offline
 path) against RLBench tasks. It complements
-[`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md).
+`.agents/rules/adding-env-backend.md`.
 
 [RLBench](https://github.com/stepjam/RLBench) is a manipulation benchmark
 built on CoppeliaSim + PyRep, with 107 tasks and both state and (5-camera)

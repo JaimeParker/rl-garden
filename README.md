@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="rl-garden logo" width="360">
+  <img src="docs/_static/logo.png" alt="rl-garden logo" width="360">
 </p>
 
 # rl-garden
@@ -16,470 +16,81 @@ platforms can be integrated without creating platform-specific training entrypoi
 
 ## Capabilities
 
-- **Online RL:** SAC, PPO, RLPD, RLPD-Hybrid, ExPLORe, SUPE, JSRL, TD3, DrQ-v2,
-  FlashSAC, TDMPC2, DreamerV3, NCRL, SuperMimic, DPPO, FlowPPO, online consistency
-  distillation of a diffusion policy, SACFlow, ACRLPD, plus recurrent and
-  transformer SAC/PPO variants. PPO has a decision-level (semi-Markov) mode for
-  envs whose actions take effect on some steps only, see
-  [`docs/guides/decision-level-ppo.md`](docs/guides/decision-level-ppo.md).
-  Online imitation: DAgger, GAIL, and
-  teacher-student policy distillation. See the
-  [Training Entrypoints](#training-entrypoints) table for the full list.
-- **Policy graphs:** the trunk of a PPO-family policy (`ppo`, `recurrent_ppo`,
-  `transformer_ppo`) can be declared in YAML with `--policy-graph`: encoders over
-  observation-key subsets, MLP, concat, GRU, LSTM, and GTrXL nodes, per-edge
-  gradient `detach`, and auxiliary losses on extra nodes, see
-  [`docs/guides/policy-graphs.md`](docs/guides/policy-graphs.md).
-- **Offline RL and imitation:** BC, Diffusion BC, Flow BC, MeanFlow BC,
-  consistency-distilled BC, A2A BC, IQL, IDQL, CQL, Cal-QL, BCQ, PLAS, EDAC,
-  SPOT, ReBRAC, TD3+BC, AWAC, FQL, FloQ, FINO, Value Flows, FAC, QGF, QAM, BPPO,
-  Uni-O4 (with optional OPE gating), HILP, OPAL skill pretraining, WSRL,
-  multitask TDMPC2, PWM (policy learning on a frozen multitask world model), and
-  reward-free RSSM pretraining.
-- **Offline-to-online:** WSRL, Cal-QL, IQL, AWAC, SPOT, FQL, FloQ, FINO,
-  Value Flows, FAC, SO2, and ACFQL pretraining, warm start, and online
-  fine-tuning.
-- **Observations:** a single strict Dict contract -- a ``state`` vector key
-  (any low-dim signal, proprioception included, folds into it), optional
-  ``state_<name>`` auxiliary/privileged low-dim keys, and any number of
-  ``rgb_<camera>``/``depth_<camera>`` image keys. Actor and critic can use
-  asymmetric observation groups, allowing privileged state visible only to the
-  critic (every critic-bearing algorithm except the recurrent/transformer
-  variants; ``encoder_sharing`` is inferred automatically when asymmetric
-  ``obs_groups`` are provided).
-- **Visual encoders:** PlainConv, ResNet, DrQ-v2 conv, 3D CNN, and ViT backbones
-  with configurable image-key fusion, pooling, augmentation, and proprioception
-  fusion. Actor and critic share one encoder by default; SAC-family and PPO-family
-  policies can opt into independent actor/critic encoder architectures.
-- **Replay:** dict, Monte-Carlo return, PPO rollout, and sequence buffers with
-  explicit storage and sample devices.
-- **Model-based RL:** world model base class, imagine rollout, MPPI planner, and
-  `ModelBasedAlgorithm` base for learning + planning models (TD-MPC2, DreamerV3
-  for state and pixels; see [`docs/guides/dreamer-v3.md`](docs/guides/dreamer-v3.md)),
-  PWM, NCRL (pretrained-RSSM
-  Dreamer fine-tuning with rehearsal and guidance;
-  see [`docs/guides/ncrl.md`](docs/guides/ncrl.md)), and SuperMimic
-  (policy learning by backpropagation through an explicit-state world model;
-  see [`docs/guides/supermimic.md`](docs/guides/supermimic.md)).
-- **Environment backends:** a registry-based interface with 13 simulator and
-  dataset backends: ManiSkill, IsaacLab (Isaac Lab 3.0 and 2.3.x, auto-detected),
-  MuJoCo Warp (GPU), MuJoCo, Gymnasium, dm_control (see
-  [`docs/guides/dm-control-integration.md`](docs/guides/dm-control-integration.md)),
-  Meta-World, RLBench, RoboTwin, robomimic, OGBench, Minari, and legacy
-  D4RL/Adroit/Kitchen. A real-robot Franka backend comes from the downstream
-  `real-world-rl` repository, and a template backend shows how to add
-  further platforms. Every
-  backend follows the episode boundary contract in
-  [`.agents/rules/adding-env-backend.md`](.agents/rules/adding-env-backend.md).
-- **Robot integration:** EE twist/impedance control, teleoperation, demonstration
-  recording, and learned reward classifiers.
-- **Distributed training:** optional RLinf/Ray adapters for offline, async
-  off-policy (SAC/RLPD), and FSDP on-policy (PPO) training.
-
-## Project Layout
-
-```text
-rl_garden/
-├── algorithms/    # Online, offline, and off-to-online algorithms
-├── buffers/       # Replay and rollout buffers
-├── common/        # Logging, CLI/env args, checkpoints, optimizers, utilities
-├── datasets/      # Offline and WSRL dataset workflows
-├── encoders/      # State, CNN, ResNet, RGBD/proprio, pooling, augmentation
-├── envs/          # Environment backend registry, implementations, wrappers
-├── integrations/  # Optional RLinf/Ray adapters (offline, SAC/RLPD, FSDP PPO)
-├── models/        # ACT and reward models
-├── networks/      # Actor, critic, value, and backbone modules
-├── planners/      # Decision-time planners (MPPI)
-├── policies/      # Algorithm policy composition
-├── training/      # Registered online, offline, and off2on training packages
-└── world_models/  # World model base, imagination, latent consistency (TD-MPC2)
-examples/          # Thin dispatchers and specialized experiment entrypoints
-scripts/           # Launchers with experiment defaults
-tests/             # Unit and backend/accelerator integration tests
-docs/              # Guides, design docs, and roadmaps (see docs/README.md)
-3rd_party/         # Read-only research references and external projects
-```
+- Online reinforcement learning with SAC, PPO and their variants: [algorithms](docs/algorithms/index.rst).
+- YAML policy graphs and decision-level PPO: [policy graphs](docs/guides/policy-graphs.md).
+- Offline learning from datasets: [offline RL](docs/algorithms/offline-rl.rst).
+- Imitation and generative policies: [imitation](docs/algorithms/imitation-and-generative.rst).
+- Offline-to-online warm starts and fine-tuning: [offline-to-online](docs/algorithms/offline-to-online.rst).
+- State, RGB, depth and asymmetric actor/critic observations: [observations and encoders](docs/tutorials/03-observations-and-encoders.rst).
+- Tensor replay and explicit storage/sample devices: [core concepts](docs/start/concepts.rst).
+- World models and planning: [model-based RL](docs/algorithms/model-based.rst).
+- Independently registered simulator and dataset backends: [backends](docs/backends/index.rst).
+- External actors, extractors and downstream packages: [bring your own policy](docs/tutorials/08-bring-your-own-policy.rst).
+- Downstream robot integration and reward classifiers: [real-robot work](docs/real-robot.rst).
+- Optional RLinf/Ray distributed training adapters: [RLinf integration](docs/design/rlinf-integration.md).
 
 ## Installation
 
-Clone the repository:
-
-```bash
-git clone <your-repo-url>
-cd rl-garden
-```
-
-For real-robot work, clone
-[real-world-rl](https://github.com/JaimeParker/real-world-rl)
-instead: it is the top-level repository and carries rl-garden as a submodule
-under `rl-garden/` (see [Robot Infrastructure and Reward
-Models](#robot-infrastructure-and-reward-models)).
-
-Install the package and the extras needed for your workflow:
-
 ```bash
 pip install -e .
-pip install -e ".[dev]"          # pytest and development tools
-pip install -e ".[maniskill]"    # ManiSkill backend dependencies
-pip install -e ".[wandb]"        # Weights & Biases logging
 ```
 
-Other environment backends may require their own runtime and assets. See the
-backend-specific documentation before launching a run.
+See [installation](docs/start/installation.rst) for extras and CUDA setup.
 
-## Training Entrypoints
+## Training
 
-Training is organized around three registry dispatchers. The first positional
-argument selects the algorithm:
-
-| Stage | Entrypoint | Registered algorithms |
-|---|---|---|
-| Online | `examples/train_online.py` | `sac`, `ppo`, `drqv2`, `flash_sac`, `td3`, `rlpd`, `rlpd_hybrid`, `explore`, `supe`, `jsrl`, `tdmpc2`, `dreamer_v3`, `ncrl`, `supermimic`, `dppo`, `flow_ppo`, `diffusion_cm_distill_online`, `sac_flow`, `acrlpd`, `recurrent_sac`, `recurrent_ppo`, `transformer_sac`, `transformer_ppo`, `dagger`, `gail`, `policy_distillation` |
-| Offline | `examples/pretrain_offline.py` | `bc`, `diffusion_bc`, `flow_bc`, `mean_flow_bc`, `consistency_distill_bc`, `a2a_bc`, `iql`, `idql`, `cql`, `calql`, `bcq`, `plas`, `edac`, `spot`, `rebrac`, `td3_bc`, `awac`, `fql`, `floq`, `fino`, `value_flows`, `fac`, `qgf`, `qam`, `bppo`, `unio4`, `unio4_ope`, `hilp`, `opal`, `wsrl`, `tdmpc2_multitask`, `pwm`, `rssm_pretrain` |
-| Offline-to-online | `examples/train_off2on.py` | `wsrl`, `calql`, `iql`, `awac`, `spot`, `fql`, `floq`, `fino`, `value_flows`, `fac`, `so2`, `acfql` |
-
-Every registered algorithm's exact args and defaults can be listed with
-`--print-config`; use `python examples/train_online.py --help` (or
-`pretrain_offline.py` / `train_off2on.py`) to see the current algorithm list
-directly from the registry instead of relying on this table staying in sync.
-
-**"Online" means "needs live env rollout during training," not "is
-reward-driven RL."** Most entries under `train_online.py` optimize a reward
-signal (`sac`, `ppo`, `rlpd`, ...), but `dagger` and `policy_distillation` are
-imitation learning: their loss is supervised regression against an expert/
-teacher action, not reward. They live under `train_online.py` (reusing its
-env-construction, logging, and checkpoint machinery) purely because, unlike
-`bc`/`diffusion_bc`/`flow_bc` under `pretrain_offline.py`, they need to
-collect on-policy rollouts to see the state distribution the trained policy
-will actually encounter -- that's an infrastructure requirement, not a claim
-that they're RL. `policy_distillation` in particular trains no critic and
-never reads a reward from the env at all; see its module docstring
-(`rl_garden/algorithms/policy_distillation.py`) for the teacher/student split.
-
-All registry-managed entrypoints accept `--config PRESET.yaml`, `--print-config`,
-`--dry-run`, and `--explain-param FIELD`. Static printing does not load a
-simulator; dry-run materializes the selected environment and agent but never
-trains. Normal runs atomically save the same versioned effective configuration
-under `{log_dir}/{run_name}/config.json`. See the
-[configuration guide](docs/guides/configuration.md).
-
-## References
-
-`rl-garden` reimplements published algorithms rather than inventing new ones.
-Every algorithm above is ported from, or cross-checked against, a named paper
-and/or reference implementation (many vendored read-only under `3rd_party/`);
-see [docs/REFERENCES.md](docs/REFERENCES.md) for the full per-algorithm table.
-
-### Online Training
-
-State SAC with a reusable preset:
+Train SAC on Pendulum on the CPU (the quickstart run):
 
 ```bash
-python examples/train_online.py sac \
-  --config configs/online/sac_state.yaml
+rl-garden-train-online sac --env-backend gymnasium --env-id Pendulum-v1 \
+  --num-envs 1 --num-eval-envs 1 --gymnasium.device cpu --buffer-device cpu \
+  --total-timesteps 2000 --learning-starts 100 --training-freq 4 --batch-size 64 \
+  --buffer-size 10000 --hidden-dim 64 --gamma 0.99 --eval-freq 0 --log-freq 500 \
+  --no-capture-video --exp-name sac-pendulum
 ```
 
-Visual SAC and PPO:
+Pretrain IQL on the H5 dataset written by tutorial 04:
 
 ```bash
-python examples/train_online.py sac \
-  --env-id PickCube-v1 --obs.rgb base_camera --encoder.backbone plain_conv
-
-python examples/train_online.py ppo \
-  --env-id PickCube-v1 --obs.rgb base_camera --encoder.backbone plain_conv
+rl-garden-train-offline iql --offline-dataset runs/chapter04-data/pendulum.h5 \
+  --dataset-backend h5 --env-backend gymnasium --env-id Pendulum-v1 \
+  --device cpu --buffer-device cpu --buffer-size 256 --batch-size 16 \
+  --action-low -2 --action-high 2 --n-critics 2 --critic-subsample-size 2 \
+  --num-offline-steps 20 --eval-freq 0 --log-freq 10 --exp-name chapter04-iql
 ```
 
-Additional preset-backed entrypoints include:
+Preflight an offline-to-online WSRL preset without starting a simulator:
 
 ```bash
-python examples/train_online.py sac \
-  --config configs/online/sac_rgb_resnet.yaml
-python examples/train_online.py ppo \
-  --config configs/online/ppo_state.yaml
-python examples/train_online.py ppo \
-  --config configs/online/ppo_rgb.yaml
-python examples/train_online.py drqv2 \
-  --config configs/online/drqv2_rgbd.yaml
+rl-garden-train-off2on wsrl --config configs/off2on/wsrl.yaml --print-config
 ```
 
-### Offline Pretraining
-
-Offline training reads a flat or dict-observation H5 dataset without creating a
-simulator unless `--env_id` is supplied for evaluation:
+Evaluate the quickstart checkpoint:
 
 ```bash
-python examples/pretrain_offline.py calql \
-  --offline_dataset demos/pickcube.h5 \
-  --num_offline_steps 700000
-
-python examples/pretrain_offline.py iql \
-  --offline_dataset demos/pickcube.h5
+rl-garden-eval --checkpoint-path runs/sac-pendulum/checkpoints/final.pt \
+  --device cpu --num-eval-envs 1 --num-eval-episodes 5
 ```
 
-BC, IQL, CQL, and FQL support dict observations containing image and state
-inputs. Cal-QL, WSRL, and the remaining offline algorithms currently use flat
-state datasets for their standard offline workflow.
-
-### Offline-to-Online Training
-
-```bash
-python examples/train_off2on.py wsrl \
-  --env_id PickCube-v1 \
-  --offline_dataset demos/pickcube.h5
-
-python examples/train_off2on.py wsrl \
-  --config configs/off2on/wsrl.yaml
-python examples/train_off2on.py wsrl \
-  --config configs/off2on/wsrl_rgb.yaml
-```
-
-See [Reproducing WSRL](docs/guides/wsrl-reproduction.md) for the complete checkpoint,
-dataset-generation, offline-pretraining, and online-fine-tuning workflow.
-
-### Environment Backends
-
-Training algorithms select an environment through `--env-backend`; backend-specific
-arguments use a nested namespace. For example, PPO on RoboTwin:
-
-```bash
-python examples/train_online.py ppo \
-  --env-backend robotwin \
-  --env-id place_empty_cup \
-  --obs.rgb head \
-  --robotwin.robotwin-root /path/to/RoboTwin
-```
-
-See [RoboTwin Integration](docs/guides/robotwin.md) for installation, assets, observation
-mapping, rewards, and performance controls.
-
-Other registered `--env-backend` values: `maniskill` (default for most examples),
-`isaaclab` (see [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md) and the
-[camera-stall history](docs/guides/isaaclab-camera-stall.md)), `mujoco`,
-`mujoco_warp` (GPU-vectorized MuJoCo), `dm_control` (see
-[dm_control Integration](docs/guides/dm-control-integration.md)), `metaworld` (see
-[Meta-World Integration](docs/guides/metaworld-integration.md)), `rlbench` (see
-[RLBench Integration](docs/guides/rlbench-integration.md)), `robomimic` (see
-[robomimic Integration](docs/guides/robomimic-integration.md)), `ogbench` (see
-[OGBench Integration](docs/guides/ogbench-integration.md)), `minari`,
-`d4rl_legacy` (legacy Gym/D4RL Adroit and Kitchen tasks, see
-[D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)), and
-`gymnasium` (any registered `gymnasium.Env` from your own package, see
-[Training on Your Own Gymnasium Envs](docs/guides/gymnasium-custom-envs.md)).
-`franka_real` is added by the downstream `real-world-rl` repository for
-real-robot training.
-
-To train on your own `gymnasium.Env` you do not need to fork rl-garden or write a
-backend: register it in your package and pass `--env-backend gymnasium
---gymnasium.import-modules my_pkg.envs` (see
-[the guide](docs/guides/gymnasium-custom-envs.md)).
-
-`rl_garden/envs/custom/` is a runnable template for authoring a brand-new
-environment that isn't wrapping an existing simulator (`--env-backend custom
---env-id PointReach-v0`). Copy it to start your own backend; see
-`.agents/rules/adding-env-backend.md` for the full contract.
-
-## Visual Training
-
-Every algorithm shares one observation/encoder CLI surface: `--obs.*` decides
-*what* is observed, `--encoder.*` decides *how* any images are encoded (see
-[the configuration guide](docs/guides/configuration.md#observation-and-encoder-configuration)).
-Use `--encoder.backbone plain_conv` for the lightweight CNN path, a ResNet name
-such as `--encoder.backbone resnet10`/`resnet18`, `--encoder.backbone
-drqv2_conv` for DrQ-v2's conv stack, `--encoder.backbone cnn3d` for
-volumetric/stacked-frame input, or `--encoder.backbone vit` for the ViT path.
-Image keys can be fused in two ways:
-
-- `stack_channels`: concatenate visual keys before a single encoder. This is the
-  default and the simplest path for a single RGB stream.
-- `per_key`: encode each visual key independently and concatenate features. Use it
-  for multi-camera observations and pretrained three-channel backbones.
-
-Example with a pretrained ResNet backbone:
-
-```bash
-python examples/train_online.py sac \
-  --env-id PickCube-v1 \
-  --obs.rgb base_camera \
-  --encoder.backbone resnet10 \
-  --encoder.image-fusion-mode per_key \
-  --encoder.pretrained-weights resnet10-imagenet \
-  --encoder.freeze-resnet-backbone
-```
-
-ViT example:
-
-```bash
-python examples/train_online.py sac \
-  --env-id PickCube-v1 \
-  --obs.rgb base_camera \
-  --encoder.image-fusion-mode per_key \
-  --encoder.backbone vit
-```
-
-`--encoder.freeze-resnet-backbone` keeps the stem and residual blocks fixed
-while leaving the pooling/bottleneck head trainable.
-`--encoder.freeze-resnet-encoder` freezes the full visual extractor.
-
-Actor/critic encoder sharing is the per-algorithm `encoder_sharing` default
-(`shared_critic_grad` for almost every algorithm, including PPO; `shared`
-only for IDQL/QGF). When asymmetric `obs_groups` (actor observes different
-keys than critic) are provided, `encoder_sharing` is automatically inferred to
-`separate`; use `--print-config` to inspect the resolved value and its origin.
-You may override this with `--encoder-sharing` to explicitly choose a value,
-though a non-`separate` override contradicting asymmetric groups raises an error.
-`--obs-groups.actor`/`--obs-groups.critic` split
-which observation keys each consumes (asymmetric/privileged critic, e.g. a
-state-only critic paired with an image-observing actor); `--critic-encoder.*`
-gives the critic its own encoder hyperparameters, meaningful only together with
-asymmetric `--obs-groups`:
-
-```bash
-python examples/train_online.py sac \
-  --env-id PickCube-v1 \
-  --obs.rgb base_camera \
-  --obs-groups.actor rgb_base_camera \
-  --obs-groups.critic rgb_base_camera state \
-  --critic-encoder.backbone resnet10
-```
-
-Torchvision-style ResNet checkpoints must be converted to rl-garden parameter names:
-
-```bash
-python tools/conversion/convert_resnet_checkpoint.py \
-  --input ~/Downloads/resnet10_pretrained.pt \
-  --output ~/.cache/rl_garden/pretrained/resnet/resnet10-imagenet.pt \
-  --arch resnet10
-```
-
-## Checkpoints
-
-Checkpoints are torch-native `.pt` dictionaries containing model, optimizer, and
-training state. Replay snapshots are optional separate files; save them when exact
-off-policy continuation requires preserving replay distribution.
-
-See [Checkpoint Save & Load](docs/guides/checkpoint.md) for default paths, resume commands,
-replay-buffer tradeoffs, and algorithm compatibility.
-
-## Library Composition
-
-Algorithms accept either a shared MLP layout or separate policy/value layouts:
-
-```python
-from rl_garden.algorithms import BC, IQL, SAC, WSRL
-
-sac = SAC(env=env, net_arch=[256, 256, 256])
-wsrl = WSRL(env=env, net_arch={"pi": [256, 256], "qf": [256, 256]})
-iql = IQL(
-    env=env,
-    net_arch={"pi": [256, 256], "qf": [256, 256], "vf": [256, 256]},
-)
-bc = BC(env=env, net_arch=[256, 256])
-```
-
-Algorithms accept `encoder_config`/`obs_groups`/`critic_encoder_config`/
-`encoder_sharing` directly; the algorithm never branches on the observation
-space's type -- a state-only `Box` normalizes to `Dict({"state": Box})` and a
-`Dict` with `rgb_<cam>`/`depth_<cam>` keys is encoded through the same path:
-
-```python
-from rl_garden.algorithms import SAC
-from rl_garden.encoders import EncoderConfig
-
-agent = SAC(
-    env=env,  # observation_space is Dict({"state": ..., "rgb_base_camera": ...})
-    encoder_config=EncoderConfig(backbone="resnet10", image_fusion_mode="per_key"),
-)
-```
-
-`rl_garden.encoders.build_observation_encoder(observation_space,
-encoder_config, schema=...)` is the lower-level Layer B entry point algorithms
-call internally (via `ObservationEncoderMixin`,
-`rl_garden/algorithms/observation_encoders.py`) to build the actual
-`FlattenExtractor`/`CombinedExtractor` feature extractor.
-
-## Robot Infrastructure and Reward Models
-
-Robot hardware/communication/control and real-world RL orchestration live in
-the separate downstream repository
-[real-world-rl](https://github.com/JaimeParker/real-world-rl). It is
-the top level for real-robot work and carries rl-garden as a git submodule under
-`rl-garden/`, pinned to the commit its tests pass against:
-
-- `real_world_rl/` -- `ActorLoop`/`LearnerLoop`, the `franka_real` and
-  `real_robot` env backends, SERL/HIL-SERL/residual/SiLRI training loops,
-  teleoperation demo/recording scripts, and the [teleop
-  guide](https://github.com/JaimeParker/real-world-rl/blob/main/docs/teleop.md).
-- `real_world_rl/{devices,server,discovery,setup,supervise,doctor}` -- the
-  torch-free device layer: arms, grippers, cameras and teleop parts, the robot
-  daemon, setup and doctor. Teleop devices live under
-  `real_world_rl/teleop/<device>/` (`spacemouse`, `gello`, `pico`, `keyboard`,
-  `leader`), with shared `core/`; the EE twist/impedance controllers and the
-  ROS Franka bridge are kept under `real_world_rl/legacy/`.
-
-The downstream distribution is `real-world-rl` 0.1.0, with learning dependencies
-in its `[learning]` extra and one command, `rwrl`. For installation, follow the
-[installation tutorial](https://github.com/JaimeParker/real-world-rl/blob/main/docs/tutorial/01-install.md);
-daemon-only hosts use `bash scripts/install.sh --daemon-only`.
-
-It imports `rl_garden` as a library and extends it only through the contract in
-[Extending rl-garden from Your Own Package](docs/guides/extending.md). Neither
-part is required for simulation-only use. Its tests all live under `tests/`
-(device tests under `tests/devices/`) and run from its own root:
-
-```bash
-git clone --recurse-submodules https://github.com/JaimeParker/real-world-rl.git
-cd real-world-rl
-python -m pytest tests -q
-# or, without installing: PYTHONPATH=.:rl-garden python -m pytest tests -q
-```
-
-## Testing
-
-Run the available test suite from the repository root:
-
-```bash
-pytest tests -q
-```
-
-During development, start with the smallest relevant tests. Examples:
-
-```bash
-pytest -q tests/test_training_registry.py tests/test_cli_args.py
-pytest -q tests/test_checkpoint.py
-pytest -q tests/test_replay_buffer.py tests/test_mc_buffer.py
-```
-
-Backend and accelerator smoke tests require their corresponding optional runtime and
-hardware. If those dependencies are unavailable, report the skipped or failed check
-rather than changing the framework's preferred device path.
+Every training command accepts `--print-config`, `--dry-run` and `--explain-param`; see the [CLI reference](docs/reference/cli.rst).
 
 ## Documentation
 
-See [docs/README.md](docs/README.md) for the full index. Highlights:
+The [documentation site](https://jaimeparker.github.io/rl-garden/) is served by `.github/workflows/docs.yml` once Pages is enabled; the source entry point is [docs/index.rst](docs/index.rst).
+The Diátaxis sections cover learning (Start and Tutorials), tasks (Algorithms and Backends), Reference and Design, with a Real robot pointer.
 
-- [Checkpoint Save & Load](docs/guides/checkpoint.md)
-- [Configuration System](docs/guides/configuration.md)
-- [D4RL Legacy Manipulation Baselines](docs/guides/d4rl-legacy-expansion.md)
-- [Decision-Level (Semi-Markov) PPO](docs/guides/decision-level-ppo.md)
-- [Extending rl-garden from Your Own Package](docs/guides/extending.md)
-- [IsaacLab Camera Training Stall (resolved on Isaac Lab 3.0)](docs/guides/isaaclab-camera-stall.md)
-- [IsaacLab Custom Tasks](docs/guides/isaaclab-custom-tasks.md)
-- [Offline Training Acceleration](docs/guides/offline-acceleration.md)
-- [Policy Graphs (YAML-Declared PPO Policies)](docs/guides/policy-graphs.md)
-- [RoboTwin Integration](docs/guides/robotwin.md)
-- [Teleoperation and Recording](https://github.com/JaimeParker/real-world-rl/blob/main/docs/teleop.md) (in `real-world-rl`)
-- [WSRL Reproduction](docs/guides/wsrl-reproduction.md)
-- [IQL Overview](docs/design/iql-overview.md)
-- [RLinf Integration](docs/design/rlinf-integration.md)
-- [WSRL Overview](docs/design/wsrl-overview.md)
-- [RNG and Numerical Determinism](docs/design/rng-numerical-determinism.md)
+## Testing
+
+`scripts/test.sh` provides fast, sim, gpu, slow, docs, linkcheck and all lanes.
+Run the smallest relevant test file first.
+See docs/README.md and .agents/runbooks/testing.md.
 
 ## Research Influences
 
 The implementation combines ideas and engineering patterns from multiple projects
 rather than treating any single framework as its template. Reference implementations
 are kept under `3rd_party/`: `Cal-QL`, `wsrl`, and `implicit_q_learning` are real git
-submodules (see [Baseline Install](.agents/runbooks/baseline-install.md)); `CORL`,
+submodules (see `.agents/runbooks/baseline-install.md`); `CORL`,
 `NexRL`, `RL-100`, `RLinf`, `dppo`, `fql`, `hil-serl`, `qam`, `qc`, `qgf`, and
 `stable-baselines3` are untracked read-only reference clones. Treat all of these
 directories as read-only unless a change is explicitly requested.

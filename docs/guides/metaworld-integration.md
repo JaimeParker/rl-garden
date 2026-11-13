@@ -3,7 +3,7 @@
 This guide covers installing the `metaworld` env backend and using both
 dataset paths (official Minari expert demos, and live scripted-policy demo
 generation) with rl-garden's training/eval stack. It complements
-[`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md).
+`.agents/rules/adding-env-backend.md`.
 
 [Meta-World](https://github.com/Farama-Foundation/Metaworld) is a
 single-agent MuJoCo manipulation benchmark: 50 distinct tasks (`MT1`) plus

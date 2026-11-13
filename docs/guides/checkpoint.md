@@ -1,5 +1,7 @@
 # Checkpoint Save & Load
 
+(checkpoint-what-gets-saved)=
+
 ## What gets saved
 
 `save_final_checkpoint=True` (default) writes a `.pt` file containing:
@@ -10,6 +12,8 @@
 - Global step counters (`_global_step`, `_global_update`)
 - Observation/action space metadata (for compatibility validation)
 - Hyperparameters
+
+(checkpoint-replay-buffer)=
 
 ## Replay buffer
 
@@ -30,6 +34,8 @@ off-policy learning, not a bug in the checkpoint mechanism.
 | Checkpoint will be used to **resume training** later | `True` — preserves full training state |
 | Offline-only checkpoint (Cal-QL/CQL pretraining) | Usually not needed — the offline dataset can be reloaded |
 
+(checkpoint-loading)=
+
 ## Loading
 
 ```bash
@@ -45,8 +51,10 @@ python examples/train_online.py sac \
   --total_timesteps 500000
 ```
 
-`--load_replay_buffer True` (default) attempts to load the buffer; it is a
+`--load-replay-buffer` opts in to loading the buffer (CLI default: False); it is a
 no-op when the checkpoint has no saved buffer.
+
+(checkpoint-evaluating-a-checkpoint)=
 
 ## Evaluating a checkpoint
 
@@ -83,6 +91,8 @@ rl-garden-eval --checkpoint-path runs/<run>/checkpoints/final.pt \
   (no multitask evaluation) and `pwm` (evaluated by its own training run in a
   padded multitask environment). Their checkpoints still rebuild and load
   through the registered builders.
+
+(checkpoint-compatibility)=
 
 ## Compatibility
 

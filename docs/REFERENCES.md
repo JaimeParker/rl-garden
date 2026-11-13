@@ -50,6 +50,7 @@ this repository.
 | JSRL | `algorithms/jsrl.py` | Uchendu et al. 2022, [arXiv:2204.02372](https://arxiv.org/abs/2204.02372) | Ported from [jumpstart-rl](https://github.com/steventango/jumpstart-rl)'s `src/jsrl/jsrl.py`; built on rl-garden's own `SAC` |
 | FlowPPO | `algorithms/flow_ppo.py` | RL-100, Lei et al. 2025, [arXiv:2510.14830](https://arxiv.org/abs/2510.14830) | Ported from [RL-100](https://github.com/Lei-Kun/RL-100)'s `unidpg/diffusion_policy/diffusers_patch/flow_match_scheduler.py::FlowMatchSchedulerExtended` + `unidpg/uni_ppo.py` |
 | DiffusionCMDistillOnline | `algorithms/diffusion_cm_distill.py` | RL-100, Lei et al. 2025, [arXiv:2510.14830](https://arxiv.org/abs/2510.14830) (LCM-style self-consistency distillation; no separate arXiv preprint found in repo for the underlying Latent Consistency Model formulation) | Ported from [RL-100](https://github.com/Lei-Kun/RL-100)'s `unidpg/uni_ppo.py::distill_update` -> `policy/rl100_3d.py::compute_ddim2cm_loss`; built on rl-garden's own `DPPO` |
+| SuperMimic | `algorithms/supermimic.py` | SuperMimic, [arXiv:2610.28480](https://arxiv.org/abs/2610.28480), Algorithm A.1 | Follows the official implementation's sample-reuse schedule and nominal-error world-model scoring (see the module docstring) |
 
 ## Offline RL and Imitation Learning
 
@@ -103,7 +104,8 @@ this repository.
 | Off2OnFINO | `algorithms/fino.py` | Shin et al., "Flow Matching with Injected Noise for Offline-to-Online RL", ICLR 2026, [OpenReview 6wd38R8L0Z](https://openreview.net/forum?id=6wd38R8L0Z) (no arXiv preprint found) | Off2on wiring follows `Off2OnFloQ`'s pattern; built on rl-garden's own `FINO` |
 | Off2OnValueFlows | `algorithms/value_flows.py` | Dong et al. 2025, [arXiv:2510.07650](https://arxiv.org/abs/2510.07650) | Off2on wiring follows `FQL`/`FloQ`'s pattern (no action chunking); built on rl-garden's own `ValueFlows` |
 | Off2OnFAC | `algorithms/fac.py` | Chae et al., "Flow Actor-Critic for Offline Reinforcement Learning", ICLR 2026, [arXiv:2602.18015](https://arxiv.org/abs/2602.18015) | Off2on `online_finetuning=True` branch (`agents/fac.py:54-65`) cross-checked against the reference; built on rl-garden's own `FAC` |
-| SO2 / Off2OnSO2 | `algorithms/so2.py` | Zhang et al. 2024, [arXiv:2312.07685](https://arxiv.org/abs/2312.07685), "A Perspective of Q-value Estimation on Offline-to-Online RL" | Ported from [SO2](https://github.com/opendilab/SO2)'s `origin/code` branch (`ding/policy/edac.py`); built on rl-garden's own `SAC`/`OfflineSAC` |
+| SO2 | `algorithms/so2.py` | Zhang et al. 2024, [arXiv:2312.07685](https://arxiv.org/abs/2312.07685), "A Perspective of Q-value Estimation on Offline-to-Online RL" | Ported from [SO2](https://github.com/opendilab/SO2)'s `origin/code` branch (`ding/policy/edac.py`); built on rl-garden's own `SAC`/`OfflineSAC` |
+| Off2OnSO2 | `algorithms/off2on_so2.py` | Zhang et al. 2024, [arXiv:2312.07685](https://arxiv.org/abs/2312.07685), "A Perspective of Q-value Estimation on Offline-to-Online RL" | Ported from [SO2](https://github.com/opendilab/SO2)'s `origin/code` branch (`ding/policy/edac.py`); built on rl-garden's own `SAC`/`OfflineSAC` |
 
 ## Shared infrastructure (not algorithm-specific)
 

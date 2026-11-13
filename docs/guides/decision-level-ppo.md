@@ -38,7 +38,7 @@ simpler and cheaper. The two cannot be combined (see
 ## 2. Env contract
 
 The authoritative statement is rules 9 and 10 of the episode boundary contract
-in [`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md);
+in `.agents/rules/adding-env-backend.md`;
 the consumer-side validation is `rl_garden/algorithms/decision_mask.py`. In
 short, `step()` (never `reset()`) returns one of two optional keys in `infos`:
 
@@ -133,6 +133,11 @@ to the loss and gradients even if non-finite.
   `--per-step-critic` is on.
 - **DDP.** Each rank normalizes by its own decision count; gradients and the
   adaptive-KL statistic are all-reduced as in the plain path.
+- **Per-dimension actor contract.** Decision-level PPO requires both actor
+  log-probability methods to support `sum_dims=False`, even when an environment
+  reports only `decision`. An actor returning no entropy needs `ent_coef=0`;
+  adaptive-KL additionally requires Gaussian capabilities. See
+  {doc}`/tutorials/08-bring-your-own-policy`.
 - **`decision_components`.** The policy returns per-component log-probs and
   entropies. The log-ratio, entropy and adaptive-KL terms of a step sum the
   components that took effect, so a component that never takes effect gets

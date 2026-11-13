@@ -9,11 +9,11 @@ evaluation code, without editing or copying rl-garden.
 This guide is the extension contract: the registration API, the builders and
 the protected methods listed here are what a downstream package may rely on.
 A hook named here counts as a consumer under the parent-hook rule in
-[`AGENTS.md`](../../AGENTS.md); a change to one of them updates this guide in
+[`AGENTS.md`](https://github.com/JaimeParker/rl-garden/blob/main/AGENTS.md); a change to one of them updates this guide in
 the same commit.
 
 The reference implementation is the fixture package
-[`tests/fixtures/downstream_extension/`](../../tests/fixtures/downstream_extension/)
+[`tests/fixtures/downstream_extension/`](https://github.com/JaimeParker/rl-garden/tree/main/tests/fixtures/downstream_extension/)
 (`rlg_downstream_example`), exercised end to end by
 `tests/test_downstream_extension.py`. It registers `aux_split_rppo`, a
 `RecurrentPPO` whose policy has a two-head action mean, with an auxiliary loss
@@ -24,6 +24,9 @@ taken from it.
 For PPO ablations that only change the network between the observation and the
 heads, use a [policy graph](policy-graphs.md) (YAML, no Python subclass). A
 task-specific network, loss or rollout detail goes through this contract.
+
+For actor factories and external feature extractors without an algorithm subclass,
+see {doc}`/tutorials/08-bring-your-own-policy`.
 
 ## 1. Registering an algorithm
 
@@ -136,6 +139,11 @@ one of `3 ** num_grippers` joint gripper actions, labelled and decoded by
 `rl_garden.policies.rlpd_hybrid_policy`.
 The `run_*` functions of the other builders take `build_agent=` (the module's
 builder when omitted); `run_rlpd` and `run_rlpd_hybrid` do not.
+
+A builder exposing external policy modules mixes `PolicyModuleArgs` into its Args
+and forwards `policy_module_kwargs(args)` from `rl_garden.common.cli_args`.
+It resolves `actor_factory` and the actor/critic extractor classes; omit unset
+values so the standard construction path remains active.
 
 A builder written from scratch maps Args to constructor kwargs with the public
 helpers `ppo_common_kwargs` / `ppo_observation_kwargs`
@@ -255,7 +263,7 @@ class SharedInputSplitActor(SplitDiagGaussianActor):
 ```
 
 Any `PPOActor` works on the plain path; its entropy may be `None`, which drops
-the entropy bonus and the `entropy` metric. `PPO._check_actor_capabilities()`
+the entropy bonus and the `entropy` metric; a positive `ent_coef` is rejected at construction. `PPO._check_actor_capabilities()`
 (run by `_setup_model` right after the policy is built) rejects, with a
 `ValueError`, `--lr-schedule adaptive_kl` unless `actor_capabilities.is_gaussian`
 (a `log_std` tensor and a `forward` returning a `Normal`) and `--decision-level`
@@ -283,6 +291,7 @@ default), which `SACPolicy.actor_diagnostics` delegates to;
 `SACCore._compute_actor_diagnostics` stays the algorithm-side seam for batches
 the policy cannot read flat (`SequenceSAC` returns `{}`).
 
+(extending-ppo-seams)=
 ### PPO seam table
 
 The protected PPO methods and attributes a subclass overrides, at this version:
@@ -306,7 +315,7 @@ The protected PPO methods and attributes a subclass overrides, at this version:
 | `OnPolicyAlgorithm._bootstrap_mask(terminations, truncations)` / `_compute_final_values(infos, done_mask, hidden)` | which ended episodes bootstrap their GAE target from `final_observation` (default per `bootstrap_at_done`), and that value (0 elsewhere); independent of `_next_done` |
 | `PPO._aux_loss(data, evaluation, decision_mask)` | the auxiliary loss of a minibatch: `(loss or None, {name: detached scalar})`; the loss is added to the PPO loss before its single `backward()`, each term is averaged over the update and returned by `train()` as `aux/<name>` (logged as `losses/aux/<name>`). Extend `super()`'s result so policy-graph losses still apply. Reduce a per-row loss with `rl_garden.algorithms.ppo.masked_mean(row_loss, decision_mask, decision_mask.sum())` |
 | `PPO._policy_loss(advantages=, ratio=, clip_coef=, mask=)` | the scalar policy loss from the (normalized) advantages and the ratio, 1-D over the rows; `mask` is the decision mask or `None`; default the clipped surrogate |
-| `PPO._value_loss(values=, old_values=, returns=, clip_coef=, decision_mask=)` | the scalar value loss (`values` carries gradients); default `0.5 * mse`, clipped when `clip_vloss`, over every row or the decision rows (`per_step_critic`) under a decision mask |
+| `PPO._value_loss(values=, old_values=, returns=, clip_coef=, decision_mask=)` | the scalar value loss (`values` carries gradients); default `ppo_terms.clipped_value_loss` (`0.5 * mse`, clipped when `clip_vloss`), over every row or the decision rows (`per_step_critic`) under a decision mask |
 | `PPO._entropy_term(terms)` | the scalar entropy bonus, or `None`; default `terms.row_mean(terms.entropy)`, the mean over the policy-loss rows (`PolicyTerms`: `advantages`, `logratio`, `ratio`, `entropy`, `row_mean`, `decisions`), `None` when the actor reports no entropy |
 | `PPO._total_loss(policy_loss=, value_loss=, entropy_loss=, aux_loss=)` | the loss of the minibatch's single `backward()`; default `policy_loss - ent_coef * entropy_loss + vf_coef * value_loss (+ aux_loss)`, without the entropy term when `entropy_loss` is `None`, reported as `loss` |
 | `PPO._should_stop_early(approx_kl)` | whether `target_kl` stops the update at this minibatch, before its gradient step; default: the approx-KL averaged over DDP ranks (`allreduce_mean`) exceeds `target_kl` (never when it is `None`), so every rank stops at the same minibatch. An override must decide identically on every rank |
@@ -391,6 +400,7 @@ Under DDP every rank must return a loss reaching the same parameters on every
 minibatch. A custom evaluate method of your policy returns the outputs dict
 last when called with `return_outputs=True`.
 
+(extending-sac-seams)=
 ### SAC family seam table
 
 `SAC` (and `RLPD`, `SequenceSAC`, `SACFlow`, which set their own
@@ -487,6 +497,12 @@ for its `aux_logit_mean` metric).
   the extra keys are stored in `metadata["hyperparameters"]`, restored onto
   Args fields of the same name at evaluation, and not validated on load (a
   resume-consistency check is the subclass's own `load` override).
+- User-supplied policy modules are recorded as import paths under
+  `actor_factory`, `actor_extractor`, and `critic_extractor` in
+  `metadata["hyperparameters"]`; evaluation restores them before construction.
+  A lambda, local or `__main__` definition warns and records an unrecorded
+  sentinel, so automatic rebuilding raises `ConfigError`. Extractor kwargs
+  are not recorded; prefer an importable class with constructor defaults.
 - Extra modules attached to the policy are part of its state dict; modules
   outside it go through `_extra_checkpoint_state` / `_load_extra_checkpoint_state`
   and extra optimizers through `_optimizer_names`.

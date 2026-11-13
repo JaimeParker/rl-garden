@@ -2,7 +2,7 @@
 
 This guide covers installing the `robomimic` env backend, downloading its
 datasets, and running RLPD offline-to-online training against them. It
-complements [`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md),
+complements `.agents/rules/adding-env-backend.md`,
 which this backend follows structurally (mirrors the already-shipped
 `d4rl_legacy` backend).
 

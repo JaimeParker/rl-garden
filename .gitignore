@@ -6,6 +6,7 @@ __pycache__
 *.txt
 !requirements/**
 !docs/*
+docs/__pycache__/
 *.DS_Store
 *.out
 build
@@ -26,7 +27,10 @@ mutagen.yml
 .tmp/
 .codex
 .pytest_cache
-.github
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/docs.yml
 runs/
 run/
 logs/
@@ -56,3 +60,5 @@ temp/
 
 # Local-only golden fixtures (generated on a remote server, never committed)
 tests/fixtures/tdmpc2_parity.json
+
+docs/_build/

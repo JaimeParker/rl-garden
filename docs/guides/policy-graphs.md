@@ -122,6 +122,8 @@ are required.
 The actor and value heads are sized from the widths of their sinks' inputs, so
 the sinks may be fed different widths (see [example c](#c-a-concat-skip-connection-into-the-value-sink)).
 
+(several-actor-sinks)=
+
 #### Several actor sinks
 
 A graph may declare more than one `actor` sink. Each sink owns a contiguous
@@ -640,7 +642,7 @@ parses it (the trainer, `eval_checkpoint`, RLinf workers). Two ways:
   types at import time, from a module that the project's own entry script
   imports before the CLI parses the graph. Env backends register the same way
   (`register_env_backend` at import, see
-  [`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md)).
+  `.agents/rules/adding-env-backend.md`).
 
 ### New loss types
 

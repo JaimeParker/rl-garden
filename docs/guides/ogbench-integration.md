@@ -3,7 +3,7 @@
 This guide covers installing the `ogbench` env backend, the standard
 (non-goal-conditioned) offline RL usage OGBench itself documents, the
 task-family matrix, and regenerating OGBench's own datasets. It complements
-[`.agents/rules/adding-env-backend.md`](../../.agents/rules/adding-env-backend.md),
+`.agents/rules/adding-env-backend.md`,
 which this backend follows structurally (mirrors the already-shipped
 `mujoco` backend almost exactly).
 
@@ -174,7 +174,7 @@ Locomotion regeneration needs OGBench's own `impls` codebase
 `ml_collections` — plus pretrained expert policy checkpoints. This must
 **never** land in rl-garden's main (PyTorch-native) venv. Use a throwaway
 venv, same spirit as
-[`.agents/runbooks/baseline-install.md`](../../.agents/runbooks/baseline-install.md)'s
+`.agents/runbooks/baseline-install.md`'s
 per-baseline JAX venv pattern — but this is dataset-generation tooling, not
 an RL algorithm baseline, so it is **not** registered in
 `baselines/baselines.yaml`:

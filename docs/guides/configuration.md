@@ -6,6 +6,8 @@ the selected backend, and runtime-derived values for both inspection and normal
 training. It reports facts from parsing and materialization rather than trying to
 infer a static graph of every parameter consumer.
 
+(configuration-resolution-order)=
+
 ## Resolution order
 
 Values are resolved from lowest to highest priority:
@@ -67,7 +69,9 @@ Training and logging values are configured only through YAML and CLI. Environmen
 variables are reserved for third-party runtime requirements such as renderer,
 cache, or external simulator paths. The removed logging variables map directly to
 `--std-log`/`--no-std-log`, `--log-type`, `--log-keywords`, `--wandb-project`,
-`--wandb-entity`, and `--wandb-group`.
+`--wandb-entity`, and `--log-group`.
+
+(configuration-observation-and-encoder-configuration)=
 
 ## Observation and encoder configuration
 
@@ -98,6 +102,8 @@ backend-specific: ManiSkill sensor names (e.g. `base_camera`), RoboTwin
 RLBench (`left_shoulder`/`right_shoulder`/`overhead`/`wrist`/`front`), and
 Meta-World's six fixed cameras (`corner`/`corner2`/`corner3`/`corner4`/
 `behindGripper`/`gripperPOV`).
+
+(configuration-low-dim-observations-and-privileged-state)=
 
 ### Low-dim observations and privileged state
 
@@ -138,6 +144,8 @@ CLI equivalent:
 --obs.state true --obs.extra-state object_pose \
   --obs-groups.actor state --obs-groups.critic state state_object_pose
 ```
+
+(configuration-actorcritic-encoder-asymmetry)=
 
 ### Actor/critic encoder asymmetry
 
@@ -215,6 +223,8 @@ A vision chunked-BC run can use both at once (env-side `frame_stack` on the
 raw camera feed, algorithm-side `cond_steps` on the resulting per-step
 features) -- they compose rather than substitute for each other.
 
+(configuration-inspect-before-training)=
+
 ## Inspect before training
 
 `--print-config` performs pure parsing and static validation. It does not import a
@@ -255,6 +265,8 @@ Inactive fields fail instead of returning a misleading value. These commands are
 machine-readable interfaces intended equally for humans, scripts, and coding agents.
 
 The three inspection actions are mutually exclusive.
+
+(configuration-effectiveconfig-v3)=
 
 ## EffectiveConfig v3
 
