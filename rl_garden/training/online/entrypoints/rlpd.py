@@ -20,6 +20,7 @@ def build_rlpd(
     derived from ``args`` and win over them."""
     from rl_garden.algorithms import RLPD
     from rl_garden.common.cli_args import (
+        policy_module_kwargs,
         resolve_critic_encoder_config,
         resolve_obs_groups_config,
     )
@@ -89,6 +90,9 @@ def build_rlpd(
         actor_use_layer_norm=args.actor_use_layer_norm,
         actor_log_std_min=args.actor_log_std_min,
         actor_log_std_mode=args.actor_log_std_mode,
+        target_policy_noise=args.target_policy_noise,
+        target_noise_clip=args.target_noise_clip,
+        actor_q_agg=args.actor_q_agg,
         net_arch=net_arch,
         seed=args.seed,
         logger=logger,
@@ -101,6 +105,7 @@ def build_rlpd(
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
+        **policy_module_kwargs(args),
     )
     agent_kwargs.update(extra_kwargs)
     agent = construct_agent(algorithm_cls, **agent_kwargs)
@@ -160,6 +165,7 @@ def run_rlpd(args: RLPDArgs) -> None:
 
 from dataclasses import dataclass
 
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.networks import BackboneType, KernelInit
 from rl_garden.training.online.args import VisionSACTrainingArgs
@@ -167,7 +173,7 @@ from rl_garden.training.online.registry import registry
 
 
 @dataclass
-class RLPDArgs(VisionSACTrainingArgs, EnvBackendArgs):
+class RLPDArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """RLPD -- high UTD + REDQ-style critic ensemble subsampling + LayerNorm
     + offline/online prior-data mixing from step 0, on top of SAC.
 

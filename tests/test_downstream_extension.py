@@ -25,6 +25,9 @@ RL_GARDEN_ROOT = Path(__file__).resolve().parents[1] / "rl_garden"
 #: Seams whose contract is "build this module": an override supplies the
 #: module and has nothing to extend through super().
 BUILDER_SEAMS = {"_build_actor"}
+#: ``SACActorBase``'s abstract methods (they raise ``NotImplementedError``
+#: there): an actor implements them, with nothing to extend.
+ABSTRACT_ACTOR_METHODS = {"action_log_prob", "deterministic_action"}
 
 
 @pytest.fixture
@@ -228,10 +231,15 @@ def test_the_downstream_package_copies_no_rl_garden_code(online_registry):
             cls = getattr(importlib.import_module(f"{PACKAGE}.{path.stem}"), node.name)
             library_bases = [base for base in cls.__mro__[1:] if base.__module__.startswith("rl_garden")]
             for method in node.body:
-                overrides = isinstance(method, ast.FunctionDef) and any(
-                    method.name in vars(base) for base in library_bases
+                if not isinstance(method, ast.FunctionDef):
+                    continue
+                owners = [base for base in library_bases if method.name in vars(base)]
+                if not owners or method.name in BUILDER_SEAMS or _calls_super(method):
+                    continue
+                implements_abstract = (
+                    owners[0].__name__ == "SACActorBase" and method.name in ABSTRACT_ACTOR_METHODS
                 )
-                if overrides and method.name not in BUILDER_SEAMS and not _calls_super(method):
+                if not implements_abstract:
                     replaced.append(f"{path.name}:{node.name}.{method.name}")
 
     assert copied == []

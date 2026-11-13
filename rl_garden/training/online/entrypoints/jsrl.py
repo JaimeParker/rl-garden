@@ -12,7 +12,11 @@ from __future__ import annotations
 
 def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import JSRL
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
@@ -66,6 +70,9 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
         critic_use_layer_norm=args.critic_use_layer_norm,
         actor_log_std_min=args.actor_log_std_min,
         actor_log_std_mode=args.actor_log_std_mode,
+        target_policy_noise=args.target_policy_noise,
+        target_noise_clip=args.target_noise_clip,
+        actor_q_agg=args.actor_q_agg,
         net_arch=net_arch,
         seed=args.seed,
         logger=logger,
@@ -78,6 +85,7 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
+        **policy_module_kwargs(args),
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -106,14 +114,14 @@ def run_jsrl(args: "JSRLArgs") -> None:
 
 from dataclasses import dataclass  # noqa: E402
 
-from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
+from rl_garden.common.cli_args import ObservationArgs, PolicyModuleArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.training.online.args import JSRLTrainingArgs  # noqa: E402
 from rl_garden.training.online.registry import registry  # noqa: E402
 
 
 @dataclass
-class JSRLArgs(JSRLTrainingArgs, ObservationArgs, EnvBackendArgs):
+class JSRLArgs(JSRLTrainingArgs, ObservationArgs, PolicyModuleArgs, EnvBackendArgs):
     """JSRL (Jump-Start RL) -- SAC jump-started by a frozen guide policy.
 
     Requires ``--guide_checkpoint`` and ``--guide_algorithm``

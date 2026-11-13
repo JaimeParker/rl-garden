@@ -51,7 +51,10 @@ def ppo_common_kwargs(
     args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict
 ) -> dict:
     """Kwargs shared by ``PPO`` and ``RecurrentPPO`` construction -- everything
-    except the rnn-specific params that only ``RecurrentPPO`` accepts."""
+    except the rnn-specific params that only ``RecurrentPPO`` accepts.
+    ``--actor-factory`` / ``--actor-extractor`` / ``--critic-extractor``
+    arrive resolved, and only when set (``policy_module_kwargs``)."""
+    from rl_garden.common.cli_args import policy_module_kwargs
     from rl_garden.networks.graph.spec import optional_graph_source
 
     return dict(
@@ -99,6 +102,7 @@ def ppo_common_kwargs(
         decision_level=args.decision_level,
         per_step_critic=args.per_step_critic,
         policy_graph=optional_graph_source(args.policy_graph),
+        **policy_module_kwargs(args),
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

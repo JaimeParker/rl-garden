@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import re
 import time
 from collections.abc import Mapping
@@ -48,6 +49,7 @@ import tyro
 from rl_garden.algorithms import OfflineEnvSpec
 from rl_garden.common import Logger, enable_fast_math, seed_everything
 from rl_garden.common.checkpoint import _canonical_algorithm_class, load_checkpoint_file
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import (
     EnvBackendArgs,
     ManiSkillConfig,
@@ -66,6 +68,8 @@ from rl_garden.envs.backend_registry import (
 from rl_garden.observations import ObservationConfig
 
 Phase = Literal["auto", "online", "offline", "off2on"]
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -360,6 +364,7 @@ def _load_training_args(
     hyperparameters = metadata.get("hyperparameters", {})
     if isinstance(hyperparameters, Mapping):
         _apply_mapping_to_args(args, hyperparameters)
+        _log_restored_policy_modules(args, hyperparameters)
 
     environment_overrides = {
         "env_backend": eval_args.env_backend,
@@ -400,6 +405,17 @@ def _load_training_args(
     _apply_mapping_to_args(args, overrides)
     _apply_mapping_to_args(args, _backend_overrides_from_cli(eval_args))
     return args
+
+
+def _log_restored_policy_modules(args: Any, hyperparameters: Mapping[str, Any]) -> None:
+    """Log each ``PolicyModuleArgs`` import path the checkpoint metadata put
+    on ``args``; the builder imports it (``policy_module_kwargs``)."""
+    for module_field in fields(PolicyModuleArgs):
+        spec = hyperparameters.get(module_field.name)
+        if isinstance(spec, str) and getattr(args, module_field.name, None) == spec:
+            _logger.info(
+                "importing %s %s from checkpoint metadata", module_field.name, spec
+            )
 
 
 def _eval_record_dir(eval_args: EvalCheckpointArgs) -> str | None:

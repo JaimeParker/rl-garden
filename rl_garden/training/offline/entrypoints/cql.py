@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.training.offline.args import (
     OfflineActorArgs,
     OfflineCommonArgs,
@@ -28,6 +29,7 @@ class CQLArgs(
     OfflineSACNetworkArgs,
     OfflineCompileArgs,
     OfflineCQLArgs,
+    PolicyModuleArgs,
 ):
     """Conservative Q-learning offline pretraining."""
 
@@ -35,7 +37,11 @@ class CQLArgs(
 def _cql_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
 
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
@@ -116,6 +122,7 @@ def _cql_kwargs(
     }
     if args.encoder_sharing is not None:
         kwargs["encoder_sharing"] = args.encoder_sharing
+    kwargs.update(policy_module_kwargs(args))
     return kwargs
 
 

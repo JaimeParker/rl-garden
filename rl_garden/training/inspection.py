@@ -11,6 +11,7 @@ from typing import Any
 from rl_garden.common.effective_config import (
     EffectiveConfig,
     effective_config_json,
+    import_path_of,
     json_value,
     resolve_active_environment,
     resolve_effective_config,
@@ -121,14 +122,42 @@ def _space_summary(space: Any) -> dict[str, Any]:
     return result
 
 
+#: Constructor keywords (and ``policy_kwargs`` keys) whose callables the
+#: training CLI takes as import paths (``--actor-factory``,
+#: ``--actor-extractor``, ``--critic-extractor``; see
+#: ``rl_garden.common.cli_args.PolicyModuleArgs``). They are recorded as the
+#: ``"pkg.mod:attr"`` path the flag takes, every other value as ``json_value``.
+_IMPORT_PATH_KWARGS = frozenset({"actor_factory"})
+_IMPORT_PATH_POLICY_KWARGS = frozenset({"actor_extractor_class", "critic_extractor_class"})
+
+
+def _import_path_or_json(value: Any) -> Any:
+    try:
+        return import_path_of(value)
+    except ValueError:
+        return json_value(value)
+
+
+def _constructor_kwarg_value(name: str, value: Any) -> Any:
+    if name in {"env", "eval_env", "logger"}:
+        return f"<{name}>"
+    if name in _IMPORT_PATH_KWARGS and value is not None:
+        return _import_path_or_json(value)
+    if name == "policy_kwargs" and isinstance(value, Mapping):
+        return {
+            str(key): (
+                _import_path_or_json(item)
+                if key in _IMPORT_PATH_POLICY_KWARGS and item is not None
+                else json_value(item)
+            )
+            for key, item in value.items()
+        }
+    return json_value(value)
+
+
 def construct_agent(target: Any, /, **kwargs: Any) -> Any:
     """Capture the exact constructor call used by a registered builder."""
-    serialized = {
-        name: (
-            f"<{name}>" if name in {"env", "eval_env", "logger"} else json_value(value)
-        )
-        for name, value in kwargs.items()
-    }
+    serialized = {name: _constructor_kwarg_value(name, value) for name, value in kwargs.items()}
     _AGENT_BUILD.set(
         {
             "target": f"{target.__module__}.{target.__qualname__}",

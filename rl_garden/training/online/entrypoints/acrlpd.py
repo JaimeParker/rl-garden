@@ -12,7 +12,11 @@ from __future__ import annotations
 
 def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import ACRLPD
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
@@ -73,6 +77,9 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
         actor_use_layer_norm=args.actor_use_layer_norm,
         actor_log_std_min=args.actor_log_std_min,
         actor_log_std_mode=args.actor_log_std_mode,
+        target_policy_noise=args.target_policy_noise,
+        target_noise_clip=args.target_noise_clip,
+        actor_q_agg=args.actor_q_agg,
         net_arch=net_arch,
         seed=args.seed,
         logger=logger,
@@ -85,6 +92,7 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
+        **policy_module_kwargs(args),
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
@@ -133,7 +141,7 @@ def run_acrlpd(args: "ACRLPDArgs") -> None:
 from dataclasses import dataclass  # noqa: E402
 from typing import Literal, Optional  # noqa: E402
 
-from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
+from rl_garden.common.cli_args import ObservationArgs, PolicyModuleArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
 from rl_garden.networks import BackboneType, KernelInit  # noqa: E402
 from rl_garden.training.online.args import SACTrainingArgs  # noqa: E402
@@ -141,7 +149,7 @@ from rl_garden.training.online.registry import registry  # noqa: E402
 
 
 @dataclass
-class ACRLPDArgs(SACTrainingArgs, ObservationArgs, EnvBackendArgs):
+class ACRLPDArgs(SACTrainingArgs, ObservationArgs, PolicyModuleArgs, EnvBackendArgs):
     """ACRLPD -- Q-chunking's action-chunked RLPD (Li, Zhou, Levine 2025,
     ``3rd_party/qc/agents/acrlpd.py``). State-only in practice: the
     algorithm itself rejects any image observation (see module docstring).

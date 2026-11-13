@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on.args import (
     VisionWSRLTrainingArgs,
@@ -12,7 +13,7 @@ from rl_garden.training.off2on.registry import registry
 
 
 @dataclass
-class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
+class WSRLOff2OnArgs(VisionWSRLTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """WSRL args. State-only observations by default; pass
     ``--obs.rgb <camera>`` for Dict/RGBD observations."""
 
@@ -40,7 +41,11 @@ class WSRLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
 
 def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import WSRL
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.training.inspection import construct_agent
 
     image_kwargs: dict = {
@@ -139,6 +144,7 @@ def build_wsrl(args: WSRLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
+        **policy_module_kwargs(args),
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)

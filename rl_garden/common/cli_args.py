@@ -76,6 +76,70 @@ class ObservationArgs:
     encoder_sharing: Optional[EncoderSharing] = None
 
 
+@dataclass
+class PolicyModuleArgs:
+    """User-supplied policy modules, each named by an import path
+    (``"pkg.mod:attr"``; contracts in ``rl_garden/policies/contracts.py``).
+
+    ``actor_factory`` names ``fn(features_dim, action_space) -> actor``, the
+    actor head the algorithm trains instead of its default one (it must
+    satisfy ``rl_garden.policies.contracts.PPOActor`` / ``SACActor``).
+    ``actor_extractor`` / ``critic_extractor`` name a ``BaseFeaturesExtractor``
+    subclass built as ``cls(observation_space=...)`` in place of the
+    schema-driven encoder of that role (``policy_kwargs[
+    "actor_extractor_class"]`` / ``["critic_extractor_class"]``); under a
+    shared encoder the actor's extractor also feeds the critic. Mixed into
+    the Args of every algorithm that accepts all three; its builder passes
+    ``policy_module_kwargs(args)`` to the constructor.
+    """
+
+    actor_factory: Optional[str] = None
+    actor_extractor: Optional[str] = None
+    critic_extractor: Optional[str] = None
+
+
+def policy_module_kwargs(args: Any) -> dict[str, Any]:
+    """The constructor keywords of ``args``' ``PolicyModuleArgs`` fields, with
+    each import path resolved: ``actor_factory`` and a ``policy_kwargs`` dict
+    holding the extractor classes, each only when its field is set (so a run
+    without them builds exactly as before). Raises ``ConfigError`` naming the
+    flag when a path cannot be imported, and when it is the value a
+    checkpoint recorded for a module that had no import path (restored by
+    evaluation; ``reject_unrecorded_import_path``)."""
+    kwargs: dict[str, Any] = {}
+    if args.actor_factory is not None:
+        kwargs["actor_factory"] = _resolve_cli_import_path("--actor-factory", args.actor_factory)
+    policy_kwargs: dict[str, Any] = {}
+    if args.actor_extractor is not None:
+        policy_kwargs["actor_extractor_class"] = _resolve_cli_import_path(
+            "--actor-extractor", args.actor_extractor
+        )
+    if args.critic_extractor is not None:
+        policy_kwargs["critic_extractor_class"] = _resolve_cli_import_path(
+            "--critic-extractor", args.critic_extractor
+        )
+    if policy_kwargs:
+        kwargs["policy_kwargs"] = policy_kwargs
+    return kwargs
+
+
+def _resolve_cli_import_path(flag: str, spec: str) -> Any:
+    from rl_garden.common.effective_config import (
+        ConfigError,
+        reject_unrecorded_import_path,
+        resolve_import_path,
+    )
+
+    reject_unrecorded_import_path(flag.removeprefix("--").replace("-", "_"), spec)
+    try:
+        return resolve_import_path(spec)
+    except (ImportError, AttributeError) as error:
+        raise ConfigError(
+            f"{flag} {spec!r} (given on the command line, or restored from the run's "
+            f"config.json / checkpoint metadata when evaluating) cannot be imported: {error}"
+        ) from error
+
+
 def resolve_critic_encoder_config(args: Any) -> Optional[EncoderConfig]:
     """``args.critic_encoder`` (see ``ObservationArgs``) is a sentinel-valued
     ``EncoderConfig``, not ``Optional[EncoderConfig]`` -- training

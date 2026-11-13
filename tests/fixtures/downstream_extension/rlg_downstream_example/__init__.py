@@ -13,4 +13,8 @@ override extends its parent method through ``super()``.
   the module the ``rlgarden.algorithms`` entry point names
   (``../pyproject.toml``).
 - ``toy_env.py``: a torch-native vector env for the ``gymnasium`` backend.
+- ``byo_policy.py``: the package's own PPO and SAC actor heads (as
+  ``actor_factory`` functions) and a feature extractor, trained by the
+  in-tree PPO and SAC without an algorithm subclass
+  (``rl_garden/policies/contracts.py``, ``tests/test_byo_policy_contract.py``).
 """

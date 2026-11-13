@@ -4,7 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
-from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, ObservationArgs
+from rl_garden.common.cli_args import (
+    CheckpointArgs,
+    LoggingArgs,
+    ObservationArgs,
+    PolicyModuleArgs,
+)
 from rl_garden.common.env_args import EnvRunArgs
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.observations.config import ObservationConfig
@@ -52,6 +57,13 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     critic_only_freeze_encoder: bool = True
     critic_only_random_action_prob: float = 0.0
     load_actor_checkpoint: Optional[str] = None
+    # Entropy-off (TD3-shaped) options of SAC's update: Gaussian noise of
+    # this std, clipped to +-target_noise_clip, on the critic target's next
+    # action (absolute action units; 0 draws nothing), and the critic
+    # ensemble reduction in the actor loss.
+    target_policy_noise: float = 0.0
+    target_noise_clip: float = 0.5
+    actor_q_agg: Literal["min", "mean", "first"] = "min"
 
 
 @dataclass
@@ -397,7 +409,7 @@ class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
 
 
 @dataclass
-class PPOTrainingArgs(EnvRunArgs, CheckpointArgs):
+class PPOTrainingArgs(EnvRunArgs, CheckpointArgs, PolicyModuleArgs):
     total_timesteps: int = 10_000_000
     num_steps: int = 50
     gamma: float = 0.8

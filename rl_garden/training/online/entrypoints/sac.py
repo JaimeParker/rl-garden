@@ -54,6 +54,9 @@ def sac_common_kwargs(
         critic_use_layer_norm=args.critic_use_layer_norm,
         actor_log_std_min=args.actor_log_std_min,
         actor_log_std_mode=args.actor_log_std_mode,
+        target_policy_noise=args.target_policy_noise,
+        target_noise_clip=args.target_noise_clip,
+        actor_q_agg=args.actor_q_agg,
         net_arch=net_arch,
         seed=args.seed,
         logger=logger,
@@ -101,9 +104,12 @@ def build_sac(
 ):
     """Build ``algorithm_cls`` from ``args``: ``SAC``, or ``SACDDP`` under
     multi-GPU DDP, when ``None``; a given class is used as is, DDP or not.
-    ``extra_kwargs`` go to its constructor next to the common SAC kwargs."""
+    ``extra_kwargs`` go to its constructor next to the common SAC kwargs and
+    the resolved ``--actor-factory`` / ``--actor-extractor`` /
+    ``--critic-extractor`` (``policy_module_kwargs``, only when set)."""
     import os
 
+    from rl_garden.common.cli_args import policy_module_kwargs
     from rl_garden.common.ddp import ddp_rank, is_ddp_active
     from rl_garden.training.inspection import construct_agent
 
@@ -130,6 +136,7 @@ def build_sac(
         mmap_dir=mmap_dir,
         mmap_mode=args.mmap_mode,
         **sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        **policy_module_kwargs(args),
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:
@@ -165,13 +172,14 @@ def run_sac(args: SACArgs, *, build_agent: Callable | None = None) -> None:
 
 from dataclasses import dataclass
 
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online.args import VisionSACTrainingArgs
 from rl_garden.training.online.registry import registry
 
 
 @dataclass
-class SACArgs(VisionSACTrainingArgs, EnvBackendArgs):
+class SACArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """SAC. State-only observations by default; pass ``--obs.rgb <camera>``
     (optionally ``--obs.depth <camera>``) for Dict/RGBD observations.
 

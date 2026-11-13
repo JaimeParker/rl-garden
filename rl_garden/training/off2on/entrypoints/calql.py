@@ -12,6 +12,7 @@ keeps the CQL/Cal-QL regularizer online — matching Nakamoto et al. 2023
 from dataclasses import dataclass
 from typing import Literal
 
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on.args import (
     VisionWSRLTrainingArgs,
@@ -21,7 +22,7 @@ from rl_garden.training.off2on.registry import registry
 
 
 @dataclass
-class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
+class CalQLOff2OnArgs(VisionWSRLTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """Cal-QL off2on args: no warmup, mixed replay, CQL retained online.
 
     State-only observations by default; pass ``--obs.rgb <camera>`` for
@@ -50,7 +51,11 @@ class CalQLOff2OnArgs(VisionWSRLTrainingArgs, EnvBackendArgs):
 
 def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnCalQL
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.training.inspection import construct_agent
 
     image_kwargs: dict = {
@@ -152,6 +157,7 @@ def build_calql(args: CalQLOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
+        **policy_module_kwargs(args),
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)

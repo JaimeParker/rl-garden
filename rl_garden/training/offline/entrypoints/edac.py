@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.training.offline.args import (
     OfflineCommonArgs,
     OfflineDeviceArgs,
@@ -22,6 +23,7 @@ class EDACArgs(
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineEDACArgs,
+    PolicyModuleArgs,
 ):
     """EDAC offline pretraining. Box or Dict (vision) observations -- EDAC
     is an ``OfflineSAC`` subclass, which supports vision through
@@ -34,7 +36,11 @@ class EDACArgs(
 def _edac_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
 
     kwargs = {
         "env": env_spec,
@@ -75,6 +81,7 @@ def _edac_kwargs(
     }
     if args.encoder_sharing is not None:
         kwargs["encoder_sharing"] = args.encoder_sharing
+    kwargs.update(policy_module_kwargs(args))
     return kwargs
 
 

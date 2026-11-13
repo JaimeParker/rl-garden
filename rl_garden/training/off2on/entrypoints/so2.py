@@ -12,7 +12,7 @@ usage note, not a new mechanism.
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_garden.common.cli_args import ObservationArgs
+from rl_garden.common.cli_args import ObservationArgs, PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.off2on.args import (
     SO2Off2OnTrainingArgs,
@@ -22,7 +22,7 @@ from rl_garden.training.off2on.registry import registry
 
 
 @dataclass
-class SO2Off2OnArgs(SO2Off2OnTrainingArgs, ObservationArgs, EnvBackendArgs):
+class SO2Off2OnArgs(SO2Off2OnTrainingArgs, ObservationArgs, PolicyModuleArgs, EnvBackendArgs):
     """SO2 off2on args: no warmup, mixed replay, fixed ratio.
 
     State-only observations by default; pass ``--obs.rgb <camera>`` for
@@ -42,7 +42,11 @@ class SO2Off2OnArgs(SO2Off2OnTrainingArgs, ObservationArgs, EnvBackendArgs):
 
 def build_so2(args: SO2Off2OnArgs, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnSO2
-    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.common.cli_args import (
+        policy_module_kwargs,
+        resolve_critic_encoder_config,
+        resolve_obs_groups_config,
+    )
     from rl_garden.training.inspection import construct_agent
 
     image_kwargs: dict = {
@@ -99,6 +103,7 @@ def build_so2(args: SO2Off2OnArgs, env, eval_env, logger, checkpoint_dir):
         save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
+        **policy_module_kwargs(args),
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
