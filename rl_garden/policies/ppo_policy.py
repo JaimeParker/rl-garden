@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -17,12 +17,17 @@ from rl_garden.networks import (
     ValueNetwork,
 )
 from rl_garden.policies.base import BasePolicy, EncoderSharing
+from rl_garden.policies.contracts import PPOActorCapabilities, validate_ppo_actor
 
 if TYPE_CHECKING:
     from rl_garden.buffers.rollout_buffer import ExtraSpecs
 
 #: What an evaluate method returns last when called with ``return_outputs=True``.
 EvaluationOutputs = dict[str, Any]
+
+#: Builds a PPO actor head from ``(features_dim, action_space)``; the module
+#: must satisfy ``rl_garden.policies.contracts.PPOActor``.
+PPOActorFactory = Callable[[int, spaces.Box], nn.Module]
 
 
 def get_ppo_arch(
@@ -41,9 +46,18 @@ class PPOPolicy(BasePolicy):
     """Continuous-action actor-critic policy used by PPO.
 
     Extension points for a subclass (all default to plain PPO behavior):
-    ``_build_actor`` (the actor module), ``rollout_extra_specs`` (per-step
-    ``infos`` entries the rollout buffer stores) and ``evaluation_outputs``
-    (the update asks the evaluate methods for a trailing outputs dict)."""
+    ``_build_actor`` (the actor module), ``_actor_capabilities`` (what it
+    supports), ``rollout_extra_specs`` (per-step ``infos`` entries the
+    rollout buffer stores) and ``evaluation_outputs`` (the update asks the
+    evaluate methods for a trailing outputs dict).
+
+    The actor is any ``rl_garden.policies.contracts.PPOActor``: the default
+    is ``DiagGaussianActor``, ``actor_factory(features_dim, action_space)``
+    replaces it. ``actor_capabilities`` records what the actor supports
+    (checked once, at construction); the entropy of an actor without one
+    (``has_entropy`` False) is ``None`` wherever this class returns an
+    entropy. The ``*_with_dist_params`` methods read the Gaussian's
+    parameters and need ``actor_capabilities.is_gaussian``."""
 
     #: Extension point: when True, ``PPO``'s update calls the evaluate
     #: method it uses (``evaluate_actions``/``evaluate_actions_with_dist_params``,
@@ -79,7 +93,13 @@ class PPOPolicy(BasePolicy):
         critic_extractor: Optional[BaseFeaturesExtractor] = None,
         critic_backbone_type: Optional[BackboneType] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        actor_factory: Optional[PPOActorFactory] = None,
     ) -> None:
+        """``actor_factory(features_dim, action_space)`` builds the actor
+        instead of ``DiagGaussianActor``; the Gaussian-only options
+        (``log_std_init*``, ``action_mean_*``) and the actor's ``pi``
+        widths, norm, dropout, ``kernel_init`` and ``backbone_type`` options
+        then do not reach it."""
         if not isinstance(action_space, spaces.Box):
             raise TypeError("PPOPolicy only supports Box action spaces.")
         super().__init__(
@@ -96,6 +116,8 @@ class PPOPolicy(BasePolicy):
             if self.critic_extractor is None
             else self.critic_extractor.features_dim
         )
+        # Read by the default _build_actor.
+        self.actor_factory = actor_factory
         self.actor = self._build_actor(
             fd,
             action_space,
@@ -110,6 +132,9 @@ class PPOPolicy(BasePolicy):
             dropout_rate=actor_dropout_rate,
             kernel_init=kernel_init,
             backbone_type=backbone_type,
+        )
+        self.actor_capabilities: PPOActorCapabilities = self._actor_capabilities(
+            fd, action_space
         )
         self.value_net = ValueNetwork(
             critic_fd,
@@ -138,11 +163,27 @@ class PPOPolicy(BasePolicy):
         ``action_mean_bias_init``, ``action_mean_head_gain``,
         ``use_layer_norm``, ``use_group_norm``, ``num_groups``,
         ``dropout_rate``, ``kernel_init``, ``backbone_type``). The module
-        must offer ``DiagGaussianActorBase``'s interface (``forward`` -> a
-        ``Normal``, ``action_log_prob``, ``evaluate_action_log_prob``,
-        ``deterministic_action``, ``clamp_action`` and a ``log_std``
-        parameter); every method of this class reads it as ``self.actor``."""
+        must satisfy ``rl_garden.policies.contracts.PPOActor``; ``__init__``
+        checks it right after (``_actor_capabilities``), and every method of
+        this class reads it as ``self.actor``. Default:
+        ``self.actor_factory(features_dim, action_space)`` when an
+        ``actor_factory`` was given (no ``hidden_dims``/``actor_options``),
+        otherwise ``DiagGaussianActor``."""
+        if self.actor_factory is not None:
+            return self.actor_factory(features_dim, action_space)
         return DiagGaussianActor(features_dim, action_space, hidden_dims=hidden_dims, **actor_options)
+
+    def _actor_capabilities(
+        self, features_dim: int, action_space: spaces.Box
+    ) -> PPOActorCapabilities:
+        """Extension point: check ``self.actor`` against the ``PPOActor``
+        contract and return what it supports; called once from ``__init__``
+        right after ``_build_actor``, with its ``features_dim`` and
+        ``action_space``. Default: ``validate_ppo_actor`` (a ``TypeError`` or
+        ``ValueError`` names the missing method or the wrong shape; its dry
+        pass does not consume the global RNG). ``GraphPPOPolicy`` overrides
+        it for an actor that reads one features tensor per actor sink."""
+        return validate_ppo_actor(self.actor, features_dim, action_space, device=None)
 
     def rollout_extra_specs(self) -> ExtraSpecs:
         """Extension point: per-step ``infos`` entries the rollout buffer
@@ -178,7 +219,9 @@ class PPOPolicy(BasePolicy):
         *,
         stop_gradient_actor: Optional[bool] = None,
         sum_dims: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """``(actions, values, log_prob, entropy)``; ``entropy`` is ``None``
+        for an actor without one."""
         actor_features = self._actor_role_features(obs, stop_gradient_actor)
         value_features = self.extract_critic_features(obs)
         actions, log_prob, entropy = self.actor.action_log_prob(
@@ -206,9 +249,10 @@ class PPOPolicy(BasePolicy):
         sum_dims: bool = True,
         return_outputs: bool = False,
     ) -> tuple[Any, ...]:
-        """``(values, log_prob, entropy)``; with ``return_outputs`` an
-        ``EvaluationOutputs`` dict ``{"latent": <the features the actor
-        read>}`` is appended (see ``evaluation_outputs``)."""
+        """``(values, log_prob, entropy)``, ``entropy`` ``None`` for an
+        actor without one; with ``return_outputs`` an ``EvaluationOutputs``
+        dict ``{"latent": <the features the actor read>}`` is appended (see
+        ``evaluation_outputs``)."""
         actor_features = self._actor_role_features(obs, stop_gradient_actor)
         value_features = self.extract_critic_features(obs)
         log_prob, entropy = self.actor.evaluate_action_log_prob(
@@ -221,8 +265,9 @@ class PPOPolicy(BasePolicy):
 
     def act_with_value_and_logprob(
         self, obs: Obs, state: object = None
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, object]:
-        """Single-pass rollout call: action, value, log-prob, entropy, state.
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], object]:
+        """Single-pass rollout call: action, value, log-prob, entropy (or
+        ``None``), state.
 
         ``state`` is always ``None`` in and out for plain PPO -- a no-op
         passthrough. It exists so a future ``SequencePPO``-contract policy

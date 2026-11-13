@@ -13,7 +13,7 @@ from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, KernelInit, RecurrentLatentEncoder, RecurrentState
 from rl_garden.observations import ObservationContractError
 from rl_garden.policies.base import EncoderSharing
-from rl_garden.policies.ppo_policy import PPOPolicy
+from rl_garden.policies.ppo_policy import PPOActorFactory, PPOPolicy
 
 
 class RecurrentPPOPolicy(PPOPolicy):
@@ -43,6 +43,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         critic_backbone_type: Optional[BackboneType] = None,
         critic_extractor: Optional[BaseFeaturesExtractor] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        actor_factory: Optional[PPOActorFactory] = None,
     ) -> None:
         if critic_extractor is not None:
             raise ObservationContractError(
@@ -79,6 +80,7 @@ class RecurrentPPOPolicy(PPOPolicy):
             backbone_type=backbone_type,
             critic_backbone_type=critic_backbone_type,
             encoder_sharing=encoder_sharing,
+            actor_factory=actor_factory,
         )
         self.recurrent_encoder = recurrent_encoder
 
@@ -189,7 +191,8 @@ class RecurrentPPOPolicy(PPOPolicy):
     ) -> tuple[Any, ...]:
         """BPTT update path. obs/actions: (T, B, ...). Returns (values, log_prob,
         entropy), each (T, B, 1); with ``sum_dims=False`` ``log_prob`` and
-        ``entropy`` are (T, B, A). ``return_outputs`` appends
+        ``entropy`` are (T, B, A). ``entropy`` is ``None`` for an actor
+        without one. ``return_outputs`` appends
         ``{"latent": <the (T * B, D) features the actor read, T-major>}``
         (detached when ``stop_gradient_actor``).
 
@@ -221,7 +224,7 @@ class RecurrentPPOPolicy(PPOPolicy):
         evaluated = (
             values.reshape(num_steps, num_envs, -1),
             log_prob.reshape(num_steps, num_envs, -1),
-            entropy.reshape(num_steps, num_envs, -1),
+            None if entropy is None else entropy.reshape(num_steps, num_envs, -1),
         )
         return (*evaluated, {"latent": flat_actor_latent}) if return_outputs else evaluated
 

@@ -30,15 +30,21 @@ from gymnasium import spaces
 from torch.distributions.normal import Normal
 
 from rl_garden.networks.mlp import KernelInit, create_mlp
+from rl_garden.networks.sac_actor_base import SACActorBase
 
 
-class FlowMatchingActor(nn.Module):
+class FlowMatchingActor(SACActorBase):
     """Flow-matching actor trained with plain SAC's ``alpha*log_pi - Q`` loss.
 
     Drop-in replacement for ``SquashedGaussianActor`` in ``SACPolicy``-family
     classes: exposes ``action_log_prob``, ``deterministic_action``, and
     ``action_scale``/``action_bias`` buffers with the same names/shapes.
+    Its log-probability is the likelihood of the sampled Euler path
+    (``log_prob_is_density = False``), not the density of the returned
+    action, and it cannot score external actions.
     """
+
+    log_prob_is_density = False
 
     def __init__(
         self,
@@ -135,3 +141,15 @@ class FlowMatchingActor(nn.Module):
             velocity_mean = self._velocity_mean(features, x, step)
             x = x + velocity_mean * delta_t
         return torch.tanh(x) * self.action_scale + self.action_bias
+
+    def diagnostics(self, features: torch.Tensor) -> dict[str, torch.Tensor]:
+        """There is no closed-form mean/log_std to decompose, so this reports
+        one sample's path log-probability mean and (unbiased) std and the
+        sampled action's mean L2 norm."""
+        with torch.no_grad():
+            action, log_prob = self.action_log_prob(features)
+            return {
+                "log_prob_mean": log_prob.mean(),
+                "log_prob_std": log_prob.std(),
+                "action_norm": action.norm(dim=-1).mean(),
+            }

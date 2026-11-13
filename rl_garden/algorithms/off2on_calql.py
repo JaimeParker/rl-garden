@@ -19,6 +19,7 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
+from rl_garden.policies.sac_policy import SACActorFactory
 
 
 class Off2OnCalQL(_CalQLRolloutTrainingShell):
@@ -123,6 +124,7 @@ class Off2OnCalQL(_CalQLRolloutTrainingShell):
         sarsa_lr: float = 3e-4,
         # General
         policy_kwargs: Optional[dict[str, Any]] = None,
+        actor_factory: Optional[SACActorFactory] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -221,6 +223,7 @@ class Off2OnCalQL(_CalQLRolloutTrainingShell):
             online_use_cql_loss=online_use_cql_loss,
             offline_sampling=offline_sampling,
             policy_kwargs=policy_kwargs,
+            actor_factory=actor_factory,
             seed=seed,
             device=device,
             logger=logger,

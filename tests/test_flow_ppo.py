@@ -8,7 +8,7 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.algorithms import FlowPPO
-from rl_garden.algorithms.flow_ppo import FlowPPOCore
+from rl_garden.algorithms.chain_ppo_core import ChainPPOCore
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
@@ -141,13 +141,14 @@ def _make_agent(**overrides):
 
 
 def test_mro_has_no_dppo_or_ppo():
-    from rl_garden.algorithms.dppo import DPPO, DPPOCore
+    """FlowPPO shares the chain-PPO update with DPPO through ChainPPOCore
+    (its direct base), not through DPPO or PPO."""
+    from rl_garden.algorithms.dppo import DPPO
 
     mro = FlowPPO.__mro__
-    assert mro[:3] == (FlowPPO, FlowPPOCore, OnPolicyAlgorithm)
+    assert mro[:3] == (FlowPPO, ChainPPOCore, OnPolicyAlgorithm)
     assert PPO not in mro
     assert DPPO not in mro
-    assert DPPOCore not in mro
 
 
 def test_registry_discovers_flow_ppo():
@@ -333,7 +334,7 @@ def test_vision_learn_runs_and_produces_finite_losses():
 def test_vision_encoder_only_in_critic_optimizer():
     """Gradient-isolation structural check (mirrors FQL's/DPPO's own
     precedent). The shared actor_extractor must be trained only by the
-    critic loss (FlowPPO._flow_ppo_loss detaches the copy fed to the
+    critic loss (FlowPPO._chain_policy_terms detaches the copy fed to the
     actor's log-prob computation) -- so its params must sit in
     critic_optimizer and nowhere in actor_optimizer."""
     agent = _make_agent(

@@ -200,7 +200,7 @@ def test_dppo_vision_encoder_only_in_critic_optimizer():
     "a correctness test here checks parameter-set disjointness between
     actor_optimizer and the critic's encoder, not the size of any
     particular .grad"). The shared actor_extractor must be trained only
-    by the critic loss (DPPO._dppo_loss detaches the copy fed to the actor's
+    by the critic loss (DPPO._chain_policy_terms detaches the copy fed to the actor's
     log-prob computation) -- so its params must sit in critic_optimizer and
     nowhere in actor_optimizer."""
     env = _make_vision_env(num_envs=4, act_steps=2)
@@ -291,6 +291,48 @@ def test_dppo_learn_runs_and_produces_finite_losses():
     for key, value in losses.items():
         assert np.isfinite(value), (key, value)
     assert agent.rollout_buffer.pos == agent.num_steps or agent.rollout_buffer.full
+
+
+def test_dppo_normalizes_advantages_per_minibatch_like_its_reference():
+    """``advantage_normalization = "minibatch"`` (FlowPPO's reference
+    normalizes once per rollout): each minibatch's advantages reach
+    ``_chain_policy_terms`` normalized over that minibatch (the default
+    quantiles 0 and 1 make the clamp a no-op)."""
+    from rl_garden.algorithms import FlowPPO
+
+    assert (DPPO.advantage_normalization, FlowPPO.advantage_normalization) == (
+        "minibatch",
+        "rollout",
+    )
+    torch.manual_seed(0)
+    agent = DPPO(
+        env=_make_env(num_envs=4, act_steps=2),
+        num_steps=3,
+        horizon_steps=2,
+        act_steps=2,
+        denoising_steps=5,
+        ft_denoising_steps=3,
+        actor_mlp_dims=[16, 16, 16],
+        critic_mlp_dims=[16, 16, 16],
+        update_epochs=1,
+        update_batch_size=8,
+        eval_freq=0,
+        device="cpu",
+    )
+    seen: list[torch.Tensor] = []
+    chain_policy_terms = agent._chain_policy_terms
+
+    def recording_chain_policy_terms(batch):
+        seen.append(batch.advantages.detach().clone())
+        return chain_policy_terms(batch)
+
+    agent._chain_policy_terms = recording_chain_policy_terms
+    agent.learn(total_timesteps=3 * 4 * 2)
+
+    assert seen
+    for advantages in seen:
+        torch.testing.assert_close(advantages.mean(), torch.tensor(0.0), atol=1e-5, rtol=0)
+        torch.testing.assert_close(advantages.std(), torch.tensor(1.0), atol=1e-4, rtol=0)
 
 
 def test_dppo_rejects_unchunked_env():

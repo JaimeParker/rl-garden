@@ -50,14 +50,10 @@ class SACFlow(SAC):
         super().__init__(env, eval_env, **sac_kwargs)
 
     def _policy_kwargs(self, observation_space) -> dict[str, Any]:
-        # Not built on SAC's keywords: SACFlowPolicy has no Gaussian-actor
-        # options (log_std_*, actor_use_layer_norm, actor_feature_dim) and no
-        # critic_spatial_emb_dim / critic_backbone_type.
-        extractor_kwargs = self._policy_extractor_kwargs(
-            observation_space,
-            augmentation_seed=self._image_augmentation_seed,
-        )
-        if extractor_kwargs["actor_extractor"].structured_feature_config() is not None:
+        # SACFlowPolicy accepts every SAC keyword; its flow actor ignores the
+        # Gaussian-actor ones (log_std_*, actor_use_layer_norm).
+        kwargs = super()._policy_kwargs(observation_space)
+        if kwargs["actor_extractor"].structured_feature_config() is not None:
             raise NotImplementedError(
                 f"{type(self).__name__} only supports flat-latent feature "
                 "extractors (Box, or Dict/RGBD via CombinedExtractor); a "
@@ -65,18 +61,11 @@ class SACFlow(SAC):
                 "FlowMatchingActor and not supported this round."
             )
         return {
-            "observation_space": observation_space,
-            "action_space": self._policy_action_space(),
-            "net_arch": self.net_arch,
-            "n_critics": self.n_critics,
-            "critic_subsample_size": self.critic_subsample_size,
-            "critic_use_layer_norm": self.critic_use_layer_norm,
-            "critic_impl": self.critic_impl,
+            **kwargs,
             "flow_hidden_dims": self.flow_hidden_dims,
             "denoising_steps": self.denoising_steps,
             "noise_std": self.noise_std,
             "flow_use_layer_norm": self.flow_use_layer_norm,
-            **extractor_kwargs,
         }
 
     def _checkpoint_metadata(self) -> dict[str, Any]:

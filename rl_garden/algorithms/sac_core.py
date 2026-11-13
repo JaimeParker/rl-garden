@@ -9,13 +9,20 @@ target-network updates.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from rl_garden.common.utils import polyak_update
+
+if TYPE_CHECKING:
+    from rl_garden.policies.contracts import SACActorCapabilities
+    from rl_garden.policies.sac_policy import SACActorFactory
+
+ActorQAggregation = Literal["min", "mean", "first"]
+ACTOR_Q_AGGREGATIONS: tuple[str, ...] = ("min", "mean", "first")
 
 
 class SACCore:
@@ -24,8 +31,9 @@ class SACCore:
     Extension points for a subclass: ``_critic_features`` (the critic's
     input features), ``_critic_loss`` and its info dict, the step methods
     ``_critic_step`` / ``_actor_step`` / ``_alpha_step`` that ``train`` and
-    ``train_high_utd`` call, and ``_post_critic_update`` /
-    ``_post_actor_update`` run after them."""
+    ``train_high_utd`` call, ``_post_critic_update`` /
+    ``_post_actor_update`` run after them, and ``_check_actor_capabilities``
+    (construction-time checks of the actor against the algorithm's options)."""
 
     # Extra batch fields beyond the SAC standard (obs/next_obs/actions/rewards/
     # dones) that subclasses want carried through ``_slice_batch``. Subclasses
@@ -33,7 +41,38 @@ class SACCore:
     # touching ``_slice_batch`` itself.
     _extra_batch_slice_keys: tuple[str, ...] = ()
 
+    #: ``actor_factory(features_dim, action_space) -> SACActor`` the policy
+    #: builds its actor with (``SACPolicy._build_actor``); ``None`` keeps the
+    #: policy's default actor. Set by the constructors that build a
+    #: ``SACPolicy`` (``SAC``, ``OfflineSAC``, ``CQLCore``'s shells).
+    actor_factory: Optional["SACActorFactory"] = None
+
+    #: The entropy-off (TD3-shaped) options of the default ``_target_q`` /
+    #: ``_actor_loss``; ``SAC`` takes them as constructor options, every other
+    #: user of this mixin keeps these defaults. ``target_policy_noise > 0``
+    #: adds Gaussian noise of that std, clipped to +-``target_noise_clip``, to
+    #: the next action the critic target reads (``_target_policy_action``);
+    #: ``actor_q_agg`` reduces the critic ensemble in the actor loss
+    #: (``_actor_q_value``).
+    target_policy_noise: float = 0.0
+    target_noise_clip: float = 0.5
+    actor_q_agg: ActorQAggregation = "min"
+
     # --- hooks subclasses may override ---
+
+    def _check_actor_capabilities(self, capabilities: "SACActorCapabilities") -> None:
+        """Extension point: raise ``ValueError`` when an option of this
+        algorithm needs an actor capability that ``capabilities`` (the
+        policy's ``actor_capabilities``) does not declare. ``_setup_model``
+        calls it once, right after the policy is built; extend it with
+        ``super()._check_actor_capabilities(capabilities)``."""
+        autotune = isinstance(self.ent_coef_init, str) and self.ent_coef_init.startswith("auto")
+        if autotune and not capabilities.stochastic:
+            raise ValueError(
+                f"ent_coef={self.ent_coef_init!r} tunes the temperature toward a target "
+                "entropy, which needs a stochastic actor, but the actor declares "
+                "stochastic=False; pass ent_coef=0.0."
+            )
 
     def _sample_train_batch(self, batch_size: int):
         return self.replay_buffer.sample(batch_size)
@@ -251,7 +290,39 @@ class SACCore:
     def _target_action_log_prob(
         self, data
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self._actor_action_log_prob(data.next_obs)
+        # The log-prob (the entropy backup) stays the un-noised action's.
+        next_action, next_log_prob, next_actor_features = self._actor_action_log_prob(
+            data.next_obs
+        )
+        return self._target_policy_action(next_action), next_log_prob, next_actor_features
+
+    def _target_policy_action(self, next_action: torch.Tensor) -> torch.Tensor:
+        """TD3's target policy smoothing of the next action the critic target
+        reads: ``next_action`` itself when ``target_policy_noise`` is 0 (no
+        random numbers drawn), else ``next_action`` plus
+        ``N(0, target_policy_noise)`` noise clipped to
+        +-``target_noise_clip``, clamped to the policy's action bounds
+        (``_target_action_bounds``, which ``SAC._setup_model`` sets)."""
+        if self.target_policy_noise <= 0.0:
+            return next_action
+        noise = (torch.randn_like(next_action) * self.target_policy_noise).clamp(
+            -self.target_noise_clip, self.target_noise_clip
+        )
+        low, high = self._target_action_bounds
+        return (next_action + noise).clamp(low, high)
+
+    def _actor_q_value(self, critic_features: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """The ``(B, 1)`` Q-value the actor loss maximizes: the online critic
+        ensemble at ``action`` reduced by ``actor_q_agg`` (``"min"`` over
+        the critics, their ``"mean"``, or the ``"first"`` critic as in TD3)."""
+        if self.actor_q_agg == "min":
+            return self.policy.min_q_value(
+                critic_features, action, subsample_size=None, target=False
+            )
+        q_all = self.policy.q_values_all(critic_features, action, target=False)
+        if self.actor_q_agg == "mean":
+            return q_all.mean(dim=0)
+        return q_all[0]
 
     def _actor_loss_from_batch(self, data) -> tuple[torch.Tensor, torch.Tensor]:
         return self._actor_loss(data.obs)
@@ -333,8 +404,8 @@ class SACCore:
         alpha = self._current_alpha().detach()
         action, log_prob, actor_features = self._actor_action_log_prob(obs)
         critic_features = self.policy.critic_features_for(obs, actor_features, stop_gradient=True)
-        min_q = self.policy.min_q_value(critic_features, action, subsample_size=None, target=False)
-        return (alpha * log_prob - min_q).mean(), log_prob.detach()
+        q_value = self._actor_q_value(critic_features, action)
+        return (alpha * log_prob - q_value).mean(), log_prob.detach()
 
     # --- update loops ---
 

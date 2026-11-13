@@ -9,20 +9,20 @@ LCM self-consistency path (boundary-condition ``c_skip``/``c_out``
 parameterization + EMA target network), not RL-100's simplified
 action-space-MSE shortcut.
 
-**Not a subclass of ``PPO``.** ``DPPOCore``'s cooperative checkpoint-hook
-``super()`` chain (``_checkpoint_metadata``/``_optimizer_names``/etc.)
-would, under ``class X(DPPOCore, PPO)``, resolve into ``PPO``'s own hook
-implementations -- which reference attributes (``clip_coef``, ``net_arch``,
-``log_std_init``, ...) that only exist once ``PPO.__init__`` has actually
-run. It must not run here: ``PPO``'s Gaussian-actor-critic construction is
-irrelevant to a diffusion policy, exactly why ``DPPO`` itself never
-inherits ``PPO``, only ``OnPolicyAlgorithm``. This class instead subclasses
-``DPPO`` directly (not just its ``DPPOCore`` mixin) -- ``DPPO`` already
-*is* "PPO's clip-ratio math, applied to a denoising chain treated as MDP
-steps," so subclassing it wholesale reuses that machinery (rollout,
-chain-buffer, ``train()``'s PPO update) with zero duplication, adding only
-the distillation step on top via ``train()``/``_setup_model()`` overrides
-that each call ``super()`` first.
+**Not a subclass of ``PPO``.** The cooperative checkpoint-hook ``super()``
+chain (``_checkpoint_metadata``/``_optimizer_names``/etc.) of ``DPPO`` and
+its ``ChainPPOCore`` would, with ``PPO`` in the MRO, resolve into ``PPO``'s
+own hook implementations -- which reference attributes (``clip_coef``,
+``net_arch``, ``log_std_init``, ...) that only exist once ``PPO.__init__``
+has actually run. It must not run here: ``PPO``'s Gaussian-actor-critic
+construction is irrelevant to a diffusion policy, exactly why ``DPPO``
+itself never inherits ``PPO``, only ``ChainPPOCore(OnPolicyAlgorithm)``.
+This class instead subclasses ``DPPO`` directly -- ``DPPO`` already *is*
+"PPO's clip-ratio math, applied to a denoising chain treated as MDP steps,"
+so subclassing it wholesale reuses that machinery (rollout, chain-buffer,
+``train()``'s PPO update) with zero duplication, adding only the
+distillation step on top via ``train()``/``_setup_model()`` overrides that
+each call ``super()`` first.
 
 At eval/inference time ``self.policy`` stays the multi-step teacher
 (``DPPOPolicy``, unchanged from ``DPPO``'s own eval path) -- the one-step
@@ -141,8 +141,8 @@ class DiffusionCMDistillOnline(DPPO):
         )
 
     # --- checkpoint hooks: extend DPPO's (no PPO in the MRO, see module
-    # docstring -- these super() chains resolve exactly as they do for DPPO
-    # today, through DPPOCore to OnPolicyAlgorithm/BaseAlgorithm) ---
+    # docstring -- these super() chains resolve exactly as they do for DPPO,
+    # through ChainPPOCore to OnPolicyAlgorithm/BaseAlgorithm) ---
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return (*super()._optimizer_names(), "cm_optimizer")
@@ -223,10 +223,11 @@ class DiffusionCMDistillOnline(DPPO):
         into the PPO-trained teacher (``actor``/``actor_ft``)."""
         obs_flat = flatten_leading_dims(self.rollout_buffer.obs)
         # Detached: this distillation step must not train the shared
-        # actor_extractor (only the critic loss does, see DPPO._dppo_loss's
-        # own comment) -- cm_optimizer doesn't include it anyway (so this was
-        # harmless-but-wasted compute, not a correctness bug), but detaching
-        # here makes that explicit rather than relying on optimizer-grouping.
+        # actor_extractor (only the critic loss does, see
+        # DPPO._chain_policy_terms's own comment) -- cm_optimizer doesn't
+        # include it anyway (so this was harmless-but-wasted compute, not a
+        # correctness bug), but detaching here makes that explicit rather
+        # than relying on optimizer-grouping.
         cond = self.policy._cond(obs_flat, stop_gradient=True)
         latents = self._chain_buffer.chains[:, :, -1].reshape(
             -1, self.horizon_steps, self.policy.action_dim

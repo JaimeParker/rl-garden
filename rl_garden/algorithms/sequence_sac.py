@@ -90,6 +90,11 @@ class SequenceSAC(SAC):
         # actor_feature_dim, critic_spatial_emb_dim nor critic_backbone_type,
         # and the extractors must exist before the sequence encoder is built
         # on the actor extractor.
+        if self.actor_factory is not None:
+            raise ValueError(
+                f"{type(self).__name__} does not support actor_factory: its "
+                "RecurrentSACPolicy builds the default Gaussian actor."
+            )
         extractor_kwargs = self._policy_extractor_kwargs(
             observation_space,
             augmentation_seed=self._image_augmentation_seed,
@@ -226,6 +231,7 @@ class SequenceSAC(SAC):
         target_flat = target.reshape(-1, hidden_size)
         with torch.no_grad():
             next_action, next_log_prob = self.policy.actor.action_log_prob(target_flat)
+            next_action = self._target_policy_action(next_action)
             min_q_next = self.policy.min_q_value(
                 target_flat, next_action,
                 subsample_size=self._target_critic_subsample_size(), target=True,
@@ -289,8 +295,8 @@ class SequenceSAC(SAC):
 
         alpha = self._current_alpha().detach()
         action, log_prob = self.policy.actor.action_log_prob(flat_features)
-        min_q = self.policy.min_q_value(flat_features, action, subsample_size=None, target=False)
-        actor_loss = (alpha * log_prob - min_q).mean()
+        q_value = self._actor_q_value(flat_features, action)
+        actor_loss = (alpha * log_prob - q_value).mean()
         return actor_loss, log_prob.detach()
 
     def _post_critic_update(self, data, critic_info) -> None:

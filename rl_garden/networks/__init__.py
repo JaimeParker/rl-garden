@@ -45,6 +45,7 @@ from rl_garden.networks.perturbation_actor import PerturbationActor
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
 from rl_garden.networks.reward_mask_relabeler import RewardMaskRelabeler
 from rl_garden.networks.rnd import RNDBonus
+from rl_garden.networks.sac_actor_base import SACActorBase
 from rl_garden.networks.sequence_cnn import ActionChunkDecoder, CNNSequenceEncoder
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder, SequenceState
 from rl_garden.networks.spatial_critic import SpatialEmbQEnsemble, SpatialEmbQHead
@@ -90,6 +91,7 @@ __all__ = [
     "RewardMaskRelabeler",
     "RNDBonus",
     "RNNType",
+    "SACActorBase",
     "SequenceLatentEncoder",
     "SequenceState",
     "SpatialEmbQEnsemble",

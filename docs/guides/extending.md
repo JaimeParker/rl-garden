@@ -198,11 +198,17 @@ features_dim, action_space, hidden_dims, **actor_options)` is the seam for the
 actor: it is called once, after the extractors and before the value head, with
 the width of the features the actor reads (for a recurrent or transformer
 policy the sequence latent's width, not the extractor's), the resolved `pi`
-widths and the algorithm's actor options. The module it returns must offer
-`DiagGaussianActorBase`'s interface (`forward` returning a `Normal`,
-`action_log_prob`, `evaluate_action_log_prob`, `deterministic_action`,
-`clamp_action` and a `log_std` parameter). Modules the policy adds after
-`super().__init__()` (here `aux_head`) are policy submodules:
+widths and the algorithm's actor options. The default builds `DiagGaussianActor`,
+or calls `actor_factory(features_dim, action_space)` when the policy was given
+one (the options are not forwarded to it). An override builds its own actor and
+does not call `actor_factory`. The module it returns must satisfy
+`rl_garden.policies.contracts.PPOActor` (`action_log_prob`,
+`evaluate_action_log_prob`, `deterministic_action`, `clamp_action`; shapes in
+`rl_garden/policies/contracts.py`): right after
+`_build_actor`, `PPOPolicy._actor_capabilities(features_dim, action_space)`
+validates it (`validate_ppo_actor`: a `TypeError`/`ValueError` at construction)
+and its result is stored as `policy.actor_capabilities`. Modules the policy adds
+after `super().__init__()` (here `aux_head`) are policy submodules:
 
 ```python
 class AuxSplitRecurrentPolicy(RecurrentPPOPolicy):
@@ -248,10 +254,14 @@ class SharedInputSplitActor(SplitDiagGaussianActor):
         return super()._mean(features)
 ```
 
-Any actor with `action_log_prob`, `evaluate_action_log_prob`,
-`deterministic_action` and `clamp_action` works on the plain path;
-`--lr-schedule adaptive_kl` and `--decision-level` also read `actor.log_std`
-(a Gaussian actor). A policy graph (`--policy-graph`) builds a
+Any `PPOActor` works on the plain path; its entropy may be `None`, which drops
+the entropy bonus and the `entropy` metric. `PPO._check_actor_capabilities()`
+(run by `_setup_model` right after the policy is built) rejects, with a
+`ValueError`, `--lr-schedule adaptive_kl` unless `actor_capabilities.is_gaussian`
+(a `log_std` tensor and a `forward` returning a `Normal`) and `--decision-level`
+unless `actor_capabilities.supports_per_dim_log_prob` (`sum_dims=False`);
+decision-level `policy/log_std/<j>` is logged only for a Gaussian actor.
+`actor_factory` cannot be combined with a policy graph. A policy graph (`--policy-graph`) builds a
 `GraphPPOPolicy` and ignores `policy_class`; its `_policy_head_kwargs` reach
 `GraphPPOPolicy` too, so keywords only your `policy_class` accepts belong to a
 subclass that rejects `--policy-graph`.
@@ -259,13 +269,19 @@ subclass that rejects `--policy-graph`.
 A package that swaps the actor after construction instead
 (`policy.actor = ...` following `super()._build_policy(...)`) must size it by
 the sequence latent in a recurrent or transformer policy
-(`policy.recurrent_encoder.features_dim`), and the replaced actor has already
+(`policy.recurrent_encoder.features_dim`), the replaced actor has already
 consumed random numbers, so initial weights differ from a policy that builds
-the new actor directly. Prefer `_build_actor`.
+the new actor directly, and it skips the contract validation and
+`actor_capabilities`. Prefer `_build_actor` (or `actor_factory`); this holds for
+`SACPolicy` as well.
 
 A SAC-family policy is swapped by setting `policy_class` (and extending
-`_policy_kwargs` for its own keywords, see the SAC family seam table); a
-non-Gaussian SAC actor also overrides `_compute_actor_diagnostics`.
+`_policy_kwargs` for its own keywords, see the SAC family seam table); its actor
+by `SACPolicy._build_actor` or `actor_factory`. A non-Gaussian SAC actor
+implements `SACActor.diagnostics(features)` (or inherits `SACActorBase`'s
+default), which `SACPolicy.actor_diagnostics` delegates to;
+`SACCore._compute_actor_diagnostics` stays the algorithm-side seam for batches
+the policy cannot read flat (`SequenceSAC` returns `{}`).
 
 ### PPO seam table
 
@@ -276,7 +292,10 @@ The protected PPO methods and attributes a subclass overrides, at this version:
 | `PPO.policy_class` | the policy `_build_policy` builds when no policy graph is given |
 | `PPO._policy_head_kwargs(observation_space)` | the head keywords every built policy receives (`net_arch`, actor init options, norm/dropout options, backbone types); extend with `{**super()._policy_head_kwargs(observation_space), ...}`; read once per `_build_policy` call |
 | `PPO._build_policy(observation_space)` | the policy itself; prefer `policy_class` and `_policy_head_kwargs` to overriding it |
+| `PPO(actor_factory=...)` / `PPOPolicy(actor_factory=...)` | `fn(features_dim, action_space) -> PPOActor` that the default `_build_actor` calls; reaches the policy through `_policy_head_kwargs` only when set; excludes `policy_graph` |
 | `PPOPolicy._build_actor(features_dim, action_space, hidden_dims, **actor_options)` | the actor module; see above |
+| `PPOPolicy._actor_capabilities(features_dim, action_space) -> PPOActorCapabilities` | checks the built actor, right after `_build_actor`; default `validate_ppo_actor`; `GraphPPOPolicy` overrides it for its multi-sink actor. Stored as `policy.actor_capabilities` |
+| `PPO._check_actor_capabilities()` | construction-time checks of `policy.actor_capabilities` against the run's options (`adaptive_kl`, `decision_level`); extend with `super()` |
 | `PPOPolicy.rollout_extra_specs()` | per-step extras the rollout buffer stores, `{key: (shape, dtype)}`; each key is read from `infos[key]` on every env step (a missing key raises) and arrives in `data.extras[key]`. Return `{**super().rollout_extra_specs(), ...}` |
 | `PPOPolicy.evaluation_outputs` (class attribute) | when `True`, the update calls the policy's evaluate method with `return_outputs=True` and the trailing dict lands in `MinibatchEval.outputs`: `{"latent": <the features the actor read>}` for `PPOPolicy` and `RecurrentPPOPolicy` (rows in minibatch order, T-major for sequences), the graph outputs for `GraphPPOPolicy` |
 | `PPO.rollout_buffer_class` (class attribute) | the buffer `_build_rollout_buffer()` allocates once in `_setup_model`, with `RolloutBuffer`'s constructor keywords; `RolloutBuffer` (`RecurrentRolloutBuffer` for `SequencePPO`). A subclass changes GAE or storage in a buffer subclass |
@@ -288,8 +307,8 @@ The protected PPO methods and attributes a subclass overrides, at this version:
 | `PPO._aux_loss(data, evaluation, decision_mask)` | the auxiliary loss of a minibatch: `(loss or None, {name: detached scalar})`; the loss is added to the PPO loss before its single `backward()`, each term is averaged over the update and returned by `train()` as `aux/<name>` (logged as `losses/aux/<name>`). Extend `super()`'s result so policy-graph losses still apply. Reduce a per-row loss with `rl_garden.algorithms.ppo.masked_mean(row_loss, decision_mask, decision_mask.sum())` |
 | `PPO._policy_loss(advantages=, ratio=, clip_coef=, mask=)` | the scalar policy loss from the (normalized) advantages and the ratio, 1-D over the rows; `mask` is the decision mask or `None`; default the clipped surrogate |
 | `PPO._value_loss(values=, old_values=, returns=, clip_coef=, decision_mask=)` | the scalar value loss (`values` carries gradients); default `0.5 * mse`, clipped when `clip_vloss`, over every row or the decision rows (`per_step_critic`) under a decision mask |
-| `PPO._entropy_term(terms)` | the scalar entropy bonus; default `terms.row_mean(terms.entropy)`, the mean over the policy-loss rows (`PolicyTerms`: `advantages`, `logratio`, `ratio`, `entropy`, `row_mean`, `decisions`) |
-| `PPO._total_loss(policy_loss=, value_loss=, entropy_loss=, aux_loss=)` | the loss of the minibatch's single `backward()`; default `policy_loss - ent_coef * entropy_loss + vf_coef * value_loss (+ aux_loss)`, reported as `loss` |
+| `PPO._entropy_term(terms)` | the scalar entropy bonus, or `None`; default `terms.row_mean(terms.entropy)`, the mean over the policy-loss rows (`PolicyTerms`: `advantages`, `logratio`, `ratio`, `entropy`, `row_mean`, `decisions`), `None` when the actor reports no entropy |
+| `PPO._total_loss(policy_loss=, value_loss=, entropy_loss=, aux_loss=)` | the loss of the minibatch's single `backward()`; default `policy_loss - ent_coef * entropy_loss + vf_coef * value_loss (+ aux_loss)`, without the entropy term when `entropy_loss` is `None`, reported as `loss` |
 | `PPO._should_stop_early(approx_kl)` | whether `target_kl` stops the update at this minibatch, before its gradient step; default: the approx-KL averaged over DDP ranks (`allreduce_mean`) exceeds `target_kl` (never when it is `None`), so every rank stops at the same minibatch. An override must decide identically on every rank |
 | `PPO._extra_update_metrics(stats)` | extra `train()` metrics, merged last and logged as `losses/<key>`; `stats` is the update's `UpdateStats` (per-minibatch losses, KLs, clip fractions, decision counts, aux terms, `stopped_early`); default `{}` |
 | `PPO.train()` | one update; `metrics = super().train()`, then add keys (prefer `_extra_update_metrics`) |
@@ -317,6 +336,26 @@ One override per scenario, the rest of the loop unchanged:
 `_adaptive_kl_step`, `_optimizer_step`, `_update_metrics`) that keep the
 collectives in a fixed order on every DDP rank; they are not part of this
 contract.
+
+### Chain PPO (`DPPO`, `FlowPPO`)
+
+`DPPO` and `FlowPPO` (and `DiffusionCMDistillOnline`, a `DPPO`) train a
+denoising or flow chain with PPO's clip ratio applied per chain step. They are
+not `PPO` subclasses: both subclass `ChainPPOCore(OnPolicyAlgorithm)`
+(`rl_garden/algorithms/chain_ppo_core.py`, which replaces the former
+`DPPOCore` / `FlowPPOCore`). The core owns the rollout step and the stored
+chain, the advantages (normalized and quantile-clamped once over the rollout's
+env steps), the pair-minibatch loop, the two-optimizer step with critic warmup
+and the actor gradient clip over the actor optimizer's parameters, `target_kl`
+checked after each step, the LR schedulers (checkpoint key
+`lr_scheduler_states`), the averaged metrics and explained variance. A subclass
+builds `self.policy` in `_setup_model` and then calls
+`_build_chain_training_state(...)`, and implements `_sample_rollout_chain(obs)`
+and `_chain_policy_terms(minibatch) -> ChainPolicyTerms` (its log-ratio, ratio,
+advantages and clip coefficient). The loss helpers they share with `PPO`
+(`ppo_clip_policy_loss`, `clipped_value_loss`, `approx_kl_clipfrac`,
+`explained_variance`, `encoder_checkpoint_metadata`) live in
+`rl_garden/algorithms/ppo_terms.py`.
 
 `policy_class` and `_policy_head_kwargs` are the algorithm side of the policy
 seams, `_build_actor`, `rollout_extra_specs` and `evaluation_outputs` the
@@ -364,8 +403,15 @@ and then one actor step on the full batch. The seams, at this version:
 
 | Seam | Default | What a subclass may assume |
 |---|---|---|
-| `SAC.policy_class` (class attribute) | `SACPolicy` (`RLPDPolicy`, `RLPDHybridPolicy`, `RecurrentSACPolicy`, `SACFlowPolicy` in those subclasses) | built once by `_build_policy` as `policy_class(**_policy_kwargs(observation_space))`, then moved to the device |
-| `SAC._policy_kwargs(observation_space) -> dict` | `observation_space`, `action_space`, the critic/actor options, then the extractors (`actor_extractor`, `critic_extractor`, `encoder_sharing`) | building it builds the extractors, so call it (and `super()`) once; extend with `{**super()._policy_kwargs(observation_space), ...}` |
+| `SAC.policy_class` (class attribute) | `SACPolicy` (`RLPDPolicy`, `RLPDHybridPolicy`, `RecurrentSACPolicy`, `SACFlowPolicy` in those subclasses; `SACFlowPolicy` only overrides `_build_actor`) | built once by `_build_policy` as `policy_class(**_policy_kwargs(observation_space))`, then moved to the device |
+| `SAC._policy_kwargs(observation_space) -> dict` | `observation_space`, `action_space`, the critic/actor options, `actor_factory` (only when given), then the extractors (`actor_extractor`, `critic_extractor`, `encoder_sharing`) | building it builds the extractors, so call it (and `super()`) once; extend with `{**super()._policy_kwargs(observation_space), ...}` |
+| `CQLCore.policy_class` (class attribute) / `CQLCore._policy_kwargs(observation_space) -> dict` | `SACPolicy`; `observation_space`, `action_space`, CQL's critic/actor options, `actor_factory` (only when given), then the extractors | `_setup_model` builds `policy_class(**_policy_kwargs(observation_space))` once and moves it to the device (`CQL`, `CalQL`, `WSRL` and their rollout shells); building the keywords builds the extractors, so call it (and `super()`) once; extend with `{**super()._policy_kwargs(observation_space), ...}` |
+| `OfflineSAC.policy_class` (class attribute) / `OfflineSAC._policy_kwargs(observation_space) -> dict` | `SACPolicy`; `observation_space`, `action_space`, `net_arch`, `n_critics`, `critic_subsample_size`, `actor_factory` (only when given), then the extractors | as `CQLCore`'s (`EDAC`, `SO2`) |
+| `actor_factory` (constructor keyword of `SAC`, `OfflineSAC`, `CQL`, `CalQL`, `WSRL` and their off2on shells; class attribute on `SACCore`, `None`) | `fn(features_dim, action_space) -> SACActor` that the default `SACPolicy._build_actor` calls; recorded in the checkpoint as an import path | `SACFlow` and `SequenceSAC` reject it (their policies build their own actor) |
+| `SACPolicy._build_actor(features_dim, action_space, **actor_options) -> nn.Module` | `SquashedGaussianActor` with the policy's Gaussian options, or `actor_factory(features_dim, action_space)` (options not forwarded) | called once, right after the critic and `critic_target` (the RNG position of the old inline build), with the actor's feature width (`actor_feature_dim`'s compressor output when set); a subclass sets its own options as plain attributes before `super().__init__()`. The result is validated (`validate_sac_actor`) and its flags stored as `policy.actor_capabilities` |
+| `SACCore._check_actor_capabilities(capabilities)` | `ValueError` for `ent_coef="auto"` with `stochastic=False`; `CQLCore` adds `cql_importance_sample=True` with `log_prob_is_density=False`, `ACRLPDCore` `bc_alpha > 0` with `supports_evaluate_log_prob=False` | runs once in `_setup_model` right after the policy is built; extend with `super()._check_actor_capabilities(capabilities)` |
+| `SACCore._target_policy_action(next_action) -> Tensor` | `next_action` unchanged when `target_policy_noise` is 0 (no random numbers), else plus clipped Gaussian noise (`target_noise_clip`), clamped to the action bounds | the next action the critic target reads (TD3's target smoothing); `SO2Core` keeps its own smoothing |
+| `SACCore._actor_q_value(critic_features, action) -> Tensor` | the online ensemble reduced by `actor_q_agg` (`"min"`, `"mean"`, `"first"`) | the `(B, 1)` Q-value the actor loss maximizes; `ACRLPD` keeps its reference critic mean and rejects `actor_q_agg != "min"` |
 | `SAC._make_optimizers(*, exclude_bias_from_decay=False) -> (q_optimizer, actor_optimizer)` | Adam (AdamW under weight decay) over `policy.critic_and_encoder_parameters()` and `policy.actor_parameters()`; `exclude_bias_from_decay=True` puts `ndim <= 1` parameters in a no-decay group | called once in `_setup_model`, before the temperature optimizer and the schedulers, which are bound to what it returns |
 | `SACPolicy.critic_and_encoder_parameters()` / `actor_parameters()` | the critic and the critic's extractor / the actor, plus the actor extractor when the actor loss trains it (`"separate"`, `"shared"`) | the two optimizers hold exactly these; a module the policy adds is trained only once one of them yields it, after `super()`'s parameters (optimizer state is saved by position) |
 | `SACCore._critic_features(obs, *, target) -> Tensor` | `policy.extract_critic_features(obs)`, detached as a whole when the training phase freezes the encoder | called once per critic step on its batch (once per high-UTD slice), inside `_critic_loss`; an override that reads the features calls `super()` and returns the same tensor |
@@ -377,9 +423,9 @@ and then one actor step on the full batch. The seams, at this version:
 | `SACCore._post_actor_update(data) -> dict` | `{}` | runs after every actor step and its temperature step; returned detached scalars are logged like `_critic_loss`'s info |
 | `BaseAlgorithm._optimizer_names()` | `("q_optimizer", "actor_optimizer", "alpha_optimizer", "cql_alpha_optimizer")` | an extra optimizer is built in `_setup_model` after `super()._setup_model()` and named here (`(*super()._optimizer_names(), "my_optimizer")`) so checkpoints save and load it |
 
-`SequenceSAC` and `SACFlow` do not build on `SAC._policy_kwargs`: their
-policies take a different keyword set, so a subclass of either extends their
-own `_policy_kwargs`. A class that overrides `_build_policy` itself ignores
+`SequenceSAC` does not build on `SAC._policy_kwargs`: its policy takes a
+different keyword set, so a subclass of it extends its own `_policy_kwargs`
+(`SACFlow` extends `SAC._policy_kwargs` with its flow keywords). A class that overrides `_build_policy` itself ignores
 `policy_class`; no in-tree SAC subclass does.
 
 ### Off-policy loop and replay seams

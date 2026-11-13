@@ -1,27 +1,27 @@
 """RLPD policy: SACPolicy with an optional pnorm ablation on actor/critic.
 
-Builds via ``super().__init__()``, then replaces the modules that need
-algorithm-specific construction, rather than adding ``use_pnorm`` params to
-``SACPolicy.__init__`` itself --
+The pnorm actor is built through ``SACPolicy._build_actor``; the critics are
+built via ``super().__init__()`` and then replaced, rather than adding
+``use_pnorm`` params to ``SACPolicy.__init__`` itself --
 ``use_pnorm`` is an RLPD-specific ablation knob with no other caller, unlike
 ``dropout_rate``/``kernel_init``/``backbone_type`` which were already
 generic ``SACPolicy`` capabilities before RLPD existed.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
+import torch.nn as nn
 from gymnasium import spaces
 
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.networks import BackboneType, CriticImpl, KernelInit
 from rl_garden.networks.actor_critic import (
     EnsembleQCritic as ContinuousCritic,
-    SquashedGaussianActor as Actor,
     get_actor_critic_arch,
 )
 from rl_garden.policies.base import EncoderSharing
-from rl_garden.policies.sac_policy import SACPolicy
+from rl_garden.policies.sac_policy import SACActorFactory, SACPolicy
 
 
 class RLPDPolicy(SACPolicy):
@@ -49,7 +49,11 @@ class RLPDPolicy(SACPolicy):
         critic_extractor: Optional[BaseFeaturesExtractor] = None,
         critic_backbone_type: Optional[BackboneType] = None,
         encoder_sharing: "EncoderSharing" = "shared_critic_grad",
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
+        # Read by _build_actor, which SACPolicy.__init__ calls; a plain
+        # attribute may be set before nn.Module.__init__.
+        self.use_pnorm = use_pnorm
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
@@ -72,13 +76,14 @@ class RLPDPolicy(SACPolicy):
             critic_extractor=critic_extractor,
             critic_backbone_type=critic_backbone_type,
             encoder_sharing=encoder_sharing,
+            actor_factory=actor_factory,
         )
         if not use_pnorm:
             return
         if critic_extractor is not None:
             raise ValueError(
                 "use_pnorm=True is not supported with critic_extractor "
-                "set: the pnorm rebuild below reconstructs critic/actor from a "
+                "set: the pnorm rebuild below reconstructs the critics from a "
                 "single shared actor_extractor and would silently discard "
                 "the separate critic encoder SACPolicy.__init__ already built."
             )
@@ -92,7 +97,7 @@ class RLPDPolicy(SACPolicy):
                 "use_pnorm does not reach."
             )
 
-        actor_arch, critic_arch = get_actor_critic_arch(net_arch)
+        _, critic_arch = get_actor_critic_arch(net_arch)
         fd = actor_extractor.features_dim
         critic_kwargs = dict(
             hidden_dims=critic_arch,
@@ -110,16 +115,10 @@ class RLPDPolicy(SACPolicy):
         for p in self.critic_target.parameters():
             p.requires_grad_(False)
 
-        self.actor = Actor(
-            self._actor_fd,
-            action_space,
-            hidden_dims=actor_arch,
-            use_layer_norm=actor_use_layer_norm,
-            dropout_rate=actor_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            use_pnorm=True,
-            std_parameterization=std_parameterization,
-            log_std_mode=log_std_mode,
-            log_std_min=log_std_min,
+    def _build_actor(
+        self, features_dim: int, action_space: spaces.Box, **actor_options: Any
+    ) -> nn.Module:
+        # A factory actor receives none of the Gaussian options, use_pnorm included.
+        return super()._build_actor(
+            features_dim, action_space, use_pnorm=self.use_pnorm, **actor_options
         )

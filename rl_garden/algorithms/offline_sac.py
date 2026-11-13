@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, ClassVar, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -17,7 +17,8 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
-from rl_garden.policies.sac_policy import SACPolicy
+from rl_garden.policies.contracts import policy_module_checkpoint_metadata
+from rl_garden.policies.sac_policy import SACActorFactory, SACPolicy
 
 
 class OfflineSAC(SACCore, OfflineRLAlgorithm):
@@ -30,6 +31,9 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
 
     _SUPPORTED_POLICY_KWARGS = SAC._SUPPORTED_POLICY_KWARGS
     _resolve_net_arch = staticmethod(SAC._resolve_net_arch)
+    #: The policy ``_setup_model`` builds, called with the keywords of
+    #: ``_policy_kwargs(observation_space)``; a ``SACPolicy`` subclass.
+    policy_class: ClassVar[type[SACPolicy]] = SACPolicy
 
     def __init__(
         self,
@@ -74,6 +78,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
         super().__init__(
             env=env,
@@ -122,6 +127,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
+        self.actor_factory = actor_factory
         self.policy_kwargs = SAC._normalize_policy_kwargs(self, policy_kwargs)
         self._setup_model()
 
@@ -161,6 +167,7 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
                 if self.critic_encoder_config is not None
                 else None
             ),
+            **policy_module_checkpoint_metadata(self.actor_factory, self.policy_kwargs),
         }
 
     _normalize_policy_kwargs = SAC._normalize_policy_kwargs
@@ -175,15 +182,28 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
             sample_device=self.device,
         )
 
+    def _policy_kwargs(self, observation_space) -> dict[str, Any]:
+        """The keywords ``_setup_model`` passes to ``policy_class``. Building
+        them builds the observation extractors (the last entries), so call it
+        once; a subclass extends it with
+        ``{**super()._policy_kwargs(observation_space), ...}``."""
+        return {
+            "observation_space": observation_space,
+            "action_space": self.env.single_action_space,
+            "net_arch": self.net_arch,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            # Only when given, so a policy_class without the keyword still
+            # builds; the default (None) is SACPolicy's own.
+            **({} if self.actor_factory is None else {"actor_factory": self.actor_factory}),
+            **self._policy_extractor_kwargs(observation_space),
+        }
+
     def _setup_model(self) -> None:
-        self.policy = SACPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            **self._policy_extractor_kwargs(self.env.single_observation_space),
+        self.policy = self.policy_class(
+            **self._policy_kwargs(self.env.single_observation_space)
         ).to(self.device)
+        self._check_actor_capabilities(self.policy.actor_capabilities)
         self.q_optimizer = make_optimizer(
             list(self.policy.critic_and_encoder_parameters()),
             lr=self.q_lr,

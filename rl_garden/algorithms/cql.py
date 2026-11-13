@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, ClassVar, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -21,7 +21,8 @@ from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimiz
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
-from rl_garden.policies.sac_policy import SACPolicy, TemperatureLagrange
+from rl_garden.policies.contracts import SACActorCapabilities, policy_module_checkpoint_metadata
+from rl_garden.policies.sac_policy import SACActorFactory, SACPolicy, TemperatureLagrange
 
 
 class CQLAlphaLagrange(nn.Module):
@@ -71,6 +72,9 @@ class CQLCore(SACCore):
             "critic_extractor_kwargs",
         }
     )
+    #: The policy ``_setup_model`` builds, called with the keywords of
+    #: ``_policy_kwargs(observation_space)``; a ``SACPolicy`` subclass.
+    policy_class: ClassVar[type[SACPolicy]] = SACPolicy
 
     def _init_cql_params(
         self,
@@ -137,6 +141,7 @@ class CQLCore(SACCore):
         use_td_loss: bool = True,
         # General
         policy_kwargs: Optional[dict[str, Any]] = None,
+        actor_factory: Optional[SACActorFactory] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -144,6 +149,7 @@ class CQLCore(SACCore):
         log_freq: int = 1_000,
     ) -> None:
         del seed, device, logger, std_log, log_freq
+        self.actor_factory = actor_factory
         self.tau = tau
         self.utd = utd
         self.policy_lr = policy_lr
@@ -287,6 +293,7 @@ class CQLCore(SACCore):
                 if getattr(self, "critic_encoder_config", None) is not None
                 else None
             ),
+            **policy_module_checkpoint_metadata(self.actor_factory, self.policy_kwargs),
         }
         return metadata
 
@@ -389,31 +396,53 @@ class CQLCore(SACCore):
             sample_device=self.device,
         )
 
+    def _policy_kwargs(self, observation_space) -> dict[str, Any]:
+        """The keywords ``_setup_model`` passes to ``policy_class``. Building
+        them builds the observation extractors (the last entries), so call it
+        once; a subclass extends it with
+        ``{**super()._policy_kwargs(observation_space), ...}``."""
+        return {
+            "observation_space": observation_space,
+            "action_space": self.env.single_action_space,
+            "net_arch": self.net_arch,
+            "n_critics": self.n_critics,
+            "critic_subsample_size": self.critic_subsample_size,
+            "actor_use_layer_norm": self.actor_use_layer_norm,
+            "critic_use_layer_norm": self.critic_use_layer_norm,
+            "actor_use_group_norm": self.actor_use_group_norm,
+            "critic_use_group_norm": self.critic_use_group_norm,
+            "num_groups": self.num_groups,
+            "actor_dropout_rate": self.actor_dropout_rate,
+            "critic_dropout_rate": self.critic_dropout_rate,
+            "kernel_init": self.kernel_init,
+            "backbone_type": self.backbone_type,
+            "std_parameterization": self.std_parameterization,
+            "log_std_multiplier_init": self.policy_log_std_multiplier,
+            "log_std_offset_init": self.policy_log_std_offset,
+            "log_std_mode": "clamp",
+            "log_std_min": -20.0,
+            "actor_feature_dim": self.actor_feature_dim,
+            "critic_spatial_emb_dim": self.critic_spatial_emb_dim,
+            # Only when given, so a policy_class without the keyword still
+            # builds; the default (None) is SACPolicy's own.
+            **({} if self.actor_factory is None else {"actor_factory": self.actor_factory}),
+            **self._policy_extractor_kwargs(observation_space),
+        }
+
+    def _check_actor_capabilities(self, capabilities: SACActorCapabilities) -> None:
+        super()._check_actor_capabilities(capabilities)
+        if self.cql_importance_sample and not capabilities.log_prob_is_density:
+            raise ValueError(
+                "cql_importance_sample=True subtracts the sampled actions' log-densities "
+                "from their Q-values, but the actor declares log_prob_is_density=False; "
+                "pass cql_importance_sample=False."
+            )
+
     def _setup_model(self) -> None:
-        self.policy = SACPolicy(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            net_arch=self.net_arch,
-            n_critics=self.n_critics,
-            critic_subsample_size=self.critic_subsample_size,
-            actor_use_layer_norm=self.actor_use_layer_norm,
-            critic_use_layer_norm=self.critic_use_layer_norm,
-            actor_use_group_norm=self.actor_use_group_norm,
-            critic_use_group_norm=self.critic_use_group_norm,
-            num_groups=self.num_groups,
-            actor_dropout_rate=self.actor_dropout_rate,
-            critic_dropout_rate=self.critic_dropout_rate,
-            kernel_init=self.kernel_init,
-            backbone_type=self.backbone_type,
-            std_parameterization=self.std_parameterization,
-            log_std_multiplier_init=self.policy_log_std_multiplier,
-            log_std_offset_init=self.policy_log_std_offset,
-            log_std_mode="clamp",
-            log_std_min=-20.0,
-            actor_feature_dim=self.actor_feature_dim,
-            critic_spatial_emb_dim=self.critic_spatial_emb_dim,
-            **self._policy_extractor_kwargs(self.env.single_observation_space),
+        self.policy = self.policy_class(
+            **self._policy_kwargs(self.env.single_observation_space)
         ).to(self.device)
+        self._check_actor_capabilities(self.policy.actor_capabilities)
 
         self.q_optimizer = make_optimizer(
             list(self.policy.critic_and_encoder_parameters()),
@@ -857,6 +886,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
         super().__init__(
             env=env,
@@ -942,6 +972,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             cql_alpha_param=cql_alpha_param,
             use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
+            actor_factory=actor_factory,
             seed=seed,
             device=device,
             logger=logger,
@@ -1036,6 +1067,7 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
         super().__init__(
             env=env,
@@ -1118,6 +1150,7 @@ class CQL(CQLCore, OfflineRLAlgorithm):
             cql_alpha_param=cql_alpha_param,
             use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
+            actor_factory=actor_factory,
             seed=seed,
             device=device,
             logger=logger,

@@ -20,7 +20,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
-from rl_garden.algorithms.sac_core import SACCore
+from rl_garden.algorithms.sac_core import ACTOR_Q_AGGREGATIONS, ActorQAggregation, SACCore
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
 from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
@@ -30,7 +30,8 @@ from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimiz
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
-from rl_garden.policies.sac_policy import SACPolicy
+from rl_garden.policies.contracts import policy_module_checkpoint_metadata
+from rl_garden.policies.sac_policy import SACActorFactory, SACPolicy
 
 
 class SAC(SACCore, OffPolicyAlgorithm):
@@ -40,7 +41,13 @@ class SAC(SACCore, OffPolicyAlgorithm):
     (which policy is built and with what), ``_make_optimizers`` (the critic
     and actor optimizers), and ``SACCore``'s update seams (``_critic_features``,
     ``_critic_loss``, ``_critic_step`` / ``_actor_step`` / ``_alpha_step``,
-    ``_post_critic_update`` / ``_post_actor_update``)."""
+    ``_post_critic_update`` / ``_post_actor_update``).
+
+    ``actor_factory`` replaces the policy's Gaussian actor by any
+    ``rl_garden.policies.contracts.SACActor``. With a deterministic actor
+    (``stochastic=False``) and ``ent_coef=0.0``, ``target_policy_noise``,
+    ``target_noise_clip`` and ``actor_q_agg="first"`` give a TD3-shaped
+    update (no target actor)."""
 
     _compatible_checkpoint_algorithms = ("SAC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
@@ -126,6 +133,10 @@ class SAC(SACCore, OffPolicyAlgorithm):
         mmap_dir: Optional[str | Path] = None,
         mmap_mode: Literal["create", "open"] = "create",
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        target_policy_noise: float = 0.0,
+        target_noise_clip: float = 0.5,
+        actor_q_agg: ActorQAggregation = "min",
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
         if mmap_dir is not None and save_replay_buffer:
             raise ValueError(
@@ -183,6 +194,18 @@ class SAC(SACCore, OffPolicyAlgorithm):
         if alpha_tuning not in ("legacy_exp", "log_alpha", "lagrange_softplus"):
             raise ValueError(f"Unknown alpha_tuning mode: {alpha_tuning!r}.")
         self.alpha_tuning = alpha_tuning
+        if target_policy_noise < 0:
+            raise ValueError(f"target_policy_noise must be >= 0, got {target_policy_noise}.")
+        if target_noise_clip < 0:
+            raise ValueError(f"target_noise_clip must be >= 0, got {target_noise_clip}.")
+        if actor_q_agg not in ACTOR_Q_AGGREGATIONS:
+            raise ValueError(
+                f"actor_q_agg must be one of {ACTOR_Q_AGGREGATIONS}, got {actor_q_agg!r}."
+            )
+        self.target_policy_noise = float(target_policy_noise)
+        self.target_noise_clip = float(target_noise_clip)
+        self.actor_q_agg = actor_q_agg
+        self.actor_factory = actor_factory
         self.q_landscape_diagnostics = q_landscape_diagnostics
         self.q_landscape_num_actions = q_landscape_num_actions
         self.q_landscape_batch_size = q_landscape_batch_size
@@ -244,6 +267,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
             "alpha_tuning": self.alpha_tuning,
+            "target_policy_noise": self.target_policy_noise,
+            "target_noise_clip": self.target_noise_clip,
+            "actor_q_agg": self.actor_q_agg,
             "q_landscape_diagnostics": self.q_landscape_diagnostics,
             "q_landscape_num_actions": self.q_landscape_num_actions,
             "q_landscape_batch_size": self.q_landscape_batch_size,
@@ -270,6 +296,7 @@ class SAC(SACCore, OffPolicyAlgorithm):
                 else None
             ),
             "image_augmentation_seed": self._image_augmentation_seed,
+            **policy_module_checkpoint_metadata(self.actor_factory, self.policy_kwargs),
         }
         return meta
 
@@ -490,6 +517,9 @@ class SAC(SACCore, OffPolicyAlgorithm):
             "actor_feature_dim": self.actor_feature_dim,
             "critic_spatial_emb_dim": self.critic_spatial_emb_dim,
             "critic_backbone_type": self.critic_backbone_type,
+            # Only when given, so a policy_class without the keyword still
+            # builds; the default (None) is SACPolicy's own.
+            **({} if self.actor_factory is None else {"actor_factory": self.actor_factory}),
             **self._policy_extractor_kwargs(
                 observation_space,
                 augmentation_seed=self._image_augmentation_seed,
@@ -570,6 +600,8 @@ class SAC(SACCore, OffPolicyAlgorithm):
 
     def _setup_model(self) -> None:
         self.policy = self._build_policy().to(self.device)
+        self._check_actor_capabilities(self.policy.actor_capabilities)
+        self._target_action_bounds = self.policy._action_bounds(self.device)
 
         self.q_optimizer, self.actor_optimizer = self._make_optimizers()
 

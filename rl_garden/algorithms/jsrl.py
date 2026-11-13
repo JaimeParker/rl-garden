@@ -27,20 +27,28 @@ this port targets, and is not implemented here.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal, Optional
 
 import torch
 from gymnasium import spaces
 
+from rl_garden.algorithms.cql import CQLCore
 from rl_garden.algorithms.sac import SAC
 from rl_garden.common.checkpoint import load_checkpoint_file
+from rl_garden.common.effective_config import (
+    reject_unrecorded_import_path,
+    resolve_import_path,
+)
 from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.policies.awac_policy import AWACPolicy
 from rl_garden.policies.base import BasePolicy
 from rl_garden.policies.iql_policy import IQLPolicy
-from rl_garden.policies.sac_policy import SACPolicy, WSRL_LOG_STD_MIN
+from rl_garden.policies.sac_policy import WSRL_LOG_STD_MIN
 
 GuideAlgorithm = Literal["iql", "calql", "wsrl", "awac"]
+
+_logger = logging.getLogger(__name__)
 
 # Keys under these prefixes are provably unused by BasePolicy.predict() for
 # every guide policy class below (critic/value heads never run at
@@ -48,6 +56,28 @@ GuideAlgorithm = Literal["iql", "calql", "wsrl", "awac"]
 # missing is fatal: it means the guide's actor (or, for AWAC, its obs
 # normalizer) didn't actually load.
 _GUIDE_IGNORABLE_PREFIXES = ("critic.", "critic_target.", "value.")
+
+
+def _recorded_actor_factory(hyperparameters: dict[str, Any], checkpoint_path: str):
+    """The ``actor_factory`` a CQL-family checkpoint recorded as an import
+    path (``None`` when it was trained with the default actor). A factory
+    recorded without an import path raises ``ConfigError``."""
+    spec = hyperparameters.get("actor_factory")
+    if spec is None:
+        return None
+    reject_unrecorded_import_path("actor_factory", spec)
+    _logger.info(
+        "importing actor_factory %s from checkpoint metadata (guide checkpoint %s)",
+        spec,
+        checkpoint_path,
+    )
+    try:
+        return resolve_import_path(spec)
+    except (ImportError, AttributeError) as error:
+        raise ImportError(
+            f"Guide checkpoint {checkpoint_path!r} was trained with actor_factory {spec!r}, "
+            f"which cannot be imported here: {error}"
+        ) from error
 
 
 def _load_guide_policy(
@@ -115,12 +145,11 @@ def _load_guide_policy(
             std_parameterization=std_parameterization,
         ).to(device)
     elif guide_algorithm in ("calql", "wsrl"):
-        # log_std_mode/log_std_min are hard-coded to match CQL's own
-        # _setup_model() (rl_garden/algorithms/cql.py:483-485) exactly --
-        # not user-configurable there either, so not read from metadata.
-        # SACPolicy already migrated (Phase A reference implementation), so
-        # this call site uses the new actor_extractor= kwarg.
-        policy = SACPolicy(
+        # log_std_mode/log_std_min are hard-coded to match CQLCore's own
+        # _policy_kwargs() exactly -- not user-configurable there either, so
+        # not read from metadata. Built as CQLCore.policy_class (the class
+        # CalQL/WSRL build), with the checkpoint's recorded actor_factory.
+        policy = CQLCore.policy_class(
             observation_space=observation_space,
             action_space=action_space,
             actor_extractor=actor_extractor,
@@ -131,6 +160,7 @@ def _load_guide_policy(
             std_parameterization=hp.get("std_parameterization", std_parameterization),
             log_std_mode="clamp",
             log_std_min=WSRL_LOG_STD_MIN,
+            actor_factory=_recorded_actor_factory(hp, checkpoint_path),
         ).to(device)
     else:
         raise ValueError(f"Unknown guide_algorithm {guide_algorithm!r}")

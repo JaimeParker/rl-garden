@@ -33,6 +33,7 @@ from rl_garden.networks.graph.executor import (
 from rl_garden.networks.graph.losses import TargetSpecs, info_target_specs
 from rl_garden.networks.graph.nodes import build_graph_nodes
 from rl_garden.networks.graph.spec import GraphSource, GraphSpec
+from rl_garden.policies.contracts import PPOActorCapabilities
 from rl_garden.policies.ppo_policy import PPOPolicy, get_ppo_arch
 
 #: Node name -> output of one graph run (a sink maps to its head's input).
@@ -101,6 +102,9 @@ class GraphPPOPolicy(PPOPolicy):
     clip) is ``actor``, ``value_net``, then the graph nodes; reference
     policies put ``actor_extractor`` first, which matters only when an
     encoder has parameters.
+
+    The graph decides the actor head, so ``actor_factory`` is rejected
+    (``ValueError``).
     """
 
     evaluation_outputs = True
@@ -113,6 +117,11 @@ class GraphPPOPolicy(PPOPolicy):
         graph: GraphSource,
         **ppo_head_kwargs: Any,
     ) -> None:
+        if ppo_head_kwargs.get("actor_factory") is not None:
+            raise ValueError(
+                "GraphPPOPolicy builds its actor head from the graph's actor sinks; "
+                "actor_factory cannot be combined with a policy graph."
+            )
         spec = GraphSpec.parse(graph)
         action_slices = spec.actor_action_slices(int(np.prod(action_space.shape)))
         modules, dims = build_graph_nodes(spec, observation_space, action_space)
@@ -186,6 +195,20 @@ class GraphPPOPolicy(PPOPolicy):
             action_slices,
             [hidden_dims if net_arch is None else net_arch for net_arch in sink_net_archs],
             **actor_options,
+        )
+
+    def _actor_capabilities(
+        self, features_dim: int, action_space: spaces.Box
+    ) -> PPOActorCapabilities:
+        """``PPOPolicy._actor_capabilities`` for one actor sink. With several,
+        the ``SplitDiagGaussianActor`` reads one features tensor per sink,
+        which the validator's dry pass cannot feed; it is a
+        ``DiagGaussianActorBase``, so it has an entropy, per-dimension
+        log-probs and Gaussian parameters."""
+        if self._split_actor_layout is None:
+            return super()._actor_capabilities(features_dim, action_space)
+        return PPOActorCapabilities(
+            has_entropy=True, supports_per_dim_log_prob=True, is_gaussian=True
         )
 
     def rollout_extra_specs(self) -> TargetSpecs:

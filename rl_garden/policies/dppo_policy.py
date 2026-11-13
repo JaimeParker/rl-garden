@@ -20,12 +20,12 @@ fine-tuning -- the loaded BC checkpoint must also have been trained with
 
 Box or Dict (CNN-based vision, via ``CombinedExtractor``) observations.
 ``_cond(obs)`` is the single seam where obs becomes conditioning -- rollout
-collection (``DPPO._rollout_step``) and training (``DPPO._dppo_loss``) both
+collection (``DPPO._sample_rollout_chain``) and training (``DPPO._chain_policy_terms``) both
 call it once per env-step/minibatch and reuse the resulting tensor across
 the whole K-step denoising chain, so introducing an actor_extractor call here
 does not risk re-running an (possibly expensive, image-encoding) extractor
 per denoising step. Gradient isolation (critic trains the encoder, actor
-path detaches) is implemented at the ``DPPO._dppo_loss`` call site, not
+path detaches) is implemented at the ``DPPO._chain_policy_terms`` call site, not
 inside this method -- see that method's own comment.
 """
 from __future__ import annotations

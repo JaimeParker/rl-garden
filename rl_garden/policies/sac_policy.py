@@ -6,7 +6,8 @@ Mirrors the architecture used by ManiSkill's sac.py (state) and sac_rgbd.py
   - ``actor_extractor``/``critic_extractor`` (``BasePolicy``; shared encoder
     by default -- can be ``FlattenExtractor`` for state obs, or
     ``CombinedExtractor`` for RGBD)
-  - ``actor`` (MLP -> mean/log_std heads, tanh-squashed Normal)
+  - ``actor`` (``_build_actor``: by default an MLP -> mean/log_std heads,
+    tanh-squashed Normal; any ``SACActor`` through ``actor_factory``)
   - ``critic`` (ensemble of Q-nets that *reuse* the same extractor)
   - ``critic_target`` (same, no grad)
 
@@ -24,7 +25,7 @@ policy-loss gradient, each with its own Adam state and learning rate.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -43,6 +44,7 @@ from rl_garden.networks import (
     get_actor_critic_arch,
 )
 from rl_garden.policies.base import BasePolicy, EncoderSharing
+from rl_garden.policies.contracts import SACActorCapabilities, validate_sac_actor
 
 LOG_STD_MAX = 2.0
 LOG_STD_MIN = -5.0
@@ -51,6 +53,11 @@ WSRL_LOG_STD_MIN = -20.0
 
 Actor = SquashedGaussianActor
 ContinuousCritic = EnsembleQCritic
+
+#: ``actor_factory(features_dim, action_space) -> actor``: builds a
+#: ``rl_garden.policies.contracts.SACActor`` reading ``(B, features_dim)``
+#: features and acting in ``action_space``.
+SACActorFactory = Callable[[int, spaces.Box], nn.Module]
 
 
 class _TokenCompressor(nn.Module):
@@ -166,6 +173,7 @@ class SACPolicy(BasePolicy):
         critic_extractor: Optional[BaseFeaturesExtractor] = None,
         critic_backbone_type: Optional[BackboneType] = None,
         encoder_sharing: EncoderSharing = "shared_critic_grad",
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
         del use_cql_alpha_lagrange, cql_alpha_lagrange_init
         super().__init__(
@@ -287,8 +295,9 @@ class SACPolicy(BasePolicy):
         for p in self.critic_target.parameters():
             p.requires_grad_(False)
 
-        # --- Actor ---
-        self.actor = Actor(
+        # --- Actor --- (after the critics: the RNG order is part of the contract)
+        self.actor_factory = actor_factory
+        self.actor = self._build_actor(
             self._actor_fd,
             action_space,
             hidden_dims=actor_arch,
@@ -305,9 +314,45 @@ class SACPolicy(BasePolicy):
             log_std_multiplier_init=log_std_multiplier_init,
             log_std_offset_init=log_std_offset_init,
         )
+        # A dry pass on the still-CPU actor under a forked RNG: it leaves the
+        # RNG, the actor's buffers and its train/eval flags as they were.
+        self.actor_capabilities: SACActorCapabilities = validate_sac_actor(
+            self.actor, self._actor_fd, action_space, device=None
+        )
 
         self.use_cql_alpha_lagrange = False
         self.cql_alpha_lagrange = None
+
+    def _build_actor(
+        self,
+        features_dim: int,
+        action_space: spaces.Box,
+        **actor_options: Any,
+    ) -> nn.Module:
+        """Extension point: build the actor head. Called once from
+        ``__init__``, right after the critic and ``critic_target``, so the
+        modules it creates consume the RNG at that position (a subclass that
+        needs its own options sets them as plain attributes before calling
+        ``super().__init__``). ``features_dim`` is the width of the features the actor
+        reads (the token compressor's output under ``actor_feature_dim``),
+        ``actor_options`` ``SquashedGaussianActor``'s keyword options
+        (``hidden_dims`` -- the resolved ``pi`` widths --, ``use_layer_norm``,
+        ``use_group_norm``, ``num_groups``, ``dropout_rate``, ``kernel_init``,
+        ``backbone_type``, ``std_parameterization``, ``log_std_mode``,
+        ``log_std_min``, ``log_std_max``, ``log_std_multiplier_init``,
+        ``log_std_offset_init``).
+
+        With ``actor_factory`` set, the default returns
+        ``actor_factory(features_dim, action_space)`` and the Gaussian
+        options are not forwarded. The module must implement
+        ``rl_garden.policies.contracts.SACActor`` (subclass
+        ``rl_garden.networks.SACActorBase`` for its defaults); ``__init__``
+        validates it with ``validate_sac_actor`` and stores the declared
+        flags as ``actor_capabilities``, and every method of this class reads
+        it as ``self.actor``."""
+        if self.actor_factory is not None:
+            return self.actor_factory(features_dim, action_space)
+        return Actor(features_dim, action_space, **actor_options)
 
     # --- feature extraction helpers ---
 
@@ -412,32 +457,14 @@ class SACPolicy(BasePolicy):
         return self.actor.evaluate_action_log_prob(actor_input, actions)
 
     def actor_diagnostics(self, obs: Obs) -> dict[str, torch.Tensor]:
-        """Diagnostic-only actor stats: entropy decomposition and saturation.
-
-        Mirrors the two additive terms of ``SquashedGaussianActor._squashed_log_prob``
-        (Gaussian log-density minus tanh-squash correction) so ``entropy`` can be
-        read as ``entropy_gaussian + tanh_correction`` without a closed-form
-        Gaussian-entropy estimate (which would require collapsing per-dimension,
-        per-sample std into a single scalar and incurs a Jensen's-gap bias).
-        """
+        """Diagnostic-only actor stats of a batch: ``self.actor.diagnostics``
+        on its actor features (for the default actor, the entropy
+        decomposition and saturation of ``SquashedGaussianActor.diagnostics``).
+        The caller owns RNG isolation (``SACCore._actor_diagnostics``)."""
         with torch.no_grad():
             features = self.extract_features(obs, stop_gradient=True)
             actor_input = self._transform_features_for_actor(features)
-            mean, log_std = self.actor(actor_input)
-            std = log_std.exp()
-            normal = torch.distributions.Normal(mean, std)
-            x_t = normal.rsample()
-            y_t = torch.tanh(x_t)
-            gaussian_term = normal.log_prob(x_t).sum(-1)
-            tanh_correction = torch.log(
-                self.actor.action_scale * (1 - y_t.pow(2)) + 1e-6
-            ).sum(-1)
-            return {
-                "policy_std": std.mean(),
-                "action_saturation": torch.tanh(mean).abs().mean(),
-                "entropy_gaussian": -gaussian_term.mean(),
-                "tanh_correction": tanh_correction.mean(),
-            }
+            return self.actor.diagnostics(actor_input)
 
     def q_landscape_diagnostics(
         self,
@@ -463,8 +490,7 @@ class SACPolicy(BasePolicy):
 
             batch = features.shape[0]
             act_shape = self.action_space.shape
-            low = (self.actor.action_bias - self.actor.action_scale).to(features.device)
-            high = (self.actor.action_bias + self.actor.action_scale).to(features.device)
+            low, high = self._action_bounds(features.device)
             rand = torch.rand(
                 (num_actions, batch, *act_shape),
                 device=features.device,
@@ -506,19 +532,26 @@ class SACPolicy(BasePolicy):
                 diagnostics["critic_hidden_dormant_ratio"] = _dormant_ratio(trunk).detach()
             return diagnostics
 
+    def _action_bounds(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(low, high)`` of ``action_space`` as float32 tensors, computed as
+        ``bias -/+ scale`` with the same arithmetic as the default actor's
+        ``action_bias``/``action_scale`` buffers, so the bounds equal the ones
+        read from those buffers bit for bit (``(h + l) / 2 - (h - l) / 2``
+        need not round to ``l``)."""
+        high = torch.as_tensor(self.action_space.high, dtype=torch.float32)
+        low = torch.as_tensor(self.action_space.low, dtype=torch.float32)
+        scale = (high - low) / 2.0
+        bias = (high + low) / 2.0
+        return (bias - scale).to(device), (bias + scale).to(device)
+
     def _sample_actor_actions(
         self, features: torch.Tensor, n: int
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Sample n actions from the actor using the full actor feature path."""
+        """``n`` actor samples per row, ``(B, n, A)`` actions and ``(B, n)``
+        log-probabilities, from actor-extractor ``features`` (the token
+        compressor is applied here): ``actor.sample_actions_with_log_prob``."""
         actor_input = self._transform_features_for_actor(features)
-        mean, log_std = self.actor(actor_input)
-        std = log_std.exp()
-        normal = torch.distributions.Normal(mean, std)
-        x_t = normal.rsample(sample_shape=(n,))
-        y_t = torch.tanh(x_t)
-        action = y_t * self.actor.action_scale + self.actor.action_bias
-        log_prob = self.actor._squashed_log_prob(normal, x_t, y_t).squeeze(-1)
-        return action.permute(1, 0, 2), log_prob.permute(1, 0)
+        return self.actor.sample_actions_with_log_prob(actor_input, n)
 
     def q_values(
         self, features: torch.Tensor, actions: torch.Tensor, target: bool = False

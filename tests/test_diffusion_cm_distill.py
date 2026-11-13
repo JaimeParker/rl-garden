@@ -145,12 +145,13 @@ def _make_agent(**overrides):
 
 def test_mro_has_no_ppo():
     from rl_garden.algorithms.base_algorithm import BaseAlgorithm
-    from rl_garden.algorithms.dppo import DPPO, DPPOCore
+    from rl_garden.algorithms.chain_ppo_core import ChainPPOCore
+    from rl_garden.algorithms.dppo import DPPO
     from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
     from rl_garden.algorithms.ppo import PPO
 
     mro = DiffusionCMDistillOnline.__mro__
-    assert mro[:4] == (DiffusionCMDistillOnline, DPPO, DPPOCore, OnPolicyAlgorithm)
+    assert mro[:4] == (DiffusionCMDistillOnline, DPPO, ChainPPOCore, OnPolicyAlgorithm)
     assert BaseAlgorithm in mro
     assert PPO not in mro
     assert issubclass(DiffusionCMDistillOnline, DPPO)

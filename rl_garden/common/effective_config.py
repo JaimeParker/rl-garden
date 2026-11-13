@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
 import math
@@ -152,6 +153,117 @@ def json_value(value: Any) -> Any:
     }:
         return str(value)
     return {"type": f"{value_type.__module__}.{value_type.__qualname__}"}
+
+
+def resolve_import_path(spec: str) -> Any:
+    """The object an import path names: ``"pkg.mod:attr.sub"`` (module, then
+    an attribute path) or ``"pkg.mod.attr"`` (the longest importable module
+    prefix, then attributes). Raises ``ImportError`` when no module of the
+    spec imports and ``AttributeError`` when the attribute path is missing,
+    both naming ``spec``; an ``ImportError`` raised while executing the named
+    module itself propagates."""
+    if not isinstance(spec, str) or not spec.strip():
+        raise ImportError(f"import path {spec!r} is empty or not a string")
+    if ":" in spec:
+        module_name, _, attr_path = spec.partition(":")
+        if not module_name or not attr_path or ":" in attr_path:
+            raise ImportError(
+                f"import path {spec!r} must look like 'pkg.mod:attr' or 'pkg.mod.attr'"
+            )
+        return _getattr_path(_import_module_of(spec, module_name), attr_path, spec)
+
+    parts = spec.split(".")
+    for split in range(len(parts) - 1, 0, -1):
+        try:
+            module = _import_module_of(spec, ".".join(parts[:split]))
+        except _NoSuchModule:
+            continue
+        return _getattr_path(module, ".".join(parts[split:]), spec)
+    raise ImportError(f"import path {spec!r}: no module prefix of it can be imported")
+
+
+def import_path_of(obj: Any) -> str:
+    """``"pkg.mod:qualname"`` of a module-level class or function (nested
+    classes and methods included), which ``resolve_import_path`` maps back to
+    ``obj``. Raises ``ValueError`` for an object it cannot name that way: a
+    lambda, a local definition, a ``__main__`` definition (another process
+    cannot import it) or an instance."""
+    module_name = getattr(obj, "__module__", None)
+    qualname = getattr(obj, "__qualname__", None)
+    if not isinstance(module_name, str) or not isinstance(qualname, str):
+        raise ValueError(f"{obj!r} has no __module__/__qualname__ to build an import path from")
+    if module_name == "__main__":
+        raise ValueError(
+            f"{qualname} is defined in __main__, which another process cannot import; "
+            "move it into an importable module"
+        )
+    path = f"{module_name}:{qualname}"
+    try:
+        resolved = resolve_import_path(path)
+    except (ImportError, AttributeError) as error:
+        raise ValueError(f"{obj!r} is not importable as {path!r}: {error}") from error
+    if resolved is not obj:
+        raise ValueError(f"{path!r} resolves to {resolved!r}, not to {obj!r}")
+    return path
+
+
+_UNRECORDED_IMPORT_PATH_PREFIX = "<unrecorded: "
+
+
+def unrecorded_import_path(obj: Any) -> str:
+    """The value recorded in place of the import path of ``obj`` when
+    ``import_path_of`` cannot name it: ``"<unrecorded: {obj!r}>"``."""
+    return f"{_UNRECORDED_IMPORT_PATH_PREFIX}{obj!r}>"
+
+
+def reject_unrecorded_import_path(name: str, spec: Any) -> None:
+    """Raise ``ConfigError`` when ``spec``, the recorded import path of the
+    policy module ``name`` (``actor_factory``, ``actor_extractor``,
+    ``critic_extractor``), is an ``unrecorded_import_path`` value."""
+    if not (isinstance(spec, str) and spec.startswith(_UNRECORDED_IMPORT_PATH_PREFIX)):
+        return
+    built = "actor" if name == "actor_factory" else "policy"
+    flag = "--" + name.replace("_", "-")
+    raise ConfigError(
+        f"The checkpoint's {built} cannot be rebuilt because its {name} had no import "
+        f"path when the checkpoint was saved (recorded as {spec!r}: a lambda, a local "
+        f"or a __main__ definition). Define the {name} at module level in an importable "
+        f"module, train with it (Python API, or {flag} pkg.mod:attr) and use the new "
+        "checkpoint."
+    )
+
+
+class _NoSuchModule(ImportError):
+    """The module an import path names does not exist (as opposed to an
+    ``ImportError`` raised while executing it)."""
+
+
+def _import_module_of(spec: str, module_name: str) -> Any:
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        # Only a missing ``module_name`` (or a parent package of it) is the
+        # spec's fault; a missing dependency of the module propagates.
+        if error.name is not None and not (
+            module_name == error.name or module_name.startswith(f"{error.name}.")
+        ):
+            raise
+        raise _NoSuchModule(
+            f"import path {spec!r}: no module named {module_name!r}"
+        ) from error
+
+
+def _getattr_path(module: Any, attr_path: str, spec: str) -> Any:
+    value = module
+    for name in attr_path.split("."):
+        try:
+            value = getattr(value, name)
+        except AttributeError as error:
+            raise AttributeError(
+                f"import path {spec!r}: {type(value).__name__} {getattr(value, '__name__', value)!r} "
+                f"has no attribute {name!r}"
+            ) from error
+    return value
 
 
 def _freeze(value: Any) -> Any:

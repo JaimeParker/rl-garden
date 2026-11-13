@@ -72,12 +72,14 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.rlpd import RLPD
+from rl_garden.algorithms.sac_core import ActorQAggregation
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.observations import (
     ObservationContractError,
     ObservationSchema,
     normalize_observation_space,
 )
+from rl_garden.policies.contracts import SACActorCapabilities
 
 
 class ACRLPDCore:
@@ -103,6 +105,15 @@ class ACRLPDCore:
         # unconditionally). Set before SAC.__init__ runs so its own
         # nstep==1 no-op branch leaves this untouched.
         self._extra_batch_slice_keys = ("discounts", "valid")
+
+    def _check_actor_capabilities(self, capabilities: SACActorCapabilities) -> None:
+        super()._check_actor_capabilities(capabilities)
+        if self.bc_alpha > 0 and not capabilities.supports_evaluate_log_prob:
+            raise ValueError(
+                f"bc_alpha={self.bc_alpha} scores the dataset actions with the actor's "
+                "evaluate_action_log_prob, but the actor declares "
+                "supports_evaluate_log_prob=False; pass bc_alpha=0.0."
+            )
 
     # --- action-space / buffer plumbing ---
 
@@ -253,8 +264,15 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
         critic_use_layer_norm: bool = True,
         backup_entropy: bool = False,
         target_entropy: float | str = "auto",
+        actor_q_agg: ActorQAggregation = "min",
         **rlpd_kwargs: Any,
     ) -> None:
+        if actor_q_agg != "min":
+            raise ValueError(
+                f"ACRLPD does not take actor_q_agg={actor_q_agg!r} (--actor-q-agg): its actor "
+                "loss always averages the critic ensemble, as its reference does. Its own "
+                "ensemble aggregation is q_agg (--q-agg), which applies to the critic target."
+            )
         self._init_acrlpd_params(horizon_length=horizon_length, q_agg=q_agg, bc_alpha=bc_alpha)
         self._init_chunked_rollout()
 
@@ -270,6 +288,7 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
             critic_use_layer_norm=critic_use_layer_norm,
             backup_entropy=backup_entropy,
             target_entropy=target_entropy,
+            actor_q_agg=actor_q_agg,
             **rlpd_kwargs,
         )
 

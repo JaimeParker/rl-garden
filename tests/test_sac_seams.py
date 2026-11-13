@@ -16,6 +16,7 @@ from test_optimizer_ownership import (
     TinyVecEnv,
     optimizer_parameters,
 )
+from test_policy_contracts import make_toy_sac_actor
 from test_sac_optimizer_snapshot import (
     RLPD_EXCLUDE_BIAS_OPTIMIZER_GROUPS,
     build_rlpd,
@@ -178,20 +179,11 @@ def test_policy_class_subclass_is_built_and_trained_by_the_critic_optimizer():
             {"flow_hidden_dims": [8], "denoising_steps": 2},
             SACFlowPolicy,
             [
-                "observation_space",
-                "action_space",
-                "net_arch",
-                "n_critics",
-                "critic_subsample_size",
-                "critic_use_layer_norm",
-                "critic_impl",
+                *SAC_POLICY_KWARGS,
                 "flow_hidden_dims",
                 "denoising_steps",
                 "noise_std",
                 "flow_use_layer_norm",
-                "actor_extractor",
-                "critic_extractor",
-                "encoder_sharing",
             ],
         ),
     ],
@@ -201,6 +193,15 @@ def test_policy_kwargs_feed_the_policy_class(algorithm_cls, extra_kwargs, policy
     assert algorithm_cls.policy_class is policy_cls
     assert type(agent.policy) is policy_cls
     assert list(agent._policy_kwargs(agent.env.single_observation_space)) == expected_keys
+
+
+def test_actor_factory_reaches_the_policy_kwargs_only_when_given():
+    """Without a factory the keyword is left out, so a ``policy_class`` with
+    an explicit keyword list keeps building."""
+    agent = SAC(env=TinyVecEnv(), **COMMON_KWARGS, actor_factory=make_toy_sac_actor)
+    kwargs = agent._policy_kwargs(agent.env.single_observation_space)
+    assert list(kwargs) == [*SAC_POLICY_KWARGS[:-3], "actor_factory", *SAC_POLICY_KWARGS[-3:]]
+    assert kwargs["actor_factory"] is make_toy_sac_actor
 
 
 # --- _critic_features -------------------------------------------------------------------------

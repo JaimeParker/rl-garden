@@ -19,7 +19,8 @@ encoder under ``encoder_sharing="separate"``) are the seam where obs becomes
 conditioning: rollout collection (``sample_rollout_chain``) and inference
 (``predict_values``) each call the matching
 ``extract_actor_features``/``extract_critic_features`` directly; training
-(``FlowPPO._flow_ppo_loss``) does the same, once per role per minibatch.
+(``FlowPPO._chain_policy_terms`` and ``ChainPPOCore``'s value loss) does
+the same, once per role per minibatch.
 Gradient isolation (critic trains the encoder, actor path detaches under
 ``"shared_critic_grad"``) is ``BasePolicy``'s own single stop-gradient rule
 -- no algorithm-level ad hoc detach.

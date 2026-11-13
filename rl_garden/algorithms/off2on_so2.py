@@ -24,6 +24,7 @@ from rl_garden.common.optim import ScheduleType
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
+from rl_garden.policies.sac_policy import SACActorFactory
 
 
 class Off2OnSO2(_SO2RolloutTrainingShell):
@@ -79,6 +80,7 @@ class Off2OnSO2(_SO2RolloutTrainingShell):
         encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
+        actor_factory: Optional[SACActorFactory] = None,
         target_smoothing_noise_std: float = 0.3,
         target_smoothing_noise_clip_min: float = -0.6,
         target_smoothing_noise_clip_max: float = 0.6,
@@ -142,6 +144,7 @@ class Off2OnSO2(_SO2RolloutTrainingShell):
             encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
             policy_kwargs=policy_kwargs,
+            actor_factory=actor_factory,
             target_smoothing_noise_std=target_smoothing_noise_std,
             target_smoothing_noise_clip_min=target_smoothing_noise_clip_min,
             target_smoothing_noise_clip_max=target_smoothing_noise_clip_max,

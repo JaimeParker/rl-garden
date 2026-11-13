@@ -17,6 +17,7 @@ from rl_garden.networks.mlp import (
     create_mlp,
     resolve_activation,
 )
+from rl_garden.networks.sac_actor_base import SACActorBase
 
 BackboneType = Literal["mlp", "mlp_resnet"]
 CriticImpl = Literal["vmap", "legacy"]
@@ -103,8 +104,10 @@ def _build_trunk(
     raise ValueError(f"Unknown backbone_type: {backbone_type!r}")
 
 
-class SquashedGaussianActor(nn.Module):
+class SquashedGaussianActor(SACActorBase):
     """Tanh-squashed Gaussian actor for SAC/WSRL families."""
+
+    supports_evaluate_log_prob = True
 
     def __init__(
         self,
@@ -266,8 +269,47 @@ class SquashedGaussianActor(nn.Module):
         mean, _ = self(features)
         return torch.tanh(mean) * self.action_scale + self.action_bias
 
+    def sample_actions_with_log_prob(
+        self, features: torch.Tensor, n: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``n`` samples per row from one ``rsample((n,))`` draw of the
+        row's Gaussian: ``(B, n, A)`` actions, ``(B, n)`` log-probabilities."""
+        mean, log_std = self(features)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample(sample_shape=(n,))
+        y_t = torch.tanh(x_t)
+        action = y_t * self.action_scale + self.action_bias
+        log_prob = self._squashed_log_prob(normal, x_t, y_t).squeeze(-1)
+        return action.permute(1, 0, 2), log_prob.permute(1, 0)
 
-class DeterministicTanhActor(nn.Module):
+    def diagnostics(self, features: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Entropy decomposition and saturation of one sample.
+
+        Mirrors the two additive terms of ``_squashed_log_prob`` (Gaussian
+        log-density minus tanh-squash correction) so ``entropy`` can be read
+        as ``entropy_gaussian + tanh_correction`` without a closed-form
+        Gaussian-entropy estimate (which would require collapsing
+        per-dimension, per-sample std into a single scalar and incurs a
+        Jensen's-gap bias).
+        """
+        with torch.no_grad():
+            mean, log_std = self(features)
+            std = log_std.exp()
+            normal = torch.distributions.Normal(mean, std)
+            x_t = normal.rsample()
+            y_t = torch.tanh(x_t)
+            gaussian_term = normal.log_prob(x_t).sum(-1)
+            tanh_correction = torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6).sum(-1)
+            return {
+                "policy_std": std.mean(),
+                "action_saturation": torch.tanh(mean).abs().mean(),
+                "entropy_gaussian": -gaussian_term.mean(),
+                "tanh_correction": tanh_correction.mean(),
+            }
+
+
+class DeterministicTanhActor(SACActorBase):
     """Deterministic tanh-squashed actor for TD3-BC.
 
     Unlike ``DDPGActor`` (DrQ-v2's fixed-compression pixel trunk + external
@@ -275,7 +317,16 @@ class DeterministicTanhActor(nn.Module):
     family as ``SquashedGaussianActor`` (IQL/BC/CQL), matching CORL's plain
     MLP architecture for offline state inputs. There is no built-in target
     copy: TD3-BC's target actor is a separate instance managed by the policy.
+
+    As a SAC-family actor (``stochastic = False``) its ``action_log_prob``
+    is the deterministic action with a zero log-probability, which a SAC
+    trains with the entropy term off (``ent_coef=0.0``). That zero is not a
+    density (``log_prob_is_density = False``), so CQL's importance-sampled
+    regularizer rejects this actor.
     """
+
+    stochastic = False
+    log_prob_is_density = False
 
     def __init__(
         self,
@@ -317,8 +368,12 @@ class DeterministicTanhActor(nn.Module):
     def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
         return self(features)
 
+    def action_log_prob(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        action = self(features)
+        return action, action.new_zeros(action.shape[0], 1)
 
-class UnsquashedGaussianActor(nn.Module):
+
+class UnsquashedGaussianActor(SACActorBase):
     """Unsquashed Gaussian actor for AWAC, faithful to CORL's ``awac.py::Actor``.
 
     Unlike ``SquashedGaussianActor`` (tanh squash + Jacobian log-prob
@@ -333,6 +388,8 @@ class UnsquashedGaussianActor(nn.Module):
     official JAX IQL repo's ``NormalTanhPolicy`` (``tanh_squash_distribution=False``)
     -- both keep the mean tanh-bounded but still skip the Jacobian correction.
     """
+
+    supports_evaluate_log_prob = True
 
     def __init__(
         self,
@@ -427,6 +484,38 @@ class UnsquashedGaussianActor(nn.Module):
     def deterministic_action(self, features: torch.Tensor) -> torch.Tensor:
         mean, _ = self(features)
         return mean.clamp(self.action_low, self.action_high)
+
+    def sample_actions_with_log_prob(
+        self, features: torch.Tensor, n: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``n`` samples per row from one ``rsample((n,))`` draw, clamped and
+        scored like ``action_log_prob``: ``(B, n, A)`` actions, ``(B, n)``
+        log-probabilities."""
+        mean, log_std = self(features)
+        normal = torch.distributions.Normal(mean, log_std.exp())
+        action = normal.rsample(sample_shape=(n,)).clamp(self.action_low, self.action_high)
+        log_prob = normal.log_prob(action).sum(-1)
+        return action.permute(1, 0, 2), log_prob.permute(1, 0)
+
+    def diagnostics(self, features: torch.Tensor) -> dict[str, torch.Tensor]:
+        """``SquashedGaussianActor.diagnostics``'s keys for the unsquashed
+        Gaussian: ``action_saturation`` is the mean's distance from the middle
+        of the action bounds in half-ranges (1 at a bound) and
+        ``tanh_correction`` is zero (there is no squash)."""
+        with torch.no_grad():
+            mean, log_std = self(features)
+            std = log_std.exp()
+            normal = torch.distributions.Normal(mean, std)
+            gaussian_term = normal.log_prob(normal.rsample()).sum(-1)
+            half_range = (self.action_high - self.action_low) / 2.0
+            middle = (self.action_high + self.action_low) / 2.0
+            bounded_mean = mean.clamp(self.action_low, self.action_high)
+            return {
+                "policy_std": std.mean(),
+                "action_saturation": ((bounded_mean - middle) / half_range).abs().mean(),
+                "entropy_gaussian": -gaussian_term.mean(),
+                "tanh_correction": gaussian_term.new_zeros(()),
+            }
 
 
 def _per_action_dim_tensor(

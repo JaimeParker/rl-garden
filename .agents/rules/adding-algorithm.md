@@ -359,6 +359,10 @@ through these hooks rather than copying `_build_policy`, `_setup_model` or
 | Hook | Default | Override for |
 |---|---|---|
 | class attr `policy_class` + `_policy_kwargs(observation_space)` | `SACPolicy` with SAC's keywords and the extractors | a `SACPolicy` subclass and its extra keywords: `{**super()._policy_kwargs(observation_space), ...}` |
+| `SACPolicy._build_actor(features_dim, action_space, **actor_options)` | `SquashedGaussianActor`, or `actor_factory(...)` | a different actor module |
+| `_check_actor_capabilities(capabilities)` | rejects `ent_coef="auto"` for a deterministic actor | an option needing an actor capability; call `super()` |
+| `_target_policy_action(next_action)` | unchanged at `target_policy_noise=0` | target smoothing of the next action |
+| `_actor_q_value(critic_features, action)` | ensemble reduced by `actor_q_agg` | the Q the actor loss maximizes |
 | `_make_optimizers(*, exclude_bias_from_decay=False)` | `(q_optimizer, actor_optimizer)` over `critic_and_encoder_parameters()` / `actor_parameters()` | other critic/actor optimizer settings (RLPD excludes biases from weight decay); extra optimizers go in `_setup_model` + `_optimizer_names()` |
 | `_critic_features(obs, *, target)` | the critic extractor's features, detached when the phase freezes the encoder | reading the critic latent (an auxiliary head); call `super()` |
 | `_critic_loss(data)` | TD loss and its info dict | extra critic loss terms and metrics |

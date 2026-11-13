@@ -20,6 +20,7 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
+from rl_garden.policies.sac_policy import SACActorFactory
 
 
 class WSRL(_CalQLRolloutTrainingShell):
@@ -134,6 +135,7 @@ class WSRL(_CalQLRolloutTrainingShell):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        actor_factory: Optional[SACActorFactory] = None,
     ) -> None:
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -229,6 +231,7 @@ class WSRL(_CalQLRolloutTrainingShell):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
+            actor_factory=actor_factory,
         )
 
     def _load_training_state_dict(self, state: dict[str, Any]) -> None:

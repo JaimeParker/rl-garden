@@ -18,7 +18,6 @@ from typing import (
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from rl_garden.algorithms.decision_mask import (
     DecisionMaskReader,
@@ -26,6 +25,14 @@ from rl_garden.algorithms.decision_mask import (
 )
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
+from rl_garden.algorithms.ppo_terms import (
+    approx_kl_clipfrac,
+    clipped_value_loss,
+    encoder_checkpoint_metadata,
+    explained_variance,
+    masked_mean,
+    ppo_clip_policy_loss,
+)
 from rl_garden.buffers.rollout_buffer import (
     ExtraSpecs,
     RolloutBuffer,
@@ -59,40 +66,12 @@ from rl_garden.observations import (
     ObsGroups,
     normalize_observation_space,
 )
+from rl_garden.policies.contracts import policy_module_checkpoint_metadata
 from rl_garden.policies.graph_ppo_policy import GraphPPOPolicy
-from rl_garden.policies.ppo_policy import EvaluationOutputs, PPOPolicy
+from rl_garden.policies.ppo_policy import EvaluationOutputs, PPOActorFactory, PPOPolicy
 
-
-def ppo_clip_policy_loss(
-    advantages: torch.Tensor,
-    ratio: torch.Tensor,
-    clip_coef: float,
-    *,
-    mask: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """PPO's clipped surrogate objective: ``mean(max(-adv*ratio, -adv*clip(ratio)))``.
-
-    Shared between ``PPO._policy_loss`` and ``BPPOCore`` (``bppo.py``) --
-    BPPO reuses only this formula, not ``_ppo_minibatch_update``, since it
-    normalizes/omega-weights advantages in a different order and has no
-    rollout buffer or value-clipping to hook into.
-
-    ``mask`` (bool, same shape as ``advantages``) averages over the true rows
-    only; masked rows contribute exactly zero (0 when no row is true).
-    """
-    pg_loss1 = -advantages * ratio
-    pg_loss2 = -advantages * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-    if mask is None:
-        return torch.max(pg_loss1, pg_loss2).mean()
-    return masked_mean(torch.max(pg_loss1, pg_loss2), mask, mask.sum())
-
-
-def masked_mean(x: torch.Tensor, mask: torch.Tensor, count: torch.Tensor) -> torch.Tensor:
-    """Mean of ``x`` over the rows where ``mask`` is true; 0 when none is.
-    ``count`` is ``mask.sum()`` (passed in so callers reuse it).
-    ``torch.where`` (not a multiply) keeps non-finite masked rows out. The
-    reduction ``PPO._aux_loss`` applies to a per-row loss over decision rows."""
-    return torch.where(mask, x, 0.0).sum() / count.clamp_min(1)
+# ``ppo_clip_policy_loss`` and ``masked_mean`` live in ``ppo_terms``; existing
+# callers import them from this module, which keeps re-exporting them.
 
 
 def _normalize_masked_advantages(
@@ -119,21 +98,23 @@ class MinibatchEval:
 
     Every tensor is 1-D over the minibatch rows, except ``log_prob`` and
     ``entropy`` in a window with a component mask, which keep the component
-    axis, ``(B, A)``. Sequence minibatches are flattened T-major. The four
-    distribution parameters are set only when ``lr_schedule ==
-    "adaptive_kl"``. ``outputs`` is the trailing dict the policy's evaluate
-    method returns when its ``evaluation_outputs`` is True (``None``
-    otherwise), with one row per minibatch row in the same order: the graph
-    outputs (node name -> output) of a ``GraphPPOPolicy``, ``{"latent": <the
-    features the actor read>}`` of a ``PPOPolicy``/``RecurrentPPOPolicy``
-    subclass that opts in. (Before ``_evaluate_minibatch`` flattens them,
+    axis, ``(B, A)``. Sequence minibatches are flattened T-major.
+    ``entropy`` is ``None`` for an actor without one
+    (``actor_capabilities.has_entropy`` False). The four distribution
+    parameters are set only when ``lr_schedule == "adaptive_kl"``.
+    ``outputs`` is the trailing dict the policy's evaluate method returns
+    when its ``evaluation_outputs`` is True (``None`` otherwise), with one
+    row per minibatch row in the same order: the graph outputs (node name ->
+    output) of a ``GraphPPOPolicy``, ``{"latent": <the features the actor
+    read>}`` of a ``PPOPolicy``/``RecurrentPPOPolicy`` subclass that opts
+    in. (Before ``_evaluate_minibatch`` flattens them,
     the ``MinibatchEval`` of ``_evaluate_terms`` holds ``values``,
     ``log_prob`` and ``entropy`` as the policy returned them.)
     """
 
     values: torch.Tensor
     log_prob: torch.Tensor
-    entropy: torch.Tensor
+    entropy: torch.Tensor | None
     old_values: torch.Tensor
     old_log_prob: torch.Tensor
     advantages: torch.Tensor
@@ -158,7 +139,8 @@ class PolicyTerms:
     logratio: torch.Tensor
     #: ``logratio.exp()``.
     ratio: torch.Tensor
-    entropy: torch.Tensor
+    #: ``None`` for an actor without an entropy.
+    entropy: torch.Tensor | None
     #: Mean over the rows the policy loss averages: every row, or the
     #: decision rows under a decision mask (0 when there are none).
     row_mean: Callable[[torch.Tensor], torch.Tensor]
@@ -311,6 +293,7 @@ class PPO(OnPolicyAlgorithm):
         decision_level: bool = False,
         per_step_critic: bool = True,
         policy_graph: Optional[str] = None,
+        actor_factory: Optional[PPOActorFactory] = None,
     ) -> None:
         """``decision_level=True`` reads the env's per-step decision keys:
         returns, advantages and the policy loss are computed over decision
@@ -334,7 +317,19 @@ class PPO(OnPolicyAlgorithm):
         ``losses:`` are added to the PPO loss on every minibatch and logged
         as ``losses/aux/<node>``; an ``info.<key>`` target is stored per
         step next to the observation (the env must report it on every
-        step, checked from the first rollout step on)."""
+        step, checked from the first rollout step on).
+
+        ``actor_factory(features_dim, action_space)`` builds the policy's
+        actor head instead of the diagonal Gaussian (see ``PPOPolicy``); it
+        must satisfy ``rl_garden.policies.contracts.PPOActor``. The Gaussian
+        init options and the actor's ``pi``/norm/dropout/``kernel_init``/
+        ``backbone_type`` options do not reach it. An actor without an
+        entropy trains without the entropy bonus and ``train()`` then omits
+        the ``entropy`` metric. Checked at construction
+        (``_check_actor_capabilities``): ``ent_coef > 0`` needs an actor
+        with an entropy, ``lr_schedule="adaptive_kl"`` a Gaussian actor and
+        ``decision_level`` an actor with per-dimension log-probs;
+        ``actor_factory`` cannot be combined with ``policy_graph``."""
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -437,6 +432,12 @@ class PPO(OnPolicyAlgorithm):
         self.critic_encoder_config = critic_encoder_config
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
+        if actor_factory is not None and policy_graph is not None:
+            raise ValueError(
+                "actor_factory (--actor-factory) cannot be combined with policy_graph "
+                "(--policy-graph): the graph builds the actor head from its actor sinks."
+            )
+        self.actor_factory = actor_factory
         self.policy_graph = self._resolve_policy_graph(policy_graph)
         self.policy_graph_yaml = (
             self.policy_graph.to_yaml() if self.policy_graph is not None else None
@@ -504,13 +505,15 @@ class PPO(OnPolicyAlgorithm):
         return actions, values, *self._sum_rollout_components(log_prob, entropy)
 
     def _sum_rollout_components(
-        self, log_prob: torch.Tensor, entropy: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, log_prob: torch.Tensor, entropy: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Stash the ``(N, A)`` per-component rollout log-probs and return the
         per-step ``(N, 1)`` sums: the same reduction the actor applies with
-        ``sum_dims=True``, so the summed values are bit-identical to it."""
+        ``sum_dims=True``, so the summed values are bit-identical to it
+        (``entropy`` stays ``None`` for an actor without one)."""
         self._rollout_component_log_probs = log_prob
-        return log_prob.sum(-1, keepdim=True), entropy.sum(-1, keepdim=True)
+        summed_entropy = None if entropy is None else entropy.sum(-1, keepdim=True)
+        return log_prob.sum(-1, keepdim=True), summed_entropy
 
     def _extra_rollout_buffer_kwargs(self, infos: dict | None = None) -> dict:
         out = (
@@ -615,20 +618,9 @@ class PPO(OnPolicyAlgorithm):
             "action_mean_head_gain": self.action_mean_head_gain,
             "decision_level": self.decision_level,
             "per_step_critic": self.per_step_critic,
-            "encoder_sharing": self.encoder_sharing,
-            "encoder_sharing_origin": self.encoder_sharing_origin,
-            "encoder_config": (
-                dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
-            ),
-            "obs_groups": (
-                dataclasses.asdict(self.obs_groups) if self.obs_groups is not None else None
-            ),
-            "critic_encoder_config": (
-                dataclasses.asdict(self.critic_encoder_config)
-                if self.critic_encoder_config is not None
-                else None
-            ),
+            **encoder_checkpoint_metadata(self),
             "policy_graph": self.policy_graph_yaml,
+            **policy_module_checkpoint_metadata(self.actor_factory, self.policy_kwargs),
         }
         return meta
 
@@ -785,11 +777,12 @@ class PPO(OnPolicyAlgorithm):
     def _policy_head_kwargs(self, observation_space) -> dict[str, Any]:
         """Extension point: the head keywords every built policy receives
         (``policy_class`` and ``GraphPPOPolicy`` alike): ``net_arch``, the
-        actor init options, the norm/dropout/``kernel_init`` options and the
-        backbone types. Read once per ``_build_policy`` call, before any
-        module is built. A subclass adds keywords for its own
-        ``policy_class`` with ``{**super()._policy_head_kwargs(observation_space),
-        ...}``; they also reach ``GraphPPOPolicy`` (and through it
+        actor init options, the norm/dropout/``kernel_init`` options, the
+        backbone types and, only when one was given, ``actor_factory``. Read
+        once per ``_build_policy`` call, before any module is built. A
+        subclass adds keywords for its own ``policy_class`` with
+        ``{**super()._policy_head_kwargs(observation_space), ...}``; they
+        also reach ``GraphPPOPolicy`` (and through it
         ``PPOPolicy.__init__``) when a ``policy_graph`` is given."""
         del observation_space  # the defaults do not depend on it
         return {
@@ -808,6 +801,9 @@ class PPO(OnPolicyAlgorithm):
             "kernel_init": self.kernel_init,
             "backbone_type": self.backbone_type,
             "critic_backbone_type": self.critic_backbone_type,
+            # Only when given, so a policy_class without the keyword still
+            # builds; the default (None) is PPOPolicy's own.
+            **({} if self.actor_factory is None else {"actor_factory": self.actor_factory}),
         }
 
     def _build_graph_policy(self, observation_space) -> GraphPPOPolicy:
@@ -836,6 +832,7 @@ class PPO(OnPolicyAlgorithm):
 
     def _setup_model(self) -> None:
         self.policy = self._build_policy(self.env.single_observation_space).to(self.device)
+        self._check_actor_capabilities()
         self.policy_optimizer = make_optimizer(
             self.policy.parameters(),
             lr=self.learning_rate,
@@ -854,6 +851,36 @@ class PPO(OnPolicyAlgorithm):
             )
         )
         self.rollout_buffer = self._build_rollout_buffer()
+
+    def _check_actor_capabilities(self) -> None:
+        """Construction-time checks of the built policy's actor against this
+        run's settings (``PPOPolicy.actor_capabilities``): an entropy bonus
+        needs an entropy; the adaptive-KL schedule reads the Gaussian's
+        ``(mean, log_std)``; decision-level rollouts always ask for
+        per-dimension log-probs, since whether the env reports
+        ``decision_components`` is known only from the first step on."""
+        capabilities = self.policy.actor_capabilities
+        actor_name = type(self.policy.actor).__name__
+        if self.ent_coef > 0 and not capabilities.has_entropy:
+            raise ValueError(
+                f"ent_coef={self.ent_coef} (--ent-coef) needs an actor that reports an "
+                f"entropy; {actor_name} returns None for it, so the entropy bonus would "
+                "be silently dropped. Set ent_coef=0."
+            )
+        if self.lr_schedule == "adaptive_kl" and not capabilities.is_gaussian:
+            raise ValueError(
+                f"lr_schedule='adaptive_kl' (--lr-schedule adaptive_kl) needs a diagonal "
+                f"Gaussian actor (rl_garden.policies.contracts.GaussianParamsActor: a "
+                f"log_std tensor and a forward returning a Normal); {actor_name} is not "
+                "one. Use another lr_schedule."
+            )
+        if self.decision_level and not capabilities.supports_per_dim_log_prob:
+            raise ValueError(
+                f"decision_level=True needs an actor whose action_log_prob and "
+                f"evaluate_action_log_prob accept sum_dims=False (per-dimension "
+                f"log-probs, used for the env's decision_components masks); "
+                f"{actor_name} raises NotImplementedError for it."
+            )
 
     def _build_rollout_buffer(self) -> RolloutBuffer:
         """Allocate this run's ``rollout_buffer_class``; called once from
@@ -904,7 +931,7 @@ class PPO(OnPolicyAlgorithm):
         *,
         values: torch.Tensor,
         log_prob: torch.Tensor,
-        entropy: torch.Tensor,
+        entropy: torch.Tensor | None,
         old_values: torch.Tensor,
         old_log_prob: torch.Tensor,
         advantages: torch.Tensor,
@@ -955,6 +982,10 @@ class PPO(OnPolicyAlgorithm):
         the PPO loss as is; its gradients join the global grad-norm clip and
         the optimizer's weight decay like every other parameter's.
 
+        ``entropy`` is ``None`` for an actor without one: ``_entropy_term``
+        then returns ``None``, the loss has no entropy bonus and the result
+        has no ``entropy_loss``.
+
         The step is composed of ``_policy_terms``, ``_kl_diagnostics``, the
         ``target_kl`` early return (``_should_stop_early``),
         ``_adaptive_kl_step``, ``_policy_loss``,
@@ -1004,11 +1035,14 @@ class PPO(OnPolicyAlgorithm):
         )
         self._optimizer_step(loss)
 
+        entropy_stats = (
+            {} if entropy_loss is None else {"entropy_loss": float(entropy_loss.detach().item())}
+        )
         return {
             "stop": False,
             "policy_loss": float(policy_loss.detach().item()),
             "value_loss": float(value_loss.detach().item()),
-            "entropy_loss": float(entropy_loss.detach().item()),
+            **entropy_stats,
             "approx_kl": float(kl.approx_kl.detach().item()),
             "old_approx_kl": float(kl.old_approx_kl.detach().item()),
             "clipfrac": kl.clipfrac,
@@ -1020,7 +1054,7 @@ class PPO(OnPolicyAlgorithm):
         self,
         *,
         log_prob: torch.Tensor,
-        entropy: torch.Tensor,
+        entropy: torch.Tensor | None,
         old_log_prob: torch.Tensor,
         advantages: torch.Tensor,
         decision_mask: torch.Tensor | None,
@@ -1049,7 +1083,8 @@ class PPO(OnPolicyAlgorithm):
             # ``where`` before the sum: components that did not take
             # effect contribute exactly zero, gradients included.
             log_prob = torch.where(component_mask, log_prob, 0.0).sum(-1)
-            entropy = torch.where(component_mask, entropy, 0.0).sum(-1)
+            if entropy is not None:
+                entropy = torch.where(component_mask, entropy, 0.0).sum(-1)
         advantages = torch.where(decision_mask, advantages, 0.0)
         logratio = torch.where(decision_mask, log_prob - old_log_prob, 0.0)
         if self.norm_adv:
@@ -1070,8 +1105,9 @@ class PPO(OnPolicyAlgorithm):
         here (one sync per minibatch)."""
         with torch.no_grad():
             old_approx_kl = terms.row_mean(-terms.logratio)
-            approx_kl = terms.row_mean((terms.ratio - 1.0) - terms.logratio)
-            clipfrac = terms.row_mean(((terms.ratio - 1.0).abs() > clip_coef).float()).item()
+        approx_kl, clipfrac = approx_kl_clipfrac(
+            terms.logratio, terms.ratio, clip_coef, row_mean=terms.row_mean
+        )
         return KLDiagnostics(old_approx_kl=old_approx_kl, approx_kl=approx_kl, clipfrac=clipfrac)
 
     def _should_stop_early(self, approx_kl: torch.Tensor) -> bool:
@@ -1154,17 +1190,17 @@ class PPO(OnPolicyAlgorithm):
                 )
                 v_loss = torch.max(v_loss, (values_clipped - returns) ** 2)
             return 0.5 * masked_mean(v_loss, value_mask, value_mask.sum())
-        if self.clip_vloss:
-            v_loss_unclipped = (values - returns) ** 2
-            values_clipped = old_values + torch.clamp(values - old_values, -clip_coef, clip_coef)
-            v_loss_clipped = (values_clipped - returns) ** 2
-            return 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
-        return 0.5 * F.mse_loss(values, returns)
+        return clipped_value_loss(
+            values, old_values, returns, clip_coef if self.clip_vloss else None
+        )
 
-    def _entropy_term(self, terms: PolicyTerms) -> torch.Tensor:
+    def _entropy_term(self, terms: PolicyTerms) -> torch.Tensor | None:
         """Extension point: the scalar entropy bonus of one minibatch
         (subtracted with ``ent_coef`` in ``_total_loss``): the mean entropy
-        over the policy-loss rows, ``terms.row_mean(terms.entropy)``."""
+        over the policy-loss rows, ``terms.row_mean(terms.entropy)``;
+        ``None`` (no bonus) when the actor has no entropy."""
+        if terms.entropy is None:
+            return None
         return terms.row_mean(terms.entropy)
 
     def _total_loss(
@@ -1172,14 +1208,18 @@ class PPO(OnPolicyAlgorithm):
         *,
         policy_loss: torch.Tensor,
         value_loss: torch.Tensor,
-        entropy_loss: torch.Tensor,
+        entropy_loss: torch.Tensor | None,
         aux_loss: torch.Tensor | None,
     ) -> torch.Tensor:
         """Extension point: the scalar loss of the minibatch's single
         ``backward()``: ``policy_loss - ent_coef * entropy_loss + vf_coef *
-        value_loss``, plus ``aux_loss`` (``_aux_loss``) when it is not
-        ``None``. ``train()`` reports this value as ``loss``."""
-        loss = policy_loss - self.ent_coef * entropy_loss + self.vf_coef * value_loss
+        value_loss`` (no entropy term when ``entropy_loss`` is ``None``),
+        plus ``aux_loss`` (``_aux_loss``) when it is not ``None``.
+        ``train()`` reports this value as ``loss``."""
+        if entropy_loss is None:
+            loss = policy_loss + self.vf_coef * value_loss
+        else:
+            loss = policy_loss - self.ent_coef * entropy_loss + self.vf_coef * value_loss
         if aux_loss is not None:
             loss = loss + aux_loss
         return loss
@@ -1283,15 +1323,17 @@ class PPO(OnPolicyAlgorithm):
 
     @staticmethod
     def _policy_term_rows(
-        log_prob: torch.Tensor, entropy: torch.Tensor, per_component: bool
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        log_prob: torch.Tensor, entropy: torch.Tensor | None, per_component: bool
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Flatten ``log_prob``/``entropy`` to rows (T-major for sequences);
         per component they keep the component axis, ``(rows, A)``
-        (``reshape``: ``flatten`` would merge it into the rows)."""
+        (``reshape``: ``flatten`` would merge it into the rows). A ``None``
+        entropy stays ``None``."""
         if not per_component:
-            return log_prob.flatten(), entropy.flatten()
+            return log_prob.flatten(), None if entropy is None else entropy.flatten()
         action_dim = log_prob.shape[-1]
-        return log_prob.reshape(-1, action_dim), entropy.reshape(-1, action_dim)
+        rows_entropy = None if entropy is None else entropy.reshape(-1, action_dim)
+        return log_prob.reshape(-1, action_dim), rows_entropy
 
     @staticmethod
     def _component_masked_actions(data) -> torch.Tensor:
@@ -1368,7 +1410,8 @@ class PPO(OnPolicyAlgorithm):
 
         stats.policy_losses.append(result["policy_loss"])
         stats.value_losses.append(result["value_loss"])
-        stats.entropy_losses.append(result["entropy_loss"])
+        if "entropy_loss" in result:
+            stats.entropy_losses.append(result["entropy_loss"])
         stats.approx_kls.append(result["approx_kl"])
         stats.old_approx_kls.append(result["old_approx_kl"])
         stats.losses.append(result["loss"])
@@ -1385,18 +1428,14 @@ class PPO(OnPolicyAlgorithm):
         if self.rollout_buffer.window_has_decisions and not self.per_step_critic:
             value_rows = self.rollout_buffer.decisions.reshape(-1)
             b_values, b_returns = b_values[value_rows], b_returns[value_rows]
-        y_var = torch.var(b_returns)
-        return (
-            float("nan")
-            if y_var == 0
-            else float((1 - torch.var(b_returns - b_values) / y_var).item())
-        )
+        return explained_variance(b_values, b_returns)
 
     def _update_metrics(self, stats: UpdateStats, clip_coef: float) -> dict[str, float]:
         """``train()``'s metrics: per-minibatch means of ``stats`` (0 when
         empty), ``explained_variance``, ``clip_coef``, the current
         ``learning_rate``, the decision counts under a decision mask and
-        ``aux/<name>`` per ``_aux_loss`` term."""
+        ``aux/<name>`` per ``_aux_loss`` term. ``entropy`` is omitted for an
+        actor without one (``actor_capabilities.has_entropy`` False)."""
         explained_var = self._explained_variance()
         metrics = {
             "loss": float(np.mean(stats.losses)) if stats.losses else 0.0,
@@ -1412,6 +1451,8 @@ class PPO(OnPolicyAlgorithm):
             "clip_coef": clip_coef,
             "learning_rate": float(self.policy_optimizer.param_groups[0]["lr"]),
         }
+        if not self.policy.actor_capabilities.has_entropy:
+            del metrics["entropy"]
         if stats.decision_counts:
             counts = torch.stack(stats.decision_counts).float()
             (
@@ -1510,8 +1551,10 @@ class PPO(OnPolicyAlgorithm):
     def _log_update_metrics(self, metrics: dict[str, float], step: int) -> None:
         """Logs ``train()``'s metrics as ``losses/<key>``; under
         ``decision_level`` also the window's decision and component
-        statistics (``train/...``) and the per-dimension ``policy/log_std``.
-        Extension point, see ``BaseAlgorithm._log_update_metrics``."""
+        statistics (``train/...``) and, for a Gaussian actor
+        (``actor_capabilities.is_gaussian``), the per-dimension
+        ``policy/log_std``. Extension point, see
+        ``BaseAlgorithm._log_update_metrics``."""
         super()._log_update_metrics(metrics, step)
         if self.logger is None or not self.decision_level:
             return
@@ -1527,6 +1570,8 @@ class PPO(OnPolicyAlgorithm):
             self._log_rollout_metric("env_steps_per_decision", env_steps_per_decision, step)
         if self.rollout_buffer.window_has_components:
             self._log_component_metrics(step)
+        if not self.policy.actor_capabilities.is_gaussian:
+            return
         log_stds = self.policy.actor.log_std.detach().view(-1).tolist()
         for dim, log_std in enumerate(log_stds):
             self.logger.add_scalar(f"policy/log_std/{dim}", log_std, step)
