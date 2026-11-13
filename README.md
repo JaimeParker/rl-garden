@@ -76,7 +76,7 @@ Every training command accepts `--print-config`, `--dry-run` and `--explain-para
 
 ## Documentation
 
-The [documentation site](https://jaimeparker.github.io/rl-garden/) is served by `.github/workflows/docs.yml` once Pages is enabled; the source entry point is [docs/index.rst](docs/index.rst).
+The [documentation site](https://rl-garden.readthedocs.io/) is hosted on Read the Docs; the source entry point is [docs/index.rst](docs/index.rst).
 The Diátaxis sections cover learning (Start and Tutorials), tasks (Algorithms and Backends), Reference and Design, with a Real robot pointer.
 
 ## Testing

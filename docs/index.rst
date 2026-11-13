@@ -1,34 +1,64 @@
+.. _home:
+
 rl-garden
 =========
 
-Train and evaluate robot-learning agents with a PyTorch framework for online
-reinforcement learning, offline datasets and simulation.
+.. raw:: html
 
-Start
-   :doc:`start/installation` gets your checkout ready.
-   :doc:`start/quickstart` runs your first SAC experiment.
+   <div class="rlg-hero">
+     <img class="rlg-hero-logo" src="_static/logo.png" alt="rl-garden logo" />
+     <h1 class="rlg-hero-title">rl-garden</h1>
+     <p class="rlg-hero-subtitle">Train and evaluate robot-learning agents with a PyTorch framework for online reinforcement learning, offline datasets and simulation.</p>
+   </div>
 
-Tutorials
-   Follow :doc:`tutorials/index` to move from configuration to extending the framework.
+.. grid:: 1 2 2 3
+   :gutter: 3
 
-Algorithms
-   Browse :doc:`algorithms/index` for learning methods and their existing deep dives.
+   .. grid-item-card:: Start
+      :link: start/installation
+      :link-type: doc
 
-Reference
-   Use :doc:`reference/index` and :doc:`guides/configuration` when you need a contract
-   or a configuration detail.
+      Install the framework and run your first experiment.
 
-Backends
-   Select a simulator or dataset interface with :doc:`backends/index`.
+   .. grid-item-card:: Tutorials
+      :link: tutorials/index
+      :link-type: doc
 
-Design
-   Read :doc:`design/index` for architecture and the extension contract.
+      Learn by building and extending agents.
 
-Real robot
-   Follow :doc:`real-robot` to the downstream hardware documentation.
+   .. grid-item-card:: Algorithms
+      :link: algorithms/index
+      :link-type: doc
+
+      Choose a family of learning methods.
+
+   .. grid-item-card:: Reference
+      :link: reference/index
+      :link-type: doc
+
+      Look up CLI, configuration and Python contracts.
+
+   .. grid-item-card:: Backends
+      :link: backends/index
+      :link-type: doc
+
+      Select a simulator or dataset interface.
+
+   .. grid-item-card:: Design
+      :link: design/index
+      :link-type: doc
+
+      Understand the architecture and extension contract.
+
+   .. grid-item-card:: Real robot
+      :link: real-robot
+      :link-type: doc
+
+      Find the downstream hardware documentation.
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Start
 
    start/installation
@@ -37,6 +67,7 @@ Real robot
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Tutorials
 
    tutorials/index
@@ -52,6 +83,7 @@ Real robot
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Algorithms
 
    algorithms/index
@@ -72,6 +104,7 @@ Real robot
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Backends
 
    backends/index
@@ -92,18 +125,21 @@ Real robot
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Reference
 
    reference/index
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Design
 
    design/index
 
 .. toctree::
    :maxdepth: 2
+   :hidden:
    :caption: Real robot
 
    real-robot

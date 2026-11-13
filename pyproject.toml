@@ -37,7 +37,6 @@ rl-garden-eval = "rl_garden.training.cli:eval_checkpoint"
 #   my_package = "my_package.registration"
 
 [project.optional-dependencies]
-docs = ["sphinx>=7", "furo", "myst-parser", "sphinx-copybutton"]
 maniskill = ["mani_skill"]
 robotwin = ["pillow", "pyyaml"]
 # [hf] is required to actually download a hosted dataset (minari.load_dataset(...,

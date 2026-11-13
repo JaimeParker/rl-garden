@@ -21,8 +21,9 @@ Install only the extras needed for your backend or development task, for example
 .. code-block:: bash
 
    pip install -e ".[maniskill]"
-   pip install -e ".[docs]"
+   pip install -r docs/requirements.txt
 
+Documentation requirements are separate from the package and do not install PyTorch.
 The following extras are declared in the repository's pyproject.toml.
 Legacy D4RL dependencies belong in a separate environment because their pins
 differ from modern simulator stacks.
@@ -33,8 +34,6 @@ differ from modern simulator stacks.
 
    * - Extra
      - Dependencies
-   * - ``docs``
-     - ``sphinx>=7``, ``furo``, ``myst-parser``, ``sphinx-copybutton``
    * - ``maniskill``
      - ``mani_skill``
    * - ``robotwin``

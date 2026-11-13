@@ -4,7 +4,7 @@ Documentation is built with Sphinx. The entry point is [index.rst](index.rst).
 Run these commands from the repository root:
 
 ```bash
-pip install -e ".[docs]"
+pip install -r docs/requirements.txt
 scripts/test.sh docs
 scripts/test.sh linkcheck
 python tools/docs/gen_tables.py --check

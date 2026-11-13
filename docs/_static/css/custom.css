@@ -1,0 +1,397 @@
+/* Adapted from RLinf (https://github.com/RLinf/RLinf), Apache-2.0. */
+html[data-theme="light"] {
+  --pst-color-primary: #237526;
+  --pst-color-secondary: #356b25;
+  --rlg-nav-active-bg: rgba(49, 168, 52, 0.12);
+  --rlg-nav-hover-bg: rgba(49, 168, 52, 0.06);
+}
+html[data-theme="dark"] {
+  --pst-color-primary: #83d785;
+  --pst-color-secondary: #b1d989;
+  --rlg-nav-active-bg: rgba(131, 215, 133, 0.15);
+  --rlg-nav-hover-bg: rgba(131, 215, 133, 0.08);
+}
+/* --- Home hero ----------------------------------------------------------
+   Logo above the centered project title. The rst section
+   title is hidden (kept only for the page <title>); the visible hero lives in
+   .rlg-hero. */
+#home + h1 {
+  display: none;
+}
+
+.rlg-hero {
+  margin: 0.5rem 0 2rem;
+  text-align: center;
+}
+
+.rlg-hero-logo {
+  background-color: transparent !important; /* override the theme's dark-mode white image bg */
+  display: block;
+  margin: 0 auto;
+  max-width: 220px;
+  width: 100%;
+}
+
+.rlg-hero-title {
+  margin-bottom: 0.5rem;
+  margin-top: 2rem;
+}
+
+.rlg-hero-subtitle {
+  color: var(--pst-color-text-muted);
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+
+/* --- Wider content area -------------------------------------------------
+   pydata-sphinx-theme caps the article column at 60em and the page at 88rem,
+   which leaves large empty gutters and a cramped content column on wide
+   screens. Widen both and slim the side navigations a touch so the content
+   gets more horizontal room. */
+.bd-page-width {
+  max-width: 100rem;            /* was 88rem (~1408px) */
+}
+.bd-main .bd-content .bd-article-container {
+  max-width: 84rem;            /* was 60em (~960px) — let prose, cards and tables breathe */
+}
+.bd-sidebar-primary {
+  max-width: 18rem;            /* compact global docs sidebar */
+}
+.bd-sidebar-secondary {
+  max-width: 15rem;            /* slimmer right "On this page" */
+}
+
+/* --- Sidebar-only docs chrome ------------------------------------------
+   Match the compact LeRobot/Hugging Face docs pattern: logo, search, utility
+   controls, then a single global navigation tree. */
+/* Collapse the empty top navbar (sidebar-only model). The theme reserves a 4rem
+   header band above the sidebar; with no navbar items it is just blank space.
+ */
+:root {
+  --pst-header-height: 0rem;
+}
+
+.bd-header {
+  box-shadow: none !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+
+.bd-header .bd-header__inner {
+  min-height: 0 !important;
+}
+
+.bd-header .sidebar-toggle {
+  display: none !important;
+}
+
+/* Condense the sidebar header chrome. The theme uses padding:2rem 1rem 1rem,
+   gap:1rem, and .5rem padding on every item, which spreads the logo / search /
+   version rows far apart — tighten all of it. */
+.bd-sidebar-primary {
+  gap: 0.3rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+.bd-sidebar-primary .sidebar-primary-items__start {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.bd-sidebar-primary .sidebar-header-items {
+  display: none;
+}
+
+/* 3-class selector to beat the theme's .sidebar-primary-items__start
+   .sidebar-primary-item { padding: .5rem 0 }. */
+.bd-sidebar-primary .sidebar-primary-items__start .sidebar-primary-item {
+  margin: 0;
+  padding: 0.15rem 0;
+}
+
+.rlg-sidebar-brand {
+  align-items: center;
+  color: var(--pst-color-text-base) !important;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.25rem;
+  text-decoration: none !important;
+}
+
+.rlg-sidebar-brand__mark {
+  display: block;
+  height: 1.6rem;
+  width: 1.6rem;
+  object-fit: contain;
+}
+
+.rlg-sidebar-brand__text {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.bd-sidebar-primary .bd-search {
+  margin: 0 0.25rem;
+}
+
+/* Keep the theme's search "pill" (border + absolutely-positioned magnifier on
+   .bd-search); only shrink the inner input so the field is compact. */
+.bd-sidebar-primary .bd-search input.form-control {
+  font-size: 0.85rem;
+  min-height: 1.85rem;
+}
+
+/* Render the Ctrl+K hint as one small pill (LeRobot-style) instead of two
+   separate key boxes. */
+.bd-sidebar-primary .bd-search .search-button__kbd-shortcut {
+  align-items: center;
+  background-color: var(--pst-color-surface);
+  border: 1px solid var(--pst-color-border);
+  border-radius: 0.3rem;
+  display: inline-flex;
+  font-size: 0.62rem;
+  margin-inline-end: 0.4rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.bd-sidebar-primary .bd-search .search-button__kbd-shortcut kbd {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: inherit;
+  padding: 0;
+}
+
+
+.rlg-sidebar-tools {
+  align-items: center;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.3rem;
+  padding: 0 0.25rem;
+}
+
+
+.rlg-sidebar-tools__icons {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+
+/* Two-state (light/dark) color-mode toggle in the sidebar tools. The icon
+   reflects the active theme: sun in light mode, moon in dark mode. */
+.rlg-theme-toggle {
+  border: 0;
+  color: var(--pst-color-text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.rlg-theme-toggle:hover {
+  color: var(--pst-color-primary);
+}
+
+html[data-theme="light"] .rlg-theme-icon-dark,
+html[data-theme="dark"] .rlg-theme-icon-light {
+  display: none;
+}
+
+.rlg-sidebar-tools .navbar-icon-links {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+
+.bd-sidebar-primary .bd-docs-nav {
+  border-top: 1px solid var(--pst-color-border);
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+}
+
+
+.bd-sidebar-primary .bd-sidenav {
+  padding: 0 0.25rem;
+}
+
+/* Compact, LeRobot-style nav rows: smaller text, tighter line height and less
+   vertical padding so more of the tree is visible without scrolling. */
+.bd-sidebar-primary .bd-sidenav li {
+  margin: 0;
+}
+
+.bd-sidebar-primary .bd-sidenav details,
+.bd-sidebar-primary .bd-sidenav summary,
+.bd-sidebar-primary .bd-sidenav ul {
+  margin: 0;
+}
+
+.bd-sidebar-primary .bd-sidenav li > a,
+.bd-sidebar-primary .bd-sidenav li > .reference {
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding-bottom: 0.34rem;
+  padding-top: 0.34rem;
+}
+
+/* Top-level sections: a touch larger + bold for hierarchy, but far smaller
+   than the theme default (.toctree-l1 > a is 1.3em out of the box). */
+.bd-sidebar-primary .bd-sidenav .toctree-l1 > a {
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+/* Clean rounded-pill hover + active state (LeRobot style), replacing the
+   theme's underline-on-hover and the inset left-border bar on the current
+   page. */
+.bd-sidebar-primary .bd-sidenav li > a:hover {
+  background-color: var(--rlg-nav-hover-bg);
+  color: var(--pst-color-text-base);
+  text-decoration: none !important;
+}
+
+/* The theme tags every breadcrumb ancestor <li> with .current, so neutralise
+   the highlight on the ancestor links first... */
+.bd-sidebar-primary .bd-sidenav li.current > a {
+  background-color: transparent;
+  box-shadow: none !important;
+  color: var(--pst-color-text-muted);
+}
+
+/* ...then apply the pill only to the current page itself: its <a> (not just the
+   <li>) carries the .current class, which the ancestor links do not. */
+.bd-sidebar-primary .bd-sidenav li.current > a.current,
+.bd-sidebar-primary .bd-sidenav li.current > a.current:hover {
+  background-color: var(--rlg-nav-active-bg);
+  color: var(--pst-color-primary);
+  font-weight: 600;
+}
+
+/* Shrink the collapse chevron to match the rows. */
+.bd-sidebar-primary .bd-sidenav .toctree-toggle {
+  padding: 0.3rem 0.4rem;
+}
+
+.bd-sidebar-primary .bd-sidenav .toctree-toggle .fa-chevron-down {
+  font-size: 0.8rem;
+}
+
+
+/* --- Ray-style cards ----------------------------------------------------
+   Ray's docs use compact PyData cards with a clean surface, subtle shadow,
+   small radius, and stronger hover affordance. Apply that treatment globally
+   to sphinx-design overview cards. */
+:root {
+  --rlg-card-radius: 4px;
+  --rlg-card-gap: 1em;
+  --rlg-card-shadow: 0px 4px 10px 0px rgba(0, 0, 0, 0.08);
+  --rlg-card-shadow-hover: 0px 6px 30px 5px rgba(0, 0, 0, 0.12);
+}
+
+html[data-theme="dark"] {
+  --rlg-card-shadow: 0px 4px 10px 0px rgba(0, 0, 0, 0.32);
+  --rlg-card-shadow-hover: 0px 6px 30px 5px rgba(0, 0, 0, 0.42);
+}
+
+.sd-card {
+  background: var(--pst-color-surface, var(--pst-color-background)) !important;
+  border: 0 !important;
+  border-radius: var(--rlg-card-radius) !important;
+  box-shadow: var(--rlg-card-shadow) !important;
+  color: var(--pst-color-text-base) !important;
+  overflow: hidden;
+  transition: border-color 160ms ease, box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.sd-card:hover {
+  box-shadow: var(--rlg-card-shadow-hover) !important;
+  transform: translateY(-2px);
+}
+
+.sd-card .sd-card-title {
+  color: var(--pst-color-text-base) !important;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.sd-card .sd-card-body {
+  padding: 1rem;
+}
+
+.sd-card .sd-card-body p:last-child {
+  margin-bottom: 0;
+}
+
+
+/* --- Sphinx copybutton --------------------------------------------------
+   pydata-sphinx-theme sets code blocks to flex column. sphinx-copybutton
+   inserts the button after <pre>; without absolute positioning it becomes a
+   full-width row below the block. Pin it to the top-right inside instead. */
+div.highlight,
+div[class*="highlight-"] {
+  position: relative;
+}
+
+div.highlight button.copybtn {
+  position: absolute;
+  top: 0.3em;
+  right: 0.3em;
+  width: 1.7em;
+  height: 1.7em;
+  margin: 0;
+  padding: 0;
+  z-index: 1;
+  flex: none;
+  align-self: auto;
+}
+
+@media (max-width: 959.98px) {
+  :root { --pst-header-height: 3rem; }
+  .bd-header { min-height: 3rem !important; }
+  .bd-header .bd-header__inner { min-height: 3rem !important; }
+  .bd-header .sidebar-toggle { display: inline-flex !important; }
+  .rlg-hero-logo { max-width: 150px; }
+  .rlg-hero-subtitle { font-size: 1.1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sd-card { transition: none; }
+  .sd-card:hover { transform: none; }
+}
+
+/* Long guide titles should wrap inside the compact sidebar. */
+.bd-sidebar-primary .bd-sidenav a {
+  overflow-wrap: anywhere;
+}
+.bd-sidebar-primary .sidebar-primary-item {
+  min-width: 0;
+}
+
+.bd-sidebar-primary {
+  overflow-x: hidden;
+}
+.rlg-sidebar-toggle {
+  display: none;
+}
+@media (max-width: 959.98px) {
+  .rlg-sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 3rem;
+    width: 3rem;
+  }
+}
