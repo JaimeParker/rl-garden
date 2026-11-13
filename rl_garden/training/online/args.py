@@ -326,10 +326,10 @@ class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
 
 @dataclass
 class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
-    """SuperMimic (``rl_garden.algorithms.supermimic``): backpropagation
-    through imagined rollouts of an explicit-state world model. Defaults are
-    the paper's appendix hyperparameter table (Table A.5) and the
-    ``SuperMimic`` constructor's.
+    """Defaults follow the official implementation (github.com/HybridRobotics/supermimic);
+    the paper's Table A.5 lists a cosine schedule the official code does not use,
+    so the schedule is off by default. SuperMimic backpropagates through imagined
+    rollouts of an explicit-state world model.
 
     Privileged quantities travel as observation keys: declare them with
     ``--obs.extra_state sim ctx goal time`` and the env must emit
@@ -338,24 +338,32 @@ class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     optional; the default observation uses only ``state``. ``--heads analytic``
     needs the env to expose ``analytic_mdp`` and to emit ``state_time``. The
     state codec is a Python-API argument of ``SuperMimic`` (``codec``) and has
-    no flag.
+    no flag. Goal generation likewise accepts the Python object ``goal_source``
+    or automatically uses ``env.unwrapped.goal_source``; there is no CLI flag.
+    The world-model class (``world_model_cls``, e.g.
+    ``NominalErrorStateSpaceWorldModel``) is also Python-API only.
 
     ``encoder``, ``obs_groups``, ``critic_encoder`` and ``encoder_sharing``
     (from ``ObservationArgs``) have no effect here: the policy trains no
     observation encoder, and the builder does not read them.
 
-    ``sim_steps_per_iteration`` and ``updates_per_iteration`` express the
-    update-to-data ratio (paper: 0.4 updates per vectorized env step = 2
-    updates per 5 steps); ``learning_starts=None`` means
-    ``(wm_window + 2) * num_envs`` transitions. ``warmup_updates`` updates
-    train only the world model.
+    The official schedule defines sample reuse via ``replay_ratio``: the
+    defaults give 0.4 updates per vectorized env step with 4096 envs.
+    ``wm_window=7`` scores seven predictions from the official eight-frame
+    window. Legacy iteration parameters require ``replay_ratio=None``.
+    ``buffer_size=None`` stores 1000 rows per env; ``learning_starts=None``
+    means ``(wm_window + 2) * num_envs`` transitions. World-model-only warmup
+    defaults to zero updates. ``lr_final_ratio < 1`` enables cosine decay.
+    ``max_step_reward`` optionally caps bootstrap and critic targets at
+    ``max_step_reward / (1 - gamma)``; ``None`` leaves them uncapped.
     """
 
     total_timesteps: int = 1_000_000
     heads: Literal["learned", "analytic"] = "learned"
-    sim_steps_per_iteration: int = 5
-    updates_per_iteration: int = 2
-    buffer_size: int = 4_096_000
+    replay_ratio: Optional[float] = 16.0
+    sim_steps_per_iteration: Optional[int] = None
+    updates_per_iteration: Optional[int] = None
+    buffer_size: Optional[int] = None
     buffer_device: str = "cuda"
     learning_starts: Optional[int] = None
     wm_hidden_dims: tuple[int, ...] = (2048, 2048, 2048)
@@ -365,14 +373,15 @@ class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     decoder_dims: tuple[int, ...] = (2048, 1024, 512, 256)
     critic_dims: tuple[int, ...] = (256, 128)
     horizon: int = 32
-    wm_window: int = 8
+    wm_window: int = 7
     wm_batches: int = 10
     wm_batch_size: int = 2048
     imagination_batch: int = 4096
     gamma: float = 0.99
     lam: float = 0.95
+    max_step_reward: Optional[float] = None
     lr: float = 2e-4
-    lr_final_ratio: float = 0.03
+    lr_final_ratio: float = 1.0
     lr_decay_updates: int = 250_000
     actor_betas: tuple[float, float] = (0.9, 0.95)
     wm_grad_norm: float = 1.0
@@ -383,7 +392,7 @@ class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     critic_minibatches: int = 4
     action_noise_std: float = 0.1
     obs_history_len: int = 1
-    warmup_updates: int = 500
+    warmup_updates: int = 0
     amp_dtype: Optional[Literal["bf16"]] = None
 
 

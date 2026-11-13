@@ -10,7 +10,7 @@ from gymnasium.vector import AutoresetMode
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.episode_statistics import EpisodeStatistics
-from rl_garden.world_models.state_space import ResidualStateCodec
+from rl_garden.world_models.state_space import GoalSource, ResidualStateCodec
 
 _REF_LENGTH = 64
 
@@ -20,6 +20,38 @@ class PointMassCodec(ResidualStateCodec):
 
     def __init__(self) -> None:
         super().__init__(4, error_floor=torch.full((4,), 1e-3))
+
+
+class PointMassVelocityCodec:
+    """``LossBlockStateCodec`` for ``[x, y, vx, vy]``: the MLP predicts the
+    velocity change, positions are integrated semi-implicitly
+    (``v' = v + d``, ``p' = p + dt v'``, as in ``PointMassTrackingEnv.step``),
+    and the loss scores position and velocity blocks. ``blocks`` keeps a
+    subset of ``("pos", "vel")``."""
+
+    state_dim = 4
+    feature_dim = 4
+    increment_dim = 2
+    error_floor: Optional[torch.Tensor] = None
+    _NOMINAL_ERRORS = {"pos": 0.01, "vel": 1.0}
+
+    def __init__(self, dt: float = 0.1, blocks: tuple[str, ...] = ("pos", "vel")) -> None:
+        self.dt = dt
+        self.nominal_errors = {name: self._NOMINAL_ERRORS[name] for name in blocks}
+
+    def features(self, s: torch.Tensor) -> torch.Tensor:
+        return s
+
+    def increment(self, s: torch.Tensor, s1: torch.Tensor) -> torch.Tensor:
+        return s1[..., 2:] - s[..., 2:]
+
+    def integrate(self, s: torch.Tensor, d: torch.Tensor) -> torch.Tensor:
+        velocity = s[..., 2:] + d
+        return torch.cat([s[..., :2] + self.dt * velocity, velocity], dim=-1)
+
+    def loss_blocks(self, s: torch.Tensor) -> dict[str, torch.Tensor]:
+        blocks = {"pos": s[..., :2], "vel": s[..., 2:]}
+        return {name: blocks[name] for name in self.nominal_errors}
 
 
 class PointMassMDP:
@@ -47,7 +79,7 @@ class PointMassMDP:
     def termination_prob(self, s, t):
         return torch.sigmoid(((s[..., :2] - self.ref(t)).norm(dim=-1) - 1.0) / 0.05)
 
-    def goal(self, t):
+    def goal(self, s, ctx, t):
         return torch.cat([self.ref(t + 1), self.ref(t + 2)], dim=-1)
 
     def critic_features(self, s, ctx, t):
@@ -57,6 +89,18 @@ class PointMassMDP:
         return t + horizon < self.ref_table.shape[0]
 
 
+class PointMassRelativeGoal(GoalSource):
+    """Future reference positions relative to the current point-mass position."""
+
+    goal_dim = 4
+
+    def __init__(self, ref_length: int = _REF_LENGTH) -> None:
+        self._mdp = PointMassMDP(ref_length=ref_length)
+
+    def goal(self, s: torch.Tensor, ctx: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return torch.cat([self._mdp.ref(t + 1) - s[..., :2], self._mdp.ref(t + 2) - s[..., :2]], dim=-1)
+
+
 class PointMassTrackingEnv(gym.vector.VectorEnv):
     """Torch vector env: a point mass ``[x, y, vx, vy]`` with per-episode drag
     tracks ``PointMassMDP.ref``. SAME_STEP autoreset with
@@ -64,7 +108,7 @@ class PointMassTrackingEnv(gym.vector.VectorEnv):
 
     Observation keys: ``state`` (the state plus uniform ``obs_noise``) and,
     with ``extra_keys``, ``state_sim`` (exact state), ``state_ctx`` (drag),
-    ``state_goal`` (``mdp.goal(t)``) and ``state_time`` (``t``, omitted when
+    ``state_goal`` (``mdp.goal(s, ctx, t)``) and ``state_time`` (``t``, omitted when
     ``time_key=False``). Only an env with ``extra_keys`` exposes
     ``analytic_mdp``.
     """
@@ -146,7 +190,7 @@ class PointMassTrackingEnv(gym.vector.VectorEnv):
             obs.update(
                 state_sim=s.clone(),
                 state_ctx=self._drag.clone(),
-                state_goal=self._mdp.goal(self._t),
+                state_goal=self._mdp.goal(s, self._drag, self._t),
             )
         if self.time_key:
             obs["state_time"] = self._t.float().unsqueeze(-1)

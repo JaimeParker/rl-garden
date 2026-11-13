@@ -2,12 +2,16 @@
 a differentiable explicit-state world model and a deterministic policy trained
 by backpropagation through imagined rollouts.
 
-Each iteration collects ``sim_steps_per_iteration`` vectorized env steps with
-the deterministic policy plus Gaussian action noise (the executed, noisy
-action is what the replay buffer stores), then runs
-``updates_per_iteration`` updates. One update is:
+By default each iteration collects one vectorized env step with the
+deterministic policy plus Gaussian action noise (the executed, noisy action
+is what replay stores). The official sample reuse ratio ``replay_ratio``
+sets updates per vector step to
+``num_envs * replay_ratio / (wm_batches * wm_batch_size * (wm_window + 1))``.
+A fractional accumulator schedules whole updates (0.4 per step with 4096
+envs and the defaults). One update is:
 
-1. World model (Eq. 1): ``wm_batches`` windows of ``wm_window`` steps, one
+1. World model (Eq. 1): ``wm_batches`` windows of ``wm_window`` scored
+   predictions (default 7, the official 8-frame window), one
    Adam step each on ``StateSpaceWorldModel.model_loss`` (k-step
    autoregressive loss plus the learned heads' terms).
 2. Actor (Eq. 2): ``horizon`` imagined steps from replay start rows with
@@ -27,27 +31,42 @@ action is what the replay buffer stores), then runs
    ``R_H = V_H``; ``critic_epochs`` epochs over ``critic_minibatches``
    shuffled minibatches, MSE, no target network.
 
-The first ``warmup_updates`` updates train only the world model (an
-``InitialTrainingPhase`` with actor and critic off). Learning rates follow a
-cosine decay from ``lr`` to ``lr * lr_final_ratio`` over
-``lr_decay_updates`` updates, the same value for all three optimizers.
+Optional world-model warmup defaults to ``warmup_updates=0``. Its
+``InitialTrainingPhase`` disables actor and critic for
+``ceil(warmup_updates / updates_per_env_step)`` vector steps from step 0,
+including collection before ``learning_starts``. Learning rates are constant
+by default; ``lr_final_ratio < 1`` enables cosine decay from ``lr`` to
+``lr * lr_final_ratio`` over ``lr_decay_updates`` updates for all optimizers.
 
-Update-to-data ratio: rl-garden's ``utd`` is per collected transition. The
-paper's 0.4 updates per vectorized env step is expressed here as
-``sim_steps_per_iteration=5, updates_per_iteration=2``;
-``grad_steps_per_iteration`` is set to ``updates_per_iteration`` exactly.
+Legacy scheduling requires ``replay_ratio=None`` and explicit
+``sim_steps_per_iteration`` and ``updates_per_iteration``. It collects that
+many vector steps and runs exactly that many updates per iteration.
+``max_step_reward`` optionally caps actor bootstrap and critic targets at
+``max_step_reward / (1 - gamma)``; the default ``None`` leaves them uncapped.
 
 Observation roles (Dict keys): ``state`` is the policy observation;
 ``state_sim`` the modeled state (default: ``state``); ``state_ctx`` the
 per-episode context, ``state_goal`` the goal and ``state_time`` the time
-index, each optional. Without an ``AnalyticMDP`` the goal stays at its start
-value during imagination (the learned heads cannot advance it).
+index, each optional. A ``GoalSource`` recomputes goals from imagined states,
+context and time; pass ``goal_source`` or expose ``env.unwrapped.goal_source``.
+Analytic heads default to their ``AnalyticMDP`` as the source. Without a source,
+learned heads read goals frozen at the imagination start while training uses
+stepwise advancing recorded goals, causing a distribution shift for time-varying
+goals (a construction warning explains this).
 
 Heads: ``heads="learned"`` uses learned reward and termination heads and a
 learned observation head (identity when there is no ``state_sim`` key);
 ``heads="analytic"`` takes all three from ``env.unwrapped.analytic_mdp`` and
 requires the ``state_time`` key, from which the analytic heads read the time
 index (a time-independent MDP still emits a zero column).
+
+World model: the class attribute ``world_model_cls`` (``StateSpaceWorldModel``)
+or the ``world_model_cls`` argument selects the class ``_setup_model`` builds
+with the same keyword arguments; ``NominalErrorStateSpaceWorldModel`` with a
+``LossBlockStateCodec`` scores the state error in the codec's loss blocks
+with fixed nominal errors, as the official implementation does. Its qualified
+name is checkpoint metadata. Extra state loss components a world model
+returns are logged as ``wm/<key>``.
 
 ``SuperMimicPolicy`` is a plain ``nn.Module`` outside the ``BasePolicy``
 contract (same class of exception as ``PWMPolicy``): the critic reads the
@@ -78,7 +97,11 @@ from rl_garden.networks.returns import lambda_return
 from rl_garden.networks.running_norm import RunningNorm
 from rl_garden.world_models.base import State
 from rl_garden.world_models.batch import SequenceBatch
-from rl_garden.world_models.state_space import StateCodec, StateSpaceWorldModel
+from rl_garden.world_models.state_space import (
+    GoalSource,
+    StateCodec,
+    StateSpaceWorldModel,
+)
 
 OBS_KEY = "state"
 STATE_KEY = "state_sim"
@@ -87,6 +110,40 @@ GOAL_KEY = "state_goal"
 TIME_KEY = "state_time"
 # Imagination start rejection sampling (analytic MDP ``valid_start``).
 _MAX_START_SAMPLING_ROUNDS = 10
+# ``model_loss`` keys -> metric names; other keys (a world model's extra state
+# loss components, e.g. ``state_block/<name>``) are logged as ``wm/<key>``.
+_WM_METRIC_NAMES = {
+    "total": "wm/loss",
+    "state": "wm/state",
+    "reward": "wm/reward",
+    "observation": "wm/observation",
+    "termination": "wm/termination",
+    "state_err_last": "wm/err_last",
+}
+
+
+def updates_per_env_step(
+    num_envs: int,
+    replay_ratio: float,
+    wm_batches: int,
+    wm_batch_size: int,
+    wm_window: int,
+) -> float:
+    """Convert sample reuse into updates per vectorized environment step.
+
+    ``wm_window`` counts scored predictions; a window contains one more frame.
+    """
+    for name, value in (
+        ("num_envs", num_envs),
+        ("wm_batches", wm_batches),
+        ("wm_batch_size", wm_batch_size),
+        ("wm_window", wm_window),
+    ):
+        if value < 1:
+            raise ValueError(f"{name} must be >= 1, got {value}.")
+    if not math.isfinite(replay_ratio) or replay_ratio <= 0:
+        raise ValueError(f"replay_ratio must be finite and > 0, got {replay_ratio}.")
+    return num_envs * replay_ratio / (wm_batches * wm_batch_size * (wm_window + 1))
 
 
 @contextlib.contextmanager
@@ -158,20 +215,20 @@ class SuperMimicPolicy(nn.Module):
         self.obs_history_len = obs_history_len
 
         self.goal_encoder = (
-            create_mlp(goal_dim, latent_dim, goal_encoder_dims, activation_fn=nn.ELU) if goal_dim > 0 else None
+            create_mlp(goal_dim, latent_dim, goal_encoder_dims, activation_fn=nn.GELU, use_layer_norm=True)
+            if goal_dim > 0
+            else None
         )
         decoder_in_dim = (latent_dim if goal_dim > 0 else 0) + obs_history_len * obs_dim
-        self.decoder = create_mlp(decoder_in_dim, action_dim, decoder_dims, activation_fn=nn.ELU)
-        with torch.no_grad():
-            self.decoder[-1].weight.mul_(0.01)
-            self.decoder[-1].bias.zero_()
+        self.decoder = create_mlp(
+            decoder_in_dim, action_dim, decoder_dims, activation_fn=nn.GELU, use_layer_norm=True
+        )
 
         self.critic_in_dim = world_model.latent_dim + ctx_dim + goal_dim + critic_extra_dim
-        self.critic = create_mlp(self.critic_in_dim, 1, critic_dims, activation_fn=nn.ELU)
+        self.critic = create_mlp(self.critic_in_dim, 1, critic_dims, activation_fn=nn.GELU, use_layer_norm=True)
 
         self.obs_norm = RunningNorm((obs_dim,))
         self.goal_norm = RunningNorm((goal_dim,)) if goal_dim > 0 else None
-        self.critic_norm = RunningNorm((self.critic_in_dim,))
 
     def act(self, obs_hist: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         """``obs_hist`` ``(B, L, obs_dim)``, ``goal`` ``(B, goal_dim)`` ->
@@ -184,7 +241,7 @@ class SuperMimicPolicy(nn.Module):
 
     def value(self, critic_in: torch.Tensor) -> torch.Tensor:
         """``(..., critic_in_dim)`` -> ``(..., 1)``."""
-        return self.critic(self.critic_norm(critic_in))
+        return self.critic(critic_in)
 
     def actor_parameters(self) -> list[nn.Parameter]:
         encoder = list(self.goal_encoder.parameters()) if self.goal_encoder is not None else []
@@ -206,14 +263,15 @@ class SuperMimicCore:
         self,
         *,
         horizon: int = 32,
-        wm_window: int = 8,
+        wm_window: int = 7,
         wm_batches: int = 10,
         wm_batch_size: int = 2048,
         imagination_batch: int = 4096,
         gamma: float = 0.99,
         lam: float = 0.95,
+        max_step_reward: Optional[float] = None,
         lr: float = 2e-4,
-        lr_final_ratio: float = 0.03,
+        lr_final_ratio: float = 1.0,
         lr_decay_updates: int = 250_000,
         actor_betas: tuple[float, float] = (0.9, 0.95),
         wm_grad_norm: float = 1.0,
@@ -224,7 +282,7 @@ class SuperMimicCore:
         critic_minibatches: int = 4,
         action_noise_std: float = 0.1,
         obs_history_len: int = 1,
-        warmup_updates: int = 500,
+        warmup_updates: int = 0,
         amp_dtype: Optional[str] = None,
     ) -> None:
         positive = {
@@ -249,6 +307,9 @@ class SuperMimicCore:
             raise ValueError(f"action_noise_std must be >= 0, got {action_noise_std}.")
         if amp_dtype not in (None, "bf16"):
             raise ValueError(f"amp_dtype must be None or 'bf16', got {amp_dtype!r}.")
+        if max_step_reward is not None:
+            if not math.isfinite(max_step_reward) or not 0.0 <= gamma < 1.0:
+                raise ValueError("max_step_reward requires a finite reward bound and gamma in [0, 1).")
         self.horizon = horizon
         self.wm_window = wm_window
         self.wm_batches = wm_batches
@@ -256,6 +317,8 @@ class SuperMimicCore:
         self.imagination_batch = imagination_batch
         self.gamma = gamma
         self.lam = lam
+        self.max_step_reward = max_step_reward
+        self._v_max = None if max_step_reward is None else max_step_reward / (1.0 - gamma)
         self.lr = lr
         self.lr_final_ratio = lr_final_ratio
         self.lr_decay_updates = lr_decay_updates
@@ -284,7 +347,7 @@ class SuperMimicCore:
         return ("world_optimizer", "actor_optimizer", "critic_optimizer")
 
     def _set_learning_rates(self) -> float:
-        """Cosine decay to ``lr * lr_final_ratio`` over ``lr_decay_updates``.
+        """Cosine decay when ``lr_final_ratio < 1``; constant LR by default.
         ``_global_update`` is already incremented for the current update, so
         the first update uses the initial lr (as PWM)."""
         progress = min(max(self._global_update - 1, 0), self.lr_decay_updates) / self.lr_decay_updates
@@ -349,6 +412,8 @@ class SuperMimicCore:
             discounts = self.gamma ** torch.arange(self.horizon, device=rewards.device, dtype=rewards.dtype)
             final_state = {key: value[-1] for key, value in trajectory.items()}
             value_h = policy.value(self._critic_input(final_state)).squeeze(-1).float()
+            if self._v_max is not None:
+                value_h = value_h.clamp(max=self._v_max)
             objective = (discounts.unsqueeze(-1) * survival * rewards).sum(dim=0)
             objective = objective + self.gamma**self.horizon * alive[-1] * value_h
         return {
@@ -387,7 +452,7 @@ class SuperMimicCore:
         ``r_{t+1}``/``d_{t+1}``, ``values`` ``(H + 1, B)``. ``lambda_return``
         reads row ``t + 1`` for target ``t``, hence the leading zero rows."""
         zero_row = torch.zeros_like(rewards[:1])
-        return lambda_return(
+        targets = lambda_return(
             torch.cat([zero_row, rewards], dim=0),
             values,
             values,
@@ -396,6 +461,7 @@ class SuperMimicCore:
             disc=self.gamma,
             lam=self.lam,
         )
+        return targets if self._v_max is None else targets.clamp(max=self._v_max)
 
     def _update_critic(self, critic_in: torch.Tensor, targets: torch.Tensor) -> dict[str, float]:
         """``critic_epochs`` epochs over ``critic_minibatches`` shuffled
@@ -447,15 +513,8 @@ class SuperMimicCore:
                 self.world_optimizer.step()
             else:
                 skipped += 1
-            for name, key in (
-                ("wm/loss", "total"),
-                ("wm/state", "state"),
-                ("wm/reward", "reward"),
-                ("wm/observation", "observation"),
-                ("wm/termination", "termination"),
-                ("wm/err_last", "state_err_last"),
-            ):
-                records[name].append(losses[key].detach().float())
+            for key, value in losses.items():
+                records[_WM_METRIC_NAMES.get(key, f"wm/{key}")].append(value.detach().float())
             records["wm/grad_norm"].append(grad_norm.detach().float())
         metrics = {name: float(torch.stack(values).mean()) for name, values in records.items()}
         metrics["wm/skipped"] = float(skipped)
@@ -470,7 +529,6 @@ class SuperMimicCore:
         actor_metrics = self._actor_step(rollout)
         with torch.no_grad():
             critic_in = self._critic_input(rollout["states"])
-            self.policy.critic_norm.update(critic_in)
             with self._autocast():
                 values = self.policy.value(critic_in).squeeze(-1).float()
             targets = self._critic_targets(rollout["rewards"].detach(), rollout["dones"].detach(), values)
@@ -490,6 +548,7 @@ class SuperMimicCore:
             "imagination_batch": self.imagination_batch,
             "gamma": self.gamma,
             "lam": self.lam,
+            "max_step_reward": self.max_step_reward,
             "lr": self.lr,
             "lr_final_ratio": self.lr_final_ratio,
             "lr_decay_updates": self.lr_decay_updates,
@@ -511,6 +570,9 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
     """Online SuperMimic on any rl-garden vector env (module docstring)."""
 
     _compatible_checkpoint_algorithms = ("SuperMimic",)
+    #: World-model class built by ``_setup_model``; the ``world_model_cls``
+    #: argument overrides it per instance (e.g. ``NominalErrorStateSpaceWorldModel``).
+    world_model_cls: type[StateSpaceWorldModel] = StateSpaceWorldModel
 
     def __init__(
         self,
@@ -519,9 +581,12 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
         *,
         heads: Literal["learned", "analytic"] = "learned",
         codec: Optional[StateCodec] = None,
-        sim_steps_per_iteration: int = 5,
-        updates_per_iteration: int = 2,
-        buffer_size: int = 4_096_000,
+        goal_source: Optional[GoalSource] = None,
+        world_model_cls: Optional[type[StateSpaceWorldModel]] = None,
+        replay_ratio: Optional[float] = 16.0,
+        sim_steps_per_iteration: Optional[int] = None,
+        updates_per_iteration: Optional[int] = None,
+        buffer_size: Optional[int] = None,
         buffer_device: str = "cuda",
         learning_starts: Optional[int] = None,
         wm_hidden_dims: tuple[int, ...] = (2048, 2048, 2048),
@@ -531,14 +596,15 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
         decoder_dims: tuple[int, ...] = (2048, 1024, 512, 256),
         critic_dims: tuple[int, ...] = (256, 128),
         horizon: int = 32,
-        wm_window: int = 8,
+        wm_window: int = 7,
         wm_batches: int = 10,
         wm_batch_size: int = 2048,
         imagination_batch: int = 4096,
         gamma: float = 0.99,
         lam: float = 0.95,
+        max_step_reward: Optional[float] = None,
         lr: float = 2e-4,
-        lr_final_ratio: float = 0.03,
+        lr_final_ratio: float = 1.0,
         lr_decay_updates: int = 250_000,
         actor_betas: tuple[float, float] = (0.9, 0.95),
         wm_grad_norm: float = 1.0,
@@ -549,7 +615,7 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
         critic_minibatches: int = 4,
         action_noise_std: float = 0.1,
         obs_history_len: int = 1,
-        warmup_updates: int = 500,
+        warmup_updates: int = 0,
         amp_dtype: Optional[str] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -565,20 +631,38 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
     ) -> None:
         if heads not in ("learned", "analytic"):
             raise ValueError(f"heads must be 'learned' or 'analytic', got {heads!r}.")
-        if sim_steps_per_iteration < 1 or updates_per_iteration < 1:
-            raise ValueError("sim_steps_per_iteration and updates_per_iteration must be >= 1.")
         num_envs = env.num_envs
-        training_freq = num_envs * sim_steps_per_iteration
+        if replay_ratio is not None:
+            if sim_steps_per_iteration is not None or updates_per_iteration is not None:
+                raise ValueError("replay_ratio requires both explicit iteration parameters to be None.")
+            training_freq = num_envs
+            update_rate = updates_per_env_step(num_envs, replay_ratio, wm_batches, wm_batch_size, wm_window)
+            utd = update_rate / num_envs
+            warmup_steps = math.ceil(warmup_updates / update_rate) * training_freq
+        else:
+            if (
+                sim_steps_per_iteration is None
+                or updates_per_iteration is None
+                or sim_steps_per_iteration < 1
+                or updates_per_iteration < 1
+            ):
+                raise ValueError(
+                    "replay_ratio=None requires sim_steps_per_iteration and updates_per_iteration >= 1."
+                )
+            training_freq = num_envs * sim_steps_per_iteration
+            update_rate = updates_per_iteration / sim_steps_per_iteration
+            utd = updates_per_iteration / training_freq
+            warmup_steps = warmup_updates * training_freq
         super().__init__(
             env,
             eval_env,
-            buffer_size=buffer_size,
+            buffer_size=1000 * num_envs if buffer_size is None else buffer_size,
             buffer_device=buffer_device,
             learning_starts=(wm_window + 2) * num_envs if learning_starts is None else learning_starts,
             batch_size=wm_batch_size,
             gamma=gamma,
             training_freq=training_freq,
-            utd=updates_per_iteration / training_freq,
+            utd=utd,
             bootstrap_at_done="truncated",
             seed=seed,
             device=device,
@@ -592,17 +676,23 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=InitialTrainingPhase(
-                duration_steps=warmup_updates * training_freq,
+                duration_steps=warmup_steps,
                 update_actor=False,
                 update_critic=False,
                 update_encoder=False,
             ),
         )
-        self.grad_steps_per_iteration = updates_per_iteration
+        self.grad_steps_per_iteration = 1 if replay_ratio is not None else updates_per_iteration
+        self.replay_ratio = replay_ratio
+        self.updates_per_env_step = update_rate
+        self._update_credit = 0.0
         self.sim_steps_per_iteration = sim_steps_per_iteration
         self.updates_per_iteration = updates_per_iteration
         self.heads = heads
         self.codec = codec
+        if world_model_cls is not None:
+            self.world_model_cls = world_model_cls
+        self.goal_source = goal_source if goal_source is not None else getattr(env.unwrapped, "goal_source", None)
         self.wm_hidden_dims = tuple(wm_hidden_dims)
         self.head_hidden_dims = tuple(head_hidden_dims)
         self.latent_dim = latent_dim
@@ -617,6 +707,7 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
             imagination_batch=imagination_batch,
             gamma=gamma,
             lam=lam,
+            max_step_reward=max_step_reward,
             lr=lr,
             lr_final_ratio=lr_final_ratio,
             lr_decay_updates=lr_decay_updates,
@@ -687,7 +778,7 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
             observation_head = "learned" if state_key == STATE_KEY else "identity"
             head_modes = {"reward_head": "learned", "observation_head": observation_head, "termination_head": "learned"}
 
-        world_model = StateSpaceWorldModel(
+        world_model = self.world_model_cls(
             state_dim=state_dim,
             action_dim=action_dim,
             obs_dim=obs_dim,
@@ -695,6 +786,7 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
             goal_dim=goal_dim,
             codec=self.codec,
             mdp=mdp,
+            goal_source=self.goal_source,
             hidden_dims=self.wm_hidden_dims,
             head_hidden_dims=self.head_hidden_dims,
             state_key=STATE_KEY,
@@ -760,6 +852,9 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
         return {
             **super()._checkpoint_metadata(),
             "heads": self.heads,
+            "world_model_cls": f"{self.world_model_cls.__module__}.{self.world_model_cls.__qualname__}",
+            "replay_ratio": self.replay_ratio,
+            "updates_per_env_step": self.updates_per_env_step,
             "sim_steps_per_iteration": self.sim_steps_per_iteration,
             "updates_per_iteration": self.updates_per_iteration,
         }
@@ -816,6 +911,21 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
     # ------------------------------------------------------------------
     # Training batch
     # ------------------------------------------------------------------
+
+    def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
+        """Accumulate sample reuse credit, or run the explicit legacy schedule.
+
+        Fractional credit is not checkpointed; resume may differ by at most
+        one update. The base loop accepts an empty metrics dict on skipped steps.
+        """
+        if self.replay_ratio is None:
+            return super().train(gradient_steps, compute_info)
+        self._update_credit += self.updates_per_env_step * gradient_steps
+        updates = int(self._update_credit)
+        self._update_credit -= updates
+        if updates == 0:
+            return {}
+        return super().train(updates, compute_info)
 
     def _valid_starts(self, starts: HistorySample) -> torch.Tensor:
         t = self.world_model.state_from_obs({key: value[-1] for key, value in starts.obs.items()})["t"]

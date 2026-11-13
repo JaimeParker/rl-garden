@@ -154,6 +154,7 @@ def test_strict_window_ending_at_a_termination_reads_the_final_observation(monke
         imagination_batch=8,
         warmup_updates=1,
         learning_starts=4 * NUM_ENVS,
+        replay_ratio=None,
         sim_steps_per_iteration=2,
         updates_per_iteration=1,
         buffer_size=1024,

@@ -1,5 +1,5 @@
 """CLI tests for the online ``supermimic`` entrypoint: registry discovery,
-Args defaults (paper Table A.5 and the constructor's), ``--print-config`` /
+Args defaults (official code and the constructor's), ``--print-config`` /
 ``--dry-run`` on the torch point-mass fake env (through the gymnasium
 backend's ``vector_env_factory``), analytic-head preflight errors and a short
 end-to-end run."""
@@ -31,6 +31,7 @@ SMALL_ARGV = [
     "--wm_batch_size", "8",
     "--imagination_batch", "8",
     "--warmup_updates", "1",
+    "--replay_ratio", "None",
     "--sim_steps_per_iteration", "2",
     "--updates_per_iteration", "1",
     "--eval_freq", "0",
@@ -86,7 +87,7 @@ def test_registry_discovers_supermimic():
     assert entry.build_agent is build_supermimic
 
 
-def test_args_defaults_match_paper_table_a5(capsys):
+def test_args_defaults_match_official_code(capsys):
     from rl_garden.training.online import registry
 
     registry.run_cli(["supermimic", "--log_type", "none", "--print-config"])
@@ -96,20 +97,26 @@ def test_args_defaults_match_paper_table_a5(capsys):
     inputs = config["inputs"]
     expected = {
         "horizon": 32,
-        "wm_window": 8,
+        "wm_window": 7,
         "wm_batches": 10,
         "wm_batch_size": 2048,
         "imagination_batch": 4096,
         "gamma": 0.99,
         "lam": 0.95,
         "lr": 2e-4,
-        "lr_final_ratio": 0.03,
+        "lr_final_ratio": 1.0,
         "lr_decay_updates": 250_000,
         "critic_epochs": 5,
         "critic_minibatches": 4,
         "action_noise_std": 0.1,
         "heads": "learned",
         "learning_starts": None,
+        "replay_ratio": 16.0,
+        "warmup_updates": 0,
+        "buffer_size": None,
+        "sim_steps_per_iteration": None,
+        "updates_per_iteration": None,
+        "max_step_reward": None,
         "amp_dtype": None,
         "actor_betas": [0.9, 0.95],
     }
@@ -157,10 +164,27 @@ def test_dry_run_builds_supermimic_on_point_mass(online_registry, heads):
     assert kwargs["heads"] == heads
     assert kwargs["horizon"] == 3
     assert kwargs["wm_hidden_dims"] == [16, 16]
+    assert kwargs["replay_ratio"] is None
+    assert kwargs["max_step_reward"] is None
     for unused in ("encoder_config", "obs_groups", "critic_encoder_config", "encoder_sharing"):
         assert unused not in kwargs
     observation_keys = set(config["runtime"]["train_observation_space"]["spaces"])
     assert observation_keys == {"state", "state_sim", "state_ctx", "state_goal", "state_time"}
+
+
+def test_dry_run_forwards_replay_ratio_and_reward_bound(online_registry):
+    argv = [
+        "--num_envs", "4", "--num_eval_envs", "2", "--buffer_device", "cpu",
+        "--wm_hidden_dims", "16", "--head_hidden_dims", "8",
+        "--goal_encoder_dims", "16", "--decoder_dims", "16", "--critic_dims", "8",
+        "--replay_ratio", "2.4", "--max_step_reward", "0.01", "--log_type", "none",
+        "--no-capture-video",
+    ]
+    config = _dry_run(online_registry, *_env_argv(), *argv)
+    kwargs = config["algorithm"]["constructor_kwargs"]
+    assert kwargs["replay_ratio"] == 2.4 and kwargs["max_step_reward"] == 0.01
+    assert kwargs["sim_steps_per_iteration"] is None and kwargs["updates_per_iteration"] is None
+    assert kwargs["buffer_size"] is None
 
 
 def test_analytic_heads_without_analytic_mdp_raise(online_registry):

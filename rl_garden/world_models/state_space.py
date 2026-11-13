@@ -9,6 +9,19 @@ real, every later state is the model's own prediction (full BPTT), and the
 state error is expressed in the *real* state's local frame and divided by the
 running std of the increments (floored per component).
 
+Two points of variation are overridable. ``normalize_output`` (class
+attribute, ``True`` here) decides whether the MLP output is de-normalized by
+the running increment statistics ``out_norm``; ``_state_loss`` decides how
+the predicted states are scored against the real ones.
+``NominalErrorStateSpaceWorldModel`` (``nominal_error_state_space.py``)
+predicts raw increments and scores the states in the codec's
+``LossBlockStateCodec.loss_blocks`` with fixed nominal errors, as the official
+implementation does.
+
+Dynamics and learned heads use Linear -> LayerNorm -> GELU hidden layers
+and PyTorch's default Linear initialization, as in the official implementation.
+The dynamics output is not zero-initialized, so initial steps need not be identity.
+
 Relation to the ``WorldModel`` contract. The model is an explicit-state
 degenerate of it: ``encode`` picks a key out of the observation dict instead of
 computing a learned embedding, ``observe`` just wraps that state, and
@@ -22,8 +35,9 @@ State dict (leading dims ``(B,)`` or ``(T, B)``)::
 ``state_from_obs`` reads it from an observation dict: ``state_key`` (falling
 back to ``obs_key``), ``ctx_key``, ``goal_key``, ``time_key``; absent
 context/goal become zero-width and absent time becomes zeros. ``goal`` is not a
-dynamics input: it only feeds the heads. When an ``AnalyticMDP`` is supplied
-and ``goal_dim > 0``, ``step`` advances it with ``mdp.goal(t + 1)``.
+dynamics input: it only feeds the heads. When a ``GoalSource`` is supplied
+(defaulting to the ``AnalyticMDP``) and ``goal_dim > 0``, ``step`` recomputes
+it with ``goal_source.goal(s_next, ctx, t + 1)``, retaining state gradients.
 
 Heads. Reward, observation and termination are each independently
 
@@ -32,6 +46,9 @@ Heads. Reward, observation and termination are each independently
 - ``"analytic"``: delegated to the differentiable, task-supplied
   ``AnalyticMDP`` (no parameters, no loss term);
 - observation only: ``"identity"``, the observation is the state itself.
+
+Learned heads are evaluated on the predicted states inside the k-step rollout,
+so their losses also shape the dynamics; this is Eq. 1 as written.
 
 The analytic reward needs the next state, so use ``transition_reward``;
 ``reward`` is the learned head only.
@@ -42,7 +59,8 @@ disabled.
 """
 from __future__ import annotations
 
-from typing import Iterator, Literal, Optional, Protocol
+import warnings
+from typing import Iterator, Literal, Mapping, Optional, Protocol
 
 import torch
 import torch.nn as nn
@@ -80,6 +98,24 @@ class StateCodec(Protocol):
         """``s (+) d``, differentiable in both arguments."""
 
 
+class LossBlockStateCodec(StateCodec, Protocol):
+    """A ``StateCodec`` that also names the space the state error is scored in.
+
+    ``increment`` decides what the dynamics MLP predicts (for example a
+    velocity-level delta that ``integrate`` turns into a pose);
+    ``loss_blocks`` decides in which space the prediction error is measured
+    and ``nominal_errors`` with which nominal error each block is scored (for
+    example the integrated position, scored at 1 cm). Channels left out of
+    every block do not enter the loss.
+    """
+
+    #: Nominal error per block; the keys are exactly those of ``loss_blocks``.
+    nominal_errors: Mapping[str, float]
+
+    def loss_blocks(self, s: torch.Tensor) -> dict[str, torch.Tensor]:
+        """``(..., S) -> {name: (..., W_name)}``, differentiable in ``s``."""
+
+
 class ResidualStateCodec:
     """Features are the state, the increment is ``s1 - s``, integration adds."""
 
@@ -99,9 +135,29 @@ class ResidualStateCodec:
         return s + d
 
 
-class AnalyticMDP(Protocol):
+class GoalSource(Protocol):
+    """Task-supplied, batched, pure-torch goal generation, differentiable in state."""
+
+    goal_dim: int
+
+    def goal(self, s: torch.Tensor, ctx: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """``(B, goal_dim)``; ``(B, 0)`` when ``goal_dim == 0``.
+
+        ``s`` and ``ctx`` are the state and context at time index ``t``.
+        """
+
+
+class AnalyticMDP(GoalSource, Protocol):
     """Task-supplied, batched, pure-torch and differentiable MDP functions.
-    ``t`` is ``(B,)`` long (or ``(T, B)``)."""
+    Also satisfies ``GoalSource``. ``t`` is ``(B,)`` long (or ``(T, B)``).
+
+    In ``reward(..., t_next)``, ``t_next = t + 1`` indexes ``s_next``;
+    ``termination_prob(s, t)`` receives the post-step state and its time index.
+    Official SuperMimic scores reward/termination before advancing motion time,
+    against ``ref(t_next - 1)``: subtract one when porting those heads.
+    ``valid_start`` may return all True; clamping motion time at clip ends,
+    as in the official implementation, is the MDP's responsibility.
+    """
 
     obs_dim: int
     goal_dim: int
@@ -127,7 +183,7 @@ class AnalyticMDP(Protocol):
     def termination_prob(self, s: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """``(B,)`` in ``[0, 1]``, differentiable."""
 
-    def goal(self, t: torch.Tensor) -> torch.Tensor:
+    def goal(self, s: torch.Tensor, ctx: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """``(B, goal_dim)``; ``(B, 0)`` when ``goal_dim == 0``."""
 
     def critic_features(self, s: torch.Tensor, ctx: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -138,6 +194,12 @@ class AnalyticMDP(Protocol):
 
 
 class StateSpaceWorldModel(WorldModel):
+    """Explicit-state dynamics with GELU/LayerNorm MLPs and default initialization."""
+
+    #: De-normalize the dynamics output with ``out_norm`` (and keep its
+    #: statistics updated). ``out_norm`` exists either way.
+    normalize_output: bool = True
+
     def __init__(
         self,
         *,
@@ -148,6 +210,7 @@ class StateSpaceWorldModel(WorldModel):
         goal_dim: int = 0,
         codec: Optional[StateCodec] = None,
         mdp: Optional[AnalyticMDP] = None,
+        goal_source: Optional[GoalSource] = None,
         reward_head: HeadMode = "learned",
         observation_head: ObservationHeadMode = "identity",
         termination_head: HeadMode = "learned",
@@ -170,6 +233,21 @@ class StateSpaceWorldModel(WorldModel):
             )
         self.codec: StateCodec = codec if codec is not None else ResidualStateCodec(state_dim)
         self.mdp = mdp
+        self.goal_source = goal_source if goal_source is not None else mdp
+        if self.goal_source is not None and self.goal_source.goal_dim != goal_dim:
+            raise ValueError(
+                f"goal_source.goal_dim ({self.goal_source.goal_dim}) must match goal_dim ({goal_dim})."
+            )
+        if (
+            goal_dim > 0
+            and self.goal_source is None
+            and "learned" in (reward_head, observation_head, termination_head)
+        ):
+            warnings.warn(
+                "Learned heads read goals frozen at the imagination start while training uses "
+                "stepwise advancing recorded goals; provide goal_source for time-varying goals.",
+                stacklevel=2,
+            )
         self.state_dim, self.action_dim, self.obs_dim = state_dim, action_dim, obs_dim
         self.ctx_dim, self.goal_dim = ctx_dim, goal_dim
         self.reward_mode, self.observation_mode, self.termination_mode = (
@@ -196,25 +274,25 @@ class StateSpaceWorldModel(WorldModel):
             dynamics_in_dim,
             self.codec.increment_dim,
             hidden_dims,
-            activation_fn=nn.SiLU,
+            activation_fn=nn.GELU,
             use_layer_norm=True,
         )
-        nn.init.zeros_(self.dynamics_mlp[-1].weight)
-        nn.init.zeros_(self.dynamics_mlp[-1].bias)
 
         state_context_dim = feature_dim + ctx_dim + goal_dim
         self.reward_mlp = (
-            create_mlp(state_context_dim + action_dim, 1, head_hidden_dims, activation_fn=nn.SiLU)
+            create_mlp(
+                state_context_dim + action_dim, 1, head_hidden_dims, activation_fn=nn.GELU, use_layer_norm=True
+            )
             if reward_head == "learned"
             else None
         )
         self.observation_mlp = (
-            create_mlp(state_context_dim, obs_dim, head_hidden_dims, activation_fn=nn.SiLU)
+            create_mlp(state_context_dim, obs_dim, head_hidden_dims, activation_fn=nn.GELU, use_layer_norm=True)
             if observation_head == "learned"
             else None
         )
         self.termination_mlp = (
-            create_mlp(state_context_dim, 1, head_hidden_dims, activation_fn=nn.SiLU)
+            create_mlp(state_context_dim, 1, head_hidden_dims, activation_fn=nn.GELU, use_layer_norm=True)
             if termination_head == "learned"
             else None
         )
@@ -272,12 +350,14 @@ class StateSpaceWorldModel(WorldModel):
     def step(self, state: State, action: torch.Tensor, *, sample: bool = True) -> State:
         del sample  # deterministic.
         s = state["s"].float()
-        increment = self.out_norm.denormalize(self.dynamics_mlp(self.in_norm(self._dynamics_input(state, action))))
+        increment = self.dynamics_mlp(self.in_norm(self._dynamics_input(state, action)))
+        if self.normalize_output:
+            increment = self.out_norm.denormalize(increment)
         with torch.autocast(device_type=s.device.type, enabled=False):
             s_next = self.codec.integrate(s, increment.float())
         t_next = state["t"] + 1
-        if self.mdp is not None and self.goal_dim > 0:
-            goal_next = self.mdp.goal(t_next)
+        if self.goal_source is not None and self.goal_dim > 0:
+            goal_next = self.goal_source.goal(s_next, state["ctx"], t_next)
         else:
             goal_next = state["goal"]
         return {"s": s_next, "ctx": state["ctx"], "goal": goal_next, "t": t_next}
@@ -360,7 +440,8 @@ class StateSpaceWorldModel(WorldModel):
     def update_normalizers(self, obs: Obs, action: torch.Tensor, next_obs: Obs) -> None:
         state, next_state = self.state_from_obs(obs), self.state_from_obs(next_obs)
         self.in_norm.update(self._dynamics_input(state, action))
-        self.out_norm.update(self.codec.increment(state["s"], next_state["s"]))
+        if self.normalize_output:
+            self.out_norm.update(self.codec.increment(state["s"], next_state["s"]))
         if self.goal_dim > 0:
             self.goal_norm.update(state["goal"])
 
@@ -375,6 +456,37 @@ class StateSpaceWorldModel(WorldModel):
             scale = torch.maximum(scale, floor.to(scale))
         return scale.to(like)
 
+    def _rollout_window(self, batch: SequenceBatch) -> tuple[State, torch.Tensor, torch.Tensor]:
+        """Roll the model from the window's real first state with full BPTT.
+
+        Returns the real window ``State`` (leading dims ``(k + 1, B)``), the
+        predicted states ``s_hat`` ``(k + 1, B, S)`` (``s_hat[0]`` is the real
+        first state) and the window's actions ``(k, B, A)``.
+        """
+        window = self.state_from_obs(batch.obs)
+        action = batch.action
+        state: State = {"s": window["s"][0], "ctx": window["ctx"][0], "goal": window["goal"][0], "t": window["t"][0]}
+        predicted = [state["s"]]
+        for j in range(action.shape[0]):
+            state = self.step(state, action[j])
+            predicted.append(state["s"])
+        return window, torch.stack(predicted, dim=0), action
+
+    def _state_loss(
+        self, s_real: torch.Tensor, s_hat: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Score predicted against real states, both ``(k + 1, B, S)``.
+
+        Returns the state loss, the per-step error ``(k, B)`` (its last step
+        is logged as ``state_err_last``) and extra loss components to log,
+        here none. The default is the codec increment error divided by the
+        floored running increment std, averaged over components, summed over
+        steps and averaged over ``B``.
+        """
+        increment_error = self.codec.increment(s_real[1:], s_hat[1:])
+        per_step_error = (increment_error / self._error_scale(increment_error)).square().mean(-1)
+        return per_step_error.sum(0).mean(), per_step_error, {}
+
     def model_loss(self, batch: SequenceBatch) -> tuple[dict[str, torch.Tensor], State]:
         """k-step autoregressive loss over a ``(k + 1, B)`` observation window.
 
@@ -382,27 +494,20 @@ class StateSpaceWorldModel(WorldModel):
         ``(k, B, A)``; ``batch.reward`` ``(k, B)`` or ``(k, B, 1)``;
         ``batch.terminated`` ``(k, B)`` (needed for a learned termination
         head). Predicted states are rolled from the real first state with full
-        BPTT. Every term is summed over the ``k`` steps and averaged over ``B``;
-        learned heads see the *recorded* goal of each step (the goal is
-        exogenous), analytic/identity heads add no term.
+        BPTT (``_rollout_window``) and scored by ``_state_loss``. Every head
+        term is summed over the ``k`` steps and averaged over ``B``;
+        learned heads see the *recorded* goal of each step, even with a
+        state-dependent ``GoalSource``; analytic/identity heads add no term.
+        The extra components of ``_state_loss`` are added to the returned
+        dict, detached.
         """
-        window = self.state_from_obs(batch.obs)
-        action = batch.action
+        window, s_hat, action = self._rollout_window(batch)
         horizon, batch_size = action.shape[0], action.shape[1]
         s_real = window["s"]
         ctx = window["ctx"][0]
         t0 = window["t"][0]
 
-        state: State = {"s": s_real[0], "ctx": ctx, "goal": window["goal"][0], "t": t0}
-        predicted = [state["s"]]
-        for j in range(horizon):
-            state = self.step(state, action[j])
-            predicted.append(state["s"])
-        s_hat = torch.stack(predicted, dim=0)
-
-        increment_error = self.codec.increment(s_real[1:], s_hat[1:])
-        per_step_error = (increment_error / self._error_scale(increment_error)).square().mean(-1)
-        loss_state = per_step_error.sum(0).mean()
+        loss_state, per_step_error, extra = self._state_loss(s_real, s_hat)
 
         zero = s_hat.new_zeros(())
         loss_reward = loss_observation = loss_termination = zero
@@ -439,6 +544,7 @@ class StateSpaceWorldModel(WorldModel):
             "termination": loss_termination,
             "total": loss_state + loss_reward + loss_observation + loss_termination,
             "state_err_last": per_step_error[-1].mean().detach(),
+            **{name: value.detach() for name, value in extra.items()},
         }
         posterior: State = {"s": s_real[0].detach(), "ctx": ctx, "goal": window["goal"][0], "t": t0}
         return losses, posterior

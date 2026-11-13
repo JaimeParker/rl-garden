@@ -5,9 +5,11 @@ import math
 
 import pytest
 import torch
-from _supermimic_fakes import PointMassTrackingEnv
+from _supermimic_fakes import PointMassRelativeGoal, PointMassTrackingEnv
 
-from rl_garden.algorithms.supermimic import SuperMimic
+from rl_garden.algorithms.model_based_step import ModelBasedStepMixin
+from rl_garden.algorithms.supermimic import SuperMimic, updates_per_env_step
+from rl_garden.buffers.state_sequence_replay_buffer import HistorySample
 
 NUM_ENVS = 4
 SMALL = {
@@ -23,6 +25,7 @@ SMALL = {
     "imagination_batch": 8,
     "warmup_updates": 1,
     "learning_starts": 4 * NUM_ENVS,
+    "replay_ratio": None,
     "sim_steps_per_iteration": 2,
     "updates_per_iteration": 1,
     "buffer_size": 1024,
@@ -65,6 +68,64 @@ def test_learn_runs_with_finite_metrics(monkeypatch, heads, extra_keys, obs_hist
         assert "wm/loss" in metrics
         for key, value in metrics.items():
             assert math.isfinite(value), (key, value)
+
+
+def test_learned_heads_with_relative_goal_source_learn(monkeypatch):
+    source = PointMassRelativeGoal()
+    agent = make_agent(goal_source=source)
+    assert agent.world_model.goal_source is source
+    # Record the same state-relative goal that imagination will recompute.
+    monkeypatch.setattr(agent.env.unwrapped._mdp, "goal", source.goal)
+    recorded = []
+    gradient_step = agent._gradient_step
+
+    def recording_gradient_step():
+        metrics = gradient_step()
+        recorded.append(metrics)
+        return metrics
+
+    monkeypatch.setattr(agent, "_gradient_step", recording_gradient_step)
+    agent.learn(total_timesteps=200)
+    assert agent._global_update > 0
+    assert recorded and any("actor/loss" in metrics for metrics in recorded)
+    assert all(math.isfinite(value) for metrics in recorded for value in metrics.values())
+
+
+def test_goal_source_is_adopted_from_env():
+    env = PointMassTrackingEnv(NUM_ENVS)
+    env.goal_source = PointMassRelativeGoal(ref_length=env.ref_length)
+    agent = SuperMimic(env, heads="learned", **SMALL)
+    assert agent.world_model.goal_source is env.goal_source
+
+
+@pytest.mark.parametrize("heads", ["learned", "analytic"])
+def test_explicit_goal_source_takes_precedence_over_env(heads):
+    env = PointMassTrackingEnv(NUM_ENVS)
+    env.goal_source = PointMassRelativeGoal()
+    source = PointMassRelativeGoal()
+    agent = SuperMimic(env, heads=heads, goal_source=source, **SMALL)
+    assert agent.world_model.goal_source is source
+
+
+def test_replay_ratio_learn_runs_with_fractional_updates_and_finite_metrics(monkeypatch):
+    agent = make_agent(replay_ratio=3.0, sim_steps_per_iteration=None, updates_per_iteration=None)
+    assert agent.updates_per_env_step == pytest.approx(0.5)
+    recorded = []
+    train = agent.train
+
+    def recording_train(gradient_steps, compute_info=False):
+        metrics = train(gradient_steps, compute_info=compute_info)
+        recorded.append(metrics)
+        return metrics
+
+    monkeypatch.setattr(agent, "train", recording_train)
+    agent.learn(total_timesteps=300)
+    assert agent._global_update > 0
+    assert any(not metrics for metrics in recorded)
+    updates = [metrics for metrics in recorded if metrics]
+    assert updates and all("wm/loss" in metrics for metrics in updates)
+    assert any("actor/loss" in metrics for metrics in updates)
+    assert all(math.isfinite(value) for metrics in updates for value in metrics.values())
 
 
 def test_actor_gradient_reaches_decoder_only():
@@ -139,11 +200,11 @@ def test_actor_step_clips_elements_and_skips_non_finite():
 
 def test_cosine_learning_rate_schedule():
     decay = 100
-    agent = make_agent(lr=1e-3, lr_final_ratio=0.1, lr_decay_updates=decay)
+    agent = make_agent(lr=1e-3, lr_final_ratio=0.03, lr_decay_updates=decay)
     for update in (1, decay // 2, decay, 2 * decay):
         agent._global_update = update
         progress = min(update - 1, decay) / decay
-        expected = 1e-3 * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
+        expected = 1e-3 * (0.03 + 0.97 * 0.5 * (1 + math.cos(math.pi * progress)))
         assert agent._set_learning_rates() == pytest.approx(expected)
         for name in agent._optimizer_names():
             assert getattr(agent, name).param_groups[0]["lr"] == pytest.approx(expected)
@@ -167,11 +228,173 @@ def test_warmup_updates_train_only_the_world_model():
             assert "actor/loss" in metrics and "critic/loss" in metrics and not unchanged
 
 
-def test_update_to_data_mapping():
+def test_updates_per_env_step_matches_official_sample_reuse():
+    assert updates_per_env_step(4096, 16.0, 10, 2048, 7) == 0.4
+
+
+def test_fractional_update_accumulator(monkeypatch):
+    agent = make_agent(
+        replay_ratio=3.0, sim_steps_per_iteration=None, updates_per_iteration=None,
+        wm_batch_size=10, warmup_updates=0,
+    )  # 4 * 3 / (1 * 10 * 3) = 0.4 updates per vector step.
+    calls = []
+
+    def recording_train(self, gradient_steps, compute_info=False):
+        assert self is agent
+        calls.append((gradient_steps, compute_info))
+        return {"updates": float(gradient_steps)}
+
+    monkeypatch.setattr(ModelBasedStepMixin, "train", recording_train)
+    assert agent.updates_per_env_step == pytest.approx(0.4)
+    assert agent.training_freq == NUM_ENVS and agent.steps_per_env == 1
+    assert agent.grad_steps_per_iteration == 1
+    assert agent.utd == pytest.approx(0.4 / NUM_ENVS)
+    results = [agent.train(1, compute_info=True) for _ in range(5)]
+    assert results[:2] == [{}, {}]
+    assert calls == [(1, True)] * 2
+    for _ in range(5):
+        agent.train(1, compute_info=True)
+    assert calls == [(1, True)] * 4
+    assert agent._update_credit == pytest.approx(0.0, abs=1e-14)
+
+    assert agent.train(5) == {"updates": 2.0}
+    assert calls[-1] == (2, False)
+
+
+def test_legacy_update_to_data_mapping(monkeypatch):
     agent = make_agent(sim_steps_per_iteration=5, updates_per_iteration=3)
     assert agent.grad_steps_per_iteration == 3
     assert agent.steps_per_env == 5
     assert agent.training_freq == 5 * NUM_ENVS
+    assert agent.utd == pytest.approx(3 / (5 * NUM_ENVS))
+    assert agent.updates_per_env_step == pytest.approx(3 / 5)
+    calls = []
+    monkeypatch.setattr(
+        ModelBasedStepMixin, "train",
+        lambda self, gradient_steps, compute_info=False: calls.append((gradient_steps, compute_info)) or {},
+    )
+    assert agent.train(3, compute_info=True) == {}
+    assert calls == [(3, True)] and agent._update_credit == 0.0
+
+
+def test_replay_ratio_above_one_keeps_one_scheduling_step(monkeypatch):
+    agent = make_agent(replay_ratio=18.0, sim_steps_per_iteration=None, updates_per_iteration=None)
+    assert agent.updates_per_env_step == 3.0
+    assert agent.grad_steps_per_iteration == 1
+    calls = []
+    monkeypatch.setattr(
+        ModelBasedStepMixin, "train",
+        lambda self, gradient_steps, compute_info=False: calls.append(gradient_steps) or {},
+    )
+    agent.train(1)
+    assert calls == [3]
+
+
+@pytest.mark.parametrize("warmup_updates", [0, 1, 3])
+def test_replay_ratio_buffer_warmup_and_metadata(warmup_updates):
+    agent = make_agent(
+        replay_ratio=3.0, sim_steps_per_iteration=None, updates_per_iteration=None,
+        wm_batch_size=10, warmup_updates=warmup_updates, buffer_size=None, learning_starts=None,
+    )
+    assert agent.buffer_size == 1000 * NUM_ENVS
+    assert agent.learning_starts == (agent.wm_window + 2) * NUM_ENVS
+    assert agent.initial_training_phase.duration_steps == math.ceil(warmup_updates / 0.4) * NUM_ENVS
+    metadata = agent._checkpoint_metadata()
+    assert metadata["replay_ratio"] == 3.0
+    assert metadata["updates_per_env_step"] == pytest.approx(0.4)
+    assert metadata["max_step_reward"] is None
+    assert "_update_credit" not in agent._training_state_dict()
+    assert "_update_credit" not in agent._extra_checkpoint_state()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"replay_ratio": 16.0},
+        {"replay_ratio": 16.0, "sim_steps_per_iteration": None},
+        {"replay_ratio": 16.0, "updates_per_iteration": None},
+        {"sim_steps_per_iteration": None},
+        {"updates_per_iteration": None},
+        {"sim_steps_per_iteration": 0},
+        {"updates_per_iteration": 0},
+    ],
+)
+def test_schedule_parameters_must_select_one_mode(overrides):
+    with pytest.raises(ValueError, match="replay_ratio"):
+        make_agent(**overrides)
+
+
+@pytest.mark.parametrize("ratio", [0.0, -1.0, float("nan"), float("inf")])
+def test_replay_ratio_must_be_finite_and_positive(ratio):
+    with pytest.raises(ValueError, match="replay_ratio"):
+        updates_per_env_step(NUM_ENVS, ratio, 1, 8, 2)
+
+
+def test_default_learning_rate_is_constant_and_legacy_warmup_unchanged():
+    agent = make_agent(warmup_updates=3)
+    assert agent.initial_training_phase.duration_steps == 3 * agent.training_freq
+    for update in (1, agent.lr_decay_updates // 2, 2 * agent.lr_decay_updates):
+        agent._global_update = update
+        assert agent._set_learning_rates() == agent.lr
+
+
+def test_policy_mlps_and_unnormalized_critic_input():
+    agent = make_agent()
+    for mlp in (agent.policy.goal_encoder, agent.policy.decoder, agent.policy.critic):
+        for offset in range(0, len(mlp) - 1, 3):
+            assert isinstance(mlp[offset], torch.nn.Linear)
+            assert isinstance(mlp[offset + 1], torch.nn.LayerNorm)
+            assert isinstance(mlp[offset + 2], torch.nn.GELU)
+    assert not hasattr(agent.policy, "critic_norm")
+    critic_in = torch.randn(3, agent.policy.critic_in_dim)
+    assert torch.equal(agent.policy.value(critic_in), agent.policy.critic(critic_in))
+
+
+@pytest.mark.parametrize("max_step_reward", [None, 0.01])
+def test_max_step_reward_caps_imagined_bootstrap(monkeypatch, max_step_reward):
+    agent = make_agent(gamma=0.9, max_step_reward=max_step_reward)
+    obs, _ = agent.env.reset(seed=0)
+    starts = HistorySample(
+        obs={key: value.unsqueeze(0) for key, value in obs.items()},
+        prev_action=torch.zeros(NUM_ENVS, 2),
+        obs_valid=torch.ones(1, NUM_ENVS, dtype=torch.bool),
+    )
+    monkeypatch.setattr(agent.policy, "value", lambda inputs: inputs.new_full((*inputs.shape[:-1], 1), 4.0))
+    monkeypatch.setattr(
+        agent.world_model, "termination_prob", lambda state: state["s"].new_zeros((*state["s"].shape[:-1], 1))
+    )
+    monkeypatch.setattr(
+        agent.world_model, "transition_reward",
+        lambda before, action, after, prev: action.new_full((*action.shape[:-1], 1), 0.2),
+    )
+    rollout = agent._imagine(starts)
+    bootstrap = 4.0 if max_step_reward is None else 0.1
+    expected = sum(0.9**t * 0.2 for t in range(agent.horizon)) + 0.9**agent.horizon * bootstrap
+    assert float(rollout["value_H"]) == pytest.approx(bootstrap)
+    assert float(rollout["loss"]) == pytest.approx(-expected)
+
+
+@pytest.mark.parametrize("max_step_reward", [None, 0.01])
+def test_max_step_reward_caps_critic_targets_after_recursion(max_step_reward):
+    agent = make_agent(gamma=0.9, lam=0.8, max_step_reward=max_step_reward)
+    rewards = torch.tensor([[0.2, -2.0], [0.3, -3.0]])
+    dones = torch.tensor([[0.0, 0.25], [0.5, 1.0]])
+    values = torch.tensor([[7.0, 8.0], [4.0, 1.0], [5.0, 2.0]])
+    # Last: [.3 + .9 * .5 * 5, -3] = [2.55, -3].
+    # First: [.2 + .9 * (.2 * 4 + .8 * 2.55),
+    #         -2 + .9 * .75 * (.2 * 1 + .8 * -3)] = [2.756, -3.485].
+    expected = torch.tensor([[2.756, -3.485], [2.55, -3.0]])
+    if max_step_reward is not None:
+        expected = expected.clamp(max=0.1)
+    torch.testing.assert_close(agent._critic_targets(rewards, dones, values), expected)
+
+
+@pytest.mark.parametrize(
+    "max_step_reward, gamma", [(float("nan"), 0.9), (float("inf"), 0.9), (0.01, 1.0)]
+)
+def test_value_cap_requires_a_finite_discounted_bound(max_step_reward, gamma):
+    with pytest.raises(ValueError, match="max_step_reward"):
+        make_agent(max_step_reward=max_step_reward, gamma=gamma)
 
 
 def test_terminated_steps_keep_the_pre_reset_observation():

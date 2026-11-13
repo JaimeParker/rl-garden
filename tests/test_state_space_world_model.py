@@ -1,10 +1,12 @@
 """``StateSpaceWorldModel``, ``RunningNorm`` and the PWM return normalizer."""
 from __future__ import annotations
 
+import warnings
+
 import pytest
 import torch
 import torch.nn.functional as F
-from _supermimic_fakes import PointMassCodec, PointMassMDP
+from _supermimic_fakes import PointMassCodec, PointMassMDP, PointMassRelativeGoal
 
 from rl_garden.algorithms.pwm import PWMPolicy
 from rl_garden.networks.running_norm import RunningNorm
@@ -33,7 +35,7 @@ def _model(**overrides) -> StateSpaceWorldModel:
 
 
 def _randomize(model: StateSpaceWorldModel) -> None:
-    """Non-trivial weights and normalizer statistics (the init is all-zero)."""
+    """Randomize weights and normalizer statistics for the loss comparison."""
     with torch.no_grad():
         for p in model.parameters():
             p.normal_(std=0.3)
@@ -65,6 +67,61 @@ def test_construction_validation():
         _model(observation_head="identity", obs_dim=_S + 1)
 
 
+def test_state_dependent_goal_retains_state_gradient():
+    source = PointMassRelativeGoal()
+    model = _model(goal_dim=4, goal_source=source)
+    state = model.initial_state(_B, torch.device("cpu"))
+    state["s"] = torch.randn(_B, _S, requires_grad=True)
+    state["t"] = torch.tensor([0, 5, 62])
+    with torch.no_grad():
+        model.dynamics_mlp[-1].weight.zero_()
+        model.dynamics_mlp[-1].bias.zero_()
+    nxt = model.step(state, torch.randn(_B, _A))
+    assert model.goal_source is source
+    assert nxt["goal"].shape == (_B, 4)
+    torch.testing.assert_close(nxt["goal"], source.goal(nxt["s"], state["ctx"], state["t"] + 1))
+    grad_next, = torch.autograd.grad(nxt["goal"].sum(), nxt["s"], retain_graph=True)
+    grad_start, = torch.autograd.grad(nxt["goal"].sum(), state["s"])
+    expected = torch.tensor([-2.0, -2.0, 0.0, 0.0]).expand(_B, -1)
+    torch.testing.assert_close(grad_next, expected)
+    torch.testing.assert_close(grad_start, expected)
+
+
+@pytest.mark.parametrize("source_kwargs", [{"goal_source": PointMassRelativeGoal()}, {"mdp": PointMassMDP()}])
+def test_goal_source_dimension_must_match(source_kwargs):
+    with pytest.raises(ValueError, match="goal_source.goal_dim.*must match goal_dim"):
+        _model(**source_kwargs)
+
+
+def test_learned_heads_without_goal_source_warn():
+    with pytest.warns(UserWarning, match="^Learned heads read goals frozen at the imagination start") as caught:
+        model = _model()
+    assert len(caught) == 1
+    assert str(caught[0].message) == (
+        "Learned heads read goals frozen at the imagination start while training uses "
+        "stepwise advancing recorded goals; provide goal_source for time-varying goals."
+    )
+    assert model.goal_source is None
+
+
+@pytest.mark.parametrize("with_source", [False, True])
+def test_no_frozen_goal_warning_with_source_or_without_goals(with_source):
+    kwargs = {"goal_dim": 4, "goal_source": PointMassRelativeGoal()} if with_source else {"goal_dim": 0}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model = _model(**kwargs)
+    assert not caught
+    state = model.initial_state(_B, torch.device("cpu"))
+    assert model.step(state, torch.zeros(_B, _A))["goal"].shape == (_B, kwargs["goal_dim"])
+
+
+def test_goal_source_overrides_analytic_mdp_default():
+    mdp, source = PointMassMDP(), PointMassRelativeGoal()
+    model = _model(goal_dim=4, mdp=mdp, goal_source=source)
+    assert model.goal_source is source
+    assert model.mdp is mdp
+
+
 def test_state_from_obs_defaults():
     model = _model()
     obs = {"state": torch.randn(_B, _S)}
@@ -80,14 +137,28 @@ def test_state_from_obs_defaults():
     assert torch.equal(state["t"], torch.tensor([2, 3, 4]))
 
 
-def test_step_is_identity_at_init_and_advances_time():
+def test_step_with_zero_dynamics_output_is_identity_and_advances_time():
     model = _model()
+    with torch.no_grad():
+        model.dynamics_mlp[-1].weight.zero_()
+        model.dynamics_mlp[-1].bias.zero_()
     state = {"s": torch.randn(_B, _S), "ctx": torch.randn(_B, _C), "goal": torch.randn(_B, _G), "t": torch.arange(_B)}
     nxt = model.step(state, torch.randn(_B, _A))
     torch.testing.assert_close(nxt["s"], state["s"])
     assert torch.equal(nxt["t"], state["t"] + 1)
     torch.testing.assert_close(nxt["goal"], state["goal"])
     torch.testing.assert_close(nxt["ctx"], state["ctx"])
+
+
+def test_mlp_architecture_and_default_dynamics_initialization():
+    model = _model()
+    for mlp in (model.dynamics_mlp, model.reward_mlp, model.observation_mlp, model.termination_mlp):
+        assert isinstance(mlp[-1], torch.nn.Linear)
+        for offset in range(0, len(mlp) - 1, 3):
+            assert isinstance(mlp[offset], torch.nn.Linear)
+            assert isinstance(mlp[offset + 1], torch.nn.LayerNorm)
+            assert isinstance(mlp[offset + 2], torch.nn.GELU)
+    assert torch.count_nonzero(model.dynamics_mlp[-1].weight) > 0
 
 
 def test_model_loss_matches_hand_computation():
@@ -166,13 +237,15 @@ def test_analytic_heads_with_point_mass():
         reward_head="analytic", observation_head="analytic", termination_head="analytic",
         hidden_dims=(16,),
     )
+    assert model.goal_source is mdp
     assert list(model.parameter_groups()["heads"]) == []
     t = torch.tensor([0, 5, 62])
-    state = {"s": torch.randn(3, 4), "ctx": torch.zeros(3, 0), "goal": mdp.goal(t), "t": t}
+    s, ctx = torch.randn(3, 4), torch.zeros(3, 0)
+    state = {"s": s, "ctx": ctx, "goal": mdp.goal(s, ctx, t), "t": t}
     action = torch.randn(3, 2)
     nxt = model.step(state, action)
     assert torch.equal(nxt["t"], t + 1)
-    torch.testing.assert_close(nxt["goal"], mdp.goal(t + 1))
+    torch.testing.assert_close(nxt["goal"], mdp.goal(nxt["s"], ctx, t + 1))
     reward = model.transition_reward(state, action, nxt, torch.zeros(3, 2))
     torch.testing.assert_close(reward, mdp.reward(state["s"], action, nxt["s"], torch.zeros(3, 2), state["ctx"], t + 1).unsqueeze(-1))
     torch.testing.assert_close(model.termination_prob(state), mdp.termination_prob(state["s"], t).unsqueeze(-1))
@@ -190,6 +263,17 @@ def test_analytic_heads_with_point_mass():
         assert losses[name] == 0
     assert losses["total"] == losses["state"]
     assert torch.equal(posterior["t"], torch.zeros(_B, dtype=torch.long))
+
+
+def test_model_loss_keeps_recorded_goals_with_state_dependent_source():
+    model = _model(goal_dim=4, goal_source=PointMassRelativeGoal())
+    batch = _window()
+    batch.obs["state_goal"] = batch.obs["state_goal"][..., :4]
+    with_source, _ = model.model_loss(batch)
+    model.goal_source = None
+    without_source, _ = model.model_loss(batch)
+    for name in with_source:
+        torch.testing.assert_close(with_source[name], without_source[name])
 
 
 def test_running_norm_merge_and_roundtrip():
