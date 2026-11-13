@@ -17,12 +17,13 @@ Parity notes vs the Flax version:
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
+
+from rl_garden.common import pretrained_paths
 from gymnasium import spaces
 
 from rl_garden.encoders.base import BaseFeaturesExtractor
@@ -191,15 +192,11 @@ class ResNetEncoder(BaseFeaturesExtractor):
     def pretrained_dir() -> Path:
         """Directory searched for pretrained ResNet checkpoints.
 
-        Resolution order:
-          1. ``$RL_GARDEN_PRETRAINED_DIR`` (if set)
-          2. ``pretrained/resnet/`` at the repo root.
+        ``$RL_GARDEN_PRETRAINED_DIR`` if set, else
+        ``~/.cache/rl_garden/pretrained/resnet/`` (see
+        :mod:`rl_garden.common.pretrained_paths`).
         """
-        env = os.environ.get("RL_GARDEN_PRETRAINED_DIR")
-        if env:
-            return Path(env).expanduser().resolve()
-        # rl_garden/encoders/resnet.py -> repo root is 2 parents up.
-        return Path(__file__).resolve().parents[2] / "pretrained" / "resnet"
+        return pretrained_paths.pretrained_dir("resnet")
 
     def load_pretrained(self, name: str, strict: bool = False) -> list[str]:
         """Look up ``<name>.pt`` under :meth:`pretrained_dir` and load it.

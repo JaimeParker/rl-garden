@@ -10,6 +10,8 @@ from typing import Any
 
 import torch
 
+from rl_garden.common import pretrained_paths
+
 DEFAULT_ACT_CHECKPOINT = "act-peg-only"
 
 
@@ -44,17 +46,12 @@ class ACTCheckpointSpec:
 def act_pretrained_dir() -> Path:
     """Directory searched for named ACT checkpoints.
 
-    Resolution order follows the ResNet encoder convention:
-
-    1. ``$RL_GARDEN_PRETRAINED_DIR`` if set.
-    2. ``pretrained/act/`` at the repo root.
+    ``$RL_GARDEN_PRETRAINED_DIR`` if set, else
+    ``~/.cache/rl_garden/pretrained/act/`` (see
+    :mod:`rl_garden.common.pretrained_paths`).
     """
 
-    env = os.environ.get("RL_GARDEN_PRETRAINED_DIR")
-    if env:
-        return Path(env).expanduser().resolve()
-    # rl_garden/models/act/config.py -> repo root is 3 parents up.
-    return Path(__file__).resolve().parents[3] / "pretrained" / "act"
+    return pretrained_paths.pretrained_dir("act")
 
 
 def resolve_act_checkpoint_path(ckpt_path: str | os.PathLike[str] | None) -> Path:

@@ -46,8 +46,6 @@ prompts/
 demos/
 reports/
 docs/superpowers/
-pretrained/*
-!pretrained/README.md
 temp/
 :memory:.ses
 

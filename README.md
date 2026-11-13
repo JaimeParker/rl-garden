@@ -346,8 +346,8 @@ Torchvision-style ResNet checkpoints must be converted to rl-garden parameter na
 
 ```bash
 python tools/conversion/convert_resnet_checkpoint.py \
-  --input pretrained/resnet/resnet10_pretrained.pt \
-  --output pretrained/resnet/resnet10_pretrained_converted.pt \
+  --input ~/Downloads/resnet10_pretrained.pt \
+  --output ~/.cache/rl_garden/pretrained/resnet/resnet10-imagenet.pt \
   --arch resnet10
 ```
 

@@ -149,8 +149,6 @@ agent rules; this file is a plain orientation reference, not a rules doc.
   Not to be confused with `rl_garden/integrations/rlinf/`, which is the
   opposite direction — rl-garden's own algorithms running as workers under
   RLinf.
-- `pretrained/` — externally pretrained weights (ResNet, ACT), outside the
-  importable package tree.
 - `tests/` — unit tests and accelerator/backend integration smoke tests.
 - `docs/` — public documentation, split into `guides/` (operational how-to),
   `design/` (architecture and rationale), and `roadmaps/` (migration-tracking
