@@ -15,8 +15,8 @@ from rl_garden.encoders.combined import default_image_encoder_factory
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.critic_vector_field import compute_support, hl_gauss_to_probs
 
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
-# images without PlainConv's flatten-layer size mismatch. Mirrors
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size. Mirrors
 # tests/test_fql_core.py's own vision-test image encoder factory.
 _TEST_IMAGE_SIZE = 16
 _test_image_encoder_factory = default_image_encoder_factory(

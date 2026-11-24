@@ -11,8 +11,8 @@ from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import DiffusionUNet1D
 
 _IMAGE_SIZE = 16
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
-# images without PlainConv's flatten-layer size mismatch.
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size.
 _TEST_ENCODER_CONFIG = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 

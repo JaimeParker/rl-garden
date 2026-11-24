@@ -462,14 +462,14 @@ Isaac Lab's tensor as-is.
 **On 3.0, always set `renderer_cfg` explicitly.** Leaving it at the default
 `RendererCfg()` resolves to Kit RTX.
 
-**Camera resolution: use 64×64 or 128×128.** rl-garden's default `PlainConv`
-image encoder (`rl_garden/encoders/plain_conv.py`) hardcodes a conv/pool
-stride schedule that only produces a valid feature map for those two sizes.
-Any other resolution silently builds a mis-sized `Linear` layer and crashes
-at the first forward pass (`RuntimeError: mat1 and mat2 shapes cannot be
-multiplied`). This backend doesn't consult `--obs.image_size`: the camera's
-pixel resolution is baked into the camera cfg's `width`/`height` in the task
-registration, so keep it at one of the two supported sizes.
+**Camera resolution: at least 16 px per side.** rl-garden's default
+`PlainConv` image encoder (`rl_garden/encoders/plain_conv.py`) accepts any
+height and width of 16 or more and raises `ValueError` below that. Its default
+`flatten` pooling sizes a `Linear` layer from the image, so that layer grows
+with image area; `--encoder.plain_conv_pooling gap` keeps it fixed. This
+backend doesn't consult `--obs.image_size`: the camera's pixel resolution is
+baked into the camera cfg's `width`/`height` in the task registration. The
+in-tree camera tasks use 64×64.
 
 **⚠️ Kit RTX needs a driver Kit accepts.** On a rejected driver (e.g.
 570.133.07, inside Kit's `[570.00, 570.158.01)` rejection range) Kit still

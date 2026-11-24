@@ -90,7 +90,6 @@ def test_plain_conv_activation_probe_reports_gap_bottleneck_and_gradients() -> N
     encoder = PlainConv(
         spaces.Box(0.0, 1.0, (3, 64, 64), dtype=np.float32),
         features_dim=16,
-        image_size=(64, 64),
         pooling="gap",
     )
     image = torch.randn(2, 3, 64, 64)

@@ -15,8 +15,8 @@ from rl_garden.envs.wrappers import ActionChunkWrapper
 
 OBS_DIM = 5
 ACTION_DIM = 2
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
-# images without PlainConv's flatten-layer size mismatch. Mirrors
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size. Mirrors
 # tests/test_fql_core.py's own vision-test image encoder factory.
 IMG_SIZE = 16
 _test_encoder_config = EncoderConfig(

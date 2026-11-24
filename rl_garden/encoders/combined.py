@@ -64,11 +64,9 @@ def default_image_encoder_factory(
     plain_conv_pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten",
 ) -> ImageEncoderFactory:
     def _factory(img_space: spaces.Box) -> BaseFeaturesExtractor:
-        _, h, w = img_space.shape
         return PlainConv(
             img_space,
             features_dim=features_dim,
-            image_size=(h, w),
             pooling=plain_conv_pooling,
             last_act=plain_conv_last_act,
             weight_init=plain_conv_weight_init,

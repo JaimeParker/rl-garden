@@ -14,8 +14,8 @@ from rl_garden.encoders.config import EncoderConfig
 OBS_DIM = 4
 ACTION_DIM = 2
 HORIZON = 3
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
-# images without PlainConv's flatten-layer size mismatch. Mirrors
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size. Mirrors
 # tests/test_fql_core.py's own vision-test image encoder factory.
 IMG_SIZE = 16
 _test_image_encoder_factory = default_image_encoder_factory(

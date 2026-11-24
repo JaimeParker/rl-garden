@@ -31,7 +31,7 @@ def _dict_image_env(num_envs: int = 1) -> OfflineEnvSpec:
         spaces.Dict(
             {
                 "state": spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32),
-                "rgb_cam": spaces.Box(0, 255, shape=(8, 8, 3), dtype=np.uint8),
+                "rgb_cam": spaces.Box(0, 255, shape=(16, 16, 3), dtype=np.uint8),
             }
         ),
         spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32),

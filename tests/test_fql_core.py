@@ -16,8 +16,8 @@ from rl_garden.encoders.flatten import FlattenExtractor
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.fql_policy import FQLPolicy
 
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
-# images without PlainConv's flatten-layer size mismatch.
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size.
 _TEST_IMAGE_SIZE = 16
 _test_encoder_config = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 

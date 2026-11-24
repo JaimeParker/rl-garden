@@ -41,10 +41,8 @@ class CartpoleDirectCameraSceneCfg(CartpoleDirectSceneCfg):
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
         ),
-        # rl-garden's default PlainConv image encoder only supports 64x64 or
-        # 128x128 inputs (hardcoded conv/pool stride schedule); this task's
-        # resolution is fixed here (ObservationConfig.image_size can't
-        # override it -- see rl_garden.envs.isaaclab.env module docstring).
+        # This task's resolution is fixed here (ObservationConfig.image_size
+        # can't override it -- see rl_garden.envs.isaaclab.env module docstring).
         width=CAMERA_WIDTH,
         height=CAMERA_HEIGHT,
         # Defaults to newton_renderer; isaacsim_rtx/ovrtx/rtx are selectable.

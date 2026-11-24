@@ -9,8 +9,8 @@ from rl_garden.algorithms import TransformerSAC
 from rl_garden.encoders.base import BaseFeaturesExtractor
 from rl_garden.encoders.config import EncoderConfig
 
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates the
-# tiny 64x64 test image without PlainConv's flatten-layer size mismatch.
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size.
 _test_encoder_config = EncoderConfig(features_dim=16, plain_conv_pooling="gap")
 
 

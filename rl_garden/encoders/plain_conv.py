@@ -4,7 +4,9 @@ Lifted from ``3rd_party/ManiSkill/examples/baselines/sac/sac_rgbd.py`` and
 repackaged as a ``BaseFeaturesExtractor`` so it's pluggable into any policy.
 
 Input: NCHW float tensor (already divided by 255 and channels-first).
-Expected image sizes: 64x64 or 128x128.
+Any H, W >= 16. ``pooling="flatten"`` sizes its projection from the feature map,
+so that layer grows with image area; ``"gap"`` and ``"adaptive_max"`` pool to 1x1
+and keep it independent of image size.
 """
 from __future__ import annotations
 
@@ -23,7 +25,6 @@ class PlainConv(BaseFeaturesExtractor):
         self,
         observation_space: spaces.Box,
         features_dim: int = 256,
-        image_size: tuple[int, int] = (128, 128),
         pool_feature_map: bool = False,
         pooling: Literal["flatten", "gap", "adaptive_max"] = "flatten",
         last_act: bool = True,
@@ -46,13 +47,20 @@ class PlainConv(BaseFeaturesExtractor):
         self.pooling = pooling
 
         # observation_space is the channels-first image space (C, H, W).
-        in_channels = int(observation_space.shape[0])
-        first_pool = 4 if (image_size[0] == 128 and image_size[1] == 128) else 2
+        in_channels, height, width = (int(size) for size in observation_space.shape)
+        first_pool = 4 if (height == 128 and width == 128) else 2
+        downsample = first_pool * 8
+        map_height, map_width = height // downsample, width // downsample
+        if map_height == 0 or map_width == 0:
+            raise ValueError(
+                "PlainConv needs images of at least 16 px per side, "
+                f"got {height}x{width} (HxW)"
+            )
 
         self.cnn = nn.Sequential(
             nn.Conv2d(in_channels, 16, 3, padding=1, bias=True),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(first_pool, first_pool),  # 128->32 or 64->32
+            nn.MaxPool2d(first_pool, first_pool),  # e.g. 128->32 or 64->32
             nn.Conv2d(16, 32, 3, padding=1, bias=True),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),  # 16
@@ -74,7 +82,7 @@ class PlainConv(BaseFeaturesExtractor):
             fc_input_dim = 64
         else:
             self.pool = nn.Identity()
-            fc_input_dim = 64 * 4 * 4
+            fc_input_dim = 64 * map_height * map_width
 
         fc = create_mlp(
             input_dim=fc_input_dim,

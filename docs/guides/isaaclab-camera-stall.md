@@ -170,12 +170,14 @@ kept here so they aren't retried blindly.
    stall).** `RuntimeError: mat1 and mat2 shapes cannot be multiplied` — the
    diagnostic task's `TiledCameraCfg` used `width=100, height=100` (copied
    from IsaacLab's own official camera example), but rl-garden's default
-   `PlainConv` image encoder only supports 64×64 or 128×128 (hardcoded
-   conv/pool stride schedule, see `rl_garden/encoders/plain_conv.py`'s
-   docstring). Fixed by setting `TiledCameraCfg.width`/`.height` to 64×64
-   (IsaacLab bakes camera resolution into the task registration, not
-   runtime-selectable through `--obs.image_size`). Real, permanent fix; not
-   the stall's cause (same stall reproduces with correct resolution too).
+   `PlainConv` image encoder at the time did not support that size (its
+   flatten layer was hardcoded for a 4×4 feature map). Fixed by setting
+   `TiledCameraCfg.width`/`.height` to 64×64 (IsaacLab bakes camera resolution
+   into the task registration, not runtime-selectable through
+   `--obs.image_size`). Real fix; not the stall's cause (same stall reproduces
+   with correct resolution too). **Since resolved in the encoder:** `PlainConv`
+   now sizes that layer from the image and accepts any height and width of at
+   least 16 px, so 100×100 no longer hits this error.
 
 6. **Ruled out: `clone_in_fabric=True` (real bug, separate from the
    stall).** The state-only base task's `scene` cfg sets

@@ -320,6 +320,10 @@ python examples/train_online.py sac \
   --buffer-size 50000
 ```
 
+The default `plain_conv` encoder's `flatten` pooling sizes its projection layer
+from the image; `--encoder.plain-conv-pooling gap` is the lighter choice at
+large images.
+
 The same camera cost matters for on-policy PPO throughput. `place_empty_cup`
 in RLinf's RoboTwin configs uses the head camera only and the
 `[piper, piper, 0.6]` embodiment. The dedicated rl-garden

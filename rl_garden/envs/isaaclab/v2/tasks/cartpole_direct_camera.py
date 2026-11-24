@@ -34,7 +34,7 @@ class CartpoleDirectCameraSceneCfg(CartpoleDirectSceneCfg):
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
         ),
-        # PlainConv supports only 64x64 or 128x128 (see the v3 camera task).
+        # Fixed here; ObservationConfig.image_size can't override it (see the v3 camera task).
         width=CAMERA_WIDTH,
         height=CAMERA_HEIGHT,
     )

@@ -78,7 +78,9 @@ literature, e.g. DrM/DrQ-v2/TD-MPC2), `corner3`, `corner4`, `behindGripper`,
 `gripperPOV`. There is no built-in default camera or image size — pass
 `--obs.rgb`/`--obs.depth`/`--obs.image_size` explicitly (`84x84` is the
 common Meta-World-vision size in the literature, not rl-garden's other
-backends' `128x128`).
+backends' `128x128`). The default `plain_conv` encoder's `flatten` pooling
+sizes its projection layer from the image; `--encoder.plain_conv_pooling gap`
+is the lighter choice at large images.
 
 **Single-task env ids only** — `--env_id MT10`/`MT50` with `--obs.rgb`/
 `--obs.depth` set raises a clear `ValueError`: those two env ids build their

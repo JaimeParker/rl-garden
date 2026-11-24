@@ -19,8 +19,8 @@ from rl_garden.networks.value_flow_field import (
     integrate_returns_with_jvp,
 )
 
-# Small + fast: "gap" pooling (unlike the default "flatten") tolerates tiny
-# images without PlainConv's flatten-layer size mismatch. Mirrors
+# Small + fast: "gap" pooling (unlike the default "flatten") keeps PlainConv's
+# projection layer small whatever the test image size. Mirrors
 # tests/test_floq_core.py's own vision-test image encoder factory.
 _TEST_IMAGE_SIZE = 16
 _test_image_encoder_factory = default_image_encoder_factory(
