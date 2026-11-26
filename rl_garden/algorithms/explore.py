@@ -83,6 +83,14 @@ class ExPLORe(RLPD):
         self._rnd: Optional[RNDBonus] = None
         self._offline_min_reward: Optional[torch.Tensor] = None
         super().__init__(env, eval_env, **rlpd_kwargs)
+        if self.nstep > 1 and (self._relabeler is not None or self._rnd is not None):
+            raise ValueError(
+                "ExPLORe's reward model and RND bonus label one transition "
+                "(3rd_party/ExPLORe/train_finetuning.py:377-418,443-455), and the "
+                f"reference has no n-step return; an nstep={self.nstep} sample holds a "
+                "sum over several transitions. Use nstep=1, or "
+                "offline_relabel_type='gt' without RND."
+            )
 
     def _setup_model(self) -> None:
         super()._setup_model()

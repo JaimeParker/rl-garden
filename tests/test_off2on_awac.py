@@ -129,3 +129,19 @@ def test_rollout_predict_matches_policy_contract(off2on_awac_agent):
     action = off2on_awac_agent.policy.predict(obs, deterministic=False)
     assert action.shape == (2, 2)
     assert torch.isfinite(action).all()
+
+
+def test_build_awac_accepts_the_entrypoint_kwargs(simple_env):
+    from rl_garden.training.off2on.entrypoints.awac import AWACOff2OnArgs, build_awac
+
+    args = AWACOff2OnArgs(
+        buffer_size=100, buffer_device="cpu", batch_size=8, warmup_steps=5
+    )
+    agent = build_awac(args, simple_env, None, None, None)
+    assert agent.initial_training_phase.duration_steps == 5
+    assert agent._checkpoint_metadata()["initial_training_phase"]["duration_steps"] == 5
+
+
+def test_initial_training_phase_defaults_to_none(off2on_awac_agent):
+    assert off2on_awac_agent.initial_training_phase is None
+    assert "initial_training_phase" not in off2on_awac_agent._checkpoint_metadata()

@@ -6,14 +6,20 @@ policy/optimizer state.
 """
 from __future__ import annotations
 
+import copy
+import dataclasses
+import os
+import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
 import torch
+import yaml
 from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
-from rl_garden.buffers.replay_buffer import DictArray
+from rl_garden.common.effective_config import _UNRECORDED_IMPORT_PATH_PREFIX
 from rl_garden.common.spaces import canonicalize_floating_observation_space
 
 FORMAT_VERSION = 1
@@ -71,6 +77,124 @@ def _canonical_observation_metadata(metadata: Any) -> Any:
     return metadata
 
 
+#: What a checkpoint holds in place of a value that was or contained an absolute
+#: path (``without_local_paths``). Not ``None``: the value was set.
+REMOVED_PATH = "<absolute path removed>"
+
+#: ``https://host/...``, ``s3://bucket/...``; not ``file:`` and not ``lmdb:///path``.
+_URL = re.compile(r"\b(?!file:)[a-z][a-z0-9+.-]+://[^\s/\"'][^\s\"',;]*", re.IGNORECASE)
+_ABSOLUTE_PATH = re.compile(
+    r"""
+      ^\s*/                                                  # POSIX
+    | ^\s*~(?:$|[/A-Za-z_])
+    | [\s"'`=:,;|@(\[{](?:/(?!\s)|~(?:/|[A-Za-z_][\w.-]*/))      # as a part of the text
+    | \bfile:[/\\~]
+    | [a-z][a-z0-9+.-]+:///
+    | (?<![a-z0-9])[a-z]:[\\/](?!/)                          # Windows drive
+    | \\\\[\w.$-]+\\[\w$]                                    # Windows share
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _text_without_paths(text: str) -> str:
+    if _ABSOLUTE_PATH.search(_URL.sub("", text)) is None:
+        return text
+    if text.startswith(_UNRECORDED_IMPORT_PATH_PREFIX):
+        return f"{_UNRECORDED_IMPORT_PATH_PREFIX}{REMOVED_PATH}>"
+    if "\n" in text and not text.lstrip().startswith("{"):
+        # A policy graph: only the node parameter that is a path goes.
+        try:
+            document = yaml.safe_load(text)
+        except yaml.YAMLError:
+            document = None
+        if isinstance(document, Mapping):
+            return yaml.safe_dump(
+                without_local_paths(document), sort_keys=True, default_flow_style=False
+            )
+    return REMOVED_PATH
+
+
+def without_local_paths(value: Any) -> Any:
+    """``value`` with each string (or bytes) that is or contains an absolute
+    path (also ``~``, ``file:`` and Windows ones) replaced by ``REMOVED_PATH``,
+    recursively through mappings (keys too), sequences and dataclass instances,
+    and without the command line (``argv``). Containers are copied only where
+    something changes, tensors never. The keys of a module state dict (parameter
+    names, which loading matches exactly) are kept."""
+    if isinstance(value, os.PathLike):
+        return without_local_paths(os.fspath(value))
+    if isinstance(value, str):
+        return _text_without_paths(value)
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", "replace")
+        return value if _text_without_paths(text) == text else REMOVED_PATH.encode()
+    if isinstance(value, Mapping):
+        return _mapping_without_paths(value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        cleaned = [without_local_paths(item) for item in value]
+        if all(new is old for new, old in zip(cleaned, value)):
+            return value
+        return type(value)._make(cleaned) if hasattr(value, "_make") else type(value)(cleaned)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        changed = {
+            field.name: cleaned
+            for field in dataclasses.fields(value)
+            if (cleaned := without_local_paths(getattr(value, field.name)))
+            is not getattr(value, field.name)
+        }
+        if not changed:
+            return value
+        value = copy.copy(value)
+        for name, cleaned in changed.items():
+            object.__setattr__(value, name, cleaned)
+    return value
+
+
+def _mapping_without_paths(value: Mapping) -> Mapping:
+    items = {
+        key: without_local_paths(item)
+        for key, item in value.items()
+        if not (key == "argv" and isinstance(item, (str, list, tuple)))
+    }
+    if not hasattr(value, "_metadata"):
+        renamed = [key for key in items if without_local_paths(key) is not key]
+        taken = set(items)
+        for old in renamed:
+            index = 0
+            while f"{REMOVED_PATH} {index}" in taken:
+                index += 1
+            taken.add(f"{REMOVED_PATH} {index}")
+            items = {
+                f"{REMOVED_PATH} {index}" if key is old else key: item
+                for key, item in items.items()
+            }
+    if items.keys() == value.keys() and all(items[key] is value[key] for key in items):
+        return value
+    if not isinstance(value, dict):
+        return items
+    # Keeps the type and the attributes.
+    changed = copy.copy(value)
+    changed.clear()
+    changed.update(items)
+    return changed
+
+
+def holds_removed_path(value: Any) -> bool:
+    """Whether ``without_local_paths`` took something out of ``value`` (also a
+    part of a policy graph's text)."""
+    if isinstance(value, (str, bytes)):
+        marker = REMOVED_PATH if isinstance(value, str) else REMOVED_PATH.encode()
+        return marker in value
+    if isinstance(value, Mapping):
+        return any(holds_removed_path(item) for pair in value.items() for item in pair)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(holds_removed_path(item) for item in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(holds_removed_path(getattr(value, f.name)) for f in dataclasses.fields(value))
+    return False
+
+
 def _first_differing_line(checkpoint_text: str, current_text: str) -> str:
     checkpoint_lines = checkpoint_text.splitlines()
     current_lines = current_text.splitlines()
@@ -120,8 +244,12 @@ def validate_checkpoint_metadata(
     if metadata.get("action_space") != current_action:
         errors.append("action_space metadata does not match current env")
     hyperparameters = metadata.get("hyperparameters")
-    checkpoint_graph = (
-        hyperparameters.get("policy_graph") if isinstance(hyperparameters, dict) else None
+    # The checkpoint's graph has no absolute paths, but one saved earlier may.
+    checkpoint_graph, policy_graph = without_local_paths(
+        (
+            hyperparameters.get("policy_graph") if isinstance(hyperparameters, dict) else None,
+            policy_graph,
+        )
     )
     if checkpoint_graph is not None and policy_graph is None:
         errors.append(
@@ -243,68 +371,17 @@ def _tensor_tree_to_device(tree: Any, device: torch.device) -> Any:
     return tree
 
 
-def _dict_array_state(array: DictArray) -> dict[str, Any]:
-    return {k: _dict_array_state(v) if isinstance(v, DictArray) else v for k, v in array.data.items()}
-
-
-def _load_dict_array_state(array: DictArray, state: dict[str, Any], device: torch.device) -> None:
-    if set(array.data) != set(state):
-        raise ValueError(
-            "Replay buffer observation keys do not match: "
-            f"checkpoint={sorted(state)}, current={sorted(array.data)}"
-        )
-    for key, value in state.items():
-        if isinstance(array.data[key], DictArray):
-            _load_dict_array_state(array.data[key], value, device)
-        else:
-            tensor = value.to(device)
-            if array.data[key].shape != tensor.shape:
-                raise ValueError(
-                    f"Replay buffer tensor shape mismatch for {key!r}: "
-                    f"checkpoint={tuple(tensor.shape)}, current={tuple(array.data[key].shape)}"
-                )
-            array.data[key] = tensor
-
-
 def replay_buffer_state_dict(buffer: BaseReplayBuffer) -> dict[str, Any]:
-    obs_state = _dict_array_state(buffer.obs) if isinstance(buffer.obs, DictArray) else buffer.obs
-    next_obs_state = (
-        _dict_array_state(buffer.next_obs)
-        if isinstance(buffer.next_obs, DictArray)
-        else buffer.next_obs
-    )
-    state: dict[str, Any] = {
+    return {
         "format_version": FORMAT_VERSION,
         "buffer_class": type(buffer).__name__,
         "num_envs": int(buffer.num_envs),
         "buffer_size": int(buffer.buffer_size),
         "per_env_buffer_size": int(buffer.per_env_buffer_size),
-        "pos": int(buffer.pos),
-        "full": bool(buffer.full),
         "storage_device": str(buffer.storage_device),
         "sample_device": str(buffer.sample_device),
-        "obs": obs_state,
-        "next_obs": next_obs_state,
-        "actions": buffer.actions,
-        "rewards": buffer.rewards,
-        "dones": buffer.dones,
+        **buffer.state_dict(),
     }
-    if hasattr(buffer, "base_actions"):
-        state["base_actions"] = buffer.base_actions
-    if hasattr(buffer, "next_base_actions"):
-        state["next_base_actions"] = buffer.next_base_actions
-    if hasattr(buffer, "gamma"):
-        state["gamma"] = float(buffer.gamma)
-    if hasattr(buffer, "_mc_table"):
-        state["mc_table"] = buffer._mc_table
-    if hasattr(buffer, "_episode_end"):
-        state["episode_end"] = buffer._episode_end
-    if hasattr(buffer, "_externally_valid"):
-        state["externally_valid"] = buffer._externally_valid
-        state["external_mc"] = buffer._external_mc
-    if hasattr(buffer, "_step_success") and buffer._step_success is not None:
-        state["step_success"] = buffer._step_success
-    return state
 
 
 def load_replay_buffer_state_dict(
@@ -332,77 +409,7 @@ def load_replay_buffer_state_dict(
             )
     if errors and strict:
         raise ValueError("Incompatible replay buffer checkpoint:\n- " + "\n- ".join(errors))
-
-    storage_device = buffer.storage_device
-    buffer.pos = int(state["pos"])
-    buffer.full = bool(state["full"])
-
-    if isinstance(buffer.obs, DictArray):
-        _load_dict_array_state(buffer.obs, state["obs"], storage_device)
-        _load_dict_array_state(buffer.next_obs, state["next_obs"], storage_device)
-    else:
-        buffer.obs = state["obs"].to(storage_device)
-        buffer.next_obs = state["next_obs"].to(storage_device)
-
-    buffer.actions = state["actions"].to(storage_device)
-    buffer.rewards = state["rewards"].to(storage_device)
-    buffer.dones = state["dones"].to(storage_device)
-    for key in ("base_actions", "next_base_actions"):
-        if not hasattr(buffer, key):
-            continue
-        if key not in state:
-            if strict:
-                raise ValueError(f"Replay buffer checkpoint is missing {key!r}.")
-            continue
-        setattr(buffer, key, state[key].to(storage_device))
-    buffer.sample_device = torch.device(buffer.sample_device)
-
-    if hasattr(buffer, "gamma") and "gamma" in state:
-        buffer.gamma = float(state["gamma"])
-    if hasattr(buffer, "_mc_table"):
-        mc_table = state.get("mc_table")
-        buffer._mc_table = None if mc_table is None else mc_table.to(storage_device)
-    if hasattr(buffer, "_episode_end"):
-        # Missing on checkpoints saved before episode_end tracking existed;
-        # default to `dones` (already loaded above), matching add()'s own
-        # fallback for rows added without an explicit episode_end.
-        episode_end = state.get("episode_end")
-        buffer._episode_end = (
-            episode_end.to(storage_device) if episode_end is not None
-            else buffer.dones.clone().bool()
-        )
-        buffer._valid_table = None
-    if hasattr(buffer, "_externally_valid"):
-        externally_valid = state.get("externally_valid")
-        external_mc = state.get("external_mc")
-        if externally_valid is not None and external_mc is not None:
-            buffer._externally_valid = externally_valid.to(storage_device)
-            buffer._external_mc = external_mc.to(storage_device)
-        elif mc_table is not None:
-            # Checkpoint predates this field but has a legacy whole-table
-            # mc_table: trust it wholesale rather than falling back to
-            # `dones` for episode_end above, which can be all-False (e.g.
-            # bootstrap_at_done="always") and would otherwise make every
-            # restored row look like an incomplete trailing trajectory.
-            buffer._externally_valid = torch.ones_like(buffer.dones, dtype=torch.bool)
-            buffer._external_mc = mc_table.to(storage_device)
-        else:
-            buffer._externally_valid = torch.zeros_like(buffer.dones, dtype=torch.bool)
-            buffer._external_mc = torch.zeros_like(buffer.rewards)
-    if getattr(buffer, "_step_success", None) is not None:
-        step_success = state.get("step_success")
-        if step_success is not None:
-            buffer._step_success = step_success.to(storage_device)
-    # Any cache derived from the buffer's position/validity state (not just
-    # _valid_table, reset above) must be invalidated after a load -- stale
-    # cached indices/counts/permutation from before the load would otherwise
-    # keep being served instead of reflecting the just-loaded state.
-    if hasattr(buffer, "_valid_indices_cache"):
-        buffer._valid_indices_cache = None
-    if hasattr(buffer, "_sampleable_size_cache"):
-        buffer._sampleable_size_cache = None
-    if hasattr(buffer, "_perm"):
-        buffer._perm = None
+    buffer.load_state_dict(_tensor_tree_to_device(state, buffer.storage_device), strict=strict)
 
 
 def save_replay_buffer_file(path: str | Path, buffer: BaseReplayBuffer) -> Path:

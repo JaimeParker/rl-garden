@@ -74,6 +74,7 @@ from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.algorithms.sac_core import ActorQAggregation
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.observations import (
     ObservationContractError,
     ObservationSchema,
@@ -162,11 +163,6 @@ class ACRLPDCore:
             sample_device=self.device,
         )
 
-    def _replay_buffer_step_kwargs(
-        self, terminations: torch.Tensor, truncations: torch.Tensor
-    ) -> dict[str, Any]:
-        return {"episode_end": terminations | truncations}
-
     def _sample_train_batch(self, batch_size: int):
         # Flatten the (B, horizon_length, action_dim) window gathered by
         # ChunkedReplayBuffer into the (B, horizon_length*action_dim)
@@ -179,16 +175,17 @@ class ACRLPDCore:
         return dataclasses.replace(data, actions=flat_actions)
 
     # --- chunked losses ---
-    #
-    # No `valid[..., -1]`-style critic-loss masking here (unlike
-    # acrlpd.py:44's `* batch['valid'][..., -1]`): QC's reference always
-    # reads a full horizon_length window and discards the ENTIRE sample when
-    # a terminal/truncation falls before the last position. This buffer
-    # instead stops reward/discount accumulation exactly at the first
-    # terminal-or-truncation (see chunked_replay_buffer.py's module
-    # docstring) and produces a correct, unbiased partial-length target for
-    # every sampled window -- nothing here is ever "garbage that needs
-    # masking out", so every sample is already usable as-is.
+
+    def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """``SAC._td_loss`` in which a window that runs past its episode's end
+        has zero weight, the mean still over the whole batch (``acrlpd.py:62``)."""
+        target_q = self._target_q(data)
+        complete_window = data.valid[:, -1].to(target_q.dtype).reshape(-1, 1)
+        q_loss = sum(((q - target_q).square() * complete_window).mean() for q in q_pred)
+        return q_loss, {
+            "td_loss": q_loss.detach(),
+            "target_q": target_q.mean().detach(),
+        }
 
     def _target_discounts(self, data) -> torch.Tensor:
         return data.discounts.reshape(-1, 1)
@@ -236,6 +233,20 @@ class ACRLPDCore:
         bc_loss = -bc_log_prob.mean() * self.bc_alpha
         return actor_loss + bc_loss, log_prob_detached
 
+    def _q_mc_finish_episode(
+        self, env_idx: int, bootstrap_v: Optional[torch.Tensor]
+    ) -> None:
+        """Keep the decision steps, where the critic scores the chunk chosen for
+        that observation: each env starts a chunk at its episode start and then
+        every ``horizon_length`` steps."""
+        super()._q_mc_finish_episode(env_idx, bootstrap_v)
+        for completed in (
+            self._q_mc_completed_q,
+            self._q_mc_completed_mc,
+            self._q_mc_completed_err,
+        ):
+            completed[-1] = completed[-1][:: self.horizon_length]
+
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
@@ -265,6 +276,7 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
         backup_entropy: bool = False,
         target_entropy: float | str = "auto",
         actor_q_agg: ActorQAggregation = "min",
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
         **rlpd_kwargs: Any,
     ) -> None:
         if actor_q_agg != "min":
@@ -272,6 +284,12 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
                 f"ACRLPD does not take actor_q_agg={actor_q_agg!r} (--actor-q-agg): its actor "
                 "loss always averages the critic ensemble, as its reference does. Its own "
                 "ensemble aggregation is q_agg (--q-agg), which applies to the critic target."
+            )
+        if initial_training_phase is not None:
+            raise ValueError(
+                "ACRLPD does not take an initial_training_phase (--critic-only-steps): "
+                "Q-chunking has no critic-only phase, only random actions before learning "
+                "starts (3rd_party/qc/main_online.py:179-188)."
             )
         self._init_acrlpd_params(horizon_length=horizon_length, q_agg=q_agg, bc_alpha=bc_alpha)
         self._init_chunked_rollout()

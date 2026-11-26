@@ -557,13 +557,8 @@ def test_sample_raises_when_no_complete_trajectory(obs_space, action_space):
 def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
     obs_space, action_space
 ):
-    """Regression for the codex review's claim #1: `add_flat_transitions`
-    stripes a flat, sequentially-ordered offline dataset across `num_envs`
-    buffer columns, so a naive per-column MC recursion sees fake time series
-    and both undercounts `sampleable_size` and can miscompute MC values.
-    Loader-provided rows must be trusted (`_externally_valid`) instead of
-    being recomputed from that fake column structure.
-    """
+    """Loader-provided returns are trusted (`_externally_valid`): every loaded
+    row is sampleable and keeps its return, whatever column it lands in."""
     from rl_garden.buffers.dataset_common import add_flat_transitions
 
     buf = MCReplayBuffer(
@@ -576,7 +571,7 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
         sample_device="cpu",
     )
     # Two flat, sequential 3-step episodes (as an offline loader would
-    # produce), striped across num_envs=2 columns by add_flat_transitions.
+    # produce), one per env column (add_flat_transitions loads a stretch per env).
     n = 6
     obs = {"state": torch.zeros(n, 4)}
     next_obs = {"state": torch.zeros(n, 4)}
@@ -595,7 +590,7 @@ def test_offline_load_num_envs_gt_1_marks_all_rows_valid_and_preserves_mc(
     assert n_loaded == 6
     assert buf.sampleable_size == 6
 
-    expected = mc_returns.view(3, 2)
+    expected = mc_returns.view(2, 3).T
     torch.testing.assert_close(buf._build_mc_table()[:3], expected)
 
     # An online append must not corrupt the preserved offline MC values, and

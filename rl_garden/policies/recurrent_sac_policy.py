@@ -129,6 +129,49 @@ class RecurrentSACPolicy(SACPolicy):
         )
         return tail
 
+    def windowed_and_final_features(
+        self,
+        obs_window: Obs,
+        initial_hidden: RecurrentState,
+        episode_starts_window: torch.Tensor,
+        burn_in_len: int,
+        final_obs: Obs,
+        final_steps: torch.Tensor,
+        final_columns: torch.Tensor,
+        *,
+        stop_gradient: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``windowed_features`` plus, without gradient, the ``(K, hidden_size)``
+        features of ``final_obs``: the observation after row ``final_steps`` of
+        the tail in column ``final_columns``, reached from the hidden state that
+        row left (an episode's final observation is no row of the window)."""
+        num_envs = episode_starts_window.shape[1]
+        flat_obs = flatten_leading_dims(obs_window)
+        raw = self.extract_features(flat_obs, stop_gradient=stop_gradient)
+        raw = raw.reshape(-1, num_envs, raw.shape[-1])
+        encoder = self.recurrent_encoder
+        with torch.no_grad():
+            self.actor_extractor.prepare_window_final_obs(obs_window, final_obs, final_columns)
+            final_raw = self.extract_features(final_obs, stop_gradient=True)
+            _, hidden = encoder.forward_sequence(
+                raw[:burn_in_len], initial_hidden, episode_starts_window[:burn_in_len]
+            )
+        final_features = final_raw.new_zeros(final_raw.shape[0], encoder.features_dim)
+        steps_with_finals = set(final_steps.tolist())
+        tail = []
+        for step, (latent, starts) in enumerate(
+            zip(raw[burn_in_len:], episode_starts_window[burn_in_len:])
+        ):
+            output, hidden = encoder.step(latent, hidden, starts)
+            tail.append(output)
+            if step in steps_with_finals:
+                selected = (final_steps == step).nonzero().flatten()
+                with torch.no_grad():
+                    final_features[selected] = encoder.step(
+                        final_raw[selected], encoder.index_state(hidden, final_columns[selected])
+                    )[0]
+        return torch.stack(tail, dim=0), final_features
+
     # --- parameter groups for optimizers ---
 
     def critic_and_encoder_parameters(self):

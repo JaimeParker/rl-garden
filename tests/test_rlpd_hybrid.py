@@ -11,6 +11,7 @@ from torch import nn
 
 from rl_garden.algorithms.rlpd_hybrid import RLPDHybrid
 from rl_garden.buffers.replay_buffer import ReplayBuffer
+from rl_garden.common.types import NStepReplayBufferSample
 
 
 class _ConstQ(nn.Module):
@@ -543,3 +544,39 @@ def test_n_discrete_actions_must_match_the_gripper_count():
     kwargs = agent._policy_kwargs(agent.env.single_observation_space)
     with pytest.raises(ValueError, match="n_discrete_actions must be 9"):
         RLPDHybridPolicy(**{**kwargs, "n_discrete_actions": 3})
+
+
+def test_nstep_discrete_target_bootstraps_with_the_nstep_discount(monkeypatch):
+    """With nstep > 1 the discrete head bootstraps like the continuous critic
+    (``SAC._target_discounts``): ``rewards + discounts * next_q``."""
+    import rl_garden.algorithms.rlpd_hybrid as rlpd_hybrid_module
+
+    discounts = torch.tensor([0.9**3, 0.9**2, 0.0, 0.9**3])
+    batch = NStepReplayBufferSample(
+        obs={"state": torch.zeros(4, 4)},
+        next_obs={"state": torch.zeros(4, 4)},
+        actions=torch.zeros(4, 3),
+        rewards=torch.ones(4),
+        dones=discounts == 0.0,
+        discounts=discounts,
+    )
+    agent = _agent(nstep=3)
+    agent._sample_train_batch = lambda n: batch
+    agent.policy.discrete_critic = _ConstQ(torch.zeros(4, 3), requires_grad=True)
+    agent.policy.discrete_target_critic = _ConstQ(torch.full((4, 3), 2.0))
+    targets = []
+    real_mse_loss = rlpd_hybrid_module.F.mse_loss
+
+    def spying_mse_loss(q_pred, target):
+        targets.append(target.clone())
+        return real_mse_loss(q_pred, target)
+
+    monkeypatch.setattr(rlpd_hybrid_module.F, "mse_loss", spying_mse_loss)
+    agent._train_discrete_critic(1)
+    torch.testing.assert_close(targets[0], 1.0 + 2.0 * discounts)
+
+
+def test_nstep_learns():
+    agent = _agent(nstep=3, learning_starts=8)
+    agent.learn(total_timesteps=24)
+    assert agent._global_update > 0

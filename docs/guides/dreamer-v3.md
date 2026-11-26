@@ -117,6 +117,14 @@ DreamerV3's components live in `rl_garden`:
   (`rl_garden/algorithms/model_based.py`).
 - `SequenceReplayBuffer`: Cross-episode sequence buffer with learned
   state carry (DreamerV3 uses its uniform sampling mode) (`rl_garden/buffers/sequence_replay_buffer.py`).
+  As in the reference implementations, an ended episode's final observation is a
+  training row with the last reward and the termination flag, followed by the
+  reset row with zero reward. A backend that reports no `final_observation`
+  (Isaac Lab 2.x) has no such row: the last reward and the termination flag of
+  each episode are then not trained, and the replay value target before the end
+  bootstraps from the reset observation. The choice is per step: a backend that
+  reports `final_observation` must fill it for every env that ended, as the
+  environment contract requires.
 
 ## Further Reading
 

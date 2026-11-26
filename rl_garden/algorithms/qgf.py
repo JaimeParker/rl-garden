@@ -23,10 +23,8 @@ Built directly on ``OfflineRLAlgorithm`` (no rollout shell at all, following
 ``FQL``'s own precedent) since QGF's training never touches an env, even
 with ``horizon_length > 1`` -- action chunking here only changes what a
 "macro-action" means to the offline dataset/critic, not how training data is
-collected. (Live-env eval with ``horizon_length > 1`` would additionally
-need per-env chunk-queue rollout logic akin to ``ChunkedRolloutMixin``, which
-``OfflineRLAlgorithm`` does not have; out of scope for v1, which targets
-OGBench-free validation against existing offline datasets.)
+collected. Evaluation executes each chunk one action per env step
+(``ChunkedEvalMixin``, as ``utils/evaluation.py:234-264``).
 
 Formulas verified against ``3rd_party/qgf/agents/qgf.py`` directly:
 
@@ -50,19 +48,10 @@ Formulas verified against ``3rd_party/qgf/agents/qgf.py`` directly:
   toward ``aggregate_q(target_critic(obs, batch_actions))`` -- **``q_agg``
   defaults to ``"min"``** here (not ``"mean"`` like FQL), and gates both this
   bootstrap and the inference-time guidance gradient (``qgf.py:207``).
-- **``valid`` masking omitted in critic/value loss**: the reference masks
-  both with ``valid[...,-1]`` (whole-window discard for windows that ran
-  past a terminal). This port omits it, for the same reason
-  ``ACRLPDCore``/``ACFQLCore`` already omit the analogous masking on this
-  buffer: ``ChunkedReplayBuffer`` stops reward/discount accumulation
-  exactly at the first true terminal (see its module docstring), so the
-  target it produces is already correct/unbiased for every sampled window --
-  QC's own ``valid[...,-1]``-discard convention is redundant on top of that,
-  not a fidelity gap. The critic's/value's LHS input (``batch_actions``, the
-  full action-chunk window) can still contain garbage past-terminal tail
-  positions in the rare case a window runs into the next episode -- exactly
-  the same acknowledged tradeoff ``ACFQLCore``'s critic loss already makes
-  with its own ``flat_actions`` input, extended here to ``value_loss`` too.
+- **A chunk window that runs past its episode's end has zero weight** in the
+  critic and value losses, whose mean still runs over the whole batch
+  (``valid_w = batch["valid"][..., -1]``, ``qgf.py:88-92,98-102``); the
+  policy loss is unweighted, as there.
 - **Combined backward, two optimizers**: unlike the reference's three
   separate per-network ``optax`` states (``qgf.py:128-151``), this port
   follows rl-garden ``IQLCore``'s existing convention -- one
@@ -87,6 +76,7 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.algorithms.chunked_rollout import ChunkedEvalMixin
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
@@ -387,8 +377,9 @@ class QGFCore:
             next_features = self.policy.extract_critic_features(data.next_obs)
             next_v = self.policy.value(next_features)
             target_q = data.rewards.unsqueeze(-1) + data.discounts.unsqueeze(-1) * next_v
+        complete_window = data.valid[:, -1].to(target_q.dtype).unsqueeze(-1)
         q_all = self.policy.q_values_all(critic_features, flat_actions, target=False)
-        critic_loss = F.mse_loss(q_all, target_q.unsqueeze(0).expand_as(q_all))
+        critic_loss = ((q_all - target_q).square() * complete_window).mean()
 
         # --- value: expectile regression onto aggregate_q(target_critic) ---
         with torch.no_grad():
@@ -397,7 +388,7 @@ class QGFCore:
             )
             target_q_for_value = self.policy._aggregate_q(target_qs)
         values = self.policy.value(critic_features)
-        value_loss = self._expectile_loss(target_q_for_value - values).mean()
+        value_loss = (self._expectile_loss(target_q_for_value - values) * complete_window).mean()
 
         # --- policy: BC flow matching, unmasked (matches qgf.py:56-81) ---
         batch_size = flat_actions.shape[0]
@@ -498,7 +489,7 @@ class QGFCore:
         return {key: value / gradient_steps for key, value in metrics_sum.items()}
 
 
-class QGF(QGFCore, OfflineRLAlgorithm):
+class QGF(ChunkedEvalMixin, QGFCore, OfflineRLAlgorithm):
     """Offline QGF: BC flow-matching actor + IQL critic/value, guided
     denoising at inference. See module docstring."""
 

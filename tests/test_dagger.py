@@ -2,7 +2,10 @@
 growing buffer (unmodified) for interactive imitation learning."""
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
@@ -133,3 +136,183 @@ def test_dagger_policy_is_plain_bc_policy_class():
 
     agent = _make_agent()
     assert isinstance(agent.policy, BCPolicy)
+
+
+def test_demo_buffer_is_saved_and_loaded_with_the_replay_buffer(tmp_path):
+    agent = _make_agent()
+    agent.collect_round(num_steps=4, beta=1.0)
+    path = agent.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+
+    loaded = _make_agent()
+    loaded.load(path, load_replay_buffer=False)
+    assert len(loaded.offline_replay_buffer) == 0
+    loaded.load(path, load_replay_buffer=True)
+
+    samples = []
+    for dagger in (agent, loaded):
+        torch.manual_seed(0)
+        samples.append(dagger.offline_replay_buffer.sample(8))
+    assert torch.equal(samples[0].actions, samples[1].actions)
+    assert all(torch.equal(samples[0].obs[key], samples[1].obs[key]) for key in samples[0].obs)
+
+
+def test_demo_buffer_is_not_written_without_the_replay_buffer(tmp_path):
+    agent = _make_agent()
+    agent.collect_round(num_steps=4, beta=1.0)
+    agent.save(tmp_path / "checkpoint_1.pt")
+    assert not list(tmp_path.glob("demo_buffer_*"))
+
+
+def test_missing_demo_buffer_file_is_named(tmp_path):
+    path = _make_agent().save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    (tmp_path / "demo_buffer_1.pt").unlink()
+    with pytest.raises(FileNotFoundError, match="demo_buffer_1.pt"):
+        _make_agent().load(path, load_replay_buffer=True)
+    _make_agent().load(path, load_replay_buffer=False)
+
+
+def _forget_demo_buffer_reference(path) -> None:
+    contents = torch.load(path)
+    del contents["state"]["extra"]["demo_buffer_path"]
+    torch.save(contents, path)
+
+
+def test_checkpoint_that_records_no_demo_buffer_resumes_with_a_warning(tmp_path):
+    path = _make_agent().save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    _forget_demo_buffer_reference(path)
+    (tmp_path / "demo_buffer_1.pt").unlink()
+    agent = _make_agent()
+    with pytest.warns(UserWarning, match="demo_buffer_1.pt"):
+        agent.load(path, load_replay_buffer=True)
+    assert len(agent.offline_replay_buffer) == 0
+
+
+def test_checkpoint_that_records_no_demo_buffer_loads_the_file_next_to_it(tmp_path):
+    agent = _make_agent()
+    agent.collect_round(num_steps=4, beta=1.0)
+    path = agent.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    _forget_demo_buffer_reference(path)
+    loaded = _make_agent()
+    loaded.load(path, load_replay_buffer=True)
+    assert len(loaded.offline_replay_buffer) == len(agent.offline_replay_buffer) > 0
+
+
+def test_renamed_checkpoint_that_records_no_demo_buffer_follows_its_replay_buffer(tmp_path):
+    agent = _make_agent()
+    agent.collect_round(num_steps=4, beta=1.0)
+    path = agent.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    _forget_demo_buffer_reference(path)
+    path = path.rename(tmp_path / "best.pt")
+    loaded = _make_agent()
+    loaded.load(path, load_replay_buffer=True)
+    assert len(loaded.offline_replay_buffer) == len(agent.offline_replay_buffer) > 0
+
+    (tmp_path / "demo_buffer_1.pt").unlink()
+    with pytest.warns(UserWarning, match="demo_buffer_1.pt"):
+        _make_agent().load(path, load_replay_buffer=True)
+
+
+def test_checkpoint_saved_without_buffers_loads_silently(tmp_path):
+    path = _make_agent().save(tmp_path / "checkpoint_1.pt")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _make_agent().load(path, load_replay_buffer=True)
+
+
+def test_renamed_checkpoint_loads_the_demo_buffer_it_references(tmp_path):
+    agent = _make_agent()
+    agent.collect_round(num_steps=4, beta=1.0)
+    path = agent.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    loaded = _make_agent()
+    loaded.load(path.rename(tmp_path / "best.pt"), load_replay_buffer=True)
+    assert len(loaded.offline_replay_buffer) == len(agent.offline_replay_buffer) > 0
+
+
+# --- CLI mock experts, devices, logging, checkpoints ---
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.scalars: dict[str, list[tuple[float, int]]] = {}
+
+    def add_scalar(self, key, value, step) -> None:
+        self.scalars.setdefault(key, []).append((float(value), step))
+
+    def log_metrics(self, metrics, step) -> None:
+        for key, value in metrics.items():
+            self.add_scalar(f"losses/{key}", value, step)
+
+
+def _cli_expert(name, space=None):
+    from types import SimpleNamespace
+
+    from rl_garden.training.online.entrypoints.dagger import _mock_expert_from_args
+
+    space = space or spaces.Box(-2.0, 3.0, (ACTION_DIM,), np.float32)
+    return _mock_expert_from_args(SimpleNamespace(expert=name), space)
+
+
+def test_mock_experts_answer_dict_observations_with_bounded_float32_actions():
+    obs = {
+        "state": torch.zeros(5, OBS_DIM),
+        "rgb": torch.zeros(5, 3, 8, 8, dtype=torch.uint8),
+    }
+    zero = _cli_expert("zero")(obs)
+    assert zero.shape == (5, ACTION_DIM) and zero.dtype == torch.float32 and not zero.any()
+    uniform = _cli_expert("random_uniform")(obs)
+    assert uniform.shape == (5, ACTION_DIM) and uniform.dtype == torch.float32
+    assert bool(((uniform >= -2.0) & (uniform <= 3.0)).all())
+
+
+def test_mock_experts_refuse_discrete_actions():
+    import pytest
+
+    with pytest.raises(NotImplementedError, match="Box"):
+        _cli_expert("zero", spaces.Discrete(3))
+
+
+def test_learn_logs_every_round_and_saves_periodic_and_final_checkpoints(tmp_path):
+    logger = _RecordingLogger()
+    agent = _make_agent(
+        expert=_cli_expert("zero"),
+        logger=logger,
+        checkpoint_dir=str(tmp_path),
+        checkpoint_freq=30,
+        rollout_steps_per_round=5,
+        beta_rounds=4,
+    )
+    agent.learn(5 * agent.num_envs * 4)
+    assert [step for _, step in logger.scalars["dagger/beta"]] == [15, 30, 45, 60]
+    assert [v for v, _ in logger.scalars["dagger/beta"]] == [1.0, 0.75, 0.5, 0.25]
+    assert [v for v, _ in logger.scalars["dagger/demo_buffer_size"]] == [15, 30, 45, 60]
+    assert len(logger.scalars["losses/actor_loss"]) == 4
+    names = {path.name for path in tmp_path.glob("*.pt")}
+    assert names == {"checkpoint_30.pt", "checkpoint_60.pt", "final.pt"}
+
+
+def test_resumed_run_continues_the_beta_schedule_and_demo_buffer(tmp_path):
+    first = _make_agent(
+        checkpoint_dir=str(tmp_path), save_replay_buffer=True, rollout_steps_per_round=5,
+        beta_rounds=6,
+    )
+    first.learn(5 * first.num_envs * 2)
+    assert first._round_num == 2
+
+    resumed = _make_agent(rollout_steps_per_round=5, beta_rounds=6)
+    resumed.load(tmp_path / "final.pt", load_replay_buffer=True)
+    assert resumed._round_num == 2
+    assert resumed.beta_schedule(resumed._round_num) == first.beta_schedule(2)
+    assert len(resumed.offline_replay_buffer) == len(first.offline_replay_buffer) == 30
+    resumed.learn(5 * resumed.num_envs * 3)
+    assert resumed._round_num == 3
+    assert len(resumed.offline_replay_buffer) == 45
+
+
+def test_cpu_env_with_cuda_policy_collects_on_the_buffer_device():
+    if not torch.cuda.is_available():
+        pytest.skip("needs CUDA")
+    agent = _make_agent(device="cuda", buffer_device="cuda", expert=_cli_expert("random_uniform"))
+    agent.collect_round(num_steps=6, beta=0.5)
+    buffer = agent.offline_replay_buffer
+    assert len(buffer) == 6 * agent.num_envs
+    assert buffer.actions.device.type == "cuda" and buffer.dones.device.type == "cuda"

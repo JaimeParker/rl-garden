@@ -36,6 +36,7 @@ class SO2Off2OnArgs(SO2Off2OnTrainingArgs, ObservationArgs, PolicyModuleArgs, En
     online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
     # 1 - concat_online_ratio (upstream's default concat_online_ratio=0.1).
     offline_data_ratio: float | str = 0.9
+
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     num_eval_episodes: int | None = None
 
@@ -106,7 +107,16 @@ def build_so2(args: SO2Off2OnArgs, env, eval_env, logger, checkpoint_dir):
         **policy_module_kwargs(args),
     )
     if args.load_checkpoint is not None:
-        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+        from rl_garden.training.inspection import checkpoint_to_restore
+
+        # The pool of an offline-stage checkpoint is rebuilt from the dataset.
+        extra = checkpoint_to_restore(args)["state"]["extra"]
+        offline_stage = extra.get("online_start_step") is None
+        agent.load(
+            args.load_checkpoint,
+            load_replay_buffer=args.load_replay_buffer
+            and not (offline_stage and args.offline_dataset is not None),
+        )
     return agent
 
 

@@ -28,6 +28,7 @@ class WSRLOff2OnArgs(VisionWSRLTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     # back to the WSRL algorithm's own "auto" default (approx -action_dim),
     # never the WSRL paper's own antmaze setting of 0.0.
     target_entropy: float | str = "auto"
+
     policy_log_std_multiplier: float | None = None
     policy_log_std_offset: float | None = None
     # Not exposed before this field existed -- always fell back to the WSRL

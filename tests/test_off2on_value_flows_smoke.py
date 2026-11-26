@@ -139,15 +139,8 @@ def test_off2on_value_flows_switch_to_online_and_learn(tmp_path):
 
 
 def test_off2on_value_flows_checkpoint_roundtrip_after_online_switch(tmp_path):
-    """`policy_extraction` is checkpoint metadata (`_checkpoint_metadata`)
-    and is mutated at the online switch
-    (`_apply_online_regularizer_override`) -- verify saving post-switch
-    ("rpg") and loading into a default-constructed agent ("rs") round-trips
-    the network weights without raising. Like every other constructor-only
-    hyperparameter in this checkpoint format (metadata is validated for
-    compatibility, not replayed into the loading agent's Python attributes),
-    `policy_extraction` itself is not restored by `load()` -- the loaded
-    agent keeps its own constructed value."""
+    """The online stage acts by "rpg" whatever the loading agent was
+    constructed with."""
     agent = _make_agent()
     _load_offline(agent, tmp_path)
     agent.train(5)
@@ -158,8 +151,8 @@ def test_off2on_value_flows_checkpoint_roundtrip_after_online_switch(tmp_path):
     loaded = _make_agent()
     assert loaded.policy_extraction == "rs"
     loaded.load(ckpt)
-    assert loaded.policy_extraction == "rs"
-    assert loaded.policy.policy_extraction == "rs"
+    assert loaded.policy_extraction == "rpg"
+    assert loaded.policy.policy_extraction == "rpg"
     for (n1, p1), (n2, p2) in zip(
         agent.policy.critic_flows.named_parameters(),
         loaded.policy.critic_flows.named_parameters(),

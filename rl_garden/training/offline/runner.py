@@ -199,16 +199,17 @@ def _run_offline(
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:
         print(f"[pretrain] loaded_transitions={loaded}", flush=True)
-    if hasattr(agent, "fit_obs_normalizer"):
-        agent.fit_obs_normalizer()
-    if hasattr(agent, "pretrain_vae"):
-        agent.pretrain_vae()
     if args.load_checkpoint is not None:
-        # Loaded last so a resumed checkpoint's buffer/normalizer state is
-        # authoritative over the freshly re-populated offline dataset above.
+        # Loaded after the dataset so the checkpoint's replay buffer, normalizer
+        # and VAE are authoritative.
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
         if args.std_log:
             print(f"[pretrain] resumed_from={args.load_checkpoint}", flush=True)
+    elif hasattr(agent, "fit_obs_normalizer"):
+        agent.fit_obs_normalizer()
+    if hasattr(agent, "pretrain_vae"):
+        # No-op when the checkpoint holds a pretrained VAE.
+        agent.pretrain_vae()
 
     run_offline_pretraining(
         agent,

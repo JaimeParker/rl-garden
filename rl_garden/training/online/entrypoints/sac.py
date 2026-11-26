@@ -183,7 +183,7 @@ class SACArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """SAC. State-only observations by default; pass ``--obs.rgb <camera>``
     (optionally ``--obs.depth <camera>``) for Dict/RGBD observations.
 
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default) or any other registered backend.
     ManiSkill-specific: ``--maniskill.sim-backend``, ``--maniskill.render-backend``.
     """
 

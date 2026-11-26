@@ -11,7 +11,6 @@ from __future__ import annotations
 import numpy as np
 
 
-
 def build_supe(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import SUPE
     from rl_garden.algorithms.supe import (

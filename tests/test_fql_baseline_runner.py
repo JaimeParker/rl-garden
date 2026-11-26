@@ -123,7 +123,7 @@ def test_dependency_preflight_requires_optax_and_setup_guidance(monkeypatch):
     versions = {name: "1" for name in ("jax", "jaxlib", "flax", "optax", "distrax", "ml-collections", "wandb")}
     versions.update({"ogbench": "1.1.0", "gymnasium": "0.29.1", "optax": None})
     monkeypatch.setattr(run_ogbench, "package_versions", lambda: versions)
-    with pytest.raises(RuntimeError, match="optax.*fql-ogbench-reproduction"):
+    with pytest.raises(RuntimeError, match=r"optax.*baselines/fql/README\.md"):
         run_ogbench._dependency_preflight()
 
 

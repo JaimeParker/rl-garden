@@ -506,7 +506,9 @@ one needs an agent without one, and any difference (a `detach`, an activation, a
 loss weight or mask, a node size, an actor sink's `action_dims` or `net_arch`)
 raises `ValueError` naming the first differing line, even when the parameter
 shapes would fit. Loading with
-`strict=False` skips this check.
+`strict=False` skips this check. A node parameter that is an absolute path (an encoder's
+`pretrained_weights`) is not in the checkpoint and not compared; evaluation does
+not read those weights.
 
 `examples/eval_checkpoint.py` rebuilds the training arguments from the run's
 `config.json` first and then overlays the checkpoint's metadata hyperparameters,

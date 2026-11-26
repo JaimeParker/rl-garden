@@ -82,7 +82,8 @@ def load_opal_vae(
     if not checkpoint_path or not Path(checkpoint_path).exists():
         raise FileNotFoundError(
             f"OPAL checkpoint {checkpoint_path!r} does not exist. SUPE needs it to train from "
-            "scratch, and to load a SUPE checkpoint that does not embed its OPAL VAE."
+            "scratch, and to load a SUPE checkpoint that does not embed its OPAL VAE "
+            "(--opal-checkpoint)."
         )
     checkpoint = load_checkpoint_file(checkpoint_path, map_location=device)
     return build_frozen_opal_vae(

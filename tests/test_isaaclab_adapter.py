@@ -10,6 +10,7 @@ import torch
 
 from rl_garden.envs.isaaclab.env import _box_from_tensor, _IsaacLabVecEnvAdapter
 from rl_garden.envs.wrappers import ActionRepeatWrapper, ImageFrameStackWrapper
+from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
 from rl_garden.observations.schema import ObservationContractError
 
 NUM_ENVS = 2
@@ -599,3 +600,72 @@ def test_make_env_frame_stack_wraps_action_repeat(monkeypatch, action_repeat: in
     assert env.single_observation_space["rgb_front"].shape == (3, 8, 8, 3)
     assert env.single_observation_space is adapter.single_observation_space
     assert env.num_envs == NUM_ENVS and env.post_update_sync == adapter.post_update_sync
+
+
+@pytest.mark.parametrize(
+    "cfg_kwargs",
+    [{}, {"action_repeat": 4}, {"is_visual": True, "frame_stack": 3, "action_repeat": 4}],
+    ids=["adapter", "action-repeat", "frame-stack"],
+)
+def test_make_env_applies_reward_scale_and_bias_outermost(monkeypatch, cfg_kwargs: dict) -> None:
+    step_reward = [1.0, 2.0]
+    raw_env = _ScriptedExtrasEnv([(step_reward, [False, True], [False, False])] * 4, obs=_visual_obs())
+    raw_env.closed = False
+    raw_env.close = lambda: setattr(raw_env, "closed", True)
+    repeat = cfg_kwargs.get("action_repeat", 1)
+    if repeat == 1:  # ActionRepeatWrapper rejects decision flags.
+        raw_env.extras["decision"] = torch.ones(NUM_ENVS, dtype=torch.bool)
+    env = _make_env_with_fake_build(
+        monkeypatch, raw_env, reward_scale=2.0, reward_bias=-0.5, **cfg_kwargs
+    )
+    raw_env.extras["final_obs"] = _visual_obs()
+    env.reset()
+
+    obs, reward, terminated, _truncated, info = env.step(torch.zeros(NUM_ENVS, 1))
+
+    # env 1 ends on the first sub-step, so its later sub-steps are not counted.
+    assert reward.tolist() == [2.0 * repeat * step_reward[0] - 0.5, 2.0 * step_reward[1] - 0.5]
+    assert terminated.tolist() == [False, True]
+    assert info["final_info"]["episode"]["return"][1].item() == step_reward[1]
+    assert set(info["final_observation"]) == set(obs)
+    assert ("decision" in info) is (repeat == 1)
+
+    unscaled = _make_env_with_fake_build(
+        monkeypatch, _ScriptedExtrasEnv([], obs=_visual_obs()), **cfg_kwargs
+    )
+    assert isinstance(env, RewardScaleBiasWrapper) and type(env.env) is type(unscaled)
+    assert env.metadata["autoreset_mode"] == unscaled.metadata["autoreset_mode"]
+    assert env.num_envs == NUM_ENVS and env.device == "cpu"
+    assert env.single_observation_space == unscaled.single_observation_space
+    assert env.single_action_space == unscaled.single_action_space
+    assert env.action_space == unscaled.action_space
+    assert env.post_update_sync == env.unwrapped.post_update_sync
+    env.close()
+    assert raw_env.closed
+
+
+def test_resolve_config_forwards_reward_scale_and_bias() -> None:
+    from rl_garden.envs.backend_registry import EnvRequest
+    from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+    from rl_garden.observations.config import ObservationConfig
+
+    def _resolve(**reward):
+        return IsaacLabBackend.resolve_config(
+            EnvRequest(
+                env_id="RlGarden-Fake-v0",
+                num_envs=NUM_ENVS,
+                control_mode="",
+                render_mode="rgb_array",
+                seed=0,
+                observation=ObservationConfig(),
+                num_eval_envs=1,
+                backend_config=None,
+                **reward,
+            ),
+            is_eval=False,
+        )
+
+    scaled = _resolve(reward_scale=2.0, reward_bias=-0.5)
+    assert (scaled.reward_scale, scaled.reward_bias) == (2.0, -0.5)
+    default = _resolve()
+    assert (default.reward_scale, default.reward_bias) == (1.0, 0.0)

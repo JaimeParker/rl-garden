@@ -189,6 +189,7 @@ def load_sequence_dataset(
                     torch.tensor([last]),
                     is_first=torch.tensor([t == 0]),
                     carry=zero_carry,
+                    final_obs_known=False,
                 )
             written += length
     return written

@@ -27,6 +27,7 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 
 
@@ -34,28 +35,18 @@ def _repeat_bound(bound: np.ndarray, n: int) -> np.ndarray:
     return np.broadcast_to(bound, (n,) + bound.shape).copy()
 
 
-class ActionChunkWrapper(gym.Wrapper):
+class ActionChunkWrapper(BatchedEnvWrapper):
     """``action`` has shape ``(num_envs, act_steps) + single_action_space.shape``.
 
     Reward is summed across the chunk; ``terminated``/``truncated`` are
     combined with logical-or across sub-steps.
     """
 
-    def __init__(self, env: gym.Env, act_steps: int) -> None:
+    def __init__(self, env: gym.Env | gym.vector.VectorEnv, act_steps: int) -> None:
         if act_steps < 1:
             raise ValueError(f"act_steps must be >= 1, got {act_steps}.")
         super().__init__(env)
         self.act_steps = int(act_steps)
-        # gym.Wrapper has no __getattr__ fallback for these rl-garden/ManiSkill
-        # vector-env conventions (single_observation_space, num_envs, ...) --
-        # every other wrapper in this package is applied *before* the final
-        # adapter that sets them, but this one must be one of the outermost
-        # (it changes the action contract itself), so it forwards them
-        # explicitly instead of relying on attribute delegation that doesn't
-        # exist in this gymnasium version.
-        self.num_envs = env.num_envs
-        self.single_observation_space = env.single_observation_space
-        self.observation_space = env.observation_space
         single = env.single_action_space
         self.single_action_space = spaces.Box(
             low=_repeat_bound(single.low, self.act_steps),

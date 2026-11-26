@@ -742,6 +742,12 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
         if self.logger:
             self.logger.add_summary("off2on/policy_extraction", "rpg")
 
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        if self._online_start_step is not None:
+            self.policy_extraction = "rpg"
+            self.policy.policy_extraction = "rpg"
+
 
 class Off2OnValueFlows(_ValueFlowsRolloutTrainingShell):
     """Offline-to-online Value Flows (FQL/FloQ's off2on pattern, no action

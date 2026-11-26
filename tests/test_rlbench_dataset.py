@@ -15,11 +15,17 @@ import pytest
 from gymnasium import spaces
 
 from rl_garden.buffers import (
+    DatasetRequest,
     MCReplayBuffer,
     ReplayBuffer,
+    infer_dataset_specs,
     infer_specs_from_rlbench,
+    load_dataset,
     load_rlbench_dataset_to_replay_buffer,
 )
+from rl_garden.envs.rlbench.config import RLBenchEnvConfig
+from rl_garden.envs.rlbench.env import RLBenchGymEnv
+from rl_garden.observations import ObservationConfig
 
 _CAMERAS: tuple[str, ...] = ("left_shoulder", "right_shoulder", "overhead", "wrist", "front")
 
@@ -146,7 +152,7 @@ def _install_fake_rlbench(monkeypatch, demos: list[list[_FakeObservation]]):
         pass
 
     class _FakeEnvironment:
-        def __init__(self, *, action_mode, obs_config, headless):
+        def __init__(self, *, action_mode, obs_config, headless, **env_kwargs):
             self.action_mode = action_mode
             self.obs_config = obs_config
             self.headless = headless
@@ -188,6 +194,9 @@ class _FakeTaskEnv:
     def __init__(self, demos, captured):
         self._demos = demos
         self._captured = captured
+
+    def reset(self):
+        return [], self._demos[0][0]
 
     def get_demos(self, amount, live_demos=False):
         self._captured["live_demos_called"] = live_demos
@@ -231,6 +240,76 @@ def test_infer_specs_from_rlbench_rgb_mode_renames_image_keys(monkeypatch):
     assert obs_space["rgb_front"].shape == (4, 4, 3)
     assert obs_space["depth_front"].dtype == np.float32
     assert obs_space["depth_front"].shape == (4, 4, 1)
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        ObservationConfig(rgb=("front",)),
+        ObservationConfig(depth=("wrist",)),
+        ObservationConfig(rgb=("front", "wrist"), depth=("wrist",)),
+        ObservationConfig(rgb=("front",), state=False),
+        ObservationConfig(),
+    ],
+    ids=["rgb", "depth", "rgb+depth", "no-state", "state-only"],
+)
+def test_dataset_backend_produces_exactly_the_requested_keys_like_the_live_env(
+    monkeypatch, observation: ObservationConfig
+):
+    _install_fake_rlbench(monkeypatch, _two_demos(with_images=True))
+    req = DatasetRequest(path="/data/rlbench_demos/reach_target", observation=observation)
+
+    obs_space, action_space = infer_dataset_specs(req, backend_name="rlbench")
+
+    live_env = RLBenchGymEnv(
+        RLBenchEnvConfig(
+            task_name="reach_target",
+            num_envs=1,
+            seed=0,
+            rgb_cameras=observation.rgb,
+            depth_cameras=observation.depth,
+            state=observation.state,
+        )
+    )
+    assert set(obs_space.spaces) == set(observation.expected_keys)
+    assert obs_space == live_env.observation_space
+
+    buffer = ReplayBuffer(
+        observation_space=obs_space,
+        action_space=action_space,
+        num_envs=1,
+        buffer_size=10,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+    assert load_dataset(buffer, req, backend_name="rlbench") == 3
+    sample = buffer.sample(2)
+    for obs in (sample.obs, sample.next_obs):
+        assert set(obs) == set(observation.expected_keys)
+    for key, stored in buffer.obs.data.items():
+        # demo 0 stores the frame index in every modality: transition 1 starts at frame 1.
+        assert (stored[1, 0] == 1).all(), key
+
+
+def test_direct_cameras_argument_requests_both_modalities(monkeypatch):
+    _install_fake_rlbench(monkeypatch, _two_demos(with_images=True))
+    obs_space, action_space = infer_specs_from_rlbench(
+        "/data/rlbench_demos/reach_target", cameras=("front",)
+    )
+    buffer = ReplayBuffer(
+        observation_space=obs_space,
+        action_space=action_space,
+        num_envs=1,
+        buffer_size=10,
+        storage_device="cpu",
+        sample_device="cpu",
+    )
+
+    load_rlbench_dataset_to_replay_buffer(
+        buffer, "/data/rlbench_demos/reach_target", cameras=("front",)
+    )
+
+    assert set(buffer.sample(2).obs) == {"state", "rgb_front", "depth_front"}
 
 
 def test_load_rlbench_dataset_uses_single_observation_action_derivation(monkeypatch):

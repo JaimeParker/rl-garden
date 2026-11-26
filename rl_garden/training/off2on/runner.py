@@ -37,6 +37,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -53,6 +54,7 @@ from rl_garden.common.env_args import make_env_request
 from rl_garden.envs.backend_registry import make_training_envs, should_create_eval_env
 from rl_garden.training.inspection import (
     config_session,
+    current_preflight,
     emit_materialized_config,
     has_config_session,
     is_dry_run,
@@ -65,6 +67,8 @@ from rl_garden.training.off2on.args import (
     warn_if_off2on_warmup_uses_uninitialized_policy,
 )
 from rl_garden.training.offline_dataset import load_offline_dataset
+
+_logger = logging.getLogger(__name__)
 
 BuildAgent = Callable[[Any, Any, Any, Logger, "str | None"], Any]
 
@@ -128,12 +132,15 @@ def _save_offline_checkpoint(
         print(f"[offline] saved_checkpoint={path}", flush=True)
 
 
-def _set_offline_probe(agent: Any, logger: Logger, std_log: bool) -> None:
-    probe_size = min(agent.batch_size, agent.replay_buffer.sampleable_size)
+def _set_offline_probe(
+    agent: Any, logger: Logger, std_log: bool, offline_buffer: Any = None
+) -> None:
+    buffer = agent.replay_buffer if offline_buffer is None else offline_buffer
+    probe_size = min(agent.batch_size, buffer.sampleable_size)
     if probe_size <= 0:
         logger.add_summary("off2on/offline_probe_size", 0)
         return
-    agent.set_offline_probe_batch(agent.replay_buffer.sample(probe_size))
+    agent.set_offline_probe_batch(buffer.sample(probe_size))
     logger.add_summary("off2on/offline_probe_size", probe_size)
     if std_log:
         print(f"[offline] probe_size={probe_size}", flush=True)
@@ -155,23 +162,240 @@ def _resolve_env_id(args: Off2OnCommonArgs) -> str:
     return args.env_id
 
 
+def _load_offline_stage_dataset(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
+    """Fill the replay buffer of the offline stage from the dataset, unless a
+    checkpoint's replay file already did."""
+    if args.offline_dataset is None:
+        return
+    if args.load_checkpoint is not None and agent.replay_buffer_restored:
+        if not agent.saves_offline_buffer:
+            agent._clear_replay_buffer()
+        elif len(agent.replay_buffer) > 0:
+            _logger.warning(
+                "--offline-dataset is not loaded: the replay buffer restored from the checkpoint "
+                "holds %d transitions; resume without --load-replay-buffer to use the dataset "
+                "instead",
+                len(agent.replay_buffer),
+            )
+            return
+    loaded = load_offline_dataset(agent.replay_buffer, args)
+    logger.add_summary("off2on/offline_loaded_transitions", loaded)
+
+
+def _holds_restored_offline_stage_data(agent: Any, args: Off2OnCommonArgs) -> bool:
+    return (
+        args.load_checkpoint is not None
+        and agent.replay_buffer_restored
+        and agent.saves_offline_buffer
+        and len(agent.replay_buffer) > 0
+    )
+
+
+def _prepare_dataset(agent: Any, args: Off2OnCommonArgs) -> None:
+    """The setup a run does on its dataset before any policy update."""
+    # A loaded policy was trained with the statistics its checkpoint holds.
+    if args.load_checkpoint is None and hasattr(agent, "fit_obs_normalizer"):
+        agent.fit_obs_normalizer()
+    if hasattr(agent, "pretrain_vae"):
+        agent.pretrain_vae()
+
+
 def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
     if args.num_offline_steps == 0:
         warn_if_off2on_warmup_uses_uninitialized_policy(args)
-        if args.load_checkpoint is not None and args.offline_dataset is not None:
-            loaded = load_offline_dataset(agent.replay_buffer, args)
-            logger.add_summary("off2on/offline_loaded_transitions", loaded)
-            if hasattr(agent, "fit_obs_normalizer"):
-                agent.fit_obs_normalizer()
+        if (
+            args.offline_dataset is not None
+            and args.load_checkpoint is None
+            and args.online_replay_mode != "empty"
+        ):
+            # The references keep the dataset for the online phase however many
+            # offline steps run.
+            _load_offline_stage_dataset(agent, args, logger)
+            _prepare_dataset(agent, args)
+            if hasattr(agent, "pretrain_bc_flow"):
+                agent.pretrain_bc_flow()
+            _set_offline_probe(agent, logger, args.std_log)
+        elif args.load_checkpoint is not None and args.offline_dataset is not None:
+            _load_offline_stage_dataset(agent, args, logger)
             if hasattr(agent, "pretrain_vae"):
                 agent.pretrain_vae()
             _set_offline_probe(agent, logger, args.std_log)
+        elif (
+            args.load_checkpoint is not None
+            and not agent.saves_offline_buffer
+            and args.online_replay_mode == "mixed"
+        ):
+            raise SystemExit(
+                f"{args.load_checkpoint} continues with the 'mixed' replay mode, whose offline "
+                "buffer is always built from the dataset: pass --offline-dataset."
+            )
     agent.switch_to_online_mode(
         online_replay_mode=args.online_replay_mode,
         offline_data_ratio=args.offline_data_ratio,
     )
     if args.std_log:
         print(f"[online] replay_mode={args.online_replay_mode}", flush=True)
+
+
+def _is_explicit(args: Off2OnCommonArgs, name: str) -> bool:
+    """Whether the CLI, a preset or the caller set this field."""
+    return name in current_preflight().sources or getattr(args, name) != getattr(type(args), name)
+
+
+#: Args fields that fix the range of returns a critic represents, which a
+#: resume takes from the command line like every other hyperparameter.
+_VALUE_RANGE_FIELDS = ("min_reward", "max_reward", "r_min", "r_max")
+
+
+def _report_changed_value_range(args: Off2OnCommonArgs) -> None:
+    from rl_garden.common.checkpoint import load_checkpoint_file
+
+    recorded = load_checkpoint_file(args.load_checkpoint, map_location="cpu")["metadata"].get(
+        "hyperparameters", {}
+    )
+    changed = {
+        name: recorded[name]
+        for name in _VALUE_RANGE_FIELDS
+        if hasattr(args, name) and name in recorded and recorded[name] != getattr(args, name)
+    }
+    if changed:
+        _logger.warning(
+            "%s was trained with another return range: %s; pass %s to keep it",
+            args.load_checkpoint,
+            ", ".join(
+                f"{name}={value} (now {getattr(args, name)})" for name, value in changed.items()
+            ),
+            " ".join(f"--{name.replace('_', '-')} {value}" for name, value in changed.items()),
+        )
+
+
+def _resumes_online_stage(agent: Any, args: Off2OnCommonArgs) -> bool:
+    return args.load_checkpoint is not None and agent._online_start_step is not None
+
+
+def _reconcile_with_saved_stage(agent: Any, args: Off2OnCommonArgs) -> None:
+    """Make an agent loaded in its online stage usable with ``args``, whose
+    stage settings the checkpoint overrides: one the user set to something
+    else is an error, a default is reported."""
+    if args.num_offline_steps > 0:
+        raise SystemExit(
+            f"{args.load_checkpoint} is a checkpoint of the online stage and cannot train "
+            "offline any more; pass --num-offline-steps 0."
+        )
+    if agent.online_replay_mode is None:
+        needed = ["online_replay_mode"]
+        if args.online_replay_mode == "mixed":
+            needed.append("offline_data_ratio")
+        if not all(_is_explicit(args, name) for name in needed):
+            raise SystemExit(
+                f"{args.load_checkpoint} is an online-stage checkpoint that does not record its "
+                "replay mode; pass --online-replay-mode (and, for mixed, --offline-data-ratio) as "
+                "the run that wrote it used."
+            )
+        agent.declare_online_replay_mode(args.online_replay_mode, args.offline_data_ratio)
+
+    saved = {"online_replay_mode": agent.online_replay_mode}
+    if agent.online_replay_mode == "mixed":
+        saved["offline_data_ratio"] = agent.offline_data_ratio
+    if hasattr(agent, "online_use_cql_loss"):
+        saved["online_use_cql_loss"] = agent.use_cql_loss
+        saved["online_cql_alpha"] = agent.cql_alpha
+    if hasattr(agent, "online_discount"):
+        saved["online_discount"] = agent.gamma
+    if agent._replaced_initial_training_phase is not None or (
+        agent.initial_training_phase is not None
+    ):
+        phase = agent.initial_training_phase
+        saved["warmup_steps"] = 0 if phase is None else phase.duration_steps
+    differing = {
+        name: value for name, value in saved.items() if getattr(args, name) != value
+    }
+    rejected = [name for name in differing if _is_explicit(args, name)]
+    if rejected:
+        raise SystemExit(
+            f"{args.load_checkpoint} continues the online stage it was saved in, which "
+            "contradicts: "
+            + ", ".join(
+                f"--{name.replace('_', '-')} {getattr(args, name)} (saved: {differing[name]})"
+                for name in rejected
+            )
+        )
+    if differing:
+        _logger.warning(
+            "continuing the saved online stage with %s",
+            ", ".join(f"{name}={value}" for name, value in differing.items()),
+        )
+
+
+def _why_offline_dataset_is_not_loaded(agent: Any) -> str | None:
+    if agent.online_replay_mode == "empty":
+        return "the 'empty' online stage discards offline data"
+    if agent.online_replay_mode == "mixed" and agent.offline_replay_buffer is not None:
+        return "the offline buffer is as the checkpoint was saved with it"
+    if agent.online_replay_mode == "append" and agent.replay_buffer_restored:
+        return "the restored replay buffer already holds the offline data"
+    return None
+
+
+def _restore_offline_data(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
+    """Give a resumed online stage the offline data its replay mode keeps,
+    unless the checkpoint's buffers already hold it."""
+    not_loaded_because = _why_offline_dataset_is_not_loaded(agent)
+    if not_loaded_because is not None:
+        if args.offline_dataset is not None:
+            _logger.warning("--offline-dataset is not loaded: %s", not_loaded_because)
+        if agent.offline_replay_buffer is not None:
+            _set_offline_probe(agent, logger, args.std_log, agent.offline_replay_buffer)
+        return
+    if args.offline_dataset is None:
+        if agent.lacks_offline_data:
+            raise SystemExit(
+                f"{args.load_checkpoint} continues the 'mixed' online stage, which needs its "
+                "offline data: pass "
+                + (
+                    "--load-replay-buffer if the run saved offline_buffer_<suffix>.pt, or "
+                    if agent.saves_offline_buffer
+                    else ""
+                )
+                + "--offline-dataset."
+            )
+        if agent.online_replay_mode == "append":
+            _logger.warning(
+                "the 'append' online stage continues without its replay buffer: any offline data "
+                "it held is gone (pass --load-replay-buffer or --offline-dataset)"
+            )
+        return
+    buffer = (
+        agent.restore_offline_replay_buffer()
+        if agent.online_replay_mode == "mixed"
+        else agent.replay_buffer
+    )
+    loaded = load_offline_dataset(buffer, args)
+    logger.add_summary("off2on/offline_loaded_transitions", loaded)
+    _set_offline_probe(agent, logger, args.std_log, buffer)
+    if args.std_log:
+        print(f"[online] offline data={loaded} transitions from the dataset", flush=True)
+
+
+def _resume_online_stage(agent: Any, args: Off2OnCommonArgs, logger: Logger) -> None:
+    _restore_offline_data(agent, args, logger)
+    if args.offline_dataset is not None and hasattr(agent, "pretrain_vae"):
+        offline_data = (
+            agent.offline_replay_buffer
+            if agent.online_replay_mode == "mixed"
+            else agent.replay_buffer
+        )
+        if agent.online_replay_mode != "empty" and len(offline_data) > 0:
+            agent.pretrain_vae()
+    if getattr(args, "online_eval_freq", None) is None and _is_explicit(args, "eval_freq"):
+        agent.eval_freq = args.eval_freq
+    if args.std_log:
+        print(
+            f"[online] resumed replay_mode={agent.online_replay_mode} "
+            f"offline_data_ratio={agent.offline_data_ratio} "
+            f"online_buffer={len(agent.replay_buffer)}",
+            flush=True,
+        )
 
 
 def _apply_online_eval_freq(agent: Any, args: Off2OnCommonArgs) -> None:
@@ -295,6 +519,11 @@ def _run_off2on(
     _require_continuous_action_space(env, args)
 
     agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
+    resumes_online_stage = _resumes_online_stage(agent, args)
+    if args.load_checkpoint is not None:
+        _report_changed_value_range(args)
+    if resumes_online_stage:
+        _reconcile_with_saved_stage(agent, args)
     materialized_derived = {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
     if dry_run:
         materialized_derived["dry_run_resource_overrides"] = {
@@ -323,18 +552,12 @@ def _run_off2on(
 
     # Offline training phase
     if args.num_offline_steps > 0:
-        if args.offline_dataset is None:
-            raise ValueError(
-                "--offline_dataset is required when --num_offline_steps > 0."
-            )
-        loaded = load_offline_dataset(agent.replay_buffer, args)
+        if args.offline_dataset is None and not _holds_restored_offline_stage_data(agent, args):
+            raise SystemExit("--offline_dataset is required when --num_offline_steps > 0.")
+        _load_offline_stage_dataset(agent, args, logger)
         offline_start_step = agent._global_step
-        logger.add_summary("off2on/offline_loaded_transitions", loaded)
         logger.add_summary("off2on/offline_start_step", offline_start_step)
-        if hasattr(agent, "fit_obs_normalizer"):
-            agent.fit_obs_normalizer()
-        if hasattr(agent, "pretrain_vae"):
-            agent.pretrain_vae()
+        _prepare_dataset(agent, args)
         _offline_update_loop(
             agent,
             args.num_offline_steps,
@@ -353,7 +576,10 @@ def _run_off2on(
         )
         _set_offline_probe(agent, logger, args.std_log)
 
-    _switch_to_online_mode(agent, args, logger)
+    if resumes_online_stage:
+        _resume_online_stage(agent, args, logger)
+    else:
+        _switch_to_online_mode(agent, args, logger)
     _apply_online_eval_freq(agent, args)
 
     # Online training phase

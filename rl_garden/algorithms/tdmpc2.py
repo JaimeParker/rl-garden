@@ -252,8 +252,10 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
     # single joint world-model optimizer (see module docstring) -- there is
     # no separate actor/critic split to stop-gradient between, so "shared"
     # (both paths train it, no detach) is the only sharing mode that makes
-    # sense here.
+    # sense here. Asymmetric obs_groups or a distinct critic encoder would
+    # resolve to "separate", which encoder_sharing_choices excludes.
     encoder_sharing = "shared"
+    encoder_sharing_choices = ("shared",)
 
     def __init__(
         self,

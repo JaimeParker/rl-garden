@@ -33,10 +33,9 @@ it, not because FQL/FAC's flow-matching actor needs them (matching
 The reference's ``balanced_sampling`` (``main.py:212-216``, half offline
 dataset / half replay buffer, every online step) maps to this repo's existing
 ``--online_replay_mode mixed --offline_data_ratio 0.5`` combination rather
-than a new mechanism; matching FINO/FloQ's off2on files, neither overrides
-``Off2OnCommonArgs``'s defaults (``online_replay_mode="empty"``,
-``offline_data_ratio=0.0``), so balanced sampling is opt-in via those two
-flags, not the default.
+than a new mechanism, and is opt-in via those two flags. The default,
+``online_replay_mode="append"``, is the reference's: online transitions join
+the dataset in one buffer (``main.py:90-93,218``).
 """
 
 from __future__ import annotations
@@ -145,6 +144,9 @@ class FACOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     State-only observations by default; pass ``--obs.rgb <camera>`` for
     CNN-based Dict/RGBD observations.
     """
+
+    # One buffer holds the dataset and the online transitions (main.py:54,90-93,218).
+    online_replay_mode: Literal["empty", "append", "mixed"] = "append"
 
     # FAC's paper default (arXiv 2602.18015, agents/fac.py:517) -- overrides
     # Off2OnCommonArgs's 0.99 default, matching offline/entrypoints/fac.py's FACArgs.

@@ -158,6 +158,9 @@ class ACRLPDArgs(SACTrainingArgs, ObservationArgs, PolicyModuleArgs, EnvBackendA
     mean- not min-ensemble aggregation, no entropy backup) rather than plain
     RLPD's own defaults.
 
+    ``--critic-only-steps`` above 0 is rejected: Q-chunking has no critic-only
+    phase.
+
     Env backend: ``--env_backend maniskill`` (default) or ``--env_backend custom``.
     """
 
@@ -207,5 +210,5 @@ registry.register(
     run_acrlpd,
     algorithm_cls=_acrlpd_algorithm_cls,
     build_agent=build_acrlpd,
-    training_only_inputs=("offline_dataset",),
+    training_only_inputs={"offline_dataset": None, "critic_only_steps": 0},
 )

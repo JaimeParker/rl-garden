@@ -127,6 +127,7 @@ def build_rlpd(
             reward_scale=args.reward_scale,
             reward_bias=args.reward_bias,
             success_key=args.success_key,
+            backend_config=getattr(args, args.dataset_backend, None),
         )
         if args.std_log:
             print(
@@ -177,8 +178,8 @@ class RLPDArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """RLPD -- high UTD + REDQ-style critic ensemble subsampling + LayerNorm
     + offline/online prior-data mixing from step 0, on top of SAC.
 
-    Env backend: ``--env_backend maniskill`` (default), ``robotwin``, or
-    ``d4rl_legacy``.
+    Env backend: ``--env_backend maniskill`` (default) or any other
+    registered backend, e.g. ``d4rl_legacy``.
     """
 
     n_critics: int = 10

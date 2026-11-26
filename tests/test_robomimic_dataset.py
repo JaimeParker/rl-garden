@@ -7,12 +7,16 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import (
+    DatasetRequest,
     MCReplayBuffer,
     ReplayBuffer,
     infer_specs_from_robomimic,
+    load_dataset,
     load_robomimic_dataset_to_replay_buffer,
 )
+from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.buffers.robomimic_dataset import ROBOMIMIC_LOW_DIM_OBS_KEYS
+from rl_garden.common.env_args import RobomimicConfig
 
 _KEY_DIMS = {
     "object": 10,
@@ -124,13 +128,10 @@ def test_load_robomimic_dataset_episode_ends_track_raw_dones(tmp_path):
     loaded = load_robomimic_dataset_to_replay_buffer(buffer, path)
 
     assert loaded == 10
-    # Concatenated stream: demo_0's 5 steps (flat index 0..4), then demo_1's
-    # 5 steps (flat index 5..9). Loaded in (num_envs=2)-sized chunks -> row 2
-    # is [demo_0 step4 (True, its last step), demo_1 step0 (False)]; row 4 is
-    # [demo_1 step3 (False), demo_1 step4 (True, its last step)].
-    assert buffer._episode_end[2, :].tolist() == [True, False]
-    assert buffer._episode_end[4, :].tolist() == [False, True]
-    assert buffer._episode_end[0, :].tolist() == [False, False]
+    # One contiguous stretch of the concatenated stream per env: demo_0's 5
+    # steps in env 0, demo_1's in env 1, each ending at its last step.
+    assert buffer._episode_end[:5, :].tolist() == [[False, False]] * 4 + [[True, True]]
+    assert buffer.obs["state"][:5, :, 0].tolist() == [[0.0, 1.0]] * 5
     # MC returns must have been computed per-demo (not leaking across the
     # concatenated stream) -- external_mc/externally_valid populated.
     assert buffer._externally_valid[:10].all()
@@ -220,6 +221,88 @@ def test_load_robomimic_dataset_infers_success_when_sparse_reward_mc_enabled(tmp
     assert loaded == 3
 
 
+def _load_one_demo(tmp_path, demo_rewards, config, *, sparse_reward_mc=False, **request):
+    """Load one 4-step demo with raw rewards ``demo_rewards`` (end marker on the last
+    step) through the registered backend into an MC buffer with gamma 0.5."""
+    path = tmp_path / "robomimic.hdf5"
+    with h5py.File(path, "w") as f:
+        demo = f.create_group("data").create_group("demo_0")
+        _write_demo(
+            demo, length=4, action_dim=7, dones=[0, 0, 0, 1], reward_value=0.0, obs_value=0.0
+        )
+        demo["rewards"][:] = np.asarray(demo_rewards, dtype=np.float64)
+    buffer = MCReplayBuffer(
+        observation_space=spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
+        action_space=spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
+        num_envs=1,
+        buffer_size=4,
+        gamma=0.5,
+        storage_device="cpu",
+        sample_device="cpu",
+        sparse_reward_mc=sparse_reward_mc,
+    )
+    req = DatasetRequest(path=str(path), backend_config=config, **request)
+    assert load_dataset(buffer, req, backend_name="robomimic") == 4
+    return buffer
+
+
+def test_terminate_on_success_marks_success_steps_done_and_stops_mc_returns_there(tmp_path):
+    buffer = _load_one_demo(
+        tmp_path, [0.0, 1.0, 0.0, 1.0], RobomimicConfig(terminate_on_success=True)
+    )
+
+    assert buffer.dones[:, 0].tolist() == [0.0, 1.0, 0.0, 1.0]
+    assert buffer._episode_end[:, 0].tolist() == [False, True, False, True]
+    assert buffer._external_mc[:, 0].tolist() == [0.5, 1.0, 0.5, 1.0]
+
+
+def test_terminate_on_success_leaves_a_failed_demo_without_dones(tmp_path):
+    buffer = _load_one_demo(
+        tmp_path, [0.0, 0.0, 0.0, 0.0], RobomimicConfig(terminate_on_success=True)
+    )
+
+    assert buffer.dones[:, 0].tolist() == [0.0] * 4
+    assert buffer._episode_end[:, 0].tolist() == [False, False, False, True]
+
+
+def test_terminate_on_success_uses_the_raw_reward_and_ignores_shaping_below_success(tmp_path):
+    # 0.6 stands for a shaped reward of an unsuccessful step: robosuite only
+    # reaches 1.0 on task success.
+    buffer = _load_one_demo(
+        tmp_path,
+        [0.0, 0.6, 0.0, 1.0],
+        RobomimicConfig(terminate_on_success=True),
+        reward_scale=10.0,
+        reward_bias=-5.0,
+    )
+
+    assert buffer.rewards[:, 0].tolist() == [-5.0, 1.0, -5.0, 5.0]
+    assert buffer.dones[:, 0].tolist() == [0.0, 0.0, 0.0, 1.0]
+
+
+@pytest.mark.filterwarnings("ignore:sparse_reward_mc=True")
+def test_terminate_on_success_stops_sparse_reward_mc_returns_at_success(tmp_path):
+    buffer = _load_one_demo(
+        tmp_path,
+        [0.0, 1.0, 0.0, 1.0],
+        RobomimicConfig(terminate_on_success=True),
+        sparse_reward_mc=True,
+    )
+
+    assert buffer._build_mc_table()[:, 0].tolist() == [0.5, 1.0, 0.5, 1.0]
+
+
+@pytest.mark.parametrize(
+    "config", [None, RobomimicConfig()], ids=["no-backend-config", "default-backend-config"]
+)
+def test_without_terminate_on_success_dones_stay_zero(tmp_path, config):
+    buffer = _load_one_demo(tmp_path, [0.0, 1.0, 0.0, 1.0], config)
+
+    assert buffer.dones[:, 0].tolist() == [0.0] * 4
+    assert buffer._episode_end[:, 0].tolist() == [False, False, False, True]
+    assert buffer._external_mc[:, 0].tolist() == [0.625, 1.25, 0.5, 1.0]
+
+
 def test_flatten_robomimic_obs_order_matches_constant():
     from rl_garden.buffers.robomimic_dataset import flatten_robomimic_obs
 
@@ -230,3 +313,26 @@ def test_flatten_robomimic_obs_order_matches_constant():
         [obs[key] for key in ROBOMIMIC_LOW_DIM_OBS_KEYS], axis=-1
     )
     assert np.array_equal(flat, expected)
+
+
+def test_every_demo_ends_where_it_ends_even_without_dones(tmp_path):
+    path = tmp_path / "robomimic.hdf5"
+    _write_dataset(path, num_demos=2, length=5, action_dim=7)
+    with h5py.File(path, "a") as f:
+        for i in range(2):
+            f[f"data/demo_{i}/dones"][...] = 0
+    buffer = ChunkedReplayBuffer(
+        spaces.Dict({"state": spaces.Box(-np.inf, np.inf, (_OBS_DIM,), dtype=np.float32)}),
+        spaces.Box(-1.0, 1.0, (7,), dtype=np.float32),
+        num_envs=1, buffer_size=10, horizon_length=3, gamma=0.9, storage_device="cpu", sample_device="cpu",
+    )
+    load_robomimic_dataset_to_replay_buffer(buffer, path)
+
+    assert buffer.episode_ends[:10, 0].tolist() == [False] * 4 + [True] + [False] * 4 + [True]
+    assert not buffer.dones.any()
+    sample = buffer.sample(200)
+    demo = sample.obs["state"][:, 0]
+    assert torch.equal(sample.next_obs["state"][:, 0], demo)
+    starts_at_last_step = sample.valid.sum(1) == 1
+    assert starts_at_last_step.any()
+    assert torch.allclose(sample.discounts[starts_at_last_step], torch.tensor(0.9))

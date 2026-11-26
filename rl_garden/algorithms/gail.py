@@ -24,18 +24,17 @@ observation, so it is schema-agnostic (Box, Dict/image via
 ``CombinedExtractor``, or a ``state_<name>``-augmented ``obs_groups.critic``
 all reduce to the same flat vector by the time they reach
 ``GAILDiscriminator``) -- see ``GAILDiscriminator``'s own docstring.
-``build_gail`` (``rl_garden/training/online/entrypoints/gail.py``) does not currently
-forward ``--obs.rgb``/``--obs_groups.*``/``--encoder.*`` from the CLI, so
-GAIL stays state-only in practice when driven through the CLI; direct
-construction with ``obs_groups``/``critic_encoder_config`` (PPO's existing
-kwargs, inherited unchanged) works today.
+``build_gail`` (``rl_garden/training/online/entrypoints/gail.py``) forwards
+``--obs.*``/``--obs-groups.*``/``--encoder.*``/``--critic-encoder.*`` the same
+way the ``ppo`` entrypoint does.
 
 Expert demonstrations are loaded once at construction time into a plain
 ``ReplayBuffer`` via the existing
 ``rl_garden.buffers.d4rl_legacy_dataset.load_d4rl_legacy_dataset_to_replay_buffer``
 -- no new dataset-loading code. That loader only ever fills the buffer's
 ``"state"`` key (``rl_garden.buffers.dataset_common.match_obs_to_buffer``
-wraps every flat loader output as ``{"state": ...}``). ``_build_demo_buffer``
+wraps every flat loader output as ``{"state": ...}``), so the demo buffer
+is allocated on the critic-role keys only. ``_build_demo_buffer``
 checks the discriminator's critic-role schema (``obs_groups.critic``, or the
 full schema when unset) against that ``{"state"}`` limit and raises
 ``ObservationContractError`` naming any other key (an image or
@@ -49,6 +48,7 @@ from typing import Any, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
+from gymnasium import spaces
 
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.buffers.replay_buffer import ReplayBuffer
@@ -156,8 +156,13 @@ class GAIL(PPO):
                 f"'state' key; the discriminator's critic schema also needs "
                 f"{unsupported}, which the demo dataset does not provide."
             )
+        observation_space = self.env.single_observation_space
+        if isinstance(observation_space, spaces.Dict):
+            observation_space = spaces.Dict(
+                {key: observation_space[key] for key in critic_keys}
+            )
         buffer = ReplayBuffer(
-            observation_space=self.env.single_observation_space,
+            observation_space=observation_space,
             action_space=self.env.single_action_space,
             num_envs=1,
             buffer_size=self.demo_buffer_size,

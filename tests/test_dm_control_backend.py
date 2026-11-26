@@ -247,6 +247,27 @@ def test_pixel_frame_stack_enables_autoreset_in_step():
     train_env.close()
 
 
+def test_frame_stack_with_reward_transform_scales_rewards_and_stacks_frames():
+    _require_dm_control()
+    if "MUJOCO_GL" not in os.environ and "DISPLAY" not in os.environ:
+        pytest.skip("no GL backend: set MUJOCO_GL=egl")
+    from rl_garden.envs.backend_registry import make_training_envs
+
+    obs_cfg = ObservationConfig(state=True, rgb=(DEFAULT_CAMERA_NAME,), frame_stack=3)
+    rewards = []
+    for scale, bias in ((1.0, 0.0), (2.0, 0.5)):
+        env, _ = make_training_envs(
+            "dm_control",
+            _make_req(observation=obs_cfg, reward_scale=scale, reward_bias=bias),
+        )
+        obs, _ = env.reset(seed=0)
+        assert obs["rgb_default"].shape == (2, 3, 64, 64, 3)
+        rewards.append(env.step(torch.full(env.action_space.shape, 0.5))[1])
+        env.close()
+
+    assert torch.allclose(rewards[1], 2.0 * rewards[0] + 0.5)
+
+
 def test_action_repeat_gives_500_step_episodes():
     _require_dm_control()
     from rl_garden.envs.dm_control.env import DMControlGymEnv

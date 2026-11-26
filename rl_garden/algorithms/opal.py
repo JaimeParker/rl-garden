@@ -46,6 +46,8 @@ class OPAL(OfflineRLAlgorithm):
     """
 
     _compatible_checkpoint_algorithms = ("OPAL",)
+    # There is no critic encoder, so "separate" does not exist.
+    encoder_sharing_choices = ("shared_critic_grad", "shared")
     checkpoint_eval_unsupported_reason = (
         "it is a skill-VAE pretraining stage with no policy that acts in an environment"
     )

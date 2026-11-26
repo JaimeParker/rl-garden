@@ -101,6 +101,7 @@ class PriorDataReplayMixin:
         reward_scale: float = 1.0,
         reward_bias: float = 0.0,
         success_key: Optional[str] = None,
+        backend_config: Any = None,
     ) -> int:
         if not (0.0 <= offline_data_ratio <= 1.0):
             raise ValueError(
@@ -115,6 +116,7 @@ class PriorDataReplayMixin:
                 reward_scale=reward_scale,
                 reward_bias=reward_bias,
                 success_key=success_key,
+                backend_config=backend_config,
                 observation=_observation_config_from_space(
                     self.env.single_observation_space
                 ),

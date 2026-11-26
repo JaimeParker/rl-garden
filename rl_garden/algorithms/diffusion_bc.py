@@ -82,6 +82,7 @@ class DiffusionBC(OfflineRLAlgorithm):
     # See module docstring: no critic, so extract_actor_features must never
     # stop-gradient.
     encoder_sharing = "shared"
+    encoder_sharing_choices = ("shared",)
 
     def __init__(
         self,

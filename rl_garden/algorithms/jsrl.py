@@ -269,7 +269,8 @@ def require_guide_checkpoint(checkpoint_path: Optional[str]) -> None:
     if not checkpoint_path or not Path(checkpoint_path).exists():
         raise FileNotFoundError(
             f"Guide checkpoint {checkpoint_path!r} does not exist. JSRL needs it to train from "
-            "scratch, and to load a JSRL checkpoint that does not embed its guide."
+            "scratch, and to load a JSRL checkpoint that does not embed its guide "
+            "(--guide-checkpoint)."
         )
 
 

@@ -320,6 +320,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def learn(self, total_timesteps: int) -> "OffPolicyAlgorithm":
         self._on_training_start(total_timesteps)
         obs, _ = self.env.reset(seed=self.seed)
+        self.replay_buffer.cut_running_episodes()
         self._on_env_reset(obs)
         # Resumed or post-offline runs can already be past learning_starts --
         # seeding False would make the first rollout iteration explore randomly.

@@ -179,11 +179,12 @@ class ObservationEncoderMixin:
     encoder_sharing_origin: str
 
     def _resolve_encoder_sharing(self, observation_space) -> EncoderSharing:
-        """Resolve ``self.encoder_sharing`` (possibly ``None``, meaning
-        "infer from obs_groups/critic_encoder_config, else use this class's
-        own default") against the observation contract, storing the result
-        and its origin on the instance (``self.encoder_sharing``,
-        ``self.encoder_sharing_origin``).
+        """Resolve the requested ``encoder_sharing`` against the observation
+        contract, storing the result and its origin on the instance
+        (``self.encoder_sharing``, ``self.encoder_sharing_origin``). Only a
+        value set on the instance is a request; without one (or with
+        ``None``) it is inferred from obs_groups/critic_encoder_config, else
+        it is the class attribute, this class's own default.
 
         Idempotent and cheap -- builds no encoder, so it never shifts RNG
         consumption or wastes compute (see ``_policy_extractor_kwargs``'s
@@ -200,7 +201,7 @@ class ObservationEncoderMixin:
         resolved_groups = resolve_obs_groups(schema, self.obs_groups)
         asymmetric = resolved_groups["actor"].keys != resolved_groups["critic"].keys
         value, origin = resolve_encoder_sharing(
-            requested=self.encoder_sharing,
+            requested=vars(self).get("encoder_sharing"),
             class_default=type(self).encoder_sharing,
             asymmetric=asymmetric,
             has_critic_encoder=self.critic_encoder_config is not None,

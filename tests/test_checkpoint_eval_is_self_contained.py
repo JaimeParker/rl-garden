@@ -26,6 +26,7 @@ import torch
 from _ncrl_online_synthetic import ENV_ACTION_DIM, make_pretrain_artifacts
 from gymnasium import spaces
 
+from rl_garden.common.checkpoint import without_local_paths
 from rl_garden.common.effective_config import json_value, resolve_active_environment
 from rl_garden.common.env_args import make_env_request
 from rl_garden.common.utils import get_device
@@ -452,14 +453,14 @@ def test_checkpoint_without_a_run_config(
     evaluate_checkpoint(_eval_args(lone, config_path=str(config), phase=phase, algorithm=name))
 
 
-def test_run_config_is_the_content_of_config_json(tmp_path, shared_inputs, monkeypatch):
+def test_run_config_is_config_json_without_its_paths(tmp_path, shared_inputs, monkeypatch):
     for phase, name in (("online", "sac"), ("off2on", "iql"), ("offline", "iql")):
         directory = tmp_path / phase
         directory.mkdir()
         checkpoint, _, _ = _train(phase, name, shared_inputs, directory, monkeypatch)
         contents = torch.load(checkpoint)
         config = json.loads((checkpoint.parent.parent / "config.json").read_text())
-        assert contents["metadata"]["run_config"] == config
+        assert contents["metadata"]["run_config"] == without_local_paths(config)
         assert config["selection"]["algorithm"] == name
         assert contents["format_version"] == 1
 
@@ -659,8 +660,19 @@ def test_resume_restores_the_embedded_network(
     assert before.keys() == after.keys()
     assert all(torch.equal(before[k], after[k]) for k in before)
 
-    # The same file is accepted silently, a differing one is reported.
+    # The flag is not needed either, unless the checkpoint embeds no network.
     flag = f"--{argument.replace('_', '-')}"
+    without_flag = [*resume[: resume.index(flag)], *resume[resume.index(flag) + 2 :]]
+    result = builds.run_entry("train_online", without_flag)
+    assert result.returncode == 0, result.stderr[-1500:]
+    legacy = tmp_path / "legacy.pt"
+    shutil.copy(checkpoint, legacy)
+    _edit_checkpoint(legacy, lambda contents: contents["state"]["extra"].pop(extra_key))
+    without_flag[without_flag.index(str(checkpoint))] = str(legacy)
+    with pytest.raises(FileNotFoundError, match="does not embed"):
+        builds.run_entry("train_online", without_flag)
+
+    # The same file is accepted silently, a differing one is reported.
     resume[resume.index(flag) + 1] = str(other)
     assert builds.run_entry("train_online", resume).returncode == 0
     assert "not the network embedded" not in caplog.text
@@ -673,6 +685,46 @@ def test_resume_restores_the_embedded_network(
     _edit_checkpoint(other, perturb)
     assert builds.run_entry("train_online", resume).returncode == 0
     assert f"{flag} {other} is not the network embedded" in caplog.text
+
+
+def test_acrlpd_checkpoint_of_a_critic_only_run_evaluates_and_resumes_without_the_phase(
+    tmp_path, shared_inputs, monkeypatch
+):
+    checkpoint, _, trained = _train("online", "acrlpd", shared_inputs, tmp_path, monkeypatch)
+    phase = {
+        "duration_steps": 30, "update_actor": False, "update_critic": True,
+        "update_encoder": False, "random_action_prob": 0.0,
+    }
+
+    def record_phase(contents):
+        inputs = contents["metadata"]["run_config"]["inputs"]
+        assert inputs["critic_only_steps"] == 0
+        inputs["critic_only_steps"] = phase["duration_steps"]
+        contents["metadata"]["hyperparameters"]["initial_training_phase"] = phase
+        contents["state"]["training_state"]["initial_phase_start_step"] = 0
+
+    _edit_checkpoint(checkpoint, record_phase)
+    config = checkpoint.parent.parent / "config.json"
+    (tmp_path / "config.json").write_text(
+        config.read_text().replace('"critic_only_steps": 0', '"critic_only_steps": 30')
+    )
+    assert '"critic_only_steps": 30' in (tmp_path / "config.json").read_text()
+    for config_path in (None, str(tmp_path / "config.json")):
+        with _captured_agents(monkeypatch) as agents:
+            evaluate_checkpoint(_eval_args(checkpoint, config_path=config_path))
+        _assert_acts_alike(agents[-1], trained)
+
+    values = {
+        **SMALL_TRAINING, **builds.OVERRIDES.get(("online", "acrlpd"), {}),
+        "total_timesteps": "48", "load_checkpoint": str(checkpoint),
+    }
+    argv = builds.build_argv("online", "acrlpd", tmp_path / "resumed", inputs=values)
+    with pytest.raises(ValueError, match="critic-only-steps"):
+        builds.run_entry("train_online", [*argv, "--critic-only-steps", "30"])
+    with _captured_agents(monkeypatch) as agents:
+        assert builds.run_entry("train_online", argv).returncode == 0
+    assert agents[-1].initial_training_phase is None
+    assert agents[-1]._global_step == 48
 
 
 def test_evaluation_allocates_no_replay_storage(tmp_path, shared_inputs, monkeypatch):

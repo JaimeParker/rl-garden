@@ -111,6 +111,7 @@ def build_explore(args, env, eval_env, logger, checkpoint_dir):
             reward_scale=args.reward_scale,
             reward_bias=args.reward_bias,
             success_key=args.success_key,
+            backend_config=getattr(args, args.dataset_backend, None),
         )
         if args.std_log:
             print(

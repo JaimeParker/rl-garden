@@ -595,10 +595,11 @@ class RSSM(WorldModel):
                 target = target.float() / 255.0
             losses[key] = -dist.log_prob(target).mean()
 
-        # A loss row whose arriving transition ended the episode is a reset
-        # observation; its reward/terminated belong to the previous episode.
+        # A loss row that is both first and last is a reset observation holding
+        # the previous episode's reward/terminated, because that episode's final
+        # observation is unknown (DreamerSequenceBatch).
         is_last = getattr(batch, "is_last", None)
-        row_valid = None if is_last is None else ~is_last.bool()
+        row_valid = None if is_last is None else ~(is_last.bool() & batch.is_first.bool())
 
         if self.reward_head is not None:
             reward = batch.reward if batch.reward.dim() == batch.action.dim() else batch.reward.unsqueeze(-1)

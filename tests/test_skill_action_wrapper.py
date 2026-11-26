@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
+from rl_garden.envs.gymnasium import GymnasiumEnvConfig, make_gymnasium_env
 from rl_garden.envs.wrappers import SkillActionWrapper
 from rl_garden.networks.actor_critic import UnsquashedGaussianActor
 
@@ -179,3 +181,55 @@ def test_deterministic_flag_controls_repeatability():
     torch.manual_seed(1)
     stoch2, _ = decoder.action_log_prob(features)
     assert not torch.equal(stoch1, stoch2)
+
+
+def _pendulum_vector_env(*, device: str, max_episode_steps: int):
+    return make_gymnasium_env(
+        GymnasiumEnvConfig(
+            env_id="Pendulum-v1",
+            num_envs=2,
+            seed=0,
+            device=device,
+            env_kwargs={"max_episode_steps": max_episode_steps},
+        )
+    )
+
+
+def test_same_device_step_passes_the_decoded_action_through_unchanged():
+    class _RecordingEnv(_FakeStaggeredEnv):
+        def step(self, action):
+            self.last_action = action
+            return super().step(action)
+
+    class _FixedDecoder(_RecordingDecoder):
+        action = torch.zeros(1, 1)
+
+        def action_log_prob(self, features):
+            return self.action, None
+
+    inner = _RecordingEnv([None], [None])
+    env = SkillActionWrapper(inner, _FixedDecoder(1), horizon=1, skill_dim=1)
+    env.reset()
+    env.step(torch.zeros(1, 1))
+    assert inner.last_action is _FixedDecoder.action
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.parametrize("env_device", ["cpu", "cuda"])
+def test_cuda_decoder_drives_a_vector_env_on_either_device(env_device):
+    decoder = UnsquashedGaussianActor(
+        3 + 2, spaces.Box(-2.0, 2.0, (1,), np.float32), hidden_dims=(8,)
+    ).to("cuda")
+    env = SkillActionWrapper(
+        _pendulum_vector_env(device=env_device, max_episode_steps=4),
+        decoder, horizon=4, skill_dim=2,
+    )
+    env.reset()
+
+    obs, reward, _, truncated, infos = env.step(torch.zeros(2, 2, device="cuda"))
+
+    assert truncated.all()
+    for tensor in (obs["state"], reward, infos["final_observation"]["state"]):
+        assert tensor.device.type == env_device
+    env.close()

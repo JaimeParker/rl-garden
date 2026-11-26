@@ -43,6 +43,7 @@ class FlowBC(OfflineRLAlgorithm):
     # stop-gradient (the encoder is trained end-to-end by the actor loss) --
     # see BC's identical class-attribute override for the full rationale.
     encoder_sharing = "shared"
+    encoder_sharing_choices = ("shared",)
 
     def __init__(
         self,

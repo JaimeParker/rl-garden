@@ -163,6 +163,17 @@ def test_acrlpd_rejects_an_actor_q_aggregation():
         ACRLPD(env=TinyVecEnv(), actor_q_agg="mean", **COMMON_KWARGS)
 
 
+def test_acrlpd_rejects_an_initial_training_phase():
+    from rl_garden.algorithms.acrlpd import ACRLPD
+    from rl_garden.common.training_phase import InitialTrainingPhase
+
+    phase = InitialTrainingPhase(
+        duration_steps=30, update_actor=False, update_critic=True, update_encoder=False
+    )
+    with pytest.raises(ValueError, match="--critic-only-steps.*Q-chunking has no critic-only phase"):
+        ACRLPD(env=TinyVecEnv(), initial_training_phase=phase, **COMMON_KWARGS)
+
+
 def test_jsrl_rebuilds_a_guide_trained_with_an_actor_factory(byo, tmp_path, caplog):
     import logging
 

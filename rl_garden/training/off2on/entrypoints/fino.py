@@ -119,6 +119,9 @@ class FINOOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations.
     """
 
+    # One buffer holds the dataset and the online transitions (main.py:46,89-92,179).
+    online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
     alpha: float = 10.0
     flow_steps: int = 10
     q_agg: Literal["mean", "min"] = "mean"

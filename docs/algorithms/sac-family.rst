@@ -27,7 +27,12 @@ Minimal command and construction
 
 RLPD mixes its prior data with online replay from the start.
 ACRLPD adds action chunks and uses a different critic action space.
+It executes each chunk one action per environment step, in rollout and in evaluation.
+With ``--q-mc-diagnostics`` its Q-values are scored on the steps where a chunk was chosen.
+It rejects ``--critic-only-steps`` above 0: Q-chunking has no critic-only phase.
+A chunk that runs past its episode's end has zero weight in its critic loss, as in Q-chunking.
 RLPDHybrid adds a discrete gripper head beside the continuous actor.
+With ``--nstep`` above 1 that head bootstraps from the same n-step return as the critic.
 These are separate choices from replacing the continuous actor head.
 
 The DDPG class is exposed through the drqv2 registry entry, not a ddpg subcommand.

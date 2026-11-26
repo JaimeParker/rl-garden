@@ -380,7 +380,7 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
         # Stacks decision-level frames; its base_env (env.unwrapped) is the adapter.
-        wrapped = ImageFrameStackWrapper(
+        env = ImageFrameStackWrapper(
             env, frame_stack=cfg.frame_stack, autoreset_in_step=True
         )
 

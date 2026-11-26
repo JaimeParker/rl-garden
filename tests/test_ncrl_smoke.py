@@ -26,6 +26,7 @@ from rl_garden.algorithms.ncrl import (
     dv2_lambda_return,
     load_retrieval_db,
 )
+from rl_garden.common.checkpoint import REMOVED_PATH
 from rl_garden.observations.schema import ObservationContractError
 
 
@@ -286,8 +287,8 @@ def test_checkpoint_round_trip_and_resume_skips_retrieval_and_bc(artifacts, tmp_
     assert set(checkpoint["state"]["optimizers"]) == {
         "model_optimizer", "reward_optimizer", "actor_optimizer", "critic_optimizer"
     }
-    assert checkpoint["metadata"]["hyperparameters"]["pretrained_world_model"] == str(artifacts["checkpoint"])
-    assert checkpoint["metadata"]["hyperparameters"]["retrieval_db"] == str(artifacts["retrieval_db"])
+    assert checkpoint["metadata"]["hyperparameters"]["pretrained_world_model"] == REMOVED_PATH
+    assert checkpoint["metadata"]["hyperparameters"]["retrieval_db"] == REMOVED_PATH
 
     restored = _agent(artifacts, seed=7)
     restored.load(path)

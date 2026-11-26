@@ -39,9 +39,10 @@ class SarsaReferenceMixin:
         next_actions = self.actions[next_inds, env_inds].to(self.sample_device)
         # Reuses MCReplayBufferMixin's own episode-boundary tracking -- the
         # same barrier _build_mc_table() already stops its recursion at.
-        next_action_valid = (~self._episode_end[batch_inds, env_inds]).to(
-            self.sample_device
+        ended = (
+            self._episode_end[batch_inds, env_inds] | self._episode_cut[batch_inds, env_inds]
         )
+        next_action_valid = (~ended).to(self.sample_device)
         return SarsaMCReplayBufferSample(
             obs=base.obs,
             next_obs=base.next_obs,

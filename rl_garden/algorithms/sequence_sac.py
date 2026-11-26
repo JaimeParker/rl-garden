@@ -20,6 +20,7 @@ from typing import Any
 import torch
 
 from rl_garden.algorithms.sac import SAC
+from rl_garden.common.obs_utils import index_obs
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder, SequenceState
 from rl_garden.policies.recurrent_sac_policy import RecurrentSACPolicy
 
@@ -208,10 +209,18 @@ class SequenceSAC(SAC):
     def _critic_loss(self, data):
         stop_gradient = not self._training_update_mask().update_encoder
         initial_hidden = self._initial_state_from_sample(data)
-        tail = self.policy.windowed_features(
-            data.obs, initial_hidden, data.episode_starts, self.burn_in_len,
-            stop_gradient=stop_gradient,
-        )
+        any_final = data.final_steps.numel() > 0
+        if any_final:
+            tail, final_features = self.policy.windowed_and_final_features(
+                data.obs, initial_hidden, data.episode_starts, self.burn_in_len,
+                data.final_obs, data.final_steps, data.final_columns,
+                stop_gradient=stop_gradient,
+            )
+        else:
+            tail = self.policy.windowed_features(
+                data.obs, initial_hidden, data.episode_starts, self.burn_in_len,
+                stop_gradient=stop_gradient,
+            )
         if stop_gradient:
             # A frozen-encoder phase also freezes the sequence trunk, which
             # q_optimizer owns alongside the extractor.
@@ -221,6 +230,14 @@ class SequenceSAC(SAC):
         # that would also kill the online slice's gradient to the encoder/RNN,
         # since both slices come from the SAME differentiable unroll).
         target = tail[self.forward_len : self.forward_len + self.learning_len].detach()
+        if any_final:
+            # A return cut short by a truncation bootstraps from that episode's
+            # final observation.
+            target = torch.where(
+                (data.final_index >= 0).unsqueeze(-1),
+                final_features[data.final_index.clamp(min=0)],
+                target,
+            )
 
         hidden_size = online.shape[-1]
         online_flat = online.reshape(-1, hidden_size)
@@ -332,9 +349,7 @@ class SequenceSAC(SAC):
 
     @staticmethod
     def _slice_obs_window(obs, length: int):
-        if isinstance(obs, dict):
-            return {k: v[:length] for k, v in obs.items()}
-        return obs[:length]
+        return index_obs(obs, slice(0, length))
 
     # --- checkpointing ---
 

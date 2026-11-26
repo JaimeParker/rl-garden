@@ -83,7 +83,7 @@ class TransformerPPOArgs(VisionTransformerPPOTrainingArgs, EnvBackendArgs):
 
     Combine with any encoder via ``--encoder.backbone``, e.g.
     ``transformer_ppo --obs.rgb base_camera --encoder.backbone resnet10``.
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default) or any other registered backend.
     """
 
 

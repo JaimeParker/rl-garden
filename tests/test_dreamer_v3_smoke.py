@@ -7,6 +7,7 @@ minute on CPU.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -14,7 +15,9 @@ import pytest
 import torch
 from gymnasium import spaces
 
+import rl_garden.algorithms.dreamer_v3 as dreamer_v3_module
 from rl_garden.algorithms.dreamer_v3 import DreamerV3
+from rl_garden.networks.returns import lambda_return
 from rl_garden.world_models.rssm import RSSMSize
 
 _TINY_SIZE = RSSMSize(deter=32, hidden=16, discrete=4, units=32, cnn_depth=4)
@@ -293,3 +296,87 @@ def test_replay_ratio_matches_train_ratio():
     assert (agent.steps_per_env, agent.training_freq, agent.grad_steps_per_iteration) == (2, 4, 1)
     agent = _agent(num_envs=2, train_ratio=48.0)  # utd = 2
     assert (agent.steps_per_env, agent.training_freq, agent.grad_steps_per_iteration) == (1, 2, 4)
+
+
+class MarkedFinalObsVecEnv(DummyVecEnv):
+    """Env 0's episodes end every 5th step; their final observation is all ones,
+    every other observation is below 0.5. ``terminates`` picks termination or
+    truncation, ``reports_final_obs`` whether the backend returns the final observation."""
+
+    def __init__(self, *args, terminates: bool, reports_final_obs: bool = True, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.terminates = terminates
+        self.reports_final_obs = reports_final_obs
+
+    def _obs(self):
+        return {"state": torch.rand(self.num_envs, 4) * 0.4}
+
+    def step(self, actions):
+        obs, rewards, terminations, truncations, infos = super().step(actions)
+        if "final_observation" in infos:
+            infos["final_observation"]["state"][0] = 1.0
+            if not self.reports_final_obs:
+                del infos["final_observation"]
+            rewards[0] = 7.0
+            if not self.terminates:
+                terminations, truncations = truncations, terminations
+        return obs, rewards, terminations, truncations, infos
+
+
+def _agent_with_marked_final_obs(**env_kwargs):
+    env = MarkedFinalObsVecEnv(_action_space(), **env_kwargs)
+    agent = DreamerV3(env=env, **_TINY_KWARGS)
+    agent.learn(total_timesteps=60)
+    agent.batch_size = 64
+    return agent, agent.replay_buffer.sample(64)
+
+
+@pytest.mark.parametrize("terminates", [False, True])
+def test_episode_end_targets_come_from_the_true_final_observation(terminates, monkeypatch):
+    agent, batch = _agent_with_marked_final_obs(terminates=terminates)
+    final = (batch.obs["state"][1:] == 1.0).all(-1)
+    assert final.any()
+    assert torch.equal(batch.is_last, final) and not (batch.is_first & final).any()
+    assert torch.equal(batch.terminated, final & terminates)
+    assert (batch.reward[final] == 7.0).all()
+    assert (batch.reward[batch.is_first] == 0.0).all()
+
+    returns = []
+
+    def recording(reward, value, boot, *, last, term, disc, lam):
+        out = lambda_return(reward, value, boot, last=last, term=term, disc=disc, lam=lam)
+        returns.append((reward, boot, last, term, disc, out))
+        return out
+
+    monkeypatch.setattr(dreamer_v3_module, "lambda_return", recording)
+    _, posterior = agent._update_model(batch)
+    agent._imagination_losses(batch, posterior)
+    reward, boot, last, term, disc, out = returns[-1]  # the replay (repval) return
+    before_final = final[1:] & ~final[:-1]
+    expected = reward[1:] + (1.0 - term[1:]) * disc * boot[1:]
+    torch.testing.assert_close(out[before_final], expected[before_final])
+    assert torch.equal(last[..., 0].bool(), final)
+    # The reset row is not in the previous episode: its value target is trained.
+    assert not last[..., 0].bool()[batch.is_first].any()
+
+
+@pytest.mark.parametrize("field", ["reward", "terminated"])
+def test_last_reward_and_termination_are_trained(field):
+    agent, batch = _agent_with_marked_final_obs(terminates=True)
+    with torch.no_grad():  # the reward head starts at zero output, which ignores its target
+        for param in agent.world_model.reward_head.parameters():
+            param.normal_(0.0, 0.5)
+
+    def loss(values):
+        torch.manual_seed(0)
+        losses, _ = agent.world_model.model_loss(dataclasses.replace(batch, **{field: values}))
+        return losses[{"reward": "rew", "terminated": "con"}[field]]
+
+    values = getattr(batch, field)
+    changed = torch.where(batch.is_last, values.logical_not() if field == "terminated" else values - 5.0, values)
+    assert not torch.allclose(loss(values), loss(changed))
+
+
+def test_without_a_reported_final_observation_no_reset_observation_stands_in():
+    _, batch = _agent_with_marked_final_obs(terminates=False, reports_final_obs=False)
+    assert batch.is_last.any() and torch.equal(batch.is_last, batch.is_first)

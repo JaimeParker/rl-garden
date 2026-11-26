@@ -6,7 +6,6 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.transformer_replay_buffer import TransformerReplayBuffer
-from rl_garden.common.obs_utils import index_obs
 
 
 def _obs_space() -> spaces.Dict:
@@ -107,7 +106,7 @@ def test_nstep_window_matches_manual_accumulation():
 
     t0 = torch.tensor([0])
     env = torch.zeros(1, dtype=torch.long)
-    rewards, discounts = buf._accumulate_nstep_window(t0, env)
+    rewards, discounts, _ = buf._accumulate_nstep_window(t0, env)
     expected_0 = rewards_seq[1] + gamma * rewards_seq[2]
     expected_1 = rewards_seq[2] + gamma * rewards_seq[3]
     assert torch.allclose(rewards[0, 0], torch.tensor(expected_0))
@@ -176,7 +175,7 @@ def test_sample_raises_before_any_checkpoint_ready():
         buf.sample(batch_size=4)
 
 
-def test_truncation_bootstrap_uses_patched_final_obs_not_reset_obs():
+def test_truncation_bootstraps_from_the_final_obs_and_keeps_the_reset_obs():
     buf = _make_buffer(num_envs=1, per_env_buffer_size=8, burn_in_len=1, learning_len=1, forward_len=1)
     true_final_obs = {"state": torch.full((1, 4), 999.0)}
     for t in range(8):
@@ -193,7 +192,12 @@ def test_truncation_bootstrap_uses_patched_final_obs_not_reset_obs():
 
     t0 = torch.tensor([0])
     env = torch.zeros(1, dtype=torch.long)
-    idx_grid, env_grid = buf._gather_window(t0, env)
-    window_obs = index_obs(buf.obs, (idx_grid, env_grid))
-    patched = buf._patch_final_obs(window_obs, idx_grid, env_grid)
-    assert torch.allclose(patched["state"][2, 0], true_final_obs["state"][0])
+    _, _, truncated_at = buf._accumulate_nstep_window(t0, env)
+    assert truncated_at.tolist() == [[0]]
+    final_obs, steps, columns, index = buf._truncation_bootstraps(t0, env, truncated_at)
+    assert torch.equal(final_obs["state"], true_final_obs["state"])
+    assert (steps.tolist(), columns.tolist(), index.tolist()) == ([0], [0], [[0]])
+    buf._sample_valid_window_starts = lambda n, generator=None: (t0, env, t0, torch.ones(1))
+    sample = buf.sample(1)
+    assert sample.obs["state"][:, 0, 0].tolist() == [0.0, 1.0, 2.0]
+    assert sample.episode_starts[:, 0].tolist() == [1.0, 0.0, 1.0]

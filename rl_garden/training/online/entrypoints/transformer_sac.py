@@ -58,7 +58,7 @@ def build_transformer_sac(
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:
-        agent.load(args.load_checkpoint, load_replay_buffer=False)
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     return agent
 
 
@@ -96,7 +96,7 @@ class TransformerSACArgs(VisionTransformerSACTrainingArgs, EnvBackendArgs):
     """TransformerSAC — GTrXL latent module + dense (not checkpoint-aligned),
     burn-in-from-zero priority replay buffer.
 
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default) or any other registered backend.
     """
 
 

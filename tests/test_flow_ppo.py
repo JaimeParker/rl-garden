@@ -479,3 +479,93 @@ def test_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not():
     losses = agent.train()
     for key, value in losses.items():
         assert np.isfinite(value), (key, value)
+
+
+def _build_from_cli(*cli: str, env=None) -> FlowPPO:
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.entrypoints.flow_ppo import build_flow_ppo
+
+    args = registry.parse_args(
+        [
+            "flow_ppo",
+            "--log-type", "none",
+            "--num-steps", "3",
+            "--horizon-length", "2",
+            "--flow-steps", "4",
+            "--update-epochs", "1",
+            "--update-batch-size", "8",
+            "--eval-freq", "0",
+            "--no-save-final-checkpoint",
+            *cli,
+        ]
+    )
+    return build_flow_ppo(args, env if env is not None else _FakeVisionEnv(4), None, None, None)
+
+
+_VISION_CLI = (
+    "--obs.rgb", "cam",
+    "--encoder.image-fusion-mode", "per_key",
+    "--encoder.features-dim", "32",
+)
+
+
+@pytest.mark.parametrize("sharing", ["shared_critic_grad", "shared", "separate"])
+def test_cli_encoder_sharing_reaches_the_agent_and_trains(sharing: str):
+    agent = _build_from_cli(*_VISION_CLI, "--encoder-sharing", sharing)
+
+    assert agent.encoder_sharing == sharing
+    assert agent.encoder_sharing_origin == "explicit"
+    assert agent.policy.encoder_sharing == sharing
+    assert (agent.policy.critic_extractor is not None) is (sharing == "separate")
+
+    agent.learn(total_timesteps=3 * 4 * 2)
+    before = {k: v.clone() for k, v in agent.policy.actor_extractor.named_parameters()}
+    metrics = agent.train()
+
+    assert all(np.isfinite(value) for value in metrics.values()), metrics
+    after = dict(agent.policy.actor_extractor.named_parameters())
+    assert any(not torch.equal(before[k], after[k]) for k in before)
+
+
+@pytest.mark.parametrize("sharing", ["shared_critic_grad", "shared", "separate"])
+def test_actor_loss_reaches_the_image_encoder_except_under_shared_critic_grad(sharing: str):
+    agent = _build_from_cli(*_VISION_CLI, "--encoder-sharing", sharing)
+    obs, _ = agent.env.reset()
+    obs = {key: value.to(agent.device) for key, value in obs.items()}
+    with torch.no_grad():
+        chain, _, _ = agent.policy.sample_rollout_chain(obs)
+
+    log_probs = agent.policy.get_logprobs_subsample(
+        agent.policy.extract_actor_features(obs),
+        chain[:, 0],
+        chain[:, 1],
+        torch.zeros(chain.shape[0], dtype=torch.long, device=agent.device),
+    )
+    log_probs.sum().backward()
+
+    image_params = [
+        param
+        for name, param in agent.policy.actor_extractor.named_parameters()
+        if name.startswith("image_encoder")
+    ]
+    assert image_params
+    reached = any(
+        param.grad is not None and bool(param.grad.abs().sum() > 0) for param in image_params
+    )
+    assert reached is (sharing != "shared_critic_grad")
+
+
+def test_cli_critic_encoder_builds_a_distinct_critic_extractor():
+    agent = _build_from_cli(*_VISION_CLI, "--critic-encoder.features-dim", "48")
+
+    assert agent.encoder_sharing == "separate"
+    assert agent.critic_encoder_config.features_dim == 48
+    assert agent.policy.critic_extractor is not None
+    assert agent.policy.critic_features_dim != agent.policy.actor_features_dim
+
+
+def test_cli_defaults_keep_the_class_default_encoder_sharing():
+    agent = _build_from_cli(*_VISION_CLI)
+
+    assert agent.encoder_sharing == "shared_critic_grad"
+    assert agent.critic_encoder_config is None and agent.policy.critic_extractor is None

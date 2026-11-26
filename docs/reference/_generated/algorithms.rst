@@ -18,7 +18,7 @@ Algorithm registry
      - Q-chunking, Li et al. 2025, `arXiv:2507.07969 <https://arxiv.org/abs/2507.07969>`_
    * - ``dagger``
      - online
-     - —
+     - ``rl_garden.algorithms.dagger.DAgger``
      - :doc:`/algorithms/imitation-and-generative`
      - Ross, Gordon & Bagnell 2011, AISTATS (no arXiv preprint)
    * - ``diffusion_cm_distill_online``
@@ -48,7 +48,7 @@ Algorithm registry
      - Li et al. 2023, `arXiv:2311.05067 <https://arxiv.org/abs/2311.05067>`_
    * - ``flash_sac``
      - online
-     - —
+     - ``rl_garden.algorithms.flash_sac.FlashSAC``
      - :doc:`/algorithms/sac-family`
      - `arXiv:2409.08689 <https://arxiv.org/abs/2409.08689>`_
    * - ``flow_ppo``

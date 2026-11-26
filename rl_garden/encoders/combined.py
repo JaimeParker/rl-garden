@@ -54,6 +54,8 @@ ImageAugmentationMode = Literal["none", "random_shift"]
 
 _AUG_STACK_KEY = "_rl_garden_aug_stack_image"
 _AUG_IMAGES_KEY = "_rl_garden_aug_images"
+_AUG_SHIFTS_KEY = "_rl_garden_aug_shifts"
+_STACKED_IMAGE = "stacked"
 _AUG_SEED_SALT = 1_000_003
 
 
@@ -260,6 +262,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
         # call silently overwrite the first's cached augmented images.
         self._aug_stack_key = f"{_AUG_STACK_KEY}_{id(self)}"
         self._aug_images_key = f"{_AUG_IMAGES_KEY}_{id(self)}"
+        self._aug_shifts_key = f"{_AUG_SHIFTS_KEY}_{id(self)}"
 
     @staticmethod
     def _image_space_to_hwc(
@@ -323,11 +326,14 @@ class CombinedExtractor(BaseFeaturesExtractor):
             self._augmentation_generators[device_key] = generator
         return generator
 
-    def _augment_image(self, image: torch.Tensor) -> torch.Tensor:
+    def _augment_image(
+        self, image: torch.Tensor, shifts: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         assert self.random_shift is not None
         return self.random_shift(
             image,
             generator=self._augmentation_generator(image.device),
+            shifts=shifts,
         )
 
     def prepare_batch(
@@ -335,21 +341,83 @@ class CombinedExtractor(BaseFeaturesExtractor):
         obs: dict,
         next_obs: Optional[dict] = None,
     ) -> None:
+        """``obs`` may also be a ``(T, B)`` window of observations (without
+        ``next_obs``): each of its ``B`` sequences gets one shift, the same at
+        every step."""
         if self.random_shift is None or not self._has_images:
+            return
+        if self._is_window(obs):
+            self._prepare_augmented_window(obs)
             return
         self._prepare_augmented_images(obs)
         if next_obs is not None:
             with torch.no_grad():
                 self._prepare_augmented_images(next_obs)
 
-    def _prepare_augmented_images(self, obs: dict) -> None:
-        if self.fusion_mode == "stack_channels":
-            obs[self._aug_stack_key] = self._augment_image(self._stack_images_uncached(obs))
+    def prepare_window_final_obs(
+        self, obs: dict, final_obs: dict, final_columns: torch.Tensor
+    ) -> None:
+        """Give ``final_obs[k]`` the shift of sequence ``final_columns[k]`` of the
+        window ``obs`` that ``prepare_batch`` augmented."""
+        shifts = obs.get(self._aug_shifts_key)
+        if shifts is None:
             return
+        images = self._images_to_augment(final_obs)
+        self._cache_augmented_images(
+            final_obs,
+            {
+                name: self._augment_image(image, shifts[name][0][final_columns])
+                for name, image in images.items()
+            },
+        )
 
-        obs[self._aug_images_key] = {
-            key: self._augment_image(self._to_nchw(self._prepare_image(key, obs[key])))
-            for key in self.image_keys
+    def _is_window(self, obs: dict) -> bool:
+        key = self.image_keys[0]
+        return obs[key].ndim == len(self._observation_space[key].shape) + 2
+
+    def _images_to_augment(self, obs: dict) -> dict[str, torch.Tensor]:
+        """The NCHW images the encoders read: the channel stack, or one per key."""
+        if self.fusion_mode == "stack_channels":
+            return {_STACKED_IMAGE: self._stack_images_uncached(obs)}
+        return {
+            key: self._to_nchw(self._prepare_image(key, obs[key])) for key in self.image_keys
+        }
+
+    def _cache_augmented_images(self, obs: dict, images: dict[str, torch.Tensor]) -> None:
+        if self.fusion_mode == "stack_channels":
+            obs[self._aug_stack_key] = images[_STACKED_IMAGE]
+        else:
+            obs[self._aug_images_key] = images
+
+    def _prepare_augmented_images(self, obs: dict) -> None:
+        images = self._images_to_augment(obs)
+        self._cache_augmented_images(
+            obs, {name: self._augment_image(image) for name, image in images.items()}
+        )
+
+    def _prepare_augmented_window(self, obs: dict) -> None:
+        assert self.random_shift is not None
+        steps, batch = obs[self.image_keys[0]].shape[:2]
+        images = self._images_to_augment(
+            {key: obs[key].flatten(0, 1) for key in self.image_keys}
+        )
+        shifts = {
+            name: self.random_shift.sample_shifts(
+                batch, image.device, self._augmentation_generator(image.device)
+            )
+            for name, image in images.items()
+        }
+        self._cache_augmented_images(
+            obs,
+            {
+                name: self._augment_image(image, shifts[name].repeat(steps, 1, 1, 1)).unflatten(
+                    0, (steps, batch)
+                )
+                for name, image in images.items()
+            },
+        )
+        obs[self._aug_shifts_key] = {
+            name: shift.expand(steps, *shift.shape) for name, shift in shifts.items()
         }
 
     def _encode_images(

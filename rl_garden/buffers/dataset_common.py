@@ -14,6 +14,7 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.base import BaseReplayBuffer
+from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.types import Obs
 from rl_garden.observations.schema import validate_observation_space
 
@@ -227,6 +228,18 @@ def add_flat_transitions(
     *or* truncation), independent of ``dones`` -- callers whose source data
     has no way to distinguish the two (e.g. a single combined terminal
     field) can pass the same tensor for both.
+
+    The rows are written ``buffer.num_envs`` at a time in dataset order. A
+    buffer whose samples read consecutive rows (``rows_form_trajectories``)
+    instead gets one contiguous stretch of the dataset per env. A trajectory
+    that continues in the next stretch is cut there: a buffer that samples
+    windows (one with an ``episode_ends`` column) ends it (truncated), the
+    others stop reading the next row there (``cut_running_episodes``), and a
+    Monte Carlo buffer gets the returns of the dataset order.
+
+    Each call starts with ``cut_running_episodes()``: the loaded rows never
+    continue an episode the buffer already holds, so a trajectory split over two
+    calls is two, the first cut.
     """
     total = actions.shape[0]
     usable = (total // buffer.num_envs) * buffer.num_envs
@@ -235,39 +248,59 @@ def add_flat_transitions(
             f"Offline dataset has {total} transitions, fewer than num_envs={buffer.num_envs}."
         )
 
+    windowed = hasattr(buffer, "episode_ends")
+    if windowed and episode_ends is None:
+        raise ValueError(
+            f"{type(buffer).__name__} samples windows of consecutive transitions, so its "
+            "dataset must say where episodes end; this one does not (episode_ends=None)."
+        )
+    stretched = windowed or buffer.rows_form_trajectories
     mc_table = None
     written_mask = None
-    if mc_returns is not None and hasattr(buffer, "_mc_table"):
-        mc_table = torch.zeros_like(buffer.rewards)
-        written_mask = torch.zeros_like(buffer.rewards, dtype=torch.bool)
-    has_episode_end = episode_ends is not None and hasattr(buffer, "_episode_end")
+    mc_known = None
+    if hasattr(buffer, "_mc_table"):
+        if mc_returns is None and stretched and buffer.num_envs > 1:
+            mc_returns, mc_known = buffer.stream_mc_returns(
+                rewards, episode_ends if episode_ends is not None else dones, successes
+            )
+        if mc_returns is not None:
+            mc_table = torch.zeros_like(buffer.rewards)
+            written_mask = torch.zeros_like(buffer.rewards, dtype=torch.bool)
+    has_episode_end = episode_ends is not None and (windowed or hasattr(buffer, "_episode_end"))
+    per_env = usable // buffer.num_envs
+    stretch_starts = torch.arange(buffer.num_envs, device=actions.device) * per_env
 
-    for start in range(0, usable, buffer.num_envs):
-        end = start + buffer.num_envs
+    buffer.cut_running_episodes()
+    for row in range(per_env):
+        start, end = row * buffer.num_envs, (row + 1) * buffer.num_envs
+        selected = stretch_starts + row if stretched else slice(start, end)
         pos = buffer.pos
         add_kwargs = {}
         if successes is not None:
-            add_kwargs["success"] = successes[start:end]
+            add_kwargs["success"] = successes[selected]
         if has_episode_end:
-            add_kwargs["episode_end"] = episode_ends[start:end]
+            ends = episode_ends[selected]
+            last_of_stretch = windowed and row == per_env - 1
+            add_kwargs["episode_end"] = torch.ones_like(ends) if last_of_stretch else ends
         buffer.add(
-            tree_slice(obs, start, end),
-            tree_slice(next_obs, start, end),
-            actions[start:end],
-            rewards[start:end],
-            dones[start:end],
+            index_obs(obs, selected),
+            index_obs(next_obs, selected),
+            actions[selected],
+            rewards[selected],
+            dones[selected],
             **add_kwargs,
         )
         if mc_table is not None:
-            mc_table[pos] = mc_returns[start:end].to(buffer.storage_device)
-            written_mask[pos] = True
+            mc_table[pos] = mc_returns[selected].to(buffer.storage_device)
+            written_mask[pos] = True if mc_known is None else mc_known[selected].to(buffer.storage_device)
+    if stretched and not windowed and buffer.num_envs > 1:
+        buffer.cut_running_episodes()
 
     if mc_table is not None:
         # Loader-provided MC values are trusted as-is (see mc_buffer.py's
-        # _externally_valid mechanism): the (T, N) grid these chunks land in
-        # is an artifact of load order, not a real per-column trajectory
-        # stream, so this buffer must not try to recompute them via its own
-        # backward-sweep recursion. add() already cleared _externally_valid
+        # _externally_valid mechanism): this buffer must not recompute them
+        # via its own backward-sweep recursion, which cannot see a trajectory
+        # continue in the next column. add() already cleared _externally_valid
         # at each written position; restore it here, after the full load, so
         # it isn't immediately wiped by the loop's own add() calls.
         buffer._external_mc = torch.where(written_mask, mc_table, buffer._external_mc)

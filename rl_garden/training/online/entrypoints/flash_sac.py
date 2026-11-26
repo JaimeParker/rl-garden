@@ -63,7 +63,7 @@ def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
         save_final_checkpoint=args.save_final_checkpoint,
     )
     if args.load_checkpoint is not None:
-        agent.load(args.load_checkpoint)
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     return agent
 
 
@@ -99,9 +99,16 @@ class FlashSACArgs(FlashSACTrainingArgs, ObservationArgs, EnvBackendArgs):
     """
 
 
+def _flash_sac_algorithm_cls() -> type:
+    from rl_garden.algorithms.flash_sac import FlashSAC
+
+    return FlashSAC
+
+
 registry.register(
     "flash_sac",
     FlashSACArgs,
     run_flash_sac,
+    algorithm_cls=_flash_sac_algorithm_cls,
     build_agent=build_flash_sac,
 )

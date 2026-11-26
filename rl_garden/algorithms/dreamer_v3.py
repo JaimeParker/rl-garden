@@ -37,11 +37,10 @@ the optimizer + LR scheduler.
 kwarg, threaded straight into ``RSSM``, see that class's own docstring for
 the exact behavioural difference from official JAX's default ``True``).
 
-**``torch.compile``** (design decision): DEFERRED, not used anywhere in
-this module. Official JAX is jit-compiled end to end; r2dreamer wraps its
-own ``_cal_grad`` in ``torch.compile(mode="reduce-overhead")``
-(``dreamer.py:163``). Enabling ``torch.compile`` here is a follow-up, not
-attempted in this commit -- also see ``docs/guides/dreamer-v3.md``.
+**``torch.compile``** (design decision): not used anywhere in this module.
+Official JAX is jit-compiled end to end; r2dreamer wraps its own
+``_cal_grad`` in ``torch.compile(mode="reduce-overhead")``
+(``dreamer.py:163``).
 
 **Discrete (``spaces.Discrete``) action spaces are out of scope for this
 class** (``DreamerPolicy`` itself implements both action heads by design, but this algorithm currently only supports ``spaces.Box``):
@@ -364,13 +363,17 @@ class DreamerV3(ModelBasedAlgorithm):
     def _replay_buffer_add_kwargs(
         self, action_context, obs, next_obs, real_next_obs, infos, need_final_obs
     ) -> dict[str, Any]:
-        del obs, next_obs, real_next_obs, infos, need_final_obs
+        del obs, next_obs, real_next_obs, need_final_obs
         new_state = action_context["new_state"]
         carry = {
             "deter": new_state["deter"],
             "stoch": new_state["stoch"].reshape(new_state["stoch"].shape[0], -1),
         }
-        return {"is_first": self._rollout_is_first, "carry": carry}
+        return {
+            "is_first": self._rollout_is_first,
+            "carry": carry,
+            "final_obs_known": "final_observation" in infos,
+        }
 
     def _post_rollout_step(self, action_context, terminations, truncations, infos) -> None:
         del action_context, infos

@@ -50,14 +50,15 @@ from typing import Any
 import gymnasium as gym
 import torch
 
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 
 
-class ActionRepeatWrapper(gym.Wrapper):
+class ActionRepeatWrapper(BatchedEnvWrapper):
     """Repeat each action for ``repeat`` env steps and sum the rewards (see
     module docstring for the episode-boundary contract)."""
 
-    def __init__(self, env: gym.Env, repeat: int) -> None:
+    def __init__(self, env: gym.Env | gym.vector.VectorEnv, repeat: int) -> None:
         if repeat < 1:
             raise ValueError(f"repeat must be >= 1, got {repeat}.")
         super().__init__(env)
@@ -67,13 +68,6 @@ class ActionRepeatWrapper(gym.Wrapper):
     @property
     def dropped_episode_ends(self) -> torch.Tensor | None:
         return self._chunk.dropped_episode_ends
-
-    def __getattr__(self, name: str):
-        # Only reached when normal lookup fails. "env" is guarded so a lookup
-        # before __init__ sets it (e.g. during unpickling) cannot recurse.
-        if name == "env":
-            raise AttributeError(name)
-        return getattr(self.env, name)
 
     def step(self, action: Any):
         self._chunk.begin()

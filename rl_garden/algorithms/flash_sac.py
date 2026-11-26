@@ -14,6 +14,7 @@ Reference: arxiv.org/abs/2409.08689
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any, Optional
 
 import dataclasses
@@ -129,6 +130,8 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
     """FlashSAC algorithm for Box observations."""
 
     _compatible_checkpoint_algorithms = ("FlashSAC",)
+    # There is no encoder, so "separate" does not exist.
+    encoder_sharing_choices = ("shared_critic_grad", "shared")
 
     def _obs_to_policy_device(self, obs):
         # FlashSACPolicy has no encoder mixin / Dict handling -- it indexes
@@ -349,6 +352,7 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
                 G_max=self.normalized_g_max,
                 device=self.device,
             )
+        self._reward_normalizer_missing_in_checkpoint = False
 
         # Optional compile
         if self.use_compile:
@@ -375,6 +379,33 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
     # ------------------------------------------------------------------
     # Reward normalizer — updated online each env step
     # ------------------------------------------------------------------
+
+    def _on_training_start(self, total_timesteps: int) -> None:
+        super()._on_training_start(total_timesteps)
+        # Here and not at load: evaluating a checkpoint needs no normalizer, and
+        # its number of envs is the evaluation's.
+        normalizer = self.reward_normalizer
+        if normalizer is None:
+            return
+        if self._reward_normalizer_missing_in_checkpoint:
+            self._reward_normalizer_missing_in_checkpoint = False
+            warnings.warn(
+                "normalize_reward is on, but the loaded checkpoint has no reward-normalizer state: "
+                "its return statistics start from zero, so the reward scale differs from the one "
+                "the loaded critic was trained with.",
+                stacklevel=3,
+            )
+        # The initial zeros(1), before any reward, broadcasts to every number of envs.
+        untouched = normalizer.G_r.numel() == 1 and not normalizer.G_r.any()
+        if normalizer.G_r.shape == (self.num_envs,) or untouched:
+            return
+        if normalizer.G_r.any():
+            warnings.warn(
+                f"The loaded reward normalizer has running returns of {normalizer.G_r.numel()} envs, "
+                f"this run has {self.num_envs}: they restart at zero, the return statistics are kept.",
+                stacklevel=3,
+            )
+        normalizer.reset_running_returns()
 
     def _on_env_step(
         self,
@@ -625,16 +656,23 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
-        return {
+        state = {
             "target_entropy": self.target_entropy,
             "temperature": self.temperature_module.state_dict(),
         }
+        if self.reward_normalizer is not None:
+            state["reward_normalizer"] = self.reward_normalizer.state_dict()
+        return state
 
     def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
         if "target_entropy" in state:
             self.target_entropy = float(state["target_entropy"])
         if "temperature" in state:
             self.temperature_module.load_state_dict(state["temperature"])
+        if self.reward_normalizer is not None:
+            self._reward_normalizer_missing_in_checkpoint = "reward_normalizer" not in state
+            if "reward_normalizer" in state:
+                self.reward_normalizer.load_state_dict(state["reward_normalizer"])
 
     def _optimizer_state_dicts(self) -> dict[str, Any]:
         return {

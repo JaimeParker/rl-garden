@@ -106,7 +106,6 @@ subcommand:
 ```bash
 # Pure offline CQL
 python examples/pretrain_offline.py cql \
-
     --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/cql_pretrain \
@@ -114,7 +113,6 @@ python examples/pretrain_offline.py cql \
 
 # Pure offline Cal-QL
 python examples/pretrain_offline.py calql \
-
     --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/calql_pretrain \
@@ -137,7 +135,6 @@ will be resumed by WSRL's offline→online flow:
 
 ```bash
 python examples/pretrain_offline.py wsrl \
-
     --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 200000 \
     --checkpoint_dir runs/robot_pretrain \
@@ -146,8 +143,8 @@ python examples/pretrain_offline.py wsrl \
     --use_calql --cql_alpha 5.0
 ```
 
-The WSRL mode writes
-`runs/robot_pretrain/checkpoints/wsrl_offline_pretrained.pt` by default, which
+With `--checkpoint_dir` as above the WSRL mode writes
+`runs/robot_pretrain/wsrl_offline_pretrained.pt`, which
 contains the policy, critic ensemble, target critic, optimizer state, and
 Lagrange multipliers — everything needed to resume.
 
@@ -156,15 +153,34 @@ Lagrange multipliers — everything needed to resume.
 ```bash
 python examples/train_off2on.py wsrl \
     --env_id <your_env_id> \
-    --load_checkpoint runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt \
+    --load_checkpoint runs/robot_pretrain/wsrl_offline_pretrained.pt \
+    --actor_hidden_layers 2 --critic_hidden_layers 4 \
+    --offline_dataset /path/to/real_robot.h5 \
     --num_offline_steps 0 \
     --num_online_steps 50000 \
     --online_replay_mode mixed \
     --offline_data_ratio 0.5
 ```
 
+The two hidden-layer flags are the offline entry's defaults; the off2on entry's
+are 3 and 3.
+
 This cleanly separates the two WSRL phases across machines: the pretraining
-host needs no sim, and the deployment host runs only online fine-tuning.
+host needs no sim, and the deployment host runs only online fine-tuning. The
+dataset is needed for `append` and `mixed` only.
+
+**Resume the online stage** with the run's own flags plus
+`--load_checkpoint <run>/checkpoints/<checkpoint>.pt --load_replay_buffer
+--num_offline_steps 0` (the interrupted run needs `--save_replay_buffer`, and
+`--checkpoint_freq` to have a checkpoint before `final.pt`). The
+checkpoint decides the replay mode, ratio, CQL weight and warmup; see
+[Resuming an off2on run](../guides/checkpoint.md#resuming-an-off2on-run).
+
+**Evaluate** with `rl-garden-eval --checkpoint-path <checkpoint>.pt`, for either
+stage and without `--phase` or `--algorithm`: an offline-stage checkpoint is
+evaluated as the Cal-QL policy it is, an online one under the online objective,
+which follows `--online_use_cql_loss` (default: SAC), and the result says which
+(`training_stage`).
 
 **Constraints:**
 - State observations only (flat `Box`). For RGBD pretraining, write a vision
@@ -434,7 +450,6 @@ and `_target_q` with `torch.compile(mode="default")`. First step pays a
 ```bash
 # Enable compile-based acceleration
 python examples/pretrain_offline.py wsrl \
-
     --offline_dataset real_robot.h5 \
     --num_offline_steps 100000 \
     --batch_size 1024 \
@@ -537,11 +552,19 @@ compatible `WSRL`, `CalQL`, or `SAC`-family agent against the live env and call
 
 ```python
 from rl_garden.algorithms import WSRL
+from rl_garden.buffers import load_h5_dataset_to_replay_buffer
 
-agent = WSRL(env=live_env, n_critics=10, critic_subsample_size=2, use_calql=True)
-agent.load("runs/robot_pretrain/checkpoints/wsrl_calql_offline_pretrained.pt")
+agent = WSRL(
+    env=live_env,
+    net_arch={"pi": [256, 256], "qf": [256, 256, 256, 256]},  # the offline entry's networks
+    n_critics=10,
+    critic_subsample_size=2,
+    use_calql=True,
+)
+agent.load("runs/robot_pretrain/wsrl_offline_pretrained.pt")
+load_h5_dataset_to_replay_buffer(agent.replay_buffer, "real_robot.h5")
 agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
-agent.learn(total_timesteps=50_000)
+agent.learn(total_timesteps=agent._global_step + 50_000)  # the loaded steps count
 ```
 
 ### Vision-Based WSRL

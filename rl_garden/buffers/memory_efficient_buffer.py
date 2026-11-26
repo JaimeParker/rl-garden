@@ -66,6 +66,13 @@ from rl_garden.common.types import GraspPenaltyReplayBufferSample, ReplayBufferS
 
 
 class MemoryEfficientReplayBuffer(ReplayBuffer):
+    _window_state_absent_from_old_files = (
+        "_ep_id",
+        "_current_ep_id",
+        "_step_id",
+        "_current_step_id",
+    )
+
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -151,6 +158,13 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                 shape=(num_envs,),
                 dtype=torch.int64,
             )
+
+    def _state_attrs(self) -> tuple[str, ...]:
+        return (*super()._state_attrs(), *self._window_state_absent_from_old_files)
+
+    def cut_running_episodes(self) -> None:
+        self._current_ep_id += (self._current_step_id > 0).long()
+        self._current_step_id.zero_()
 
     def add(
         self,

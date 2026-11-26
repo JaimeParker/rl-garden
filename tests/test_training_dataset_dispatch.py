@@ -235,9 +235,9 @@ def test_load_offline_dataset_routes_to_d4rl_legacy_with_num_episodes(monkeypatc
     assert called["num_episodes"] == 12
 
 
-def test_infer_specs_routes_to_rlbench_with_cameras(monkeypatch):
-    """Regression test for the found bug: --obs/--rlbench.cameras
-    weren't reaching rlbench's dataset spec inference/loading at all."""
+def test_infer_specs_routes_to_rlbench_with_the_requested_modalities(monkeypatch):
+    """``--obs.*`` reaches rlbench's dataset spec inference, one argument per
+    modality: rgb and depth cameras are requested independently."""
     _, action_space = _box_spaces()
     obs_space = spaces.Dict(
         {
@@ -247,9 +247,13 @@ def test_infer_specs_routes_to_rlbench_with_cameras(monkeypatch):
     )
     called = {}
 
-    def _fake_infer_specs_from_rlbench(path, *, cameras, image_size):
+    def _fake_infer_specs_from_rlbench(
+        path, *, rgb_cameras, depth_cameras, state, image_size
+    ):
         called["path"] = path
-        called["cameras"] = cameras
+        called["rgb_cameras"] = rgb_cameras
+        called["depth_cameras"] = depth_cameras
+        called["state"] = state
         called["image_size"] = image_size
         return obs_space, action_space
 
@@ -266,7 +270,9 @@ def test_infer_specs_routes_to_rlbench_with_cameras(monkeypatch):
 
     result = infer_offline_dataset_specs(args)
     assert result == (obs_space, action_space)
-    assert called["cameras"] == ("front",)
+    assert called["rgb_cameras"] == ("front",)
+    assert called["depth_cameras"] == ()
+    assert called["state"] is True
     assert called["image_size"] == (64, 64)
 
 

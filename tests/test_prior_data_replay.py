@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
 from rl_garden.algorithms import RLPD
+from rl_garden.common.env_args import RobomimicConfig
 from rl_garden.common.types import ReplayBufferSample
 
 
@@ -278,7 +281,10 @@ def test_load_offline_replay_buffer_d4rl_legacy(monkeypatch):
 def test_load_offline_replay_buffer_robomimic(monkeypatch):
     calls = {}
 
-    def fake_loader(buffer, path, *, num_traj, reward_scale, reward_bias, success_key):
+    def fake_loader(
+        buffer, path, *, num_traj, reward_scale, reward_bias, success_key, terminate_on_success
+    ):
+        calls["terminate_on_success"] = terminate_on_success
         calls["path"] = path
         calls["num_traj"] = num_traj
         calls["reward_scale"] = reward_scale
@@ -311,6 +317,15 @@ def test_load_offline_replay_buffer_robomimic(monkeypatch):
     assert len(agent.offline_replay_buffer) == 3
     assert agent.offline_data_ratio == 0.4
     assert calls["path"] == "/fake/lift_low_dim.hdf5"
+    assert calls["terminate_on_success"] is False
+
+    agent.load_offline_replay_buffer(
+        "/fake/lift_low_dim.hdf5",
+        backend="robomimic",
+        buffer_size=16,
+        backend_config=RobomimicConfig(terminate_on_success=True),
+    )
+    assert calls["terminate_on_success"] is True
 
 
 def test_load_offline_replay_buffer_ogbench(monkeypatch):
@@ -355,7 +370,17 @@ def test_load_offline_replay_buffer_rlbench(monkeypatch):
     calls = {}
 
     def fake_loader(
-        buffer, path, *, num_traj, cameras, image_size, reward_scale, reward_bias, success_key
+        buffer,
+        path,
+        *,
+        num_traj,
+        rgb_cameras,
+        depth_cameras,
+        state,
+        image_size,
+        reward_scale,
+        reward_bias,
+        success_key,
     ):
         calls["path"] = path
         calls["num_traj"] = num_traj
@@ -389,3 +414,38 @@ def test_load_offline_replay_buffer_rlbench(monkeypatch):
     assert len(agent.offline_replay_buffer) == 3
     assert agent.offline_data_ratio == 0.4
     assert calls["path"] == "/data/rlbench_demos/reach_target"
+
+
+@pytest.mark.parametrize("algorithm", ["rlpd", "rlpd_hybrid", "explore"])
+def test_entrypoint_forwards_the_dataset_backend_config_to_the_prior_data_loader(
+    monkeypatch, algorithm: str
+):
+    from rl_garden.training import inspection
+    from rl_garden.training.online import registry
+
+    calls = {}
+
+    class _RecordingAgent:
+        def load_offline_replay_buffer(self, path, **kwargs):
+            calls.update(kwargs, path=path)
+            return 0
+
+    monkeypatch.setattr(inspection, "construct_agent", lambda *args, **kwargs: _RecordingAgent())
+    args = registry.parse_args(
+        [
+            algorithm,
+            "--log-type", "none",
+            "--env-backend", "robomimic",
+            "--dataset-backend", "robomimic",
+            "--offline-dataset", "/fake/lift_low_dim.hdf5",
+            "--offline-buffer-size", "16",
+            "--robomimic.terminate-on-success",
+        ]
+    )
+    module = importlib.import_module(f"rl_garden.training.online.entrypoints.{algorithm}")
+
+    getattr(module, f"build_{algorithm}")(args, DummyVecEnv(), None, None, None)
+
+    assert calls["path"] == "/fake/lift_low_dim.hdf5"
+    assert calls["backend_config"] is args.robomimic
+    assert calls["backend_config"].terminate_on_success is True

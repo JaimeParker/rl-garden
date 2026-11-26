@@ -32,6 +32,14 @@ env/dataset backend). Dict/image observations are supported too via the
 shared ``ObservationEncoderMixin`` inherited from ``SAC``/``OfflineSAC``;
 the mirroring replay buffer below is always Dict, exactly like
 ``SAC._build_replay_buffer``.
+
+The offline pool is never checkpointed: upstream builds it from the dataset at
+every start (``serial_entry_offline2online.py:78-86`` on ``origin/code``), pushes
+what it collects into both buffers (``:149-150``) and reads neither back on a
+resume (its ``load_ckpt`` hook restores the policy networks and the iteration
+count only, ``learner_hook.py:113-121``). A resumed run therefore needs its
+dataset, and the online transitions mirrored before the resume are not in the
+rebuilt pool; the online buffer itself is restorable here like any other.
 """
 from __future__ import annotations
 
@@ -186,6 +194,8 @@ class _SO2RolloutTrainingShell(Off2OnReplayMixin, SO2Core, SAC):
        may change without notice.
     """
 
+    saves_offline_buffer = False
+
     def __init__(
         self,
         *args: Any,
@@ -202,3 +212,16 @@ class _SO2RolloutTrainingShell(Off2OnReplayMixin, SO2Core, SAC):
         )
         self._init_off2on_params(offline_sampling=offline_sampling)
         super().__init__(*args, **kwargs)
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        self.replay_buffer._mirror_into = None
+
+    @property
+    def lacks_offline_data(self) -> bool:
+        return self.online_replay_mode == "mixed" and self.offline_replay_buffer is None
+
+    def restore_offline_replay_buffer(self) -> Any:
+        buffer = super().restore_offline_replay_buffer()
+        self.replay_buffer._mirror_into = buffer
+        return buffer

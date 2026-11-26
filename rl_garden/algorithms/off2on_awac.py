@@ -16,6 +16,7 @@ import torch
 from rl_garden.algorithms.awac import _AWACRolloutTrainingShell
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.common.logger import Logger
+from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import KernelInit
 from rl_garden.networks.actor_critic import BackboneType
@@ -81,6 +82,7 @@ class Off2OnAWAC(_AWACRolloutTrainingShell):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        initial_training_phase: Optional[InitialTrainingPhase] = None,
     ) -> None:
         super().__init__(
             env=env,
@@ -134,4 +136,5 @@ class Off2OnAWAC(_AWACRolloutTrainingShell):
             checkpoint_freq=checkpoint_freq,
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
+            initial_training_phase=initial_training_phase,
         )

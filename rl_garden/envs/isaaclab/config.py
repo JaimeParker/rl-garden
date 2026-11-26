@@ -28,3 +28,7 @@ class IsaacLabEnvConfig:
     final_obs: bool | None = None
     # Env steps per policy decision; > 1 wraps the adapter in ActionRepeatWrapper.
     action_repeat: int = 1
+    # Returned reward = reward_scale * reward + reward_bias per decision (after
+    # action repeat); the episode return in final_info stays the raw env reward.
+    reward_scale: float = 1.0
+    reward_bias: float = 0.0

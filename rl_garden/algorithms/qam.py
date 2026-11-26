@@ -14,17 +14,15 @@ Built directly on `OfflineRLAlgorithm` (no rollout shell), following
 `FQL`'s exact offline-only shape -- QAM never touches an env during
 training, even the "ddpg" critic mode's `next_action` computation is a
 forward-only inference call through the policy, not real env interaction.
+Evaluation executes each chunk one action per env step (`ChunkedEvalMixin`).
 
 Formulas verified against `qam.py` (do not re-derive from memory):
 
-- **`valid` masking omitted everywhere** (critic/value/flow_loss): QAM's own
-  `valid_w = batch["valid"][...,-1]` is a whole-sample, last-position gate
-  (not ACFQL's per-position mask), so the same `ChunkedReplayBuffer`
-  early-stop-at-terminal redundancy argument `QGFCore` already documents
-  applies uniformly here -- see that module's docstring for the full
-  argument. `flow_loss`'s BC target can still contain a garbage
-  post-terminal tail in the rare window that overruns an episode boundary,
-  same tolerated leakage QGF's own `policy_loss` already accepts.
+- **A chunk window that runs past its episode's end has zero weight** in the
+  critic, value and `flow_loss` terms, whose mean still runs over the whole
+  batch (`valid_w = batch["valid"][..., -1]`, `qam.py:60,81,96,210`;
+  standalone `3rd_party/qam/agents/qam.py:39,121`); `adj_loss` and the
+  bolt-ons are unweighted, as there.
 - **Critic dispatches on `critic_loss_type`** (`qam.py:42-88`): `"ddpg"`
   (the reference's actual default) bootstraps off `next_q =
   next_qs.mean(0) - rho*next_qs.std(0,unbiased=False)` (JAX's `jnp.std`
@@ -67,6 +65,7 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.algorithms.chunked_rollout import ChunkedEvalMixin
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
@@ -372,8 +371,9 @@ class QAMCore:
                 next_q = self.policy.value(next_features)
             target_q = data.rewards.unsqueeze(-1) + data.discounts.unsqueeze(-1) * next_q
 
+        complete_window = data.valid[:, -1].to(target_q.dtype).unsqueeze(-1)
         q_all = self.policy.q_values_all(critic_features, flat_actions, target=False)
-        critic_loss = F.mse_loss(q_all, target_q.unsqueeze(0).expand_as(q_all))
+        critic_loss = ((q_all - target_q).square() * complete_window).mean()
         info = {
             "critic_loss": float(critic_loss.detach().item()),
             "q_mean": float(q_all.detach().mean().item()),
@@ -386,7 +386,9 @@ class QAMCore:
                 )
                 q_for_value = target_qs.min(dim=0).values
             values = self.policy.value(critic_features)
-            value_loss = self._expectile_loss(q_for_value - values, self.expectile).mean()
+            value_loss = (
+                self._expectile_loss(q_for_value - values, self.expectile) * complete_window
+            ).mean()
             critic_loss = critic_loss + value_loss
             info["value_loss"] = float(value_loss.detach().item())
             info["v_mean"] = float(values.detach().mean().item())
@@ -398,6 +400,7 @@ class QAMCore:
         features: torch.Tensor,
         critic_features: torch.Tensor,
         flat_actions: torch.Tensor,
+        complete_window: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         batch_size = flat_actions.shape[0]
         device, dtype = flat_actions.device, flat_actions.dtype
@@ -407,7 +410,7 @@ class QAMCore:
         x_t = (1 - t) * a0 + t * flat_actions
         vel = flat_actions - a0
         pred = self.policy.actor_slow(features, x_t, t)
-        flow_loss = F.mse_loss(pred, vel)
+        flow_loss = ((pred - vel).square().mean(dim=-1) * complete_window.to(dtype)).mean()
         actor_loss = flow_loss
         info: dict[str, float] = {"flow_loss": float(flow_loss.detach().item())}
 
@@ -515,7 +518,7 @@ class QAMCore:
                 data.obs, actor_features, stop_gradient=True
             )
             actor_loss, actor_info = self._actor_loss(
-                actor_features, actor_critic_features, flat_actions
+                actor_features, actor_critic_features, flat_actions, data.valid[:, -1]
             )
 
             self.actor_optimizer.zero_grad(set_to_none=True)
@@ -547,7 +550,7 @@ class QAMCore:
         return {key: metrics_sum[key] / counts[key] for key in metrics_sum}
 
 
-class QAM(QAMCore, OfflineRLAlgorithm):
+class QAM(ChunkedEvalMixin, QAMCore, OfflineRLAlgorithm):
     """Offline QAM: flow-matching actor fine-tuned via adjoint matching.
     See module docstring."""
 

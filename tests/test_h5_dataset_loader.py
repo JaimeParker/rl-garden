@@ -216,11 +216,12 @@ def test_loader_preserves_mc_returns_from_trajectory_boundaries(tmp_path):
 
     loaded = load_h5_dataset_to_replay_buffer(buffer, path)
     assert loaded == 6
+    # One trajectory per env column.
     expected = torch.tensor(
         [
-            [2.71, 1.9],
-            [1.0, 5.42],
-            [3.8, 2.0],
+            [2.71, 5.42],
+            [1.9, 3.8],
+            [1.0, 2.0],
         ]
     )
     # Loader-provided MC values are stored as _external_mc (trusted as-is,

@@ -31,6 +31,15 @@ from rl_garden.observations import (
 from rl_garden.policies.base import BasePolicy
 
 
+try:
+    from tests._cli import run_entry
+except ModuleNotFoundError as exc:
+    if exc.name != "tests._cli":
+        raise
+    # Some environments install a top-level tests package that shadows this one.
+    from _cli import run_entry
+
+
 class DummyVecEnv:
     def __init__(self, observation_space: spaces.Space, action_space: spaces.Box) -> None:
         self.num_envs = 1
@@ -377,3 +386,101 @@ def test_sac_critic_encoder_config_without_encoder_sharing_infers_separate():
 def test_sac_default_encoder_sharing_origin_names_the_class():
     agent = SAC(env=DummyVecEnv(STATE_SPACE, ACT_SPACE), **_sac_kwargs())
     assert agent.encoder_sharing_origin == "SAC default"
+
+
+# --- a class attribute is the class's default, never a request ---
+
+
+ASYMMETRIC = ObsGroups(actor=("rgb_cam", "state"), critic=("rgb_cam", "depth_cam", "state"))
+
+
+class _ClassDefaultOnly(ObservationEncoderMixin):
+    encoder_sharing = "shared"
+
+
+class _SingleEncoderOnly(_ClassDefaultOnly):
+    encoder_sharing_choices = ("shared",)
+
+
+class _InheritsClassDefault(_ClassDefaultOnly):
+    pass
+
+
+@pytest.mark.parametrize("algorithm_cls", [_ClassDefaultOnly, _SingleEncoderOnly, _InheritsClassDefault])
+def test_class_attribute_resolves_as_the_class_default(algorithm_cls):
+    algo = algorithm_cls()
+    for _ in range(2):  # the second call reads the resolved value back
+        assert algo._resolve_encoder_sharing(RGBD_SPACE) == "shared"
+        assert algo.encoder_sharing_origin == f"{algorithm_cls.__name__} default"
+
+
+def test_class_attribute_does_not_contradict_asymmetric_obs_groups():
+    algo = _ClassDefaultOnly()
+    algo.obs_groups = ASYMMETRIC
+    assert algo._resolve_encoder_sharing(RGBD_SPACE) == "separate"
+    assert algo.encoder_sharing_origin == "inferred (asymmetric obs_groups)"
+
+
+def test_single_encoder_class_rejects_asymmetric_obs_groups_without_blaming_the_user():
+    algo = _SingleEncoderOnly()
+    algo.obs_groups = ASYMMETRIC
+    with pytest.raises(ObservationContractError, match="only supports") as excinfo:
+        algo._resolve_encoder_sharing(RGBD_SPACE)
+    assert "explicit" not in str(excinfo.value).split(";")[0]
+
+
+def test_instance_value_is_still_an_explicit_request():
+    algo = _ClassDefaultOnly()
+    algo.encoder_sharing = "shared"
+    algo._resolve_encoder_sharing(RGBD_SPACE)
+    assert algo.encoder_sharing_origin == "explicit"
+    contradicting = _ClassDefaultOnly()
+    contradicting.encoder_sharing = "shared"
+    contradicting.obs_groups = ASYMMETRIC
+    with pytest.raises(ObservationContractError, match="explicitly set to 'shared'"):
+        contradicting._resolve_encoder_sharing(RGBD_SPACE)
+
+
+def test_subclass_class_attribute_overrides_an_algorithm_default():
+    class SharedSAC(SAC):
+        encoder_sharing = "shared"
+
+    agent = SharedSAC(env=DummyVecEnv(STATE_SPACE, ACT_SPACE), **_sac_kwargs())
+    assert (agent.encoder_sharing, agent.encoder_sharing_origin) == ("shared", "SharedSAC default")
+
+
+# (entry point, algorithm, its required dataset flag)
+WITHOUT_CRITIC_ENCODER = [
+    ("train_online", "dagger", None),
+    ("train_online", "flash_sac", None),
+    ("train_online", "policy_distillation", None),
+    *(("pretrain_offline", name, "--offline-dataset") for name in ("bc", "flow_bc", "mean_flow_bc")),
+    *(
+        ("pretrain_offline", name, "--dataset-path")
+        for name in ("a2a_bc", "diffusion_bc", "consistency_distill_bc", "hilp", "opal")
+    ),
+]
+
+
+def _print_config(entry: str, name: str, dataset_flag: str | None, *flags: str):
+    argv = [name, "--log-type", "none", "--obs.extra-state", "priv"]
+    if dataset_flag is not None:
+        argv += [dataset_flag, "unused.h5"]
+    return run_entry(entry, [*argv, *flags, "--print-config"])
+
+
+@pytest.mark.parametrize(("entry", "name", "dataset_flag"), WITHOUT_CRITIC_ENCODER)
+def test_print_config_rejects_a_second_encoder_where_none_exists(entry, name, dataset_flag):
+    actor = ("--obs-groups.actor", "state", "--obs-groups.critic")
+    asymmetric = _print_config(entry, name, dataset_flag, *actor, "state", "state_priv")
+    assert asymmetric.returncode != 0
+    assert "inferred (asymmetric obs_groups)" in asymmetric.stderr
+    assert "only supports" in asymmetric.stderr
+    assert "explicitly set" not in asymmetric.stderr
+
+    separate = _print_config(entry, name, dataset_flag, "--encoder-sharing", "separate")
+    assert separate.returncode != 0
+    assert "only supports" in separate.stderr
+
+    assert _print_config(entry, name, dataset_flag, *actor, "state").returncode == 0
+    assert _print_config(entry, name, dataset_flag).returncode == 0

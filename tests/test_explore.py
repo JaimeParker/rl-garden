@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -172,3 +173,26 @@ def test_checkpoint_roundtrip(tmp_path):
         assert torch.equal(value, loaded._relabeler.state_dict()[key]), key
     for key, value in agent._rnd.state_dict().items():
         assert torch.equal(value, loaded._rnd.state_dict()[key]), key
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {"offline_relabel_type": "pred"},
+        {"offline_relabel_type": "min"},
+        {"offline_relabel_type": "gt", "use_rnd_online": True},
+        {"offline_relabel_type": "gt", "use_rnd_offline": True},
+    ],
+)
+def test_nstep_is_rejected_while_single_transitions_are_labeled(labels):
+    with pytest.raises(ValueError, match="nstep=3"):
+        _agent(nstep=3, **labels)
+
+
+def test_nstep_with_dataset_labels_and_no_rnd_learns_from_both_buffers(tmp_path):
+    path = tmp_path / "demo.h5"
+    _write_offline_h5(path)
+    agent = _agent(nstep=3, offline_relabel_type="gt", learning_starts=8)
+    agent.load_offline_replay_buffer(path, backend="h5", buffer_size=16, offline_data_ratio=0.5)
+    agent.learn(total_timesteps=24)
+    assert agent._global_update > 0

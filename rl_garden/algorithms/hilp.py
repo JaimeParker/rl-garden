@@ -72,6 +72,8 @@ class HILP(OfflineRLAlgorithm):
     """
 
     _compatible_checkpoint_algorithms = ("HILP",)
+    # There is no critic encoder, so "separate" does not exist.
+    encoder_sharing_choices = ("shared_critic_grad", "shared")
     checkpoint_eval_unsupported_reason = (
         "it is a skill-learning stage: its skill actor acts only given a skill "
         "latent, which no environment provides"

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, NamedTuple, Optional
+from typing import Any, Iterable, NamedTuple, Optional
 
 import numpy as np
 import torch
@@ -161,6 +161,17 @@ class RehearsalSequenceBuffer:
     def add(self, *args, **kwargs) -> None:
         self.online.add(*args, **kwargs)
 
+    def cut_running_episodes(self) -> None:
+        self.online.cut_running_episodes()
+
+    def state_dict(self) -> dict[str, Any]:
+        """The online half. ``prior`` is fixed data its owner loads again, and
+        its carry is never read (``sample`` starts prior columns cold)."""
+        return self.online.state_dict()
+
+    def load_state_dict(self, state: dict[str, Any], *, strict: bool = True) -> None:
+        self.online.load_state_dict(state, strict=strict)
+
     # ------------------------------------------------------------------
     # Prior
     # ------------------------------------------------------------------
@@ -175,7 +186,7 @@ class RehearsalSequenceBuffer:
     def load_prior_episodes(self, episodes: Iterable[SequenceEpisode]) -> int:
         """Writes every episode into ``prior`` step by step (``is_first`` on
         its first step, ``episode_end`` on its last, ``done=False``, zero
-        carry). Actions narrower than the prior's action space are
+        carry; the final observation is not in the dataset). Actions narrower than the prior's action space are
         zero-padded. Returns the number of steps written."""
         if self.prior is None:
             raise RuntimeError("load_prior_episodes needs a prior buffer; set .prior first.")
@@ -209,6 +220,7 @@ class RehearsalSequenceBuffer:
                     torch.tensor([last]),
                     is_first=torch.tensor([t == 0]),
                     carry=zero_carry,
+                    final_obs_known=False,
                 )
             written += length
         return written

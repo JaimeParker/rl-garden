@@ -12,6 +12,7 @@ from gymnasium import spaces
 from rl_garden.algorithms import A2ABC, OfflineEnvSpec
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import ActionChunkDecoder, CNNSequenceEncoder
+from rl_garden.observations import ObservationContractError, ObsGroups
 from rl_garden.policies.a2a_policy import A2APolicy
 
 _IMAGE_SIZE = 16
@@ -94,6 +95,28 @@ def test_rejects_box_observation_space():
     )
     with pytest.raises(ValueError):
         A2ABC(env=env, dataset_path="unused.h5", device="cpu")
+
+
+def _small_dataset(tmp_path):
+    path = tmp_path / "data.h5"
+    _write_vision_h5_dataset(path, num_traj=1, steps_per_traj=6, state_dim=4, action_dim=2)
+    return path
+
+
+@pytest.mark.parametrize("image_keys", [None, ("rgb_cam",)], ids=["own_default", "given"])
+def test_equal_actor_and_critic_groups_resolve_to_the_class_default(tmp_path, image_keys):
+    groups = None if image_keys is None else ObsGroups(actor=image_keys, critic=image_keys)
+    agent = _make_agent(_small_dataset(tmp_path), obs_groups=groups)
+    assert agent.obs_groups.actor == agent.obs_groups.critic
+    assert (agent.encoder_sharing, agent.encoder_sharing_origin) == ("shared", "A2ABC default")
+
+
+def test_asymmetric_obs_groups_are_rejected(tmp_path):
+    with pytest.raises(ObservationContractError, match="A2ABC .*only supports"):
+        _make_agent(
+            _small_dataset(tmp_path),
+            obs_groups=ObsGroups(actor=("rgb_cam",), critic=("rgb_cam", "state")),
+        )
 
 
 def test_loss_decreases_and_checkpoint_roundtrips(tmp_path):

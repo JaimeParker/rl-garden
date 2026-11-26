@@ -129,11 +129,15 @@ class FloQOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations.
     """
 
+    # One buffer holds the dataset and the online transitions (main.py:54,93-96,193).
+    online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
     # 10.0, not ACFQL's 100.0: floq's own reference config
     # (3rd_party/floq/agents/floq.py get_config, alpha=10.0) inherits FQL's
     # actor-side BC coefficient unchanged (ACFQL's 100.0 is Q-chunking's own
     # action-chunked recipe, not floq's).
     alpha: float = 10.0
+
     flow_steps: int = 10
     q_agg: Literal["mean", "min"] = "mean"
     normalize_q_loss: bool = False

@@ -1,6 +1,6 @@
 """OGBench env backend — registered as ``"ogbench"``.
 
-Covers all 8 OGBench task families (locomotion: pointmaze/antmaze/
+Covers seven OGBench task families (locomotion: pointmaze/antmaze/
 humanoidmaze/antsoccer; manipulation: cube/scene/puzzle), state and pixel
 observations; see ``rl_garden.envs.ogbench.env`` module docstring for the
 sync/async vectorization choice and pixel-obs scoping.

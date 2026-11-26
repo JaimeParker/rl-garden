@@ -107,6 +107,16 @@ class MmapMultitaskEpisodeBuffer(StrictWindowSamplingMixin, BaseReplayBuffer):
     def flush(self) -> None:
         self._store.flush()
 
+    def _state_attrs(self) -> tuple[str, ...]:
+        return (
+            *super()._state_attrs(),
+            "episode_ends",
+            "task",
+            "_ep_id",
+            "_step_id",
+            "_current_ep_id",
+        )
+
     # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------

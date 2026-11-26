@@ -11,6 +11,26 @@ import torch
 
 
 class NStepSamplingMixin:
+    rows_form_trajectories = True
+
+    #: Storage that decides which n-step windows are valid, part of the host's
+    #: ``_state_attrs``.
+    window_state_attrs = (
+        "episode_ends",
+        "_ep_id",
+        "_current_ep_id",
+        "_step_id",
+        "_current_step_id",
+    )
+
+    def cut_running_episodes(self) -> None:
+        if len(self) == 0:
+            return
+        last = (self.pos - 1) % self.per_env_buffer_size
+        running = ~self.episode_ends[last]
+        self.episode_ends[last] = True
+        self._current_ep_id += running.long()
+
     def _valid_nstep_batch(
         self,
         batch_inds: torch.Tensor,

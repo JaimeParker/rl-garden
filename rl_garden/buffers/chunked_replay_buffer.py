@@ -11,22 +11,15 @@ r[i]*gamma**i``, ``3rd_party/qc/utils/datasets.py:120-129``) is identical to
 rl-garden's existing per-step accumulation once accumulation stops at the
 first true terminal.
 
-One deliberate, documented deviation from ``3rd_party/qc/utils/datasets.py``:
-QC's own ``sample_sequence`` always reads a full ``horizon_length`` window
-regardless of an in-window terminal (silently summing reward from whatever
-data follows the terminal in the ring buffer -- the next episode's data),
-and instead discards the ENTIRE sample from the critic loss via
-``valid[..., -1] = 0`` whenever the terminal falls strictly before the final
-window position. This buffer instead stops reward/discount accumulation
-exactly at the first true terminal (matching ``NStepReplayBuffer``'s
-existing, already-battle-tested convention) -- mathematically identical to
-QC's target for every sample QC itself would keep (window doesn't cross a
-terminal, or terminates exactly at the last position), and additionally
-produces a correct, unbiased partial-length target for windows QC would
-have discarded outright. Strictly more sample-efficient, never less
-correct. The per-position ``valid`` mask QC needs for its actor's chunked
-BC-flow loss (a genuinely different use -- masking WITHIN a kept window, not
-discarding whole windows) is still faithfully reproduced.
+QC's ``sample_sequence`` (``3rd_party/qc/utils/datasets.py:96-150``) reads a
+full ``horizon_length`` window whatever lies after an in-window episode end,
+and its agents give a window whose last position is invalid zero weight
+(``valid[..., -1]``, e.g. ``3rd_party/qc/agents/acfql.py:45``). This buffer
+stops reward, discount and ``next_obs`` at the first episode end and still
+returns the whole action window with QC's per-position ``valid``: for every
+window with ``valid[..., -1] == 1`` reward, discount and ``next_obs`` equal
+QC's. ACRLPD, ACFQL, QAM and QGF weight their losses with ``valid`` as their
+references do.
 
 Same storage layout, same ``NStepSamplingMixin``-based window-validity/
 rejection-sampling logic, and same ``_accumulate_chunk`` accumulation
@@ -58,6 +51,8 @@ class ChunkedReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
     (``_valid_nstep_batch``/``_sample_valid_indices``) is shared verbatim
     with the n-step buffers.
     """
+
+    _window_state_absent_from_old_files = NStepSamplingMixin.window_state_attrs
 
     def __init__(
         self,
@@ -106,6 +101,9 @@ class ChunkedReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
     # Storage
     # ------------------------------------------------------------------
 
+    def _state_attrs(self) -> tuple[str, ...]:
+        return (*super()._state_attrs(), "next_obs", *self.window_state_attrs)
+
     def add(
         self,
         obs: TensorDict,
@@ -129,8 +127,7 @@ class ChunkedReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         self.actions[self.pos] = action
         self.rewards[self.pos] = reward
         done_bool = done.to(self.storage_device).bool()
-        # Offline H5 loading never passes episode_end explicitly -- fall
-        # back to done, matching the n-step buffer's own default.
+        # A caller without truncations may leave episode_end out.
         episode_end_bool = (
             done_bool if episode_end is None else episode_end.to(self.storage_device).bool()
         )

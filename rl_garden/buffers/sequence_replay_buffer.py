@@ -14,14 +14,15 @@ selected at construction time by ``cross_episode``:
 - ``cross_episode=True, priority=True`` (**tolerant**, ``RecurrentReplayBuffer``/
   ``TransformerReplayBuffer``): an episode boundary *inside* the window is
   fine (masked downstream via ``episode_starts``/n-step reward zeroing,
-  ``RecurrentSamplingMixin``); only a genuine ring-buffer-wraparound read is
-  rejected. Windows are proposed by a priority sum-tree over a sparse
+  ``RecurrentSamplingMixin``); a window is rejected when a row its losses read
+  was not stored in one run with the others. Windows are proposed by a priority sum-tree over a sparse
   ``stride``-periodic checkpoint grid.
 - ``cross_episode=True, priority=False`` (**uniform**, DreamerV3): windows are drawn uniformly (no priority
   tree, no checkpoint grid) over every ring-buffer-contiguous
   ``[t0, t0 + horizon]`` span; an episode boundary inside the window is fine
   (masked downstream via the per-step ``is_first`` this mode stores, not
-  ``episode_starts``). Every step's model recurrent carry (e.g. an RSSM's
+  ``episode_starts``), and an ended episode's final observation is a row of
+  its own in it (``DreamerSequenceBatch``). Every step's model recurrent carry (e.g. an RSSM's
   ``deter``/``stoch``) is stored densely (one slot per position, via
   ``carry_spec``) and written back after training (``write_back_carry()``) so
   the next sample of the same slots warm-starts from an up-to-date posterior
@@ -66,8 +67,9 @@ that host, see that module's docstring).
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
@@ -172,8 +174,11 @@ class DreamerSequenceBatch(SequenceBatch):
     """``cross_episode=True, priority=False`` (uniform) sample -- DreamerV3's
     windowed batch.
 
-    The window covers ``horizon + 1`` consecutive ring-buffer rows per
-    selected ``(env, t0)`` pair; row 0 supplies only the warm-start
+    The window covers ``horizon + 1`` consecutive rows of the stream
+    ``s_0, ..., s_{T-1}, s_T, s'_0, ...`` the reference implementations store:
+    every ring-buffer row, plus, after a row that ended its episode, the final
+    observation ``s_T`` from the final-obs side table. Row 0 supplies only the
+    warm-start
     ``carry`` (this buffer's stored ``carry_spec`` tensors at that row), an
     ``RSSM.observe()`` call seeds itself with instead of
     ``initial_state()``. Rows ``1..horizon`` ("loss rows", ``horizon`` of
@@ -195,6 +200,15 @@ class DreamerSequenceBatch(SequenceBatch):
     unshifted. ``is_terminal`` is exactly this buffer's ``dones`` and
     ``is_last`` exactly its ``episode_ends`` at those (shifted) rows -- no
     separate storage for either, only ``is_first`` is new per-step state.
+
+    At an episode end the final-observation row therefore holds the last
+    ``action``/``reward``/``is_terminal`` with ``is_last=True``, and the reset
+    row after it ``is_first=True`` and zero ``action``/``reward``, as in
+    ``3rd_party/dreamerv3/embodied/envs/from_gym.py`` and
+    ``3rd_party/r2dreamer/envs/parallel.py``. Where the final observation is
+    unknown (``add(final_obs_known=False)``) there is no such row: the reset
+    row keeps the ended transition's values and has ``is_first`` and
+    ``is_last`` both set.
     """
 
     # Inherited from SequenceBatch (always set by _sample_uniform):
@@ -204,7 +218,8 @@ class DreamerSequenceBatch(SequenceBatch):
     #   terminated (horizon, B) bool -- transition into row t was terminal
     #     (also readable/writable as ``is_terminal``, Dreamer's name)
     #   carry {key: (B, *carry_shape)} -- row-0 warm start, per carry_spec
-    #   indices (idx_grid, env_grid), each (horizon, B), storage_device -- pass to write_back_carry()
+    #   indices (idx_grid, env_grid), each (horizon, B), storage_device -- pass to
+    #     write_back_carry(); idx_grid is -1 on final-observation rows
     is_last: torch.Tensor             # (horizon, B) bool -- transition into row t ended the episode
 
     @property
@@ -224,6 +239,8 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
     ``gamma``, ``prio_exponent``, ``importance_sampling_exponent``,
     ``priority_eps``).
     """
+
+    rows_form_trajectories = True
 
     def __init__(
         self,
@@ -458,10 +475,10 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         return StrictWindowSamplingMixin._gather_window(self, t0, env_inds)
 
     def _patch_tail_final_obs(self, window_obs, idx_grid: torch.Tensor, env_grid: torch.Tensor):
-        """Strict-mode counterpart of ``RecurrentSamplingMixin._patch_final_obs``,
-        restricted to the window's last row -- the only position strict
-        mode's rejection rule allows to coincide with an episode boundary
-        (see module docstring)."""
+        """Puts the true final observation into the window's last row where that
+        row follows an episode end -- the only position strict mode's rejection
+        rule allows to coincide with an episode boundary (see module
+        docstring)."""
         last_row = idx_grid.shape[0] - 1
         prev_idx, last_env = idx_grid[last_row - 1], env_grid[last_row]
         boundary = self.episode_ends[prev_idx, last_env] & (
@@ -484,6 +501,69 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         return _patch(window_obs, final_values)
 
     # ------------------------------------------------------------------
+    # Checkpoint state
+    # ------------------------------------------------------------------
+
+    def _state_attrs(self) -> tuple[str, ...]:
+        attrs = (
+            *super()._state_attrs(),
+            "episode_ends",
+            "_ep_id",
+            "_current_ep_id",
+            "_step_id",
+            "_current_step_id",
+            "_ep_relative_step",
+            "_current_ep_relative_step",
+        )
+        if self.cross_episode and self.priority:
+            return (*attrs, "_current_ckpt_pos", "_ckpt_slot_to_pos")
+        if self.cross_episode:
+            return (*attrs, "_is_first", "_carry")
+        return attrs
+
+    def state_dict(self) -> dict[str, Any]:
+        state = super().state_dict()
+        if self.priority:
+            state["priority_tree"] = self._priority_tree.tree
+        elif self.cross_episode:
+            state["final_obs_known_recorded"] = True
+        return state
+
+    def load_state_dict(self, state: dict[str, Any], *, strict: bool = True) -> None:
+        super().load_state_dict(state, strict=strict)
+        if self.priority:
+            self._priority_tree.load_tree(state["priority_tree"])
+        elif self.cross_episode and not state.get("final_obs_known_recorded", False):
+            self._drop_final_obs_that_are_reset_obs()
+
+    def _drop_final_obs_that_are_reset_obs(self) -> None:
+        """For a uniform-mode file written before ``add(final_obs_known=...)``
+        existed: when the backend reported no final observation, its table holds
+        the reset observation instead, an exact copy of the ring row after the
+        ended one. That holds for a whole file, so the copies are told from
+        observations that happen to coincide by majority."""
+        pos, env = (self._final_slot_ids >= 0).nonzero(as_tuple=True)
+        following = (pos + 1) % self.per_env_buffer_size
+        stored = self._step_id[following, env] == self._step_id[pos, env] + 1
+        pos, env, following = pos[stored], env[stored], following[stored]
+        if pos.numel() == 0:
+            return
+        final_obs = self._final_obs[self._final_slot_ids[pos, env]]
+        is_copy = torch.ones_like(stored[stored])
+        for key, reset_obs in index_obs(self.obs, (following, env)).items():
+            is_copy &= (final_obs[key] == reset_obs).flatten(start_dim=1).all(dim=1)
+        if is_copy.sum() * 2 <= is_copy.numel():
+            return
+        warnings.warn(
+            "This replay file was written without known final observations (it holds the reset "
+            "observation in their place); they are dropped, so the last reward and the termination "
+            "flag of its episodes are not trained.",
+            stacklevel=2,
+        )
+        for row in range(self.per_env_buffer_size):
+            self._free_final_slot(row)
+
+    # ------------------------------------------------------------------
     # Storage (_add_common is the shared write body for both modes' add();
     # strict mode's own add() below is the sole entry point when this class
     # is used directly).
@@ -497,6 +577,8 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         reward: torch.Tensor,
         done: torch.Tensor,
         episode_end: torch.Tensor,
+        *,
+        final_obs_known: bool = True,
     ) -> torch.Tensor:
         done_bool = done.to(self.storage_device).bool()
         episode_end_bool = episode_end.to(self.storage_device).bool().reshape(self.num_envs)
@@ -509,13 +591,25 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         self.episode_ends[self.pos] = episode_end_bool
 
         self._free_final_slot(self.pos)
-        self._store_final_obs_for_episode_ends(self.pos, episode_end_bool, next_obs)
+        if final_obs_known:
+            self._store_final_obs_for_episode_ends(self.pos, episode_end_bool, next_obs)
 
         self._ep_id[self.pos] = self._current_ep_id
         self._step_id[self.pos] = self._current_step_id
         self._ep_relative_step[self.pos] = self._current_ep_relative_step
 
         return episode_end_bool
+
+    def cut_running_episodes(self) -> None:
+        """Starts a new episode id without an ``episode_end``: windows may still
+        end at the last row's ``obs``, but the transition that left it has no
+        stored successor and is in no window."""
+        if len(self) == 0:
+            return
+        last = (self.pos - 1) % self.per_env_buffer_size
+        running = self._ep_id[last] == self._current_ep_id
+        self._current_ep_id = self._current_ep_id + running.long()
+        self._current_ep_relative_step = torch.zeros_like(self._current_ep_relative_step)
 
     def _write_checkpoint_slots(
         self, episode_end_bool: torch.Tensor, hidden=None
@@ -542,6 +636,7 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         *,
         is_first: Optional[torch.Tensor] = None,
         carry: Optional[dict[str, torch.Tensor]] = None,
+        final_obs_known: bool = True,
     ) -> None:
         """Strict-mode (``cross_episode=False``) and uniform-mode
         (``cross_episode=True, priority=False``) storage -- the only two
@@ -553,22 +648,25 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         uniform-mode-only (see ``DreamerSequenceBatch``'s docstring for
         ``is_first``'s semantics; ``carry`` is one ``(N, *shape)`` tensor per
         ``carry_spec`` key, written verbatim into this position's carry
-        table)."""
+        table). ``final_obs_known=False`` (uniform mode only): on ended rows
+        ``next_obs`` is not the observation the episode ended in."""
         if self.cross_episode and self.priority:
             raise NotImplementedError(
                 f"{type(self).__name__}(cross_episode=True, priority=True) has no "
                 "direct add() -- subclass it and override add() (see "
                 "RecurrentReplayBuffer/TransformerReplayBuffer)."
             )
-        if not self.cross_episode and (is_first is not None or carry is not None):
+        if not self.cross_episode and (is_first is not None or carry is not None or not final_obs_known):
             raise ValueError(
-                "is_first/carry are cross_episode=True, priority=False (uniform) "
-                "only kwargs; strict mode does not accept them."
+                "is_first/carry/final_obs_known are cross_episode=True, priority=False "
+                "(uniform) only kwargs; strict mode does not accept them."
             )
         if self.cross_episode and is_first is None:
             raise ValueError("cross_episode=True, priority=False (uniform) requires is_first.")
 
-        episode_end_bool = self._add_common(obs, next_obs, action, reward, done, episode_end)
+        episode_end_bool = self._add_common(
+            obs, next_obs, action, reward, done, episode_end, final_obs_known=final_obs_known
+        )
 
         if self.cross_episode:
             self._is_first[self.pos] = is_first.to(self.storage_device).bool().reshape(self.num_envs)
@@ -589,35 +687,69 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
     # Uniform-mode (cross_episode=True, priority=False) sampling.
     # ------------------------------------------------------------------
 
+    def _uniform_window_rows(
+        self, t0: torch.Tensor, env_inds: torch.Tensor, from_final: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(offset, is_final)``, each ``(window_len, B)``: window row ``k`` is
+        the ring row ``t0 + offset[k]``, or the final observation of the
+        episode that row ended (see ``DreamerSequenceBatch``). ``from_final``:
+        the window starts at the final observation of ``t0`` instead of at
+        ``t0`` itself."""
+        offsets = torch.arange(self.window_len, device=self.storage_device).unsqueeze(1)
+        ring = (t0.unsqueeze(0) + offsets) % self.per_env_buffer_size
+        has_final = (self._final_slot_ids[ring, env_inds] >= 0).long()
+        row = offsets + has_final.cumsum(dim=0) - has_final - from_final.long()
+
+        # Row ``window_len`` collects everything outside the window.
+        def placed(where: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+            inside = (where >= 0) & (where < self.window_len)
+            where = torch.where(inside, where, torch.full_like(where, self.window_len))
+            rows = torch.zeros((self.window_len + 1, t0.shape[0]), dtype=torch.long, device=self.storage_device)
+            return rows.scatter_(0, where, values)[: self.window_len]
+
+        final_row = torch.where(has_final.bool(), row + 1, torch.full_like(row, self.window_len))
+        offset = placed(row, offsets.expand_as(row)) + placed(final_row, offsets.expand_as(row))
+        return offset, placed(final_row, has_final).bool()
+
     def _valid_uniform_window_batch(
-        self, t0: torch.Tensor, env_inds: torch.Tensor
+        self,
+        t0: torch.Tensor,
+        env_inds: torch.Tensor,
+        from_final: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Ring-buffer contiguity only -- NOT episode-strict (unlike
         ``StrictWindowSamplingMixin``, no ``_ep_id`` equality check): an
         episode boundary inside the window is fine (a window may cross
-        episodes). ``_step_id`` is a per-env counter that increments by
+        episodes), except a cut (``cut_running_episodes``), where the observation
+        the last transition arrived at is unknown. ``_step_id`` is a per-env counter that increments by
         exactly 1 on every ``add()`` and never resets, so pinning every
         offset's ``_step_id`` to ``base_step + i`` is exactly "these
         per_env_buffer_size-modulo positions were all written in the same
         contiguous run, no stale wraparound data" -- the same reasoning
         ``SequenceReplayBuffer._valid_window_batch``'s tail-fix comment
-        already spells out for the strict-mode case."""
+        already spells out for the strict-mode case. Only the ring rows the
+        window uses count (``_uniform_window_rows``)."""
+        if from_final is None:
+            from_final = torch.zeros_like(t0, dtype=torch.bool)
         base_step = self._step_id[t0, env_inds]
-        valid = base_step >= 0
-        for i in range(1, self.window_len):
-            idx = (t0 + i) % self.per_env_buffer_size
-            valid = valid & (self._step_id[idx, env_inds] == base_step + i)
-        return valid
+        valid = (base_step >= 0) & (~from_final | (self._final_slot_ids[t0, env_inds] >= 0))
+        offset, _ = self._uniform_window_rows(t0, env_inds, from_final)
+        ring = (t0.unsqueeze(0) + offset) % self.per_env_buffer_size
+        valid = valid & (self._step_id[ring, env_inds] == base_step + offset).all(dim=0)
+        ep_id = self._ep_id[ring, env_inds]
+        cut = (ep_id[1:] != ep_id[:-1]) & ~self.episode_ends[ring[:-1], env_inds]
+        return valid & ~cut.any(dim=0)
 
     def _sample_uniform_window_starts(
         self, batch_size: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        accepted_t0: list[torch.Tensor] = []
-        accepted_env: list[torch.Tensor] = []
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """``(t0, env, from_final)``, uniform over every valid window."""
+        accepted: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
         remaining = batch_size
         attempted = 0
         max_attempts = max(1_000, batch_size * 100) * batch_size
         upper = self.size
+        stores_final_obs = self._next_final_slot > len(self._free_final_slots)
 
         while remaining > 0:
             candidate_count = max(32, remaining * 2)
@@ -625,13 +757,15 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
                 0, self.num_envs, (candidate_count,), device=self.storage_device
             )
             t0 = torch.randint(0, upper, (candidate_count,), device=self.storage_device)
-            valid = self._valid_uniform_window_batch(t0, env_inds)
+            if stores_final_obs:
+                from_final = torch.randint(0, 2, (candidate_count,), device=self.storage_device).bool()
+            else:
+                from_final = torch.zeros_like(t0, dtype=torch.bool)
+            valid = self._valid_uniform_window_batch(t0, env_inds, from_final)
             if valid.any():
-                sel_t0 = t0[valid][:remaining]
-                sel_env = env_inds[valid][:remaining]
-                accepted_t0.append(sel_t0)
-                accepted_env.append(sel_env)
-                remaining -= sel_t0.numel()
+                selected = tuple(x[valid][:remaining] for x in (t0, env_inds, from_final))
+                accepted.append(selected)
+                remaining -= selected[0].numel()
 
             attempted += candidate_count
             if attempted >= max_attempts and remaining > 0:
@@ -641,41 +775,52 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
                     f"horizon+1={self.horizon + 1} steps long."
                 )
 
-        return torch.cat(accepted_t0), torch.cat(accepted_env)
+        t0, env_inds, from_final = (torch.cat(parts) for parts in zip(*accepted))
+        return t0, env_inds, from_final
 
     def _sample_uniform(self, batch_size: int) -> DreamerSequenceBatch:
         """``cross_episode=True, priority=False`` sampling body, called from
         ``sample()``. See ``DreamerSequenceBatch``'s docstring for the
         returned field semantics and the storage-convention re-alignment it
         performs."""
-        t0, env_inds = self._sample_uniform_window_starts(batch_size)
-        idx_grid, env_grid = StrictWindowSamplingMixin._gather_window(self, t0, env_inds)
+        t0, env_inds, from_final = self._sample_uniform_window_starts(batch_size)
+        offset, is_final = self._uniform_window_rows(t0, env_inds, from_final)
+        idx_grid = (t0.unsqueeze(0) + offset) % self.per_env_buffer_size
+        env_grid = env_inds.unsqueeze(0).expand_as(idx_grid)
 
         window_obs = index_obs(self.obs, (idx_grid, env_grid))
+        if is_final.any():
+            final_obs = self._final_obs[self._final_slot_ids[idx_grid, env_grid][is_final]]
+            for key, value in final_obs.items():
+                window_obs[key][is_final] = value
         obs = _tree_to_device(window_obs, self.sample_device)
 
-        loss_idx, loss_env = idx_grid[1:], env_grid[1:]
-        shift_idx, shift_env = idx_grid[:-1], env_grid[:-1]
+        # The ring row whose transition arrived at each loss row; a reset row
+        # that follows a final-observation row was arrived at by none.
+        arrival_idx = torch.where(is_final[1:], idx_grid[1:], idx_grid[:-1])
+        arrival_env = env_grid[1:]
+        no_arrival = is_final[:-1]
 
-        action = self.actions[shift_idx, shift_env].to(self.sample_device)
-        reward = self.rewards[shift_idx, shift_env].to(self.sample_device)
-        is_terminal = self.dones[shift_idx, shift_env].to(self.sample_device)
-        is_last = self.episode_ends[shift_idx, shift_env].to(self.sample_device)
-        is_first = self._is_first[loss_idx, loss_env].to(self.sample_device)
+        action = self.actions[arrival_idx, arrival_env]
+        action = action.masked_fill(no_arrival.reshape(*no_arrival.shape, *[1] * (action.dim() - 2)), 0.0)
+        reward = self.rewards[arrival_idx, arrival_env].masked_fill(no_arrival, 0.0)
+        is_terminal = self.dones[arrival_idx, arrival_env] & ~no_arrival
+        is_last = self.episode_ends[arrival_idx, arrival_env] & ~no_arrival
+        is_first = self._is_first[idx_grid[1:], env_grid[1:]] & ~is_final[1:]
 
         carry = {
             key: self._carry[key][idx_grid[0], env_grid[0]].to(self.sample_device)
             for key in self._carry_spec
         }
-        indices = (loss_idx.clone(), loss_env.clone())
+        indices = (idx_grid[1:].masked_fill(is_final[1:], -1), env_grid[1:].clone())
 
         return DreamerSequenceBatch(
             obs=obs,
-            action=action,
-            reward=reward,
-            is_first=is_first,
-            terminated=is_terminal,
-            is_last=is_last,
+            action=action.to(self.sample_device),
+            reward=reward.to(self.sample_device),
+            is_first=is_first.to(self.sample_device),
+            terminated=is_terminal.to(self.sample_device),
+            is_last=is_last.to(self.sample_device),
             carry=carry,
             indices=indices,
         )
@@ -688,18 +833,21 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         ``indices`` (a ``DreamerSequenceBatch.indices``, storage-device
         ``(idx_grid, env_grid)``) so the next ``sample()`` of those slots
         warm-starts from it instead of the value stored when they were
-        first written (r2dreamer ``buffer.update`` / JAX ``Replay.update``)."""
+        first written (r2dreamer ``buffer.update`` / JAX ``Replay.update``).
+        Final-observation rows (index -1) have no carry slot and need none: the
+        row after them resets the state."""
         idx_grid, env_grid = indices
+        stored = idx_grid >= 0
         for key in self._carry_spec:
-            self._carry[key][idx_grid, env_grid] = carry[key].to(self.storage_device).detach()
+            values = carry[key].to(self.storage_device).detach()
+            self._carry[key][idx_grid[stored], env_grid[stored]] = values[stored]
 
     # ------------------------------------------------------------------
     # Sampling
     # ------------------------------------------------------------------
 
     def _sample_common(self, batch_size: int, generator: Optional[torch.Generator] = None):
-        """Tolerant-mode sample body, unchanged from the former
-        ``_CheckpointedSequenceReplayBuffer._sample_common`` -- used by
+        """Tolerant-mode sample body, used by
         ``RecurrentReplayBuffer``/``TransformerReplayBuffer``'s own
         ``sample()``."""
         t0, env_inds, leaf_indices, is_weights = self._sample_valid_window_starts(
@@ -708,7 +856,6 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         idx_grid, env_grid = self._gather_window(t0, env_inds)
 
         window_obs = index_obs(self.obs, (idx_grid, env_grid))
-        window_obs = self._patch_final_obs(window_obs, idx_grid, env_grid)
 
         learn_slice = slice(self.burn_in_len, self.burn_in_len + self.learning_len)
         actions = self.actions[idx_grid[learn_slice], env_grid[learn_slice]]
@@ -716,7 +863,8 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
         ep_rel = self._ep_relative_step[idx_grid, env_grid]
         episode_starts = (ep_rel == 0).float()
 
-        rewards, discounts = self._accumulate_nstep_window(t0, env_inds)
+        rewards, discounts, truncated_at = self._accumulate_nstep_window(t0, env_inds)
+        bootstraps = self._truncation_bootstraps(t0, env_inds, truncated_at)
 
         return (
             env_inds,
@@ -727,6 +875,7 @@ class SequenceReplayBuffer(RecurrentSamplingMixin, FinalObsTableMixin, BaseRepla
             episode_starts,
             rewards,
             discounts,
+            *bootstraps,
         )
 
     def sample(self, batch_size: int) -> SequenceReplayBufferSample | DreamerSequenceBatch:

@@ -6,7 +6,6 @@ import torch
 from gymnasium import spaces
 
 from rl_garden.buffers.recurrent_replay_buffer import RecurrentReplayBuffer
-from rl_garden.common.obs_utils import index_obs
 
 
 def _obs_space() -> spaces.Dict:
@@ -171,7 +170,7 @@ def test_nstep_window_matches_manual_accumulation():
 
     t0 = torch.tensor([0])
     env = torch.zeros(1, dtype=torch.long)
-    rewards, discounts = buf._accumulate_nstep_window(t0, env)
+    rewards, discounts, _ = buf._accumulate_nstep_window(t0, env)
     # burn_in_len=1, learning_len=2, forward_len=2 -> learning starts at pos 1,2.
     # learning position 0 (pos=1): forward window covers pos 1,2 -> r[1]+gamma*r[2]
     expected_0 = rewards_seq[1] + gamma * rewards_seq[2]
@@ -197,7 +196,7 @@ def test_nstep_window_zeroes_discount_at_termination():
 
     t0 = torch.tensor([0])
     env = torch.zeros(1, dtype=torch.long)
-    rewards, discounts = buf._accumulate_nstep_window(t0, env)
+    rewards, discounts, _ = buf._accumulate_nstep_window(t0, env)
     # learning position 0 -> forward window starts at pos=1: r[1] + gamma*r[2], then
     # terminates at pos=2 so discount zeroes and accumulation stops there.
     expected = rewards_seq[1] + gamma * rewards_seq[2]
@@ -253,9 +252,10 @@ def test_sample_raises_before_any_checkpoint_ready():
         buf.sample(batch_size=4)
 
 
-def test_truncation_bootstrap_uses_patched_final_obs_not_reset_obs():
+def test_truncation_bootstraps_from_the_final_obs_and_keeps_the_reset_obs():
     """episode_end=True with done=False (truncation, bootstrap should continue)
-    must patch in the true final observation, not the auto-reset one."""
+    must offer the true final observation, and leave the next episode's first row
+    as it was stored."""
     buf = _make_buffer(num_envs=1, per_env_buffer_size=8, burn_in_len=1, learning_len=1, forward_len=1)
     true_final_obs = {"state": torch.full((1, 4), 999.0)}
     for t in range(8):
@@ -271,12 +271,63 @@ def test_truncation_bootstrap_uses_patched_final_obs_not_reset_obs():
         else:
             _add_step(buf, t)
 
-    # window_len = burn_in(1)+learning(1)+forward(1) = 3, indices 0,1,2 relative
-    # to t0=0 -- truncation at absolute pos=1 means window position 2 (pos=2)
-    # must be patched with the true final observation.
     t0 = torch.tensor([0])
     env = torch.zeros(1, dtype=torch.long)
-    idx_grid, env_grid = buf._gather_window(t0, env)
-    window_obs = index_obs(buf.obs, (idx_grid, env_grid))
-    patched = buf._patch_final_obs(window_obs, idx_grid, env_grid)
-    assert torch.allclose(patched["state"][2, 0], true_final_obs["state"][0])
+    _, _, truncated_at = buf._accumulate_nstep_window(t0, env)
+    assert truncated_at.tolist() == [[0]]
+    final_obs, steps, columns, index = buf._truncation_bootstraps(t0, env, truncated_at)
+    assert torch.equal(final_obs["state"], true_final_obs["state"])
+    assert (steps.tolist(), columns.tolist(), index.tolist()) == ([0], [0], [[0]])
+    buf._sample_valid_window_starts = lambda n, generator=None: (t0, env, t0, torch.ones(1))
+    sample = buf.sample(1)
+    assert sample.obs["state"][:, 0, 0].tolist() == [0.0, 1.0, 2.0]
+    assert sample.episode_starts[:, 0].tolist() == [1.0, 0.0, 1.0]
+
+
+def _valid_leaves(buf: RecurrentReplayBuffer) -> torch.Tensor:
+    leaves = torch.arange(buf.checkpoint_capacity * buf.num_envs)
+    slot, env = leaves % buf.checkpoint_capacity, leaves // buf.checkpoint_capacity
+    t0 = buf._ckpt_slot_to_pos[slot, env]
+    return (t0 >= 0) & buf._valid_window_batch(t0.clamp(min=0), env)
+
+
+def _leaf_priorities(buf: RecurrentReplayBuffer) -> torch.Tensor:
+    tree = buf._priority_tree
+    return tree.tree[tree._leaf_offset : tree._leaf_offset + tree.capacity]
+
+
+@pytest.mark.parametrize("num_envs", [2, 8])
+@pytest.mark.parametrize("unequal_priorities", [False, True])
+@pytest.mark.parametrize("steps", [40, 22])  # 22: the newest checkpoints' windows are not stored yet
+def test_windows_are_sampled_in_proportion_to_priority_among_valid_ones(num_envs, unequal_priorities, steps):
+    buf = _make_buffer(num_envs=num_envs, per_env_buffer_size=40, burn_in_len=2, learning_len=2, forward_len=1)
+    for t in range(steps):
+        _add_step(buf, t, episode_end=torch.full((num_envs,), float(t % 7 == 6)))
+    if unequal_priorities:
+        leaves = torch.arange(buf.checkpoint_capacity * num_envs)
+        errors = torch.rand(leaves.numel(), generator=torch.Generator().manual_seed(3)) * 4
+        buf.update_priorities(leaves, errors)
+
+    valid = _valid_leaves(buf)
+    priorities = _leaf_priorities(buf)
+    expected = torch.where(valid, priorities, 0.0)
+    expected = expected / expected.sum()
+    assert int(valid.sum()) < valid.numel() or steps == 40
+
+    generator = torch.Generator().manual_seed(0)
+    counts = torch.zeros(valid.numel(), dtype=torch.float64)
+    draws = 0
+    for _ in range(400):
+        sample = buf.sample(batch_size=32, generator=generator)
+        counts += torch.bincount(sample.priority_indices, minlength=valid.numel()).double()
+        draws += 32
+        leaf_priority = priorities[sample.priority_indices]
+        assert torch.allclose(
+            sample.is_weights.double(),
+            (leaf_priority / leaf_priority.min()).pow(-buf._priority_tree.beta),
+        )
+    assert counts[~valid].sum() == 0
+    expected_counts = expected[valid] * draws
+    chi_square = float(((counts[valid] - expected_counts) ** 2 / expected_counts).sum())
+    dof = int(valid.sum()) - 1
+    assert chi_square < dof + 6 * (2 * dof) ** 0.5, (chi_square, dof)

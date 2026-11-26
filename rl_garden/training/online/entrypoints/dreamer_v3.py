@@ -99,16 +99,19 @@ from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online.args import DreamerV3TrainingArgs
 from rl_garden.training.online.registry import registry
 
+#: The ``learning_starts`` a checkpoint evaluation builds the agent with: never reached.
+EVALUATION_LEARNING_STARTS = 2**62
+
 
 @dataclass
 class DreamerV3Args(DreamerV3TrainingArgs, EnvBackendArgs):
     """DreamerV3 -- RSSM world model + imagination-based actor-critic
     (Hafner et al., ``rl_garden.algorithms.dreamer_v3`` module docstring).
 
-    Env backend: ``--env_backend maniskill`` (default), ``--env_backend
-    mujoco``, or ``--env_backend robotwin``. State-only observations by
-    default; pass ``--obs.rgb <camera>`` for Dict/RGB observations (the
-    ``mujoco`` backend is state-only, see ``MujocoBackend.resolve_config``).
+    Env backend: ``--env_backend maniskill`` (default) or any other
+    registered backend. State-only observations by default; pass
+    ``--obs.rgb <camera>`` for Dict/RGB observations (the ``mujoco`` backend is
+    state-only, see ``MujocoBackend.resolve_config``).
     """
 
 
@@ -124,4 +127,7 @@ registry.register(
     run_dreamer_v3,
     algorithm_cls=_dreamer_v3_algorithm_cls,
     build_agent=build_dreamer_v3,
+    # learning_starts only paces training; at any eval env count it must pass
+    # DreamerV3's check that each env holds a window by then.
+    training_only_inputs={"learning_starts": EVALUATION_LEARNING_STARTS},
 )

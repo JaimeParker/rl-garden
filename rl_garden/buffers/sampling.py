@@ -7,6 +7,8 @@ is detected (``pos`` or ``full`` changes since the last build).
 """
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 from rl_garden.common.types import ReplayBufferSample
@@ -51,6 +53,20 @@ class WithoutReplaceSamplerMixin:
             self._perm_pos_at_build != self.pos
             or self._perm_full_at_build != self.full
         )
+
+    def state_dict(self) -> dict[str, Any]:
+        state = super().state_dict()
+        if not self._perm_is_stale():
+            state["perm"] = self._perm
+            state["perm_cursor"] = int(self._perm_cursor)
+        return state
+
+    def load_state_dict(self, state: dict[str, Any], *, strict: bool = True) -> None:
+        super().load_state_dict(state, strict=strict)
+        self._perm = state.get("perm")
+        self._perm_cursor = int(state.get("perm_cursor", 0))
+        self._perm_pos_at_build = self.pos
+        self._perm_full_at_build = self.full
 
     # ------------------------------------------------------------------
     # Without-replacement sample

@@ -55,6 +55,13 @@ ROBOMIMIC_LOW_DIM_OBS_KEYS: tuple[str, ...] = (
 )
 
 
+# robosuite normalizes the manipulation task rewards (sparse and shaped, at its
+# default reward_scale=1.0) so that they reach 1.0 only on task success, so
+# `reward >= 1.0` is the dataset's counterpart of `info["is_success"]["task"]`,
+# which the online `_RobomimicSuccessTermination` terminates on.
+ROBOMIMIC_SUCCESS_REWARD = 1.0
+
+
 def flatten_robomimic_obs(obs: dict[str, Any]) -> np.ndarray:
     """Concatenate ``obs[key]`` for each key in ``ROBOMIMIC_LOW_DIM_OBS_KEYS``.
 
@@ -117,10 +124,11 @@ def load_robomimic_dataset_to_replay_buffer(
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
     success_key: str | None = None,
+    terminate_on_success: bool = False,
 ) -> int:
     """Load robomimic ``demo_N`` transitions into an existing replay buffer.
 
-    ``dones`` passed to the buffer is always all-zero: the online rollout
+    By default ``dones`` passed to the buffer is all-zero: the online rollout
     env (``rl_garden/envs/robomimic/env.py``) never sets ``terminated=True``
     -- robosuite's ``ignore_done=True`` is forced unconditionally and
     ``EnvRobosuite.is_done()`` always returns ``False`` (confirmed by
@@ -130,10 +138,19 @@ def load_robomimic_dataset_to_replay_buffer(
     bootstrap targets. The raw ``dones`` array is instead passed only as
     ``episode_ends`` (trajectory-boundary bookkeeping, and this loader's own
     per-demo MC-return boundary) -- it must never be used to cut bootstrap
-    here. If a caller enables ``terminate_on_success`` on the online env,
-    this loader's ``dones`` must change together (derive from ``reward >=
-    success_threshold`` instead of the raw ``dones`` array), not be left as
-    zeros.
+    here.
+
+    ``terminate_on_success`` mirrors the online env's option of the same name
+    (``RobomimicConfig.terminate_on_success``): every step whose raw reward,
+    before ``reward_scale``/``reward_bias``, reaches
+    ``ROBOMIMIC_SUCCESS_REWARD`` gets ``done=1`` and is an episode end, so
+    neither TD targets nor MC returns bootstrap past it. Demo steps recorded
+    after the first success are kept as a new segment.
+
+    A demo's last step always ends an episode (a truncation; ``dones`` stay as
+    they are). qc joins demos whose ``dones`` are all zero
+    (``3rd_party/qc/envs/robomimic_utils.py:120-127``); this loader departs
+    from it there, since a window or return crossing two demos is never data.
     """
     h5py = require_h5py()
     path = Path(path)
@@ -166,13 +183,18 @@ def load_robomimic_dataset_to_replay_buffer(
             rewards = to_tensor(demo["rewards"], storage_device).float()
             raw_dones = to_tensor(demo["dones"], storage_device).bool()
             length = actions.shape[0]
+            if terminate_on_success:
+                success_dones = rewards >= ROBOMIMIC_SUCCESS_REWARD
+            else:
+                success_dones = torch.zeros_like(raw_dones)
+            episode_ends = raw_dones | success_dones
+            episode_ends[-1] = True
 
             if reward_scale != 1.0 or reward_bias != 0.0:
                 rewards = rewards * reward_scale + reward_bias
 
             obs = to_tensor(flatten_robomimic_obs(demo["obs"]), storage_device)
             next_obs = to_tensor(flatten_robomimic_obs(demo["next_obs"]), storage_device)
-            zero_dones = torch.zeros(length, device=storage_device, dtype=torch.float32)
 
             if sparse_reward_mc:
                 success, inferred = load_success(
@@ -198,10 +220,10 @@ def load_robomimic_dataset_to_replay_buffer(
             next_obs_parts.append(next_obs)
             action_parts.append(actions)
             reward_parts.append(rewards)
-            done_parts.append(zero_dones)
-            episode_end_parts.append(raw_dones)
+            done_parts.append(success_dones.float())
+            episode_end_parts.append(episode_ends)
             if (not sparse_reward_mc) and hasattr(buffer, "_mc_table"):
-                mc_parts.append(mc_returns(rewards, raw_dones.float(), gamma))
+                mc_parts.append(mc_returns(rewards, episode_ends.float(), gamma))
 
     if not action_parts:
         raise ValueError(f"No trajectories found in robomimic hdf5 file: {path}")
@@ -243,6 +265,9 @@ class RobomimicDatasetBackend(DatasetBackend):
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
             success_key=req.success_key,
+            terminate_on_success=(
+                req.backend_config is not None and req.backend_config.terminate_on_success
+            ),
         )
 
 

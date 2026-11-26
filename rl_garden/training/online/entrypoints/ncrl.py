@@ -117,6 +117,7 @@ from dataclasses import dataclass
 
 from rl_garden.common.env_args import EnvBackendArgs
 from rl_garden.training.online.args import NCRLTrainingArgs
+from rl_garden.training.online.entrypoints.dreamer_v3 import EVALUATION_LEARNING_STARTS
 from rl_garden.training.online.registry import registry
 
 
@@ -156,5 +157,6 @@ registry.register(
         "prior_dataset_dir": None,
         # Rehearsal and execution guidance only act in training.
         "online_ratio": 1.0,
+        "learning_starts": EVALUATION_LEARNING_STARTS,
     },
 )

@@ -120,9 +120,11 @@ class TD3Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     """
 
     # --- Env (overrides EnvRunArgs' defaults) ---
+
     control_mode: str = "pd_ee_delta_pose"
 
     # --- Training ---
+
     total_timesteps: int = 1_000_000
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
@@ -132,6 +134,7 @@ class TD3Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     batch_size: int = 256
 
     # --- DDPG ---
+
     gamma: float = 0.99
     tau: float = 0.01
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
@@ -150,14 +153,17 @@ class TD3Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     use_adamw: bool = False
 
     # --- TD3 ---
+
     policy_freq: int = 2
     target_noise_std: float = 0.2
     target_noise_clip: float = 0.5
 
     # --- Checkpoint (overrides CheckpointArgs' default) ---
+
     load_replay_buffer: bool = False
 
     # --- Replay buffer (not part of CheckpointArgs) ---
+
     replay_lazy_next_obs: bool = False
     replay_pin_sampled_batch: bool = False
 

@@ -17,6 +17,7 @@ from rl_garden.buffers.rlbench_dataset import (
     build_default_rlbench_action_mode,
     build_rlbench_obs_config,
     build_rlbench_observation,
+    rlbench_observation_space,
 )
 from rl_garden.envs.rlbench.config import RLBenchEnvConfig
 from rl_garden.envs.vector_env import SeededResetVectorEnv, TorchVectorEnvAdapter
@@ -49,17 +50,14 @@ class RLBenchGymEnv(gym.Env):
         rgb_cameras = set(cfg.rgb_cameras)
         depth_cameras = set(cfg.depth_cameras)
         _validate_cameras(rgb_cameras | depth_cameras)
-        # build_rlbench_obs_config/build_rlbench_observation (shared with the
-        # offline dataset loader) always pair rgb+depth per camera and always
-        # include "state" -- request the union of cameras and keep every
-        # returned key, then filter down to exactly what ObservationConfig
-        # asked for below.
-        self._cameras = tuple(sorted(rgb_cameras | depth_cameras))
         self._rgb_cameras = cfg.rgb_cameras
         self._depth_cameras = cfg.depth_cameras
         self._state = cfg.state
 
-        obs_config = build_rlbench_obs_config(cameras=self._cameras, image_size=cfg.image_size)
+        # Renders rgb+depth for every camera; _extract_obs keeps the requested keys.
+        obs_config = build_rlbench_obs_config(
+            cameras=tuple(sorted(rgb_cameras | depth_cameras)), image_size=cfg.image_size
+        )
         action_mode = build_default_rlbench_action_mode()
         self._env = Environment(
             action_mode=action_mode,
@@ -71,15 +69,7 @@ class RLBenchGymEnv(gym.Env):
         self._task_env = self._env.get_task(name_to_task_class(cfg.task_name))
 
         _, obs = self._task_env.reset()
-        first_obs = self._extract_obs(obs)
-        self.observation_space = spaces.Dict(
-            {
-                key: spaces.Box(low=0, high=255, shape=value.shape, dtype=np.uint8)
-                if key.startswith("rgb_")
-                else spaces.Box(low=-np.inf, high=np.inf, shape=value.shape, dtype=np.float32)
-                for key, value in first_obs.items()
-            }
-        )
+        self.observation_space = rlbench_observation_space(self._extract_obs(obs))
         # MoveArmThenGripper (the composable action mode this integration
         # uses) does not implement action_bounds() -- only RLBench's own
         # preset action modes (e.g. JointPositionActionMode) do, confirmed
@@ -100,17 +90,12 @@ class RLBenchGymEnv(gym.Env):
         )
 
     def _extract_obs(self, obs: Any) -> dict[str, np.ndarray]:
-        raw = build_rlbench_observation(obs, cameras=self._cameras)
-        if not isinstance(raw, dict):
-            raw = {"state": raw}
-        result: dict[str, np.ndarray] = {}
-        if self._state:
-            result["state"] = raw["state"]
-        for camera in self._rgb_cameras:
-            result[f"rgb_{camera}"] = raw[f"rgb_{camera}"]
-        for camera in self._depth_cameras:
-            result[f"depth_{camera}"] = raw[f"depth_{camera}"]
-        return result
+        return build_rlbench_observation(
+            obs,
+            rgb_cameras=self._rgb_cameras,
+            depth_cameras=self._depth_cameras,
+            state=self._state,
+        )
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)

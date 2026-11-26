@@ -1,13 +1,15 @@
 """Tests for the Meta-World env backend. Monkeypatches ``gymnasium.make``/
 ``gymnasium.make_vec`` (and inserts an empty fake ``metaworld`` module into
-``sys.modules``) rather than the real package -- no real MuJoCo/metaworld
-install needed, same strategy as ``test_ogbench_dataset.py``'s fake-module
+``sys.modules``) rather than the real package -- no ``metaworld`` install
+needed, same strategy as ``test_ogbench_dataset.py``'s fake-module
 injection but at the ``gym.make`` boundary, since Meta-World's own env
 construction goes through gymnasium's registry rather than a bespoke class
-tree the way RLBench's does.
+tree the way RLBench's does. The ``mujoco`` package is needed:
+``rl_garden.envs.metaworld.env`` imports gymnasium's ``MujocoRenderer``.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 import types
 from typing import ClassVar
@@ -386,6 +388,13 @@ def test_frame_stack_applies_image_frame_stack_wrapper(monkeypatch):
     env = make_metaworld_env(cfg)
     obs, _ = env.reset()
     assert obs["rgb_corner2"].shape == (1, 3, 4, 4, 3)
+    env.close()
+
+    env = make_metaworld_env(dataclasses.replace(cfg, reward_scale=2.0, reward_bias=1.0))
+    env.reset()
+    obs, rewards, *_ = env.step(torch.zeros(1, 2))
+    assert obs["rgb_corner2"].shape == (1, 3, 4, 4, 3)
+    assert rewards.tolist() == [3.0]  # 1.0 * 2.0 + 1.0
     env.close()
 
 

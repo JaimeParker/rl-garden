@@ -8,6 +8,7 @@ from gymnasium import spaces
 
 from rl_garden.algorithms import AWAC, IQL, JSRL, WSRL, CalQL, OfflineEnvSpec
 from rl_garden.algorithms.jsrl import _load_guide_policy
+from rl_garden.common.checkpoint import REMOVED_PATH
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 
@@ -464,7 +465,7 @@ def test_checkpoint_embeds_the_guide(tmp_path):
     with pytest.raises(RuntimeError, match="no guide policy"):
         restored._guide_action(obs, deterministic=True)
     restored.load(tmp_path / "jsrl.pt", load_replay_buffer=False)
-    assert restored.guide_checkpoint == ckpt
+    assert restored.guide_checkpoint == REMOVED_PATH
     assert torch.allclose(
         restored.guide_policy.predict(obs, deterministic=True),
         source.policy.predict(obs, deterministic=True),
@@ -473,9 +474,21 @@ def test_checkpoint_embeds_the_guide(tmp_path):
 
     restored.save(tmp_path / "again.pt")
     again = torch.load(tmp_path / "again.pt")["state"]["extra"]["guide"]
-    assert again["source"] == ckpt
+    assert again["source"] == REMOVED_PATH
 
 
 def test_missing_guide_checkpoint_is_named(tmp_path):
     with pytest.raises(FileNotFoundError, match="gone.pt"):
         _make_jsrl_agent(str(tmp_path / "gone.pt"))
+
+
+def test_run_without_a_guide_stops_before_the_run_is_set_up(monkeypatch):
+    from rl_garden.training.online import runner
+    from rl_garden.training.online.entrypoints.jsrl import JSRLArgs, run_jsrl
+
+    def run_online(*args, **kwargs):
+        pytest.fail("run_online was reached")
+
+    monkeypatch.setattr(runner, "run_online", run_online)
+    with pytest.raises(FileNotFoundError, match="train from scratch"):
+        run_jsrl(JSRLArgs())

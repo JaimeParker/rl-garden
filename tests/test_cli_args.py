@@ -9,6 +9,7 @@ import pytest
 import tyro
 
 from rl_garden.common.cli_args import (
+    CheckpointArgs,
     resolve_num_eval_steps,
     warn_if_eval_budget_undersized,
 )
@@ -220,6 +221,12 @@ def test_flash_sac_args_keep_existing_defaults() -> None:
     assert flash.capture_video is False
     assert flash.log_type == "tensorboard"
     assert flash.log_dir == "runs"
+    assert isinstance(flash, CheckpointArgs)
+    assert flash.checkpoint_dir is None
+    assert flash.checkpoint_freq == 0
+    assert flash.save_replay_buffer is False
+    assert flash.load_replay_buffer is False
+    assert flash.save_final_checkpoint is True
 
 
 def test_algorithm_args_are_not_exported_from_common_cli_args() -> None:
@@ -1175,29 +1182,23 @@ def test_static_preflight_allows_asymmetric_obs_groups_with_explicit_separate_sh
     assert config.inputs["encoder_sharing"] == "separate"
 
 
-def test_static_preflight_skips_algorithms_without_a_registered_class_factory():
-    """dagger hasn't opted into ``AlgorithmEntry.algorithm_cls`` (register()'s
-    ``algorithm_cls=`` factory, rl_garden/training/algorithm_registry.py) --
-    it is critic-less, one of the fixed-sharing/no-critic entries exempted by
-    ``scripts/check_observation_invariants.sh``'s algorithm_cls gate (every
-    critic-bearing algorithm, including drqv2 and the PPO family, now
-    registers one per encoder-sharing-inference.md item 4). For dagger, a
-    defaulted mismatch is instead caught later, at agent-construction time,
-    by ``ObservationEncoderMixin._resolve_encoder_sharing`` -- a documented
-    gap in the static preflight's coverage, not a bug."""
+def test_static_preflight_skips_algorithms_without_a_registered_class_factory(monkeypatch):
+    """Without ``AlgorithmEntry.algorithm_cls`` the preflight cannot read
+    ``encoder_sharing_choices``; ``ObservationEncoderMixin._resolve_encoder_sharing``
+    rejects the config at agent construction instead."""
     from rl_garden.observations import ObsGroups
-    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.algorithm_registry import AlgorithmEntry, ParsedCommand
     from rl_garden.training.online import registry
     from rl_garden.training.online.entrypoints.dagger import DAggerArgs
 
     registry.discover()
-    entry = registry._entries["dagger"]
-    assert entry.algorithm_cls is None
+    entry = AlgorithmEntry(args_cls=DAggerArgs, run_fn=lambda args: None)
+    monkeypatch.setitem(registry._entries, "without_class_factory", entry)
     args = DAggerArgs(
         obs=ObservationConfig(extra_state=("object_pose",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
     )
-    command = ParsedCommand(args, "dagger", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "without_class_factory", "print_config", None, {}, (), {})
 
     registry._validate_config(command)  # must not raise
     assert command.args.encoder_sharing is None

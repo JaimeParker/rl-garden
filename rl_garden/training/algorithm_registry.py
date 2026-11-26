@@ -519,6 +519,11 @@ class BaseAlgorithmRegistry:
             self.phase_name == "off2on"
             and getattr(args, "num_offline_steps", 0) > 0
             and not getattr(args, "offline_dataset", None)
+            # The runner decides once it knows whether a replay buffer was restored.
+            and not (
+                getattr(args, "load_checkpoint", None)
+                and getattr(args, "load_replay_buffer", False)
+            )
         ):
             raise ConfigError(
                 "--offline_dataset is required when --num_offline_steps > 0."

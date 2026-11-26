@@ -87,6 +87,14 @@ class BaseFeaturesExtractor(nn.Module):
         ``sample()`` call, so mutation does not pollute replay storage.
         """
 
+    def prepare_window_final_obs(
+        self, obs: dict, final_obs: dict, final_columns: torch.Tensor
+    ) -> None:
+        """Pre-process ``final_obs``, the observations that end the episodes of
+        sequences ``final_columns`` of a ``(T, B)`` window ``obs`` already passed
+        to ``prepare_batch``, the way that sequence was (e.g. its augmentation).
+        Default is a no-op."""
+
     def update_normalizer(self, obs) -> None:
         """Update any running obs-normalization statistics from ``obs``.
 

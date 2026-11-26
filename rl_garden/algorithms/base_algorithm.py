@@ -23,7 +23,9 @@ from rl_garden.common.checkpoint import (
     save_checkpoint_file,
     save_replay_buffer_file,
     validate_checkpoint_metadata,
+    without_local_paths,
 )
+from rl_garden.common.effective_config import config_digest
 from rl_garden.common.eval_metrics import append_masked_episode_metrics
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import STANDARD_UPDATE_MASK, TrainingUpdateMask
@@ -70,8 +72,9 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
     checkpoint_eval_unsupported_reason: Optional[str] = None
 
     #: The run's resolved configuration (what its ``config.json`` holds, as
-    #: plain JSON data), set by the training runner and written to every
-    #: checkpoint; ``None`` for an agent built without one.
+    #: plain JSON data), set by the training runner and written, without its
+    #: absolute paths and command line, to every checkpoint; ``None`` for an
+    #: agent built without one.
     run_config: Optional[dict[str, Any]] = None
 
     def __init__(
@@ -362,6 +365,8 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         When ``include_replay_buffer`` is true, replay state is written to a
         sibling file (for example ``checkpoint_1000.pt`` +
         ``replay_buffer_1000.pt``) and referenced from the model checkpoint.
+        The checkpoint file holds no absolute path and no command line
+        (``without_local_paths``).
         """
         checkpoint_path = Path(path)
         replay_path = (
@@ -381,7 +386,8 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         )
         if self.run_config is not None:
             checkpoint["metadata"]["run_config"] = self.run_config
-        save_checkpoint_file(checkpoint_path, checkpoint)
+            checkpoint["metadata"]["run_config_digest"] = config_digest(self.run_config)
+        save_checkpoint_file(checkpoint_path, without_local_paths(checkpoint))
         if replay_path is not None:
             save_replay_buffer_file(replay_path, self.replay_buffer)
         return checkpoint_path

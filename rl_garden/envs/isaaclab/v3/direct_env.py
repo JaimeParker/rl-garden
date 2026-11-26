@@ -43,10 +43,10 @@ used for other backends. Image tensors must be **raw pixel values** (e.g.
 IsaacLab's own ``camera.data.output["rgb"].torch``, passed through
 untouched, uint8 ``[0, 255]``): do NOT apply the mean-subtraction
 IsaacLab's own camera examples do for RGB. rl-garden's
-image encoders decide whether to apply ``/255`` normalization from the
-declared space's dtype/range (see
-``rl_garden.encoders.base.image_needs_normalization``), so pre-normalized
-input is silently handled wrong rather than raising an error. That rule is
+image encoders apply ``/255`` normalization themselves (see
+``rl_garden.encoders.base.image_needs_normalization``), and the observation
+contract rejects an ``rgb_<camera>`` space that is not uint8 with an
+``ObservationContractError`` when the env is created. That rule is
 RGB-only: ``depth_<camera>`` keys are passed to the network unscaled, in
 whatever unit the task emits, so the task must emit finite float32 values
 (clip Isaac Lab's ``inf`` for no-hit to a max range).

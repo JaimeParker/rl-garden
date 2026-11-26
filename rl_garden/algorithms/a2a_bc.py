@@ -48,6 +48,7 @@ class A2ABC(OfflineRLAlgorithm):
     # losses, the only losses that ever touch it); see BC's identical
     # class-attribute override for the full rationale.
     encoder_sharing = "shared"
+    encoder_sharing_choices = ("shared",)
 
     def __init__(
         self,

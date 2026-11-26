@@ -22,23 +22,27 @@ from rl_garden.training.offline.args import OfflineIQLArgs, OfflineValueArgs
 class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     """Orchestration + training fields generic across off2on algorithms."""
 
-    # Override EnvRunArgs/LoggingArgs's fixed int=50 default with the same
-    # "unset" sentinel offline training uses, so resolve_num_eval_steps can
-    # derive a budget from eval_episode_horizon below when appropriate.
+    # Vector-env steps per evaluation (whole chunks with action chunking).
+    # Replaces LoggingArgs's fixed int=50 default with the same "unset"
+    # sentinel offline training uses, so resolve_num_eval_steps can derive a
+    # budget from eval_episode_horizon below when appropriate.
     num_eval_steps: Optional[int] = None
     # Expected worst-case env steps for one eval episode (e.g. 1000 for
     # AntMaze). Only sizes the eval step budget when num_eval_steps is unset
     # and the algorithm's own num_eval_episodes field is set -- does not
     # impose a TimeLimit on the eval env itself.
     eval_episode_horizon: Optional[int] = None
+
     num_offline_steps: int = 0
-    # The dataset locator is a filesystem path for "h5", a dataset id for
-    # "minari", and a legacy Gym environment id for "d4rl_legacy".
     num_online_steps: int = 1_000_000
     # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
     # Literal: a new backend registers itself, no CLI arg change needed here.
     dataset_backend: str = "h5"
+
+    # The dataset locator is a filesystem path for "h5", a dataset id for
+    # "minari", and a legacy Gym environment id for "d4rl_legacy".
     offline_dataset: Optional[str] = None
+
     offline_num_traj: Optional[int] = None
     action_low: float = -1.0
     action_high: float = 1.0

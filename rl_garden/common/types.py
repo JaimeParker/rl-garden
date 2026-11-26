@@ -97,7 +97,8 @@ class ChunkedReplayBufferSample(NStepReplayBufferSample):
     convention as ``NStepReplayBufferSample``. ``valid`` is a ``(B,
     horizon_length)`` per-position mask (1 up to and including the position
     of a true in-window terminal, 0 after) for chunked BC-style losses that
-    need per-position masking within a kept window.
+    need per-position masking within a kept window; ``valid[:, -1]`` is also
+    the whole window's weight.
     """
 
     valid: torch.Tensor

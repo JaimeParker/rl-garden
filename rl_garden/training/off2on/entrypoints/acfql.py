@@ -123,6 +123,9 @@ class ACFQLArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     observations.
     """
 
+    # One buffer holds the dataset and the online transitions (main.py:205,284).
+    online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
     horizon_length: int = 5
     actor_type: ActorType = "distill-ddpg"
     actor_num_samples: int = 32

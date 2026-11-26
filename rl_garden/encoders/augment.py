@@ -59,11 +59,28 @@ class RandomShiftsAug(nn.Module):
         self.padding = padding
         self.register_buffer("_base_grid", torch.empty(0), persistent=False)
 
+    def sample_shifts(
+        self,
+        n: int,
+        device: torch.device,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """``(n, 1, 1, 2)`` integer pixel shifts in ``[0, 2 * padding]``."""
+        return torch.randint(
+            0,
+            2 * self.padding + 1,
+            size=(n, 1, 1, 2),
+            device=device,
+            generator=generator,
+        )
+
     def forward(
         self,
         x: torch.Tensor,
         generator: torch.Generator | None = None,
+        shifts: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """``shifts`` (from ``sample_shifts``) replaces the random draw."""
         if self.padding <= 0:
             return x
         n, _c, h, w = x.shape
@@ -89,14 +106,9 @@ class RandomShiftsAug(nn.Module):
             self._base_grid = base_grid.unsqueeze(0)  # (1, H, W, 2)
         base_grid = self._base_grid.expand(n, -1, -1, -1)
 
-        shift = torch.randint(
-            0,
-            2 * self.padding + 1,
-            size=(n, 1, 1, 2),
-            device=x.device,
-            generator=generator,
-        ).to(dtype=x.dtype)
-        shift *= 2.0 / (h + 2 * self.padding)
+        if shifts is None:
+            shifts = self.sample_shifts(n, x.device, generator)
+        shift = shifts.to(dtype=x.dtype) * (2.0 / (h + 2 * self.padding))
         return F.grid_sample(
             x,
             base_grid + shift,

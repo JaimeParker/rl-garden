@@ -3,23 +3,20 @@
 Two call conventions, both producing ``(N, T, H, W, C)`` from ``(N, H, W, C)``
 image observations with vector state left single-frame:
 
-- ``image_keys=None`` (default): the original ManiSkill-vector-env path.
-  Derives ``image_keys`` from ``base_env._init_raw_obs`` (any ``rgb``/``depth``
+- ``image_keys=None`` (default): the ManiSkill/Isaac Lab path. Derives
+  ``image_keys`` from ``base_env._init_raw_obs`` (any ``rgb_``/``depth_``
   -prefixed key) and calls ``base_env.update_obs_space(...)`` to publish the
-  stacked space -- unchanged from before ``image_keys`` was added.
+  stacked space.
 - ``image_keys=<explicit sequence>``: for envs with no ``_init_raw_obs``/
-  ``update_obs_space`` (e.g. ``FrankaRealEnv``, whose camera keys are
-  user-configured and not necessarily ``rgb``/``depth``-prefixed). Derives the
-  stacked space purely from ``single_observation_space`` -- deliberately never
-  calls ``env.reset()`` to seed it, since construction-time side effects would
+  ``update_obs_space`` (the vector envs of the gymnasium, dm_control,
+  metaworld, ogbench, rlbench and mujoco_warp backends, or ``FrankaRealEnv``,
+  whose camera keys are user-configured). Derives the stacked space purely
+  from ``single_observation_space`` -- deliberately never calls
+  ``env.reset()`` to seed it, since construction-time side effects would
   physically move a real robot. Sets ``single_observation_space``/
   ``observation_space`` directly on this wrapper instance (mirroring
   ``RotvecObsWrapper``'s convention) since there's no ``update_obs_space`` to
-  mutate, and forwards other attributes (``num_envs``, ``single_action_space``,
-  ...) via ``__getattr__`` so wrappers stacked above this one still resolve
-  them -- purely additive relative to the ManiSkill path, which never relied
-  on ``__getattr__`` (it already worked through ``get_wrapper_attr()``/base
-  ``gym.Wrapper``'s own ``action_space``/``observation_space`` properties).
+  mutate.
 
 Episode boundaries: ``reset()`` (full or partial ``options={"env_idx": ...}``)
 fills the selected histories with ``frame_stack`` copies of the reset frame.
@@ -45,8 +42,10 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
-class ImageFrameStackWrapper(gym.Wrapper):
+
+class ImageFrameStackWrapper(BatchedEnvWrapper):
     """Stack image observations while leaving vector state single-frame.
 
     The wrapped environment is already batched, so image tensors use
@@ -60,29 +59,14 @@ class ImageFrameStackWrapper(gym.Wrapper):
 
     def __init__(
         self,
-        env: gym.Env,
+        env: gym.Env | gym.vector.VectorEnv,
         frame_stack: int = 3,
         image_keys: Optional[Sequence[str]] = None,
         autoreset_in_step: bool = False,
     ) -> None:
         if frame_stack < 2:
             raise ValueError("frame_stack must be at least 2")
-        # Not super().__init__(env): gym.Wrapper.__init__ asserts
-        # isinstance(env, gym.Env), which the generic (image_keys=...) path's
-        # real callers violate -- it wraps an already-vectorized, batched env
-        # post-TorchVectorEnvAdapter (a gymnasium.vector.VectorWrapper, not a
-        # gym.Env), e.g. rl_garden.envs.ogbench.env.make_ogbench_env /
-        # mujoco_warp.env.make_mujoco_warp_env. Replicates gym.Wrapper.__init__
-        # verbatim minus that assertion; every attribute it sets is either
-        # overwritten immediately below (observation_space) or accessed
-        # through the inherited property with this None fallback
-        # (action_space/metadata), so this is behavior-preserving for the
-        # ManiSkill/IsaacLab path (a true gym.Env) too.
-        self.env = env
-        self._action_space = None
-        self._observation_space = None
-        self._metadata = None
-        self._cached_spec = None
+        super().__init__(env)
         self.frame_stack = int(frame_stack)
         self.autoreset_in_step = bool(autoreset_in_step)
         self._frames: dict[str, torch.Tensor] = {}
@@ -106,15 +90,6 @@ class ImageFrameStackWrapper(gym.Wrapper):
     @property
     def base_env(self):
         return self.env.unwrapped
-
-    def __getattr__(self, name: str):
-        # Only reached when normal lookup fails -- doesn't shadow base
-        # gym.Wrapper's own action_space/observation_space properties, and is
-        # additive (not behavior-changing) for the ManiSkill path, which
-        # never relied on this. Needed for the generic (image_keys=...) path
-        # so attributes like num_envs/single_action_space still resolve for
-        # any wrapper stacked above this one.
-        return getattr(self.env, name)
 
     def _update_obs_space_generic(self) -> None:
         """Non-ManiSkill fallback: rewrite single_observation_space/

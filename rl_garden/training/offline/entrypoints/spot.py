@@ -58,7 +58,6 @@ def _spot_kwargs(
         "policy_noise": args.policy_noise,
         "noise_clip": args.noise_clip,
         "policy_freq": args.policy_freq,
-        "net_arch": list(args.net_arch),
         "n_critics": args.n_critics,
         "actor_use_layer_norm": args.actor_use_layer_norm,
         "critic_use_layer_norm": args.critic_use_layer_norm,

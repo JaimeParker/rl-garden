@@ -22,10 +22,9 @@ override individually -- confirmed by reading it directly), so
 from plain ``FQLCore.train()`` (verified against ``acfql.py`` directly):
 
 - **Chunked critic target**: ``target_q = rewards + discounts * next_q``
-  using the buffer's pre-accumulated H-step discounted reward/discount
-  (identical reasoning to ``ACRLPDCore`` -- no separate ``masks``/``valid``
-  term needed for the critic; see ``chunked_replay_buffer.py``'s module
-  docstring for why this buffer's convention makes that redundant).
+  using the buffer's pre-accumulated H-step discounted reward/discount. A
+  window that runs past its episode's end has zero weight in the critic
+  loss, the mean still over the whole batch (``acfql.py:45``).
 - **``next_action`` goes through the actor_type-aware dispatch**
   (``self.policy.predict(...)``), not a hardcoded ``actor_onestep_flow``
   call -- ``acfql.py``'s own ``critic_loss`` calls ``self.sample_actions``
@@ -35,12 +34,8 @@ from plain ``FQLCore.train()`` (verified against ``acfql.py`` directly):
 - **Chunked, valid-masked BC-flow loss**: ``(pred_vel - vel_target)`` reshaped
   to ``(B, horizon_length, action_dim)``, multiplied by
   ``data.valid[..., None]`` before ``.mean()`` (still divides by the full
-  element count, not ``sum(valid)`` -- matches ``acfql.py:73-79`` exactly).
-  Unlike the critic-target masking dropped above, this ``valid`` use is
-  fundamentally different (per-position regression-target masking within a
-  kept window, not whole-sample discarding) and genuinely needed: an
-  action-chunk position past an in-window terminal belongs to an unrelated
-  next episode, not a continuation of the conditioning ``obs``.
+  element count, not ``sum(valid)`` -- matches ``acfql.py:73-79`` exactly):
+  per position, as an action past the episode's end belongs to another one.
 - **``actor_type`` gates the distill/Q terms**: ``"best-of-n"`` sets
   ``distill_loss = q_loss = 0`` (no gradient into ``actor_onestep_flow`` at
   all, matching ``acfql.py:83-100``'s branch exactly) -- ``"distill-ddpg"``
@@ -204,8 +199,9 @@ class ACFQLCore(FQLCore):
                     data.rewards.unsqueeze(-1) + data.discounts.unsqueeze(-1) * next_q
                 )
 
+            complete_window = data.valid[:, -1].to(target_q.dtype).unsqueeze(-1)
             q_all = self.policy.q_values_all(obs_features, flat_actions, target=False)
-            critic_loss = self._critic_loss(q_all, target_q)
+            critic_loss = ((q_all - target_q).square() * complete_window).mean()
 
             self.critic_optimizer.zero_grad(set_to_none=True)
             critic_loss.backward()

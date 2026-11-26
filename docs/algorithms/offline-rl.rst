@@ -152,10 +152,13 @@ in :doc:`/REFERENCES`; an em dash means no matching module row exists there.
      - Offline policy optimization in a learned latent action space.
      - PLAS
    * - ``qam`` (offline)
-     - Flow actor trained using adjoint Q-gradient targets.
+     - Flow actor trained using adjoint Q-gradient targets; with
+       ``--horizon-length`` above 1, evaluation executes each chunk one
+       action per environment step.
      - QAM
    * - ``qgf`` (offline)
-     - BC flow actor with Q-gradient guidance at inference.
+     - BC flow actor with Q-gradient guidance at inference; chunks are
+       evaluated as for QAM.
      - QGF
    * - ``rebrac`` (offline)
      - TD3-BC with a cloning penalty on the critic bootstrap.

@@ -22,46 +22,45 @@ class RecurrentSamplingMixin:
     def _valid_window_batch(
         self, t0: torch.Tensor, env_inds: torch.Tensor
     ) -> torch.Tensor:
-        """``t0`` candidates must reference already-collected, ring-buffer-
-        contiguous data for the full ``burn_in_len+learning_len+forward_len``
-        span. Episode boundaries WITHIN the window are fine (handled by
-        ``episode_starts`` masking and n-step reward zeroing) -- this only
-        guards against reading stale/uninitialized data past a wraparound."""
-        target_ep = self._ep_id[t0, env_inds]
-        base_step = self._step_id[t0, env_inds]
-        valid = (target_ep >= 0) & (base_step >= 0)
-        active = valid.clone()
-        window_len = self.burn_in_len + self.learning_len + self.forward_len
+        """True where every row the window's losses read was stored in one run,
+        without a cut (``cut_running_episodes``): the rows follow each other by
+        ``_step_id``, and the episode id changes only after an ``episode_end``.
 
-        for i in range(1, window_len):
-            prev_idx = (t0 + i - 1) % self.per_env_buffer_size
-            active = active & ~self.episode_ends[prev_idx, env_inds]
-            idx = (t0 + i) % self.per_env_buffer_size
-            contiguous = (self._ep_id[idx, env_inds] == target_ep) & (
-                self._step_id[idx, env_inds] == base_step + i
-            )
-            valid = valid & (~active | contiguous)
-            active = active & contiguous
-
-        return valid
+        An ``episode_end`` inside the window is fine: ``episode_starts`` resets
+        the hidden state after it and the n-step returns stop at it. The rows
+        after the first one at or past the last learning row are read by
+        nothing, so they may be missing or belong to an older lap."""
+        offsets = torch.arange(self.window_len, device=self.storage_device).unsqueeze(1)
+        rows = (t0.unsqueeze(0) + offsets) % self.per_env_buffer_size
+        ep_id, step_id = self._ep_id[rows, env_inds], self._step_id[rows, env_inds]
+        ends = self.episode_ends[rows[:-1], env_inds]
+        follows = (step_id[1:] == step_id[:-1] + 1) & ((ep_id[1:] == ep_id[:-1]) | ends)
+        unread = torch.zeros_like(ends)
+        last_learning = self.burn_in_len + self.learning_len - 1
+        unread[last_learning:] = ends[last_learning:].cumsum(dim=0) > 0
+        return (ep_id[0] >= 0) & (step_id[0] >= 0) & (follows | unread).all(dim=0)
 
     def _sample_valid_window_starts(
         self, batch_size: int, generator: Optional[torch.Generator] = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Priority-proposed, rejection-sampled ``(t0, env, leaf_index,
-        is_weight)`` quadruple, all checkpoint-aligned and ring-buffer-safe."""
+        is_weight)`` quadruple, all checkpoint-aligned and ring-buffer-safe.
+
+        The windows follow the priority restricted to valid windows: every valid
+        one of ``batch_size`` stratified candidates is kept, and the first valid
+        ones of independent candidates, checked in the same pass, fill the rest."""
         accepted_t0: list[torch.Tensor] = []
         accepted_env: list[torch.Tensor] = []
         accepted_leaf: list[torch.Tensor] = []
-        accepted_isw: list[torch.Tensor] = []
         remaining = batch_size
         attempted = 0
         max_attempts = max(1_000, batch_size * 100) * batch_size
+        stratified_count = batch_size
 
         while remaining > 0:
-            candidate_count = max(32, remaining * 2)
-            leaf_indices, is_weights = self._priority_tree.sample(
-                candidate_count, generator=generator
+            candidate_count = stratified_count + max(32, 2 * remaining - stratified_count)
+            leaf_indices, _ = self._priority_tree.sample(
+                candidate_count, generator=generator, num_stratified=stratified_count
             )
             slot = leaf_indices % self.checkpoint_capacity
             env = leaf_indices // self.checkpoint_capacity
@@ -69,29 +68,36 @@ class RecurrentSamplingMixin:
             has_ckpt = t0 >= 0
             safe_t0 = t0.clamp(min=0)
             candidate_valid = has_ckpt & self._valid_window_batch(safe_t0, env)
+            independent_valid = candidate_valid[stratified_count:]
+            still_needed = remaining - candidate_valid[:stratified_count].sum()
+            candidate_valid[stratified_count:] = independent_valid & (
+                independent_valid.cumsum(dim=0) <= still_needed
+            )
+            stratified_count = 0
 
-            if candidate_valid.any():
-                sel = candidate_valid.nonzero(as_tuple=False).flatten()
-                sel = sel[: remaining]
-                accepted_t0.append(t0[sel])
-                accepted_env.append(env[sel])
-                accepted_leaf.append(leaf_indices[sel])
-                accepted_isw.append(is_weights[sel])
-                remaining -= sel.numel()
+            sel = candidate_valid.nonzero(as_tuple=False).flatten()
+            accepted_t0.append(t0[sel])
+            accepted_env.append(env[sel])
+            accepted_leaf.append(leaf_indices[sel])
+            remaining -= sel.numel()
 
             attempted += candidate_count
             if attempted >= max_attempts and remaining > 0:
                 raise RuntimeError(
-                    "Could not sample enough valid recurrent windows. The buffer "
-                    "may not yet contain enough checkpoint-aligned, temporally "
-                    "contiguous data for burn_in_len+learning_len+forward_len."
+                    "Could not sample enough valid recurrent windows. A window needs "
+                    f"burn_in_len+learning_len+forward_len={self.window_len} consecutive "
+                    f"rows per env from one of the {self.checkpoint_capacity} newest "
+                    "checkpoints (one at each episode start and every "
+                    f"{self.stride} steps after it); {self.size} rows per env are stored. "
+                    "Use a larger learning_starts or buffer_size per env, or shorter windows."
                 )
 
+        leaf_indices = torch.cat(accepted_leaf)
         return (
             torch.cat(accepted_t0),
             torch.cat(accepted_env),
-            torch.cat(accepted_leaf),
-            torch.cat(accepted_isw),
+            leaf_indices,
+            self._priority_tree.importance_weights(leaf_indices),
         )
 
     def _gather_window(
@@ -104,41 +110,17 @@ class RecurrentSamplingMixin:
         env_grid = env_inds.unsqueeze(0).expand(window_len, -1)
         return idx_grid, env_grid
 
-    def _patch_final_obs(self, window_obs, idx_grid: torch.Tensor, env_grid: torch.Tensor):
-        """Gymnasium autoreset means the ring buffer's naturally-following ``obs``
-        after an episode-end position is already the NEXT episode's reset
-        observation, not the true final one -- patch it in from the compact
-        final-obs side table wherever a boundary falls inside the window (needed
-        for truncation bootstrapping; harmless but also applied at true
-        terminations for consistency, matching ``LazyNextNStepReplayBuffer``'s
-        existing precedent)."""
-        slot_at_pos = self._final_slot_ids[idx_grid, env_grid]
-        boundary = self.episode_ends[idx_grid, env_grid] & (slot_at_pos >= 0)
-        boundary = boundary[:-1]  # last window position has no "next" to patch
-        if not boundary.any():
-            return window_obs
-
-        time_idx, batch_idx = torch.nonzero(boundary, as_tuple=True)
-        slots = slot_at_pos[time_idx, batch_idx]
-        final_values = self._final_obs[slots]
-        target_time = time_idx + 1
-
-        def _patch(tree, final_tree):
-            if isinstance(tree, dict):
-                return {key: _patch(value, final_tree[key]) for key, value in tree.items()}
-            tree = tree.clone()
-            tree[target_time, batch_idx] = final_tree
-            return tree
-
-        return _patch(window_obs, final_values)
-
     def _accumulate_nstep_window(
         self, t0: torch.Tensor, env_inds: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Generalizes ``_accumulate_nstep`` (``nstep_sampling.py``) to
         ``learning_len`` overlapping n-step windows simultaneously -- every
         tensor op gains a leading ``learning_len`` axis. Returns
-        ``(rewards, discounts)``, each ``(learning_len, batch)``."""
+        ``(rewards, discounts, truncated_at)``, each ``(learning_len, batch)``.
+        ``truncated_at`` counts rows from the first learning row: the row whose
+        truncation ended the return early, so the bootstrap observation is that
+        episode's final one; -1 where the return bootstraps from the row
+        ``forward_len`` later, or not at all (a termination)."""
         batch = t0.shape[0]
         learning_offsets = torch.arange(
             self.learning_len, device=self.storage_device
@@ -152,6 +134,8 @@ class RecurrentSamplingMixin:
             self.learning_len, batch, dtype=torch.bool, device=self.storage_device
         )
 
+        truncated_at = torch.full_like(learning_starts, -1)
+
         for i in range(self.forward_len):
             idx = (learning_starts + i) % self.per_env_buffer_size
             step_rewards = self.rewards[idx, env_grid]
@@ -160,8 +144,36 @@ class RecurrentSamplingMixin:
             )
             discounts = torch.where(active, discounts * self.gamma, discounts)
             terminal = active & self.dones[idx, env_grid]
-            stopped = terminal | (active & self.episode_ends[idx, env_grid])
+            ended = active & self.episode_ends[idx, env_grid]
+            truncated_at = torch.where(ended & ~terminal, learning_offsets + i, truncated_at)
+            stopped = terminal | ended
             discounts = torch.where(terminal, torch.zeros_like(discounts), discounts)
             active = active & ~stopped
 
-        return rewards, discounts
+        return rewards, discounts, truncated_at
+
+    def _truncation_bootstraps(self, t0: torch.Tensor, env_inds: torch.Tensor, truncated_at: torch.Tensor):
+        """``(final_obs, final_steps, final_columns, final_index)``: the final
+        observations the returns of ``truncated_at`` bootstrap from, as ``K``
+        compact rows, with the row (counted from the first learning row) and
+        batch column whose episode each one ends, and, per learning row, which
+        of them it uses (-1: none)."""
+        needed = torch.zeros(
+            (self.learning_len + self.forward_len, t0.shape[0]),
+            dtype=torch.bool,
+            device=self.storage_device,
+        )
+        learning_row, column = (truncated_at >= 0).nonzero(as_tuple=True)
+        needed[truncated_at[learning_row, column], column] = True
+        final_steps, final_columns = needed.nonzero(as_tuple=True)
+        rows = (t0[final_columns] + self.burn_in_len + final_steps) % self.per_env_buffer_size
+        final_obs = self._final_obs[self._final_slot_ids[rows, env_inds[final_columns]]]
+
+        compact = torch.full_like(needed, -1, dtype=torch.long)
+        compact[final_steps, final_columns] = torch.arange(
+            final_steps.numel(), device=self.storage_device
+        )
+        final_index = torch.where(
+            truncated_at >= 0, compact.gather(0, truncated_at.clamp(min=0)), -1
+        )
+        return final_obs, final_steps, final_columns, final_index

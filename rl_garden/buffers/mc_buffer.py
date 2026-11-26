@@ -17,7 +17,7 @@ Key features:
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
@@ -39,6 +39,8 @@ class MCReplayBufferMixin:
         class MCReplayBuffer(MCReplayBufferMixin, ReplayBuffer):
             pass
     """
+
+    rows_form_trajectories = True
 
     def __init__(
         self,
@@ -76,6 +78,10 @@ class MCReplayBufferMixin:
             device=self.storage_device,
             dtype=torch.bool,
         )
+        # True on the last row of a trajectory that cut_running_episodes() cut
+        # off: the MC recursion stops there, but the trajectory never becomes a
+        # complete one.
+        self._episode_cut = torch.zeros_like(self._episode_end)
         # Cached validity mask (True where a transition's trajectory has a
         # known episode_end at or after it among currently stored data);
         # invalidated whenever add() is called.
@@ -118,6 +124,66 @@ class MCReplayBufferMixin:
             self._step_success = None
 
     # ------------------------------------------------------------------
+    # Checkpoint state
+    # ------------------------------------------------------------------
+
+    def _state_attrs(self) -> tuple[str, ...]:
+        success = () if self._step_success is None else ("_step_success",)
+        return (
+            *super()._state_attrs(),
+            "_episode_end",
+            "_episode_cut",
+            "_externally_valid",
+            "_external_mc",
+            *success,
+        )
+
+    def state_dict(self) -> dict[str, Any]:
+        return {**super().state_dict(), "mc_table": self._mc_table}
+
+    def load_state_dict(self, state: dict[str, Any], *, strict: bool = True) -> None:
+        super().load_state_dict(self._with_keys_absent_from_old_files(state), strict=strict)
+        self._mc_table = state.get("mc_table")
+        self._valid_table = None
+        self._valid_indices_cache = None
+        self._sampleable_size_cache = None
+
+    def _with_keys_absent_from_old_files(self, state: dict[str, Any]) -> dict[str, Any]:
+        state = dict(state)
+        if state.get("episode_end") is None:
+            # Matches add()'s own fallback for rows added without an episode_end.
+            state["episode_end"] = state["dones"].clone().bool()
+        if state.get("episode_cut") is None:
+            state["episode_cut"] = torch.zeros_like(state["episode_end"])
+        if state.get("externally_valid") is None or state.get("external_mc") is None:
+            mc_table = state.get("mc_table")
+            # An old file's whole mc_table is trusted rather than rebuilt from
+            # `dones`, which can be all-False (bootstrap_at_done="always") and
+            # would make every restored row look like an incomplete trajectory.
+            if mc_table is not None:
+                state["externally_valid"] = torch.ones_like(state["dones"], dtype=torch.bool)
+                state["external_mc"] = mc_table
+            else:
+                state["externally_valid"] = torch.zeros_like(state["dones"], dtype=torch.bool)
+                state["external_mc"] = torch.zeros_like(state["rewards"])
+        if self._step_success is not None and state.get("step_success") is None:
+            state["step_success"] = self._step_success
+        return state
+
+    def cut_running_episodes(self) -> None:
+        """A cut trajectory has no Monte Carlo return: its rows stay unsampleable
+        until overwritten. ``_externally_valid`` rows keep their own return."""
+        super().cut_running_episodes()
+        if len(self) == 0:
+            return
+        last = (self.pos - 1) % self.per_env_buffer_size
+        self._episode_cut[last] = ~self._episode_end[last]
+        self._mc_table = None
+        self._valid_table = None
+        self._valid_indices_cache = None
+        self._sampleable_size_cache = None
+
+    # ------------------------------------------------------------------
     # Cache invalidation: any add() invalidates the MC table.
     # ------------------------------------------------------------------
 
@@ -154,6 +220,7 @@ class MCReplayBufferMixin:
         # valid, regardless of what previously occupied this slot.
         self._externally_valid[self.pos] = False
         self._external_mc[self.pos] = 0.0
+        self._episode_cut[self.pos] = False
         if episode_end is None:
             episode_end = args[4] if len(args) >= 5 else kwargs.get("done")
         self._episode_end[self.pos] = (
@@ -243,9 +310,8 @@ class MCReplayBufferMixin:
         Rows marked ``_externally_valid`` (offline-loader-precomputed, or
         checkpoint-restored) keep their preserved ``_external_mc`` value
         instead of being recomputed -- this buffer usually cannot reconstruct
-        them correctly on its own (e.g. offline data striped across
-        ``num_envs`` columns by the loader does not form a real per-column
-        time series). A transition into or out of an externally-valid run is
+        them correctly on its own (e.g. a dataset trajectory that the loader
+        continues in the next column). A transition into or out of an externally-valid run is
         treated as a hard recursion barrier, exactly like ``episode_end``: the
         online recursion must not flow across that seam, since neither side
         is guaranteed to be the other's real trajectory continuation.
@@ -274,12 +340,48 @@ class MCReplayBufferMixin:
         # includes the more-recent neighbor's ext flag.
         succ_ext_o = torch.zeros_like(ext_o)
         succ_ext_o[:-1] = ext_o[1:]
-        boundary_o = ee_o | ext_o | succ_ext_o
-        keep_o = ~boundary_o
+        boundary_o = ee_o | ext_o | succ_ext_o | self._episode_cut[order]
+        succ_o = (
+            self._step_success[order] > 0.5
+            if self.sparse_reward_mc and self._step_success is not None
+            else None
+        )
+        computed_o = self._returns_in_order(r_o, ~boundary_o, succ_o)
 
+        mc_o = torch.where(ext_o, emc_o, computed_o)
+        mc = torch.zeros_like(rewards)
+        mc[order] = mc_o
+        return mc
+
+    def stream_mc_returns(
+        self,
+        rewards: torch.Tensor,
+        episode_ends: torch.Tensor,
+        successes: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(returns, ended)`` of the rows of one stream of trajectories in
+        order (e.g. a flat dataset), computed as this buffer computes its own
+        rows; ``ended`` is False on the rows of a trajectory the stream does not
+        end, whose return is unknown."""
+        ends = episode_ends.bool().unsqueeze(1)
+        succ = None
         if self.sparse_reward_mc and self._step_success is not None:
+            if successes is None:
+                successes = rewards >= self.success_threshold
+            succ = successes.unsqueeze(1).to(self._step_success.dtype) > 0.5
+        returns = self._returns_in_order(rewards.unsqueeze(1), ~ends, succ)[:, 0]
+        ended = torch.flip(torch.cummax(torch.flip(ends[:, 0], dims=(0,)), dim=0).values, dims=(0,))
+        return returns, ended
+
+    def _returns_in_order(
+        self, r_o: torch.Tensor, keep_o: torch.Tensor, succ_o: torch.Tensor | None
+    ) -> torch.Tensor:
+        """MC returns of rows in chronological order, the recursion carried from
+        a row to the one before it where ``keep_o``; ``succ_o``: per-row success
+        for ``sparse_reward_mc``."""
+        rewards = r_o
+        if succ_o is not None:
             inf_horizon_value = self.sparse_negative_reward / (1.0 - self.gamma)
-            succ_o = self._step_success[order] > 0.5
 
             # acc_succ's own recursion never depends on the reward side (only
             # the reverse coupling exists below) -- compute it first via its
@@ -316,31 +418,29 @@ class MCReplayBufferMixin:
         # Reverse to forward-recurrence form and scan.
         A = torch.flip(a_o, dims=(0,))
         R = torch.flip(r_prime_o, dims=(0,))
-        computed_o = torch.flip(self._hillis_steele_affine(A, R), dims=(0,))
-
-        mc_o = torch.where(ext_o, emc_o, computed_o)
-        mc = torch.zeros_like(rewards)
-        mc[order] = mc_o
-        return mc
+        return torch.flip(self._hillis_steele_affine(A, R), dims=(0,))
 
     def _build_validity_mask(self) -> torch.Tensor:
         """(T, N) mask: True where a transition's trajectory has reached a
         known ``episode_end`` among currently stored data (i.e. it is not
-        part of a still-open trailing trajectory), or where the row is
+        part of a still-open trailing trajectory or of one cut off by
+        ``cut_running_episodes``), or where the row is
         ``_externally_valid`` (always individually valid on its own merit,
         regardless of what surrounds it).
 
-        Vectorized as a reverse cumulative-OR of ``episode_end`` (a single
-        ``cummax`` on a flipped view, both GPU-native, single-kernel-launch
-        primitives) instead of a Python loop over every stored timestep --
-        the loop form cost seconds per rebuild at realistic buffer sizes,
+        Vectorized as a ``cummax`` on a flipped view (GPU-native,
+        single-kernel-launch primitives) instead of a Python loop over every
+        stored timestep -- the loop form cost seconds per rebuild at realistic buffer sizes,
         entirely from Python/launch overhead, not from the actual work.
         """
         order = self._chronological_order()
-        ee_o = self._episode_end[order]
-        seen_end_o = torch.flip(
-            torch.cummax(torch.flip(ee_o, dims=(0,)), dim=0).values, dims=(0,)
-        )
+        # Reversed in time, the latest boundary seen decides: odd codes are ends,
+        # even ones cuts.
+        ee_r = torch.flip(self._episode_end[order], dims=(0,))
+        boundary_r = ee_r | torch.flip(self._episode_cut[order], dims=(0,))
+        age = torch.arange(1, ee_r.shape[0] + 1, device=self.storage_device).unsqueeze(1)
+        code_r = torch.where(boundary_r, 2 * age + ee_r, 0)
+        seen_end_o = torch.flip(torch.cummax(code_r, dim=0).values % 2 == 1, dims=(0,))
         valid_o = seen_end_o | self._externally_valid[order]
         valid = torch.zeros_like(self._episode_end)
         valid[order] = valid_o

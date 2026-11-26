@@ -1,4 +1,5 @@
 """Tests for the OGBench env backend (Sync/AsyncVectorEnv + torch adapter)."""
+import dataclasses
 import os
 import sys
 import types
@@ -258,17 +259,23 @@ def test_frame_stack_applies_image_frame_stack_wrapper_on_fixed_camera_key(monke
 
     monkeypatch.setattr("gymnasium.make", lambda env_id, **env_kwargs: _PixelEnv())
 
-    env = make_ogbench_env(
-        OGBenchEnvConfig(
-            env_id="visual-cube-single-singletask-v0",
-            num_envs=2,
-            seed=0,
-            pixel_camera="ogbench",
-            frame_stack=3,
-        )
+    cfg = OGBenchEnvConfig(
+        env_id="visual-cube-single-singletask-v0",
+        num_envs=2,
+        seed=0,
+        pixel_camera="ogbench",
+        frame_stack=3,
     )
+    env = make_ogbench_env(cfg)
     obs, _ = env.reset()
     assert obs["rgb_ogbench"].shape == (2, 3, 4, 4, 3)
+    env.close()
+
+    env = make_ogbench_env(dataclasses.replace(cfg, reward_scale=2.0, reward_bias=1.0))
+    env.reset()
+    obs, rewards, *_ = env.step(torch.zeros(2, 1))
+    assert obs["rgb_ogbench"].shape == (2, 3, 4, 4, 3)
+    assert rewards.tolist() == [1.0, 1.0]  # 0.0 * 2.0 + 1.0
     env.close()
 
 

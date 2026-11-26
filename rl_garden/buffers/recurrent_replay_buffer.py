@@ -49,6 +49,14 @@ class RecurrentReplayBufferSample:
     rewards: torch.Tensor                       # (learning_len, B) -- pre-accumulated n-step
     discounts: torch.Tensor                     # (learning_len, B)
     episode_starts: torch.Tensor                # (window_len, B)
+    # The final observations of the K truncated episodes that some learning row
+    # bootstraps from, the row (from the first learning row) and column where each
+    # episode ends, and which of the K a learning row uses (-1: the row forward_len
+    # later, or no bootstrap).
+    final_obs: Obs                              # (K, *obs_shape)
+    final_steps: torch.Tensor                   # (K,)
+    final_columns: torch.Tensor                 # (K,)
+    final_index: torch.Tensor                   # (learning_len, B)
     initial_hidden_h: torch.Tensor              # (B, num_layers, H) -- batch-dim-first
     initial_hidden_c: Optional[torch.Tensor]    # (B, num_layers, H), None for GRU
     priority_indices: torch.Tensor              # (B,) LongTensor, flat leaf indices
@@ -149,6 +157,15 @@ class RecurrentReplayBuffer(SequenceReplayBuffer):
             )
         self.hidden_checkpoint_ep_id[slots, envs] = self._current_ep_id[envs]
 
+    def _state_attrs(self) -> tuple[str, ...]:
+        cell_state = ("hidden_checkpoints_c",) if self._has_cell_state else ()
+        return (
+            *super()._state_attrs(),
+            "hidden_checkpoints_h",
+            *cell_state,
+            "hidden_checkpoint_ep_id",
+        )
+
     # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------
@@ -192,6 +209,10 @@ class RecurrentReplayBuffer(SequenceReplayBuffer):
             episode_starts,
             rewards,
             discounts,
+            final_obs,
+            final_steps,
+            final_columns,
+            final_index,
         ) = self._sample_common(batch_size, generator=generator)
 
         slots = leaf_indices % self.checkpoint_capacity
@@ -207,6 +228,10 @@ class RecurrentReplayBuffer(SequenceReplayBuffer):
             rewards=rewards.to(self.sample_device),
             discounts=discounts.to(self.sample_device),
             episode_starts=episode_starts.to(self.sample_device),
+            final_obs=_tree_to_device(final_obs, self.sample_device),
+            final_steps=final_steps.to(self.sample_device),
+            final_columns=final_columns.to(self.sample_device),
+            final_index=final_index.to(self.sample_device),
             initial_hidden_h=initial_hidden_h.to(self.sample_device),
             initial_hidden_c=(
                 initial_hidden_c.to(self.sample_device)

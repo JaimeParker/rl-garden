@@ -234,6 +234,14 @@ class WSRL(_CalQLRolloutTrainingShell):
             actor_factory=actor_factory,
         )
 
+    @property
+    def training_stage(self) -> str:
+        if not self.use_cql_loss:
+            objective = "SAC"
+        else:
+            objective = "Cal-QL" if self.use_calql else "CQL"
+        return f"{super().training_stage} ({objective})"
+
     def _load_training_state_dict(self, state: dict[str, Any]) -> None:
         super()._load_training_state_dict(state)
         if not state:

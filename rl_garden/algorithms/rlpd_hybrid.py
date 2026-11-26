@@ -187,7 +187,7 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
                 next_target_q = self.policy.discrete_target_critic(next_features)
                 next_q = next_target_q.gather(-1, next_action).squeeze(-1)
                 rewards = data.rewards + data.grasp_penalty if self.use_grasp_penalty else data.rewards
-                target = rewards.reshape(-1) + (1 - data.dones.reshape(-1)) * self.gamma * next_q
+                target = rewards.reshape(-1) + self._target_discounts(data).reshape(-1) * next_q
 
             loss = F.mse_loss(q_pred, target)
             self.dqn_optimizer.zero_grad()

@@ -12,6 +12,8 @@ strict-mode tail-step fix.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 import torch
@@ -407,9 +409,10 @@ def test_uniform_window_crossing_episode_boundary_carries_is_first_inside():
             continue
         found = True
         for c in cols.tolist():
-            # loss rows are buffer positions 2,3,4 -- is_first is True only at
-            # position 3 (the new episode's first observation), unshifted.
-            assert batch.is_first[:, c].tolist() == [False, True, False]
+            # loss rows are position 2, the final observation after it and position
+            # 3 -- is_first is True only at position 3 (the new episode's first
+            # observation), unshifted.
+            assert batch.is_first[:, c].tolist() == [False, False, True]
     assert found, "a window starting at t0=1 (crossing the boundary) was never sampled"
 
 
@@ -456,15 +459,163 @@ def test_uniform_write_back_carry_visible_on_next_sample():
     assert found, "a t0=1 window was never sampled after the write-back"
 
 
+# Two envs, episodes of 3 and 4 steps. The observation of step ``t`` of episode ``ep``
+# in env ``e`` is (e, ep, t, 0); an episode's final observation has t == its length.
+_EPISODE_LENGTHS = (3, 4)
+
+
+def _episode_stream(steps: int, *, horizon: int, per_env: int = 32, terminate=False, **add_kwargs):
+    buf = _make_uniform_buffer(
+        num_envs=2, per_env_buffer_size=per_env, horizon=horizon, carry_spec={"deter": (1,)}
+    )
+    episode, step = [0, 0], [0, 0]
+    for _ in range(steps):
+        ended = torch.tensor([step[e] == _EPISODE_LENGTHS[e] - 1 for e in range(2)])
+
+        def obs(dt):
+            return {"state": torch.tensor([[e, episode[e], step[e] + dt, 0.0] for e in range(2)])}
+
+        tag = torch.tensor([10.0 * episode[e] + step[e] + 1.0 for e in range(2)])
+        buf.add(
+            obs(0), obs(1), tag.unsqueeze(1).expand(2, 2).clone(), tag, ended & terminate, ended,
+            is_first=torch.tensor([s == 0 for s in step]),
+            carry={"deter": torch.zeros(2, 1)},
+            **add_kwargs,
+        )
+        for e in range(2):
+            episode[e], step[e] = (episode[e] + 1, 0) if ended[e] else (episode[e], step[e] + 1)
+    return buf
+
+
+def _reference_rows(env: int, steps: int):
+    """The rows the official implementations store: ``(obs, action-in, reward, is_first, is_last)``."""
+    rows, ep, t = [], 0, 0
+    for _ in range(steps):
+        tag = 10.0 * ep + t + 1.0
+        rows.append(((env, ep, t), tag - 1.0 if t else 0.0, t == 0, False))
+        if t == _EPISODE_LENGTHS[env] - 1:
+            rows.append(((env, ep, t + 1), tag, False, True))
+            ep, t = ep + 1, 0
+        else:
+            t += 1
+    return rows
+
+
+@pytest.mark.parametrize("terminate", [False, True])
+def test_uniform_windows_are_the_windows_of_the_official_row_stream(terminate):
+    steps, horizon = 14, 4
+    buf = _episode_stream(steps, horizon=horizon, terminate=terminate)
+    streams = [_reference_rows(env, steps) for env in range(2)]
+    expected = {
+        tuple(row[0] for row in streams[env][i : i + horizon + 1]): (env, i)
+        for env in range(2)
+        for i in range(len(streams[env]) - horizon)
+    }
+    torch.manual_seed(0)
+    counts = dict.fromkeys(expected, 0)
+    batch = buf.sample(6_000)
+    for c in range(6_000):
+        window = tuple(tuple(int(x) for x in row[:3]) for row in batch.obs["state"][:, c].tolist())
+        counts[window] += 1  # KeyError: not a window of the official stream
+        if counts[window] > 1:
+            continue
+        env, i = expected[window]
+        for k, (_, incoming, is_first, is_last) in enumerate(streams[env][i + 1 : i + horizon + 1]):
+            assert batch.reward[k, c] == incoming and (batch.action[k, c] == incoming).all()
+            assert bool(batch.is_first[k, c]) is is_first
+            assert bool(batch.is_last[k, c]) is is_last
+            assert bool(batch.is_terminal[k, c]) is (is_last and terminate)
+    # Every window, the ones starting at a final observation included, with equal probability
+    # (6000 draws of 30-odd windows: five sigma is below 40 %).
+    mean = 6_000 / len(counts)
+    assert all(0.6 * mean < count < 1.4 * mean for count in counts.values()), counts
+
+
+def test_uniform_write_back_carry_leaves_final_observation_rows_out():
+    buf = _episode_stream(14, horizon=4)
+    torch.manual_seed(0)
+    batch = buf.sample(64)
+    idx_grid, env_grid = batch.indices
+    final = batch.is_last & ~batch.is_first
+    assert final.any() and torch.equal(idx_grid == -1, final)
+    buf.write_back_carry(batch.indices, {"deter": torch.full((4, 64, 1), 5.0)})
+    written = torch.zeros(32, 2, dtype=torch.bool)
+    written[idx_grid[~final], env_grid[~final]] = True
+    assert torch.equal(buf._carry["deter"][..., 0] == 5.0, written)
+
+
+def test_uniform_without_known_final_observations_keeps_the_ring_rows():
+    buf = _episode_stream(14, horizon=4, final_obs_known=False)
+    assert (buf._final_slot_ids == -1).all()
+    batch = buf.sample(256)
+    assert torch.equal(batch.is_last, batch.is_first)  # the reset row carries the ended transition
+    assert (batch.indices[0] >= 0).all()
+    assert ((batch.obs["state"][:, :, 2] < torch.tensor(_EPISODE_LENGTHS)[batch.obs["state"][0, :, 0].long()])).all()
+
+
+def _old_file(buf: SequenceReplayBuffer, *, final_obs_reported: bool) -> dict:
+    """What a uniform buffer saved before ``final_obs_known``: without a reported final
+    observation every ended row kept the reset observation, the next ring row."""
+    state = {k: v for k, v in buf.state_dict().items() if k != "final_obs_known_recorded"}
+    if not final_obs_reported:
+        table = {k: v.clone() for k, v in state["final_obs"].items()}
+        for pos, env in (buf._final_slot_ids >= 0).nonzero().tolist():
+            table["state"][buf._final_slot_ids[pos, env]] = buf.obs["state"][(pos + 1) % buf.per_env_buffer_size, env]
+        state["final_obs"] = table
+    return state
+
+
+@pytest.mark.parametrize("per_env", [9, 32])
+@pytest.mark.parametrize("final_obs_reported", [True, False])
+def test_old_uniform_files_keep_only_true_final_observations(final_obs_reported, per_env):
+    buf = _episode_stream(22, horizon=4, per_env=per_env)
+    loaded = _make_uniform_buffer(num_envs=2, per_env_buffer_size=per_env, horizon=4, carry_spec={"deter": (1,)})
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        loaded.load_state_dict(_old_file(buf, final_obs_reported=final_obs_reported))
+    assert len(record) == (0 if final_obs_reported else 1)
+    if final_obs_reported:
+        assert torch.equal(loaded._final_slot_ids, buf._final_slot_ids)
+        return
+    assert (loaded._final_slot_ids == -1).all()
+    assert len(loaded._free_final_slots) == loaded._next_final_slot
+    batch = loaded.sample(256)
+    assert torch.equal(batch.is_last, batch.is_first)
+
+
+def test_files_with_recorded_final_observations_are_taken_as_they_are():
+    buf = _episode_stream(22, horizon=4)
+    state = {**_old_file(buf, final_obs_reported=False), "final_obs_known_recorded": True}
+    loaded = _make_uniform_buffer(num_envs=2, per_env_buffer_size=32, horizon=4, carry_spec={"deter": (1,)})
+    loaded.load_state_dict(state)
+    assert torch.equal(loaded._final_slot_ids, buf._final_slot_ids)
+    assert buf.state_dict()["final_obs_known_recorded"] is True
+
+
+def test_uniform_final_observations_survive_the_ring_wrapping():
+    steps, horizon = 40, 4
+    buf = _episode_stream(steps, horizon=horizon, per_env=9)
+    batch = buf.sample(2_000)
+    streams = [[row[0] for row in _reference_rows(env, steps)] for env in range(2)]
+    starts = set()
+    for c in range(2_000):
+        window = [tuple(int(x) for x in row[:3]) for row in batch.obs["state"][:, c].tolist()]
+        stream = streams[window[0][0]]
+        i = stream.index(window[0])
+        assert window == stream[i : i + horizon + 1]
+        starts.add((window[0][0], i))
+    assert {env for env, _ in starts} == {0, 1}
+
+
 def test_uniform_is_last_and_is_terminal_are_separate_for_truncation():
     buf = _make_uniform_buffer(per_env_buffer_size=8, horizon=1)
     _add_uniform_step(buf, 0, episode_end=torch.tensor([1.0]))  # truncation only: done stays False
     _add_uniform_step(buf, 1, is_first=torch.tensor([1.0]))
 
-    batch = buf.sample(batch_size=4)  # only t0=0 is valid -> deterministic
-    assert bool(batch.is_last[0, 0].item()) is True
-    assert bool(batch.is_terminal[0, 0].item()) is False
-    assert bool(batch.is_first[0, 0].item()) is True
+    batch = buf.sample(batch_size=32)  # the row after step 0 is its final observation or the reset
+    assert batch.is_last.any() and batch.is_first.any()
+    assert torch.equal(batch.is_last, ~batch.is_first)
+    assert not batch.is_terminal.any()
 
 
 def test_uniform_is_last_and_is_terminal_both_set_for_true_termination():
@@ -472,6 +623,7 @@ def test_uniform_is_last_and_is_terminal_both_set_for_true_termination():
     _add_uniform_step(buf, 0, done=torch.tensor([1.0]), episode_end=torch.tensor([1.0]))
     _add_uniform_step(buf, 1, is_first=torch.tensor([1.0]))
 
-    batch = buf.sample(batch_size=4)
-    assert bool(batch.is_last[0, 0].item()) is True
-    assert bool(batch.is_terminal[0, 0].item()) is True
+    batch = buf.sample(batch_size=32)
+    assert batch.is_last.any() and batch.is_first.any()
+    assert torch.equal(batch.is_last, ~batch.is_first)
+    assert torch.equal(batch.is_terminal, batch.is_last)

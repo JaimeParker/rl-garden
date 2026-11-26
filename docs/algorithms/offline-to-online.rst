@@ -107,7 +107,8 @@ in :doc:`/REFERENCES`; an em dash means no matching module row exists there.
      - Difference
      - Reference key
    * - ``explore`` (online)
-     - RLPD with optimistic relabeling of unlabeled prior data.
+     - RLPD with optimistic relabeling of unlabeled prior data; relabeling
+       and RND label single transitions, so they reject ``--nstep`` above 1.
      - ExPLORe
    * - ``jsrl`` (online)
      - Frozen guide policy acts before the online SAC policy.
@@ -119,7 +120,9 @@ in :doc:`/REFERENCES`; an em dash means no matching module row exists there.
      - Offline preparation of a WSRL-compatible Cal-QL checkpoint.
      - WSRL
    * - ``acfql`` (off2on)
-     - Action-chunked FQL continuation.
+     - Action-chunked FQL continuation; rollout and evaluation execute each
+       chunk one action per environment step, and a chunk that runs past its
+       episode's end has zero weight in the critic loss.
      - ACFQL
    * - ``awac`` (off2on)
      - Online continuation: advantage-weighted actor-critic.

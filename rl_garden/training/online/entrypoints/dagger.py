@@ -13,13 +13,23 @@ from __future__ import annotations
 
 import torch
 
+from rl_garden.common.types import Obs
+
+
+def _batch_reference(obs: Obs) -> torch.Tensor:
+    """Any observation leaf: they all share the leading env dimension and device."""
+    return next(iter(obs.values())) if isinstance(obs, dict) else obs
+
 
 class _ZeroExpert:
     def __init__(self, action_dim: int) -> None:
         self.action_dim = action_dim
 
-    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(obs.shape[0], self.action_dim, device=obs.device)
+    def __call__(self, obs: Obs) -> torch.Tensor:
+        reference = _batch_reference(obs)
+        return torch.zeros(
+            reference.shape[0], self.action_dim, dtype=torch.float32, device=reference.device
+        )
 
 
 class _RandomUniformExpert:
@@ -31,13 +41,24 @@ class _RandomUniformExpert:
         self.low = low
         self.high = high
 
-    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
-        batch = obs.shape[0]
-        noise = torch.rand(batch, self.low.shape[0], device=obs.device)
-        return self.low + noise * (self.high - self.low)
+    def __call__(self, obs: Obs) -> torch.Tensor:
+        reference = _batch_reference(obs)
+        low = self.low.to(reference.device)
+        high = self.high.to(reference.device)
+        noise = torch.rand(
+            reference.shape[0], low.shape[0], dtype=torch.float32, device=reference.device
+        )
+        return low + noise * (high - low)
 
 
 def _mock_expert_from_args(args, action_space):
+    from gymnasium import spaces
+
+    if not isinstance(action_space, spaces.Box):
+        raise NotImplementedError(
+            "dagger supports continuous (Box) action spaces only; "
+            f"got {type(action_space).__name__}."
+        )
     if args.expert == "zero":
         return _ZeroExpert(action_dim=action_space.shape[0])
     if args.expert == "random_uniform":
@@ -70,7 +91,7 @@ def build_dagger(args, env, eval_env, logger, checkpoint_dir):
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
     }
-    return construct_agent(
+    agent = construct_agent(
         DAgger,
         env=env,
         expert=expert,
@@ -92,9 +113,13 @@ def build_dagger(args, env, eval_env, logger, checkpoint_dir):
         log_freq=args.log_freq,
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=args.checkpoint_freq,
+        save_replay_buffer=args.save_replay_buffer,
         save_final_checkpoint=args.save_final_checkpoint,
         **image_kwargs,
     )
+    if args.load_checkpoint is not None:
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+    return agent
 
 
 def run_dagger(args: "DAggerArgs") -> None:
@@ -124,4 +149,16 @@ class DAggerArgs(DAggerTrainingArgs, ObservationArgs, EnvBackendArgs):
     """DAgger with multi-env backend support."""
 
 
-registry.register("dagger", DAggerArgs, run_dagger, build_agent=build_dagger)
+def _dagger_algorithm_cls() -> type:
+    from rl_garden.algorithms.dagger import DAgger
+
+    return DAgger
+
+
+registry.register(
+    "dagger",
+    DAggerArgs,
+    run_dagger,
+    algorithm_cls=_dagger_algorithm_cls,
+    build_agent=build_dagger,
+)

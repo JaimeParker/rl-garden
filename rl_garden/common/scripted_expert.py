@@ -17,6 +17,10 @@ from rl_garden.common.types import Obs
 
 class ScriptedExpert(Protocol):
     """Callable expert: batched ``obs`` -> batched action, same convention as
-    ``BasePolicy.predict()`` (leading batch dim matches ``env.num_envs``)."""
+    ``BasePolicy.predict()`` (leading batch dim matches ``env.num_envs``).
+
+    ``obs`` is what the env returned: a dict of tensors for the standard
+    backends, on the env's device. DAgger moves the returned action to the
+    policy device, so an expert may answer on any device."""
 
     def __call__(self, obs: Obs) -> torch.Tensor: ...

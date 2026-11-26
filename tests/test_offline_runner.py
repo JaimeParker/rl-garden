@@ -50,8 +50,9 @@ def test_run_offline_closes_resources_when_builder_fails(monkeypatch, tmp_path):
     assert closed == {"eval_env": True}
 
 
-def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("resumes", [False, True])
+def test_run_offline_fits_the_normalizer_of_a_fresh_agent_only(
+    resumes, monkeypatch, tmp_path
 ):
     events: list[object] = []
 
@@ -61,6 +62,9 @@ def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
 
         def fit_obs_normalizer(self):
             events.append("fit_obs_normalizer")
+
+        def pretrain_vae(self):
+            events.append("pretrain_vae")
 
         def load(self, path, *, load_replay_buffer):
             events.append(("load", path, load_replay_buffer))
@@ -96,7 +100,7 @@ def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
         offline_dataset="dummy_dataset",
         num_offline_steps=1,
         env_id=None,
-        load_checkpoint=str(checkpoint_path),
+        load_checkpoint=str(checkpoint_path) if resumes else None,
         load_replay_buffer=True,
     )
 
@@ -109,8 +113,8 @@ def test_run_offline_loads_checkpoint_last_and_respects_load_replay_buffer(
 
     assert events == [
         "load_offline_dataset",
-        "fit_obs_normalizer",
-        ("load", str(checkpoint_path), True),
+        ("load", str(checkpoint_path), True) if resumes else "fit_obs_normalizer",
+        "pretrain_vae",
         "run_offline_pretraining",
     ]
 

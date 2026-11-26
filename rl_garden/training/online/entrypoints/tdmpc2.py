@@ -22,7 +22,8 @@ def build_tdmpc2(args, env, eval_env, logger, checkpoint_dir):
 
     # TDMPC2 only accepts encoder_config/obs_groups/image_augmentation_seed
     # (no distinct critic encoder; encoder_sharing is a fixed "shared" class
-    # attribute, not a constructor kwarg).
+    # attribute, not a constructor kwarg; asymmetric --obs-groups and
+    # --critic-encoder are rejected at preflight).
     image_kwargs = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
@@ -116,10 +117,22 @@ class TDMPC2Args(VisionTDMPC2TrainingArgs, EnvBackendArgs):
     """TD-MPC2 — implicit world model + CEM/MPPI planner (single-task,
     single-env only; see ``rl_garden.algorithms.tdmpc2`` module docstring).
 
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default) or any other registered backend.
     State-only observations by default; pass ``--obs.rgb <camera>`` for
     Dict/RGBD observations.
     """
 
 
-registry.register("tdmpc2", TDMPC2Args, run_tdmpc2, build_agent=build_tdmpc2)
+def _tdmpc2_algorithm_cls() -> type:
+    from rl_garden.algorithms.tdmpc2 import TDMPC2
+
+    return TDMPC2
+
+
+registry.register(
+    "tdmpc2",
+    TDMPC2Args,
+    run_tdmpc2,
+    algorithm_cls=_tdmpc2_algorithm_cls,
+    build_agent=build_tdmpc2,
+)

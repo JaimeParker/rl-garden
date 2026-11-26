@@ -11,12 +11,14 @@ from rl_garden.common.env_args import EnvBackendArgs
 @dataclass
 class OfflineDatasetArgs:
     num_offline_steps: int = 100_000
-    # The dataset locator is a filesystem path for "h5", a dataset id for
-    # "minari", and a legacy Gym environment id for "d4rl_legacy".
     # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
     # Literal: a new backend registers itself, no CLI arg change needed here.
     dataset_backend: str = "h5"
+
+    # The dataset locator is a filesystem path for "h5", a dataset id for
+    # "minari", and a legacy Gym environment id for "d4rl_legacy".
     offline_dataset: Optional[str] = None
+
     offline_num_traj: Optional[int] = None
     save_filename: Optional[str] = None
     reward_scale: float = 1.0
@@ -56,12 +58,17 @@ class OfflineEvalArgs:
     env_id: Optional[str] = None
     num_eval_envs: int = 1
     num_eval_episodes: int = 100
+    # Vector-env steps per evaluation (whole chunks with action chunking).
+    # None derives num_eval_episodes * eval_episode_horizon when the horizon
+    # is set.
     num_eval_steps: Optional[int] = None
+
     # Expected worst-case env steps for one eval episode (e.g. 1000 for
     # AntMaze). Only sizes the eval step budget when num_eval_steps is unset
     # (num_eval_steps = num_eval_episodes * eval_episode_horizon) -- does not
     # impose a TimeLimit on the eval env itself.
     eval_episode_horizon: Optional[int] = None
+
     control_mode: str = "pd_joint_delta_pos"
     render_mode: str = "rgb_array"
 
@@ -100,6 +107,7 @@ class TDMPC2MultitaskTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArg
     # episodes (0 = all); task ids keep their full-manifest indices.
     tasks: tuple[str, ...] = ()
     max_episodes_per_task: int = 0
+
     device: str = "auto"
     num_offline_steps: int = 10_000_000
     buffer_size: int = 1_000_000
@@ -168,7 +176,9 @@ class PWMTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     init_logstd: float = -1.0
     min_logstd: float = -1.427
     ret_rms: bool = True
+    # Evaluate every this many gradient updates (0 disables).
     eval_freq: int = 200
+
     eval_runs: int = 10
 
 
@@ -653,6 +663,7 @@ class OfflineReBRACArgs(OfflineDeterministicActorCriticArgs):
     # through, letting ReBRAC.__init__'s own None -> [256,256] default
     # apply); ReBRAC needs the 3-layer width explicitly.
     net_arch: tuple[int, ...] = (256, 256, 256)
+
     policy_noise: float = 0.2
     noise_clip: float = 0.5
     policy_freq: int = 2
@@ -713,6 +724,7 @@ class OfflineFloQArgs(OfflineFQLArgs):
     # than read from dataset statistics (see rl_garden/algorithms/floq.py).
     r_min: float = -1.0
     r_max: float = 0.0
+
     flow_num_ensembles: int = 2
     noise_samples: int = 8
     noise_coverage: float = 0.1
@@ -741,6 +753,7 @@ class OfflineValueFlowsArgs(OfflineFQLArgs):
     # simplification as FloQ's r_min/r_max (see rl_garden/algorithms/value_flows.py).
     min_reward: float = -1.0
     max_reward: float = 0.0
+
     ret_agg: Literal["mean", "min"] = "mean"
     confidence_weight_temp: float = 0.3
     dcfm_lambda: float = 1.0
@@ -799,12 +812,14 @@ class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
     actor_use_layer_norm: bool = True
     critic_use_layer_norm: bool = True
     value_use_layer_norm: bool = True
+
     expectile: float = 0.9
     q_agg: Literal["mean", "min"] = "min"
     denoise_steps: int = 10
     # "grid" matches QGF's own policy_loss (qgf.py:69-74, discrete-grid t);
     # "uniform" reproduces IFQL's own actor loss (ifql.py:72) instead.
     t_sampling: Literal["grid", "uniform"] = "grid"
+
     sampling_mode: Literal["guided", "grad_step", "best_of_n", "bptt", "robust_q"] = "guided"
     guidance_weight: float = 1.0
     denoised_action_approx: Literal["one_euler_step_approx", "noisy"] = (
@@ -844,6 +859,7 @@ class OfflineQAMArgs(OfflineDeterministicActorCriticArgs):
     actor_use_layer_norm: bool = False
     critic_use_layer_norm: bool = True
     value_use_layer_norm: bool = True
+
     critic_loss_type: Literal["ddpg", "iql"] = "ddpg"
     rho: float = 0.0
     expectile: float = 0.9
@@ -889,6 +905,7 @@ class OfflineEDACArgs:
     target_entropy: str = "auto"
     # CORL's Actor/VectorizedCritic both use 3 hidden layers of width 256.
     net_arch: tuple[int, ...] = (256, 256, 256)
+
     n_critics: int = 10
     critic_subsample_size: Optional[int] = None
 

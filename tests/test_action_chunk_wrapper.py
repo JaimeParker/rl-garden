@@ -6,6 +6,7 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
+from rl_garden.envs.gymnasium import GymnasiumEnvConfig, make_gymnasium_env
 from rl_garden.envs.wrappers import ActionChunkWrapper
 
 
@@ -137,3 +138,33 @@ def test_final_info_emitted_only_on_done_substeps_is_frozen_per_env():
     assert torch.equal(done_mask, torch.tensor([True, True, False]))
     assert torch.equal(infos["final_info"]["raw_value"][done_mask], torch.tensor([1.0, 3.0]))
     assert torch.equal(env.dropped_episode_ends, torch.tensor([3, 0, 0]))
+
+
+def test_real_vector_env_chunk_stops_counting_at_the_truncated_sub_step():
+    # RlgTestPixels-v0 pays 1 per step and truncates after 3 steps.
+    env = ActionChunkWrapper(
+        make_gymnasium_env(
+            GymnasiumEnvConfig(
+                env_id="RlgTestPixels-v0",
+                num_envs=2,
+                seed=0,
+                import_modules=("_gymnasium_user_envs",),
+            )
+        ),
+        act_steps=2,
+    )
+    env.reset()
+    action = torch.zeros(2, 2, 1)
+
+    _, reward, _, truncated, infos = env.step(action)
+    assert reward.tolist() == [2.0, 2.0] and not truncated.any()
+    assert "final_info" not in infos
+
+    obs, reward, terminated, truncated, infos = env.step(action)
+    assert reward.tolist() == [1.0, 1.0]
+    assert truncated.all() and not terminated.any()
+    assert infos["final_info"]["episode"]["r"].tolist() == [3.0, 3.0]
+    assert infos["final_info"]["episode"]["l"].tolist() == [3, 3]
+    assert not torch.equal(infos["final_observation"]["state"], obs["state"])
+    assert env.dropped_episode_ends.tolist() == [0, 0]
+    env.close()

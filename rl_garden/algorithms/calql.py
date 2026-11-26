@@ -9,6 +9,8 @@ from __future__ import annotations
 import copy
 import dataclasses
 import warnings
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
 import torch
@@ -287,6 +289,34 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
             (MCReplayBuffer, SarsaMCReplayBuffer),
         ):
             self.replay_buffer = self._build_plain_replay_buffer()
+
+    def _restore_online_stage(self, stage: Mapping[str, Any]) -> None:
+        super()._restore_online_stage(stage)
+        recorded = stage.get("replay_buffer_class")
+        if recorded is not None:
+            plain = recorded == ReplayBuffer.__name__
+        else:
+            plain = (
+                self.online_replay_mode == "empty"
+                and not self.use_cql_loss
+                and len(self.replay_buffer) == 0
+            )
+        if plain and type(self.replay_buffer) is not ReplayBuffer:
+            self.replay_buffer = self._build_plain_replay_buffer()
+        elif not plain and type(self.replay_buffer) is ReplayBuffer:
+            self.replay_buffer = self._build_replay_buffer()
+
+    def _infer_online_stage(
+        self, checkpoint: Mapping[str, Any], replay_path: Optional[Path]
+    ) -> Optional[dict[str, Any]]:
+        stage = super()._infer_online_stage(checkpoint, replay_path)
+        if replay_path is None:
+            return stage
+        saved = torch.load(replay_path, map_location="cpu", mmap=True)["buffer_class"]
+        # Only the empty mode leaves the MC buffer behind.
+        if stage is None and saved == ReplayBuffer.__name__:
+            stage = {"replay_mode": "empty", "offline_data_ratio": 0.0}
+        return None if stage is None else {**stage, "replay_buffer_class": saved}
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {

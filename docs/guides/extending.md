@@ -456,8 +456,9 @@ These are stable contract points: the real-world package
 (`real_world_rl`, in the downstream `real-world-rl` repository,
 which carries rl-garden as a submodule) subclasses `SAC`, `RLPD` and `RLPDHybrid` through
 them, so a change to a signature or to when the loop calls a hook updates this
-table and `tests/test_off_policy_seams.py` in the same commit. `learn()` runs,
-per environment step: `_rollout_action`, `env.step`, `_on_env_step`,
+table and `tests/test_off_policy_seams.py` in the same commit. `learn()` starts with
+`env.reset(seed=...)`, `replay_buffer.cut_running_episodes()` and
+`_on_env_reset`, then runs, per environment step: `_rollout_action`, `env.step`, `_on_env_step`,
 `_replay_buffer_add_kwargs`
 and `_replay_buffer_step_kwargs` (merged into one `replay_buffer.add(obs,
 real_next_obs, replay_action, rewards, stop_bootstrap, **kwargs)` call), then
@@ -469,14 +470,15 @@ real_next_obs, replay_action, rewards, stop_bootstrap, **kwargs)` call), then
 | `OffPolicyAlgorithm._explore_action` | `(obs) -> Tensor` | uniform in `[-1, 1]`, shaped like `env.action_space` (all envs), on the algorithm's device | `NCRL`, `SuperMimic` |
 | `OffPolicyAlgorithm._on_env_step` | `(rewards, terminations, truncations) -> None` | no-op; called right after every training `env.step` with the tensors it returned, before the replay write | `FlashSAC` (updates its reward normalizer) |
 | `OffPolicyAlgorithm._replay_buffer_add_kwargs` | `(action_context, obs, next_obs, real_next_obs, infos, need_final_obs) -> dict` | `{}`; the dict is passed as extra keywords to `replay_buffer.add` | `RLPDHybrid` (`grasp_penalty` from `infos`), `SequenceSAC`, `TransformerSAC`, `DreamerV3`, `SuperMimic` |
-| `OffPolicyAlgorithm._replay_buffer_step_kwargs` | `(terminations, truncations) -> dict` | `{}` (`SAC`: `{"episode_end": terminations \| truncations}` when `nstep > 1`); merged after the add keywords, so a key present in both takes this value | `SAC`, `DDPG`, `FlashSAC`, `SequenceSAC`, `RLPDHybrid`, `ACRLPDCore`, `_CalQLRolloutTrainingShell`, `ModelBasedAlgorithm` |
-| `OffPolicyAlgorithm._on_env_reset` | `(obs) -> None` | no-op; called once by `learn()` right after its `env.reset(seed=...)` (later resets happen inside `env.step`, see `terminations` / `truncations` in `_post_rollout_step`) | `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `NCRL`, `SuperMimic` |
+| `OffPolicyAlgorithm._replay_buffer_step_kwargs` | `(terminations, truncations) -> dict` | `{}` (`SAC`: `{"episode_end": terminations \| truncations}` when `nstep > 1`); merged after the add keywords, so a key present in both takes this value | `SAC`, `DDPG`, `FlashSAC`, `SequenceSAC`, `RLPDHybrid`, `ChunkedRolloutMixin` (`ACRLPD`, `ACFQL`), `_CalQLRolloutTrainingShell`, `ModelBasedAlgorithm` |
+| `OffPolicyAlgorithm._on_env_reset` | `(obs) -> None` | no-op; called once by `learn()` after its `env.reset(seed=...)` and the replay buffer's `cut_running_episodes()` (later resets happen inside `env.step`, see `terminations` / `truncations` in `_post_rollout_step`) | `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `NCRL`, `SuperMimic` |
 | `OffPolicyAlgorithm._post_rollout_step` | `(action_context, terminations, truncations, infos) -> None` | no-op; runs after the replay write and before `obs = next_obs` | `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `SuperMimic` |
 | `BaseAlgorithm._eval_action` | `(obs) -> Tensor` | `policy.predict(obs, deterministic=True)` under `no_grad`, observations moved to the policy device | `JSRL`, `PWM`, `PolicyDistillation`, `SuperMimic`, `OnPolicyAlgorithm` |
-| `BaseAlgorithm._eval_action_and_critic_action` | `(obs) -> (env_action, critic_action)` | `(a, a)` with `a = _eval_action(obs)`; the first is executed, the second is what the critic scores | `SequenceSAC`, `JSRL`, `DreamerV3`, `NCRL`, `SequencePPO` |
-| `BaseAlgorithm._eval_start_hook` | `() -> None` | no-op; called once after `eval_env.reset()`, before the eval loop (`SACCore` resets its Q-vs-MC bookkeeping here) | `SACCore`, `SequenceSAC` (does not call `super()`), `JSRL`, `TDMPC2`, `DreamerV3`, `SuperMimic`, `SequencePPO` |
+| `BaseAlgorithm._eval_action_and_critic_action` | `(obs) -> (env_action, critic_action)` | `(a, a)` with `a = _eval_action(obs)`; the first is executed, the second is what the critic scores | `SequenceSAC`, `JSRL`, `DreamerV3`, `NCRL`, `SequencePPO`, `ChunkedEvalMixin` (`ChunkedRolloutMixin`, `QAM`, `QGF`: the next action of each env's chunk, and that whole chunk) |
+| `BaseAlgorithm._eval_start_hook` | `() -> None` | no-op; called once after `eval_env.reset()`, before the eval loop (`SACCore` resets its Q-vs-MC bookkeeping here) | `SACCore`, `SequenceSAC` (does not call `super()`), `JSRL`, `TDMPC2`, `DreamerV3`, `SuperMimic`, `SequencePPO`, `ChunkedEvalMixin` |
 | `BaseAlgorithm._eval_step_hook` | `(obs_before, critic_action, rewards, terminations, truncations, infos) -> None` | no-op; called after every eval `env.step` (`SACCore` accumulates Q-vs-MC when `q_mc_diagnostics`) | same classes as `_eval_start_hook` |
 | `SAC._build_replay_buffer` | `() -> BaseReplayBuffer` | `NStepReplayBuffer` when `nstep > 1`, else `ReplayBuffer` over `num_envs` envs; called once in `_setup_model` | `RecurrentSAC`, `TransformerSAC`, `RLPDHybrid`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `SO2Core`, `CalQLCore` |
+| `BaseReplayBuffer.cut_running_episodes` | `() -> None` | no-op; called once per `learn()` after its `env.reset`, and by any other loop that resets the env itself while it fills a buffer. The episodes still running at the last stored row are truncated there: the stored `dones` stay as they are. A buffer class that computes returns, bootstrap observations or observation windows from several rows (n-step, frame stack, sequence window, Monte Carlo return, next action) must override it so that none of them takes the last row before the cut and the first row after it for consecutive steps of one episode (what each in-tree buffer does, and the limitations: [Checkpoint](checkpoint.md#replay-buffer)); on an empty buffer it changes nothing and it uses no random numbers. Such a class also sets `rows_form_trajectories = True`, so `add_flat_transitions` loads a dataset into it as one contiguous stretch per env | `NStepSamplingMixin`, `LazyNextNStepReplayBuffer`, `MemoryEfficientReplayBuffer`, `SequenceReplayBuffer`, `RehearsalSequenceBuffer`, `MCReplayBufferMixin`, `ReBRACReplayBuffer` |
 | `SAC._policy_action_space` | `() -> spaces.Box` | `env.single_action_space`; read by `_policy_kwargs` and by the buffer builders of the overriders | `ACRLPDCore`, `QAMCore`, `QGFCore`, `ACFQLCore` |
 | `SACCore._sample_train_batch` | `(batch_size) -> sample` | `replay_buffer.sample(batch_size)`; called once per gradient step (once per group under high UTD). The sample is a dataclass with `obs`, `next_obs`, `actions`, `rewards`, `dones` and the fields named by `_extra_batch_slice_keys` | `PriorDataReplayMixin` (mixes in the prior-data buffer), `ExPLORe`, `Off2OnReplayMixin`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `OfflineSAC`, `CQL` |
 | `SACCore._target_action_log_prob` | `(data) -> (next_action, next_log_prob, next_actor_features)` | `_actor_action_log_prob(data.next_obs)`; the TD target's next action under the current actor | `SO2Core` |
@@ -511,6 +513,13 @@ for its `aux_logit_mean` metric).
   the extra keys are stored in `metadata["hyperparameters"]`, restored onto
   Args fields of the same name at evaluation, and not validated on load (a
   resume-consistency check is the subclass's own `load` override).
+- `save()` writes no absolute path and no command line: whatever the hooks here
+  return, a string that is or contains an absolute path is replaced by
+  `REMOVED_PATH` (`rl_garden.common.checkpoint`; `holds_removed_path(value)` tests
+  for it). It is a string, not `None`, so "was set" stays readable. Code that
+  reads a path back from `hyperparameters`, `run_config` or its own
+  `_extra_checkpoint_state` must treat it as unknown. See
+  [Absolute paths](checkpoint.md#absolute-paths).
 - User-supplied policy modules are recorded as import paths under
   `actor_factory`, `actor_extractor`, and `critic_extractor` in
   `metadata["hyperparameters"]`; evaluation restores them before construction.
@@ -520,22 +529,39 @@ for its `aux_logit_mean` metric).
 - Extra modules attached to the policy are part of its state dict; modules
   outside it go through `_extra_checkpoint_state` / `_load_extra_checkpoint_state`
   and extra optimizers through `_optimizer_names`.
+- `Off2OnReplayMixin` records the online stage in `_extra_checkpoint_state` and
+  restores it on load without calling `_apply_online_regularizer_override`: a
+  subclass that changes its own state at the switch restores that state in
+  `_load_extra_checkpoint_state`, where `_online_start_step` is already set
+  after `super()`. The offline buffer of the `mixed` mode is built by
+  `_build_replay_buffer`, through `restore_offline_replay_buffer`.
 
 ## 5. Evaluation
 
 `rl-garden-eval --checkpoint-path <run>/checkpoints/final.pt` (defaults
 `--phase auto --algorithm auto`):
 
-1. picks the registry entry whose `algorithm_cls` has the checkpoint's class
-   name (the registering module is imported through the entry point); it exits
-   when no entry or several entries match, so an ambiguous class needs `--phase`
-   (in tree, `WSRL`) and one no entry declares needs `--algorithm` (`SACDDP`);
+1. picks the registry entry the checkpoint's embedded run configuration
+   selected (`selection.training_phase` / `selection.algorithm`). Without a
+   selection, or when it names no registered entry, it is the entry whose
+   `algorithm_cls` has the checkpoint's class name (the registering module is
+   imported through the entry point); a class registered offline and off2on (in
+   tree, `WSRL`) resolves by the stage the checkpoint records
+   (`state["extra"]["online_start_step"]`: `None` is the offline stage). It
+   exits when no entry or several entries match; `--phase` and `--algorithm`
+   override each step. The agent's `training_stage` (`Off2OnReplayMixin`) is
+   part of the printed result and the JSON;
 2. rebuilds the Args: the entry's Args class, the run configuration (including
    the env backend's sub-config), then the checkpoint's hyperparameters, then
    the eval CLI. The run configuration is the file `--config-path` names, else
    `metadata["run_config"]`, else the `config.json` of the run directory. The
    phase runners set it on the agent (`BaseAlgorithm.run_config`, plain JSON
-   data) and `save` writes it; a package with its own run function sets the
+   data) and `save` writes it without its absolute paths and command line,
+   together with the hash of the complete one
+   (`metadata["run_config_digest"]`), by which evaluation recognizes the run's
+   `config.json` beside the checkpoint and reads the paths there. A field whose
+   path is in neither keeps its Args default, and is an error when it belongs to
+   the environment. A package with its own run function sets the
    attribute itself to make its checkpoints self-contained. Fields the Args
    class does not have are ignored. Extra Args fields round-trip; `--env-backend`, `--env-id`,
    `--control-mode` and `--obs.*` change the run's environment only when given;

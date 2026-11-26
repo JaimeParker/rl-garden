@@ -42,6 +42,7 @@ class BC(OfflineRLAlgorithm):
     # formula, which would otherwise detach under the mixin's
     # "shared_critic_grad" default whenever critic_extractor is None.
     encoder_sharing = "shared"
+    encoder_sharing_choices = ("shared",)
 
     def __init__(
         self,

@@ -140,46 +140,46 @@ def flatten_rlbench_action(obs: Any) -> np.ndarray:
 
 
 def build_rlbench_observation(
-    obs: Any, *, cameras: tuple[str, ...] = ()
-) -> np.ndarray | dict[str, np.ndarray]:
-    """Build the observation this integration exposes to rl-garden: a flat
-    ``"state"`` ``Box`` array when ``cameras`` is empty, or a ``Dict``
-    (``"state"`` plus ``rgb_<camera>``/``depth_<camera>`` keys per camera)
-    otherwise -- matching every other backend's own state-is-flat-Box/
-    vision-is-Dict convention (see e.g.
-    ``rl_garden/training/offline/entrypoints/bc.py:_bc_kwargs``'s
-    ``isinstance(obs_space, spaces.Dict)`` branch)."""
-    state = flatten_rlbench_state(obs)
-    if not cameras:
-        return state
-    result: dict[str, np.ndarray] = {"state": state}
-    for camera in cameras:
-        rgb = np.asarray(getattr(obs, f"{camera}_rgb"), dtype=np.uint8)
+    obs: Any,
+    *,
+    rgb_cameras: tuple[str, ...] = (),
+    depth_cameras: tuple[str, ...] = (),
+    state: bool = True,
+) -> dict[str, np.ndarray]:
+    """Select the observation this integration exposes to rl-garden, for both
+    the live env and the dataset loader: exactly ``"state"`` (if ``state``),
+    ``rgb_<camera>`` per ``rgb_cameras`` and ``depth_<camera>`` per
+    ``depth_cameras``."""
+    result: dict[str, np.ndarray] = {}
+    if state:
+        result["state"] = flatten_rlbench_state(obs)
+    for camera in rgb_cameras:
+        result[f"rgb_{camera}"] = np.asarray(getattr(obs, f"{camera}_rgb"), dtype=np.uint8)
+    for camera in depth_cameras:
         depth = np.asarray(getattr(obs, f"{camera}_depth"), dtype=np.float32)
-        if depth.ndim == 2:
-            depth = depth[..., None]
-        result[f"rgb_{camera}"] = rgb
-        result[f"depth_{camera}"] = depth
+        result[f"depth_{camera}"] = depth[..., None] if depth.ndim == 2 else depth
     return result
 
 
-def _obs_space_from_observation(value: np.ndarray | dict[str, np.ndarray]) -> spaces.Box | spaces.Dict:
-    if isinstance(value, dict):
-        entries: dict[str, spaces.Box] = {}
-        for key, v in value.items():
-            if key.startswith("rgb_"):
-                entries[key] = spaces.Box(low=0, high=255, shape=v.shape, dtype=np.uint8)
-            else:
-                # "state" or "depth_<cam>" -- both float32.
-                entries[key] = spaces.Box(low=-np.inf, high=np.inf, shape=v.shape, dtype=np.float32)
-        return spaces.Dict(entries)
-    return spaces.Box(low=-np.inf, high=np.inf, shape=value.shape, dtype=np.float32)
+def rlbench_observation_space(value: dict[str, np.ndarray]) -> spaces.Dict:
+    """The space of one ``build_rlbench_observation`` result."""
+    return spaces.Dict(
+        {
+            key: spaces.Box(low=0, high=255, shape=v.shape, dtype=np.uint8)
+            if key.startswith("rgb_")
+            else spaces.Box(low=-np.inf, high=np.inf, shape=v.shape, dtype=np.float32)
+            for key, v in value.items()
+        }
+    )
 
 
-def _stack_observations(values: list[np.ndarray | dict[str, np.ndarray]]) -> Any:
-    if isinstance(values[0], dict):
-        return {key: np.stack([v[key] for v in values]) for key in values[0]}
-    return np.stack(values)
+def _union(*camera_groups: tuple[str, ...]) -> tuple[str, ...]:
+    """Cameras of every group, without duplicates, in first-seen order."""
+    return tuple(dict.fromkeys(camera for group in camera_groups for camera in group))
+
+
+def _stack_observations(values: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    return {key: np.stack([v[key] for v in values]) for key in values[0]}
 
 
 def _split_dataset_path(path: str | Path) -> tuple[str, str]:
@@ -191,14 +191,23 @@ def infer_specs_from_rlbench(
     path: str | Path,
     *,
     cameras: tuple[str, ...] = (),
+    rgb_cameras: tuple[str, ...] = (),
+    depth_cameras: tuple[str, ...] = (),
+    state: bool = True,
     image_size: tuple[int, int] = (128, 128),
 ) -> tuple[spaces.Dict, spaces.Box]:
     """Infer the strict-contract Dict obs space (plus action space) from a
     single stored demo. Pure file I/O -- never launches PyRep/CoppeliaSim
-    (see module docstring)."""
+    (see module docstring). The space holds exactly the requested keys
+    (``build_rlbench_observation``); ``cameras`` requests both the rgb and the
+    depth image of each camera it names."""
     rlbench = _require_rlbench()
     dataset_root, task_name = _split_dataset_path(path)
-    obs_config = build_rlbench_obs_config(cameras=cameras, image_size=image_size)
+    rgb_cameras = _union(cameras, rgb_cameras)
+    depth_cameras = _union(cameras, depth_cameras)
+    obs_config = build_rlbench_obs_config(
+        cameras=_union(rgb_cameras, depth_cameras), image_size=image_size
+    )
 
     demos = rlbench.utils.get_stored_demos(
         amount=1,
@@ -213,7 +222,11 @@ def infer_specs_from_rlbench(
         raise ValueError(f"No stored demo found for RLBench task at {path!r}.")
     obs = demos[0][0]
     obs_space = finalize_dataset_obs_space(
-        _obs_space_from_observation(build_rlbench_observation(obs, cameras=cameras))
+        rlbench_observation_space(
+            build_rlbench_observation(
+                obs, rgb_cameras=rgb_cameras, depth_cameras=depth_cameras, state=state
+            )
+        )
     )
     action_dim = flatten_rlbench_action(obs).shape[0]
     action_space = spaces.Box(low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32)
@@ -241,6 +254,9 @@ def load_rlbench_dataset_to_replay_buffer(
     num_traj: int | None = None,
     live_demos: bool = False,
     cameras: tuple[str, ...] = (),
+    rgb_cameras: tuple[str, ...] = (),
+    depth_cameras: tuple[str, ...] = (),
+    state: bool = True,
     image_size: tuple[int, int] = (128, 128),
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
@@ -251,7 +267,8 @@ def load_rlbench_dataset_to_replay_buffer(
     ``live_demos=True`` drives RLBench's own motion-planning oracle in real
     time instead of reading a stored dataset -- slow, and ``path`` is only
     used for its ``task_name`` half in that case (no ``dataset_root`` needed
-    since nothing is read from disk). ``success_key`` is accepted only for
+    since nothing is read from disk). Observations hold exactly the requested
+    keys, selected as in ``infer_specs_from_rlbench``. ``success_key`` is accepted only for
     call-signature parity with every other loader; RLBench demos carry no
     on-disk success field (see module docstring's sparse-reward-at-last-step
     convention), so it is unused.
@@ -262,7 +279,11 @@ def load_rlbench_dataset_to_replay_buffer(
     storage_device = buffer.storage_device
     gamma = float(getattr(buffer, "gamma", 0.99))
 
-    obs_config = build_rlbench_obs_config(cameras=cameras, image_size=image_size)
+    rgb_cameras = _union(cameras, rgb_cameras)
+    depth_cameras = _union(cameras, depth_cameras)
+    obs_config = build_rlbench_obs_config(
+        cameras=_union(rgb_cameras, depth_cameras), image_size=image_size
+    )
     if live_demos:
         amount = num_traj if num_traj is not None else 1
         demos = _load_live_demos(task_name, obs_config, amount)
@@ -289,12 +310,14 @@ def load_rlbench_dataset_to_replay_buffer(
         length = len(demo) - 1
         if length <= 0:
             continue
-        obs_values = [build_rlbench_observation(demo[i], cameras=cameras) for i in range(length)]
-        next_obs_values = [
-            build_rlbench_observation(demo[i + 1], cameras=cameras) for i in range(length)
+        obs_values = [
+            build_rlbench_observation(
+                demo[i], rgb_cameras=rgb_cameras, depth_cameras=depth_cameras, state=state
+            )
+            for i in range(length + 1)
         ]
-        obs_stack = _stack_observations(obs_values)
-        next_obs_stack = _stack_observations(next_obs_values)
+        obs_stack = _stack_observations(obs_values[:-1])
+        next_obs_stack = _stack_observations(obs_values[1:])
         actions = np.stack([flatten_rlbench_action(demo[i]) for i in range(length)])
 
         rewards = torch.zeros(length, device=storage_device, dtype=torch.float32)
@@ -337,13 +360,13 @@ def load_rlbench_dataset_to_replay_buffer(
     )
 
 
-def _resolve_camera_config(req: DatasetRequest) -> tuple[tuple[str, ...], tuple[int, int]]:
-    """Shared by infer_specs/load below -- resolves the same cameras/
+def _observation_kwargs(req: DatasetRequest) -> dict[str, Any]:
+    """Shared by infer_specs/load below -- resolves the same state/cameras/
     image_size the live env would use.
 
-    ``req.observation`` (the ``ObservationConfig``) decides: ``observation.rgb``
-    names the cameras (empty means state-only) and ``observation.image_size``
-    the resolution. Every training entrypoint that can select
+    ``req.observation`` (the ``ObservationConfig``) decides: ``state``, ``rgb``
+    and ``depth`` name the keys (no cameras means state-only) and
+    ``image_size`` the resolution. Every training entrypoint that can select
     ``--dataset_backend rlbench`` mixes in ``ObservationArgs``, so
     ``req.observation`` is never ``None`` in practice; a caller that omits it
     anyway gets a clear contract error instead of an ``AttributeError`` on a
@@ -354,32 +377,32 @@ def _resolve_camera_config(req: DatasetRequest) -> tuple[tuple[str, ...], tuple[
             "rlbench dataset backend requires DatasetRequest.observation "
             "(an ObservationConfig) -- got None."
         )
-    cameras = tuple(sorted(set(req.observation.rgb) | set(req.observation.depth)))
-    image_size = req.observation.image_size or (128, 128)
-    return cameras, image_size
+    return {
+        "rgb_cameras": req.observation.rgb,
+        "depth_cameras": req.observation.depth,
+        "state": req.observation.state,
+        "image_size": req.observation.image_size or (128, 128),
+    }
 
 
 class RLBenchDatasetBackend(DatasetBackend):
     """Unlike every other registered backend, ``observation`` genuinely
-    matters here: RLBench's dataset obs shape (flat state Box vs. a Dict
-    with per-camera keys) must match whatever the live env was configured
-    with -- see rl_garden.envs.rlbench's own camera handling.
+    matters here: RLBench's dataset obs keys (state, per-camera rgb/depth)
+    must match whatever the live env was configured with -- see
+    rl_garden.envs.rlbench's own camera handling.
     """
 
     @classmethod
     def infer_specs(cls, req: DatasetRequest):
-        cameras, image_size = _resolve_camera_config(req)
-        return infer_specs_from_rlbench(req.path, cameras=cameras, image_size=image_size)
+        return infer_specs_from_rlbench(req.path, **_observation_kwargs(req))
 
     @classmethod
     def load(cls, buffer, req: DatasetRequest) -> int:
-        cameras, image_size = _resolve_camera_config(req)
         return load_rlbench_dataset_to_replay_buffer(
             buffer,
             req.path,
             num_traj=req.num_traj,
-            cameras=cameras,
-            image_size=image_size,
+            **_observation_kwargs(req),
             reward_scale=req.reward_scale,
             reward_bias=req.reward_bias,
             success_key=req.success_key,

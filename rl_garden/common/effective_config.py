@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import inspect
 import json
@@ -281,6 +282,11 @@ def _freeze(value: Any) -> Any:
 def effective_config_json(config: EffectiveConfig | Mapping[str, Any]) -> str:
     payload = json_value(config)
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)
+
+
+def config_digest(config: EffectiveConfig | Mapping[str, Any]) -> str:
+    """The same for a configuration and for the ``config.json`` read back."""
+    return hashlib.sha256(effective_config_json(config).encode()).hexdigest()
 
 
 def persist_effective_config(config: EffectiveConfig, path: Path) -> None:

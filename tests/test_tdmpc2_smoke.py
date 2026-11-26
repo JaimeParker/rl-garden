@@ -114,3 +114,33 @@ def test_tdmpc2_registered_and_print_config_preflight_succeeds(capsys):
     payload = json.loads(captured.out)
     assert payload["selection"]["algorithm"] == "tdmpc2"
     assert payload["selection"]["training_phase"] == "online"
+
+
+def test_tdmpc2_asymmetric_obs_groups_rejected_at_preflight():
+    import pytest
+
+    from rl_garden.common.effective_config import ConfigError
+    from rl_garden.observations import ObsGroups
+    from rl_garden.observations.config import ObservationConfig
+    from rl_garden.training.algorithm_registry import ParsedCommand
+    from rl_garden.training.online import registry
+    from rl_garden.training.online.entrypoints.tdmpc2 import TDMPC2Args
+
+    registry.discover()
+    args = TDMPC2Args(
+        obs=ObservationConfig(rgb=("base_camera",)),
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "rgb_base_camera")),
+    )
+    command = ParsedCommand(args, "tdmpc2", "print_config", None, {}, (), {})
+
+    with pytest.raises(ConfigError, match="only supports"):
+        registry._validate_config(command)
+
+
+def test_tdmpc2_default_print_config_resolves_shared_encoder(capsys):
+    import json
+
+    from rl_garden.training.online import registry
+
+    registry.run_cli(["tdmpc2", "--print-config"])
+    assert json.loads(capsys.readouterr().out)["inputs"]["encoder_sharing"] == "shared"

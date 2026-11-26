@@ -5,6 +5,7 @@ needed, same strategy as ``test_rlbench_dataset.py``.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 import types
 
@@ -435,4 +436,11 @@ def test_frame_stack_applies_image_frame_stack_wrapper(monkeypatch):
     obs, _ = env.reset()
     assert obs["rgb_front"].shape == (1, 3, 4, 4, 3)
     assert obs["depth_front"].shape == (1, 3, 4, 4, 1)
+    env.close()
+
+    env = make_rlbench_env(dataclasses.replace(cfg, reward_scale=2.0, reward_bias=1.0))
+    env.reset()
+    obs, rewards, *_ = env.step(torch.zeros(1, 8))
+    assert obs["rgb_front"].shape == (1, 3, 4, 4, 3)
+    assert rewards.tolist() == [3.0]  # 1.0 * 2.0 + 1.0
     env.close()

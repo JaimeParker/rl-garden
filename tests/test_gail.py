@@ -438,3 +438,138 @@ def test_gail_asymmetric_obs_groups_critic_sees_extra_state_actor_does_not(monke
         disc_loss, list(actor_extractor.parameters()), allow_unused=True
     )
     assert all(g is None for g in grad_on_actor)
+
+
+# --- CLI wiring: build_gail forwards the observation/encoder args ---
+
+
+def _gail_args(**overrides):
+    from rl_garden.training.online.entrypoints.gail import GAILArgs
+
+    return GAILArgs(
+        num_steps=8,
+        num_minibatches=1,
+        update_epochs=1,
+        eval_freq=0,
+        log_freq=0,
+        target_kl=None,
+        demo_env_id="halfcheetah-expert-v2",
+        demo_buffer_size=64,
+        demo_batch_size=8,
+        n_disc_updates_per_round=1,
+        disc_net_arch=(16,),
+        **overrides,
+    )
+
+
+def _patch_demo_loader(monkeypatch):
+    monkeypatch.setattr(
+        "rl_garden.buffers.d4rl_legacy_dataset.load_d4rl_legacy_dataset_to_replay_buffer",
+        _fake_demo_loader,
+    )
+
+
+def test_build_gail_forwards_state_encoder_normalize_obs(monkeypatch):
+    from rl_garden.training.online.entrypoints.gail import build_gail
+
+    _patch_demo_loader(monkeypatch)
+    args = _gail_args()
+    args.encoder.normalize_obs = True
+    agent = build_gail(args, _FakeBoxEnv(), None, None, None)
+    assert agent.encoder_config is not None and agent.encoder_config.normalize_obs
+
+
+def test_build_gail_default_state_run_matches_direct_construction(monkeypatch):
+    from rl_garden.common import seed_everything
+    from rl_garden.training.online.entrypoints.gail import build_gail
+
+    _patch_demo_loader(monkeypatch)
+    seed_everything(7)
+    via_cli = build_gail(_gail_args(seed=7), _FakeBoxEnv(), None, None, None)
+    seed_everything(7)
+    direct = GAIL(_FakeBoxEnv(), **{**_gail_kwargs(), "net_arch": None, "seed": 7})
+
+    # Same parameters and same buffers (obs normalizer stats included).
+    cli_state = via_cli.policy.state_dict()
+    direct_state = direct.policy.state_dict()
+    assert cli_state.keys() == direct_state.keys()
+    for key in cli_state:
+        assert torch.equal(cli_state[key].cpu(), direct_state[key].cpu()), key
+    disc_cli = via_cli.discriminator.state_dict()
+    disc_direct = direct.discriminator.state_dict()
+    for key in disc_cli:
+        assert torch.equal(disc_cli[key].cpu(), disc_direct[key].cpu()), key
+
+
+def test_build_gail_asymmetric_groups_with_state_only_critic_builds(monkeypatch):
+    from rl_garden.observations.config import ObservationConfig
+    from rl_garden.training.online.entrypoints.gail import build_gail
+
+    _patch_demo_loader(monkeypatch)
+    args = _gail_args(
+        obs=ObservationConfig(rgb=("cam",)),
+        obs_groups=ObsGroups(actor=("rgb_cam", "state"), critic=("state",)),
+        encoder_sharing="separate",  # what registry preflight derives for asymmetric groups
+    )
+    env = _AsymmetricVecEnv()
+    env.single_observation_space = spaces.Dict(
+        {
+            "rgb_cam": env.single_observation_space["rgb_cam"],
+            "state": env.single_observation_space["state"],
+        }
+    )
+    env.observation_space = batch_space(env.single_observation_space, env.num_envs)
+    env._obs = lambda: {
+        "rgb_cam": torch.randint(0, 256, (env.num_envs, 64, 64, 3), dtype=torch.uint8),
+        "state": torch.randn(env.num_envs, 4),
+    }
+    agent = build_gail(args, env, None, None, None)
+
+    assert agent.policy.critic_extractor is not agent.policy.actor_extractor
+    assert set(agent._demo_buffer.obs.data) == {"state"}
+    agent.learn(total_timesteps=env.num_envs * agent.num_steps * 2)
+    assert "disc_loss" in agent.train()
+
+
+def test_build_gail_rejects_critic_group_the_demo_dataset_cannot_provide(monkeypatch):
+    from rl_garden.observations import ObservationContractError
+    from rl_garden.observations.config import ObservationConfig
+    from rl_garden.training.online.entrypoints.gail import build_gail
+
+    _patch_demo_loader(monkeypatch)
+    args = _gail_args(
+        obs=ObservationConfig(rgb=("cam",)),
+        obs_groups=ObsGroups(actor=("rgb_cam", "state"), critic=("rgb_cam", "state")),
+    )
+    env = _AsymmetricVecEnv()
+    env.single_observation_space = spaces.Dict(
+        {
+            "rgb_cam": env.single_observation_space["rgb_cam"],
+            "state": env.single_observation_space["state"],
+        }
+    )
+    with pytest.raises(ObservationContractError, match="rgb_cam"):
+        build_gail(args, env, None, None, None)
+
+
+def test_gail_print_config_derives_separate_encoders_for_asymmetric_groups(capsys):
+    import json
+
+    from rl_garden.training.online import registry
+
+    registry.run_cli(
+        [
+            "gail",
+            "--print-config",
+            "--obs.rgb",
+            "cam",
+            "--obs-groups.actor",
+            "rgb_cam",
+            "state",
+            "--obs-groups.critic",
+            "state",
+        ]
+    )
+    config = json.loads(capsys.readouterr().out)
+    assert config["inputs"]["encoder_sharing"] == "separate"
+    assert config["inputs"]["obs_groups"] == {"actor": ["rgb_cam", "state"], "critic": ["state"]}

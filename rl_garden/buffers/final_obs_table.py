@@ -4,8 +4,9 @@ replay buffers (``RecurrentReplayBuffer``, ``TransformerReplayBuffer``).
 Gymnasium autoreset means the ring buffer's naturally-following ``obs`` after an
 episode-end position is already the NEXT episode's reset obs, not the true final
 one -- this side table stores the true final obs compactly (a small side array,
-not one slot per buffer position) so ``RecurrentSamplingMixin._patch_final_obs``
-can patch it back in wherever a boundary falls inside a sampled window. Mirrors
+not one slot per buffer position), so a sampled window can read it wherever a
+boundary falls inside (``RecurrentSamplingMixin._truncation_bootstraps``,
+``SequenceReplayBuffer._patch_tail_final_obs``). Mirrors
 ``LazyNextNStepReplayBuffer``'s exact mechanism (``nstep_buffer.py``),
 generalized to Box observations too.
 
@@ -17,10 +18,11 @@ rl-garden observation contract -- every current user, ``SequenceReplayBuffer``
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 
+from rl_garden.buffers.base import restored_storage, storage_state
 from rl_garden.buffers.replay_buffer import DictArray
 
 
@@ -50,6 +52,28 @@ class FinalObsTableMixin:
         self._final_obs = DictArray(
             (final_obs_capacity,), self.observation_space, device=self.storage_device
         )
+
+    def _state_attrs(self) -> tuple[str, ...]:
+        return (*super()._state_attrs(), "_final_slot_ids")
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            **super().state_dict(),
+            "final_obs": storage_state(self._final_obs),
+            "final_obs_capacity": int(self._final_obs.shape[0]),
+            "free_final_slots": list(self._free_final_slots),
+            "next_final_slot": int(self._next_final_slot),
+        }
+
+    def load_state_dict(self, state: dict[str, Any], *, strict: bool = True) -> None:
+        super().load_state_dict(state, strict=strict)
+        # The table grows on demand, so its capacity comes from the file.
+        table = DictArray(
+            (int(state["final_obs_capacity"]),), self.observation_space, device=self.storage_device
+        )
+        self._final_obs = restored_storage(table, state["final_obs"], "final_obs")
+        self._free_final_slots = [int(slot) for slot in state["free_final_slots"]]
+        self._next_final_slot = int(state["next_final_slot"])
 
     def _grow_final_obs(self) -> None:
         current = self._final_obs.shape[0]

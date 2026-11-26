@@ -1,7 +1,8 @@
 """JSRL run function.
 
 Requires ``--guide_checkpoint`` (a frozen policy from another algorithm's
-offline-pretrained checkpoint, see ``rl_garden/algorithms/jsrl.py``). JSRL
+offline-pretrained checkpoint, see ``rl_garden/algorithms/jsrl.py``), except to
+resume a checkpoint that embeds its guide. JSRL
 forwards its constructor kwargs to ``SAC`` (see ``JSRL.__init__``'s
 ``**sac_kwargs``), so it takes ``--obs.*``/``--encoder.*``/``--obs_groups.*``
 like plain SAC.
@@ -10,19 +11,26 @@ like plain SAC.
 from __future__ import annotations
 
 
+def _guide_to_restore(args):
+    """The guide the checkpoint to load embeds; without one, ``None`` after
+    checking that ``--guide-checkpoint`` names a file."""
+    from rl_garden.algorithms.jsrl import embedded_guide, require_guide_checkpoint
+    from rl_garden.training.inspection import checkpoint_to_restore
+
+    guide = embedded_guide(checkpoint_to_restore(args))
+    if guide is None:
+        require_guide_checkpoint(args.guide_checkpoint)
+    return guide
+
+
 def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import JSRL
-    from rl_garden.algorithms.jsrl import embedded_guide, require_guide_checkpoint
     from rl_garden.common.cli_args import (
         policy_module_kwargs,
         resolve_critic_encoder_config,
         resolve_obs_groups_config,
     )
-    from rl_garden.training.inspection import (
-        checkpoint_to_restore,
-        construct_agent,
-        warn_if_superseded,
-    )
+    from rl_garden.training.inspection import construct_agent, warn_if_superseded
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
     net_arch = {
@@ -38,10 +46,8 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     # The checkpoint to load restores the guide it embeds.
-    guide = embedded_guide(checkpoint_to_restore(args))
-    if guide is None:
-        require_guide_checkpoint(args.guide_checkpoint)
-    else:
+    guide = _guide_to_restore(args)
+    if guide is not None:
         warn_if_superseded("--guide-checkpoint", args.guide_checkpoint, guide["policy"])
 
     agent = construct_agent(
@@ -108,8 +114,8 @@ def run_jsrl(args: "JSRLArgs") -> None:
     from rl_garden.common.env_args import make_env_request
     from rl_garden.training.online.runner import run_online
 
-    if not args.guide_checkpoint:
-        raise SystemExit("--guide_checkpoint is required for jsrl")
+    # Before run_online makes the run directory, the logger and the envs.
+    _guide_to_restore(args)
     obs_tag = f"rgbd_{args.encoder.backbone}" if args.obs.is_visual else "state"
     run_online(
         args,
@@ -137,7 +143,8 @@ class JSRLArgs(JSRLTrainingArgs, ObservationArgs, PolicyModuleArgs, EnvBackendAr
     """JSRL (Jump-Start RL) -- SAC jump-started by a frozen guide policy.
 
     Requires ``--guide_checkpoint`` and ``--guide_algorithm``
-    (``iql``/``calql``/``wsrl``/``awac``). State-only by default; pass
+    (``iql``/``calql``/``wsrl``/``awac``), except to resume a checkpoint that
+    embeds its guide. State-only by default; pass
     ``--obs.rgb <camera>`` for Dict/RGBD observations (forwarded straight
     to SAC, same as plain ``sac``).
     """

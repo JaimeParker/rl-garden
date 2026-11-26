@@ -31,6 +31,11 @@ checkpoint's run directory. Without any, ``--env-backend`` and ``--env-id`` are
 required and every setting the checkpoint does not record takes its Args
 default, with a warning.
 
+A checkpoint holds no absolute path. The embedded configuration is therefore
+completed from that ``config.json`` when the same run wrote it; a removed field
+is otherwise as if never set, which is an error for the env backend's fields
+unless their flag is passed.
+
 Evaluation needs the checkpoint and one evaluation environment, nothing else a
 run was given: the entry's
 ``training_only_inputs`` are set to their absent values and no encoder reads a
@@ -60,8 +65,15 @@ import tyro
 
 from rl_garden.algorithms import OfflineEnvSpec
 from rl_garden.common import Logger, enable_fast_math, seed_everything
-from rl_garden.common.checkpoint import _canonical_algorithm_class, load_checkpoint_file
+from rl_garden.common.checkpoint import (
+    REMOVED_PATH,
+    _canonical_algorithm_class,
+    holds_removed_path,
+    load_checkpoint_file,
+    without_local_paths,
+)
 from rl_garden.common.cli_args import PolicyModuleArgs
+from rl_garden.common.effective_config import config_digest
 from rl_garden.common.env_args import (
     EnvBackendArgs,
     ManiSkillConfig,
@@ -139,10 +151,10 @@ class EvalCheckpointArgs(EnvBackendArgs):
     guidance_weight: float | None = None
 
     # JSRL-only: the guide file of a checkpoint that embeds no guide. None uses
-    # the path recorded in training.
+    # the path in the run's configuration.
     guide_checkpoint: str | None = None
     # SUPE-only: the OPAL file of a checkpoint that embeds no VAE. None uses the
-    # path recorded in training.
+    # path in the run's configuration.
     opal_checkpoint: str | None = None
 
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
@@ -211,6 +223,26 @@ def _registered_by_class_name(
     return matches
 
 
+def _matches_of_training_stage(
+    matches: list[tuple[str, str]], checkpoint: Mapping[str, Any]
+) -> list[tuple[str, str]]:
+    """The ``matches`` that build the checkpoint's own class; of several, those
+    of the phase that trains the stage it was saved in (the only phase its
+    class is registered in, when it records no stage)."""
+    registered = _registered_by_class_name(
+        _PHASES, checkpoint.get("metadata", {}).get("algorithm_class")
+    )
+    own_class = [match for match in matches if match in registered] or matches
+    if len(own_class) == 1:
+        return own_class
+    extra = (checkpoint.get("state") or {}).get("extra") or {}
+    if "online_start_step" in extra:
+        stage_phases = {"offline" if extra["online_start_step"] is None else "off2on"}
+    else:
+        stage_phases = {phase for phase, _ in registered}
+    return [match for match in own_class if {match[0]} == stage_phases]
+
+
 def _resolve_phase_and_algorithm(
     requested_phase: str,
     requested_algorithm: str,
@@ -218,12 +250,24 @@ def _resolve_phase_and_algorithm(
 ) -> tuple[str, str]:
     """Pick the registry entry that rebuilds the checkpoint's agent.
 
-    With ``--algorithm auto`` the checkpoint's ``algorithm_class`` is matched
-    against the class each registered entry builds; only when no entry
-    declares that class does the name table in ``_algorithm_from_class``
-    apply.
+    Where a flag is ``auto``, the phase and algorithm the embedded run
+    configuration selected decide, when they name a registered entry. Otherwise
+    the checkpoint's ``algorithm_class`` is matched against the class each
+    registered entry builds; only when no entry declares that class does the
+    name table in ``_algorithm_from_class`` apply. The recorded training stage
+    decides between an offline and an off2on entry that both match.
     """
-    algorithm_class = checkpoint.get("metadata", {}).get("algorithm_class")
+    metadata = checkpoint.get("metadata", {})
+    algorithm_class = metadata.get("algorithm_class")
+    selection = (metadata.get("run_config") or {}).get("selection") or {}
+    selected = (selection.get("training_phase"), selection.get("algorithm"))
+    if (
+        selected[0] in _PHASES
+        and requested_phase in ("auto", selected[0])
+        and requested_algorithm in ("auto", selected[1])
+        and selected[1] in _registry_for_phase(selected[0]).entries()
+    ):
+        return selected
     phases = _PHASES if requested_phase == "auto" else (requested_phase,)
 
     if requested_algorithm != "auto":
@@ -251,6 +295,8 @@ def _resolve_phase_and_algorithm(
         raise SystemExit(
             f"Algorithm {algorithm!r} is not registered for phase {requested_phase!r}."
         )
+    if len(matches) > 1:
+        matches = _matches_of_training_stage(matches, checkpoint) or matches
     if len(matches) > 1:
         choices = ", ".join(f"{phase}:{alg}" for phase, alg in matches)
         raise SystemExit(
@@ -282,6 +328,13 @@ def _set_existing_attr(target: Any, key: str, value: Any) -> None:
     if not hasattr(target, key):
         return
     current = getattr(target, key)
+    nested = is_dataclass(current) and isinstance(value, Mapping)
+    if holds_removed_path(value) and not nested:
+        # A policy graph or an unrecorded import path is used without its path,
+        # unless the complete text is already there.
+        usable = isinstance(value, str) and value != REMOVED_PATH
+        if not usable or without_local_paths(current) == value:
+            return
     if (
         isinstance(current, float)
         and isinstance(value, str)
@@ -298,10 +351,14 @@ def _set_existing_attr(target: Any, key: str, value: Any) -> None:
         # a literal None, breaking downstream code that expects the
         # dataclass shape. Leave the current (default) value in place.
         return
-    if is_dataclass(current) and isinstance(value, Mapping):
+    if nested:
         if getattr(type(current), "__dataclass_params__").frozen:
             field_names = {f.name for f in fields(current)}
-            updates = {k: v for k, v in value.items() if k in field_names}
+            updates = {
+                k: v
+                for k, v in value.items()
+                if k in field_names and not holds_removed_path(v)
+            }
             setattr(target, key, replace(current, **updates))
         else:
             _apply_mapping_to_args(current, value)
@@ -321,13 +378,26 @@ def _run_config(
     if eval_args.config_path is not None:
         config_path = Path(eval_args.config_path)
     else:
-        embedded = checkpoint.get("metadata", {}).get("run_config")
-        if embedded is not None:
-            return embedded
+        metadata = checkpoint.get("metadata", {})
         config_path = _default_config_path(Path(eval_args.checkpoint_path))
+        embedded = metadata.get("run_config")
+        if embedded is not None:
+            # With its paths, if the run that wrote the checkpoint wrote it.
+            beside = _read_config(config_path)
+            recorded = metadata.get("run_config_digest")
+            same_run = beside is not None and config_digest(beside) == recorded
+            return beside if same_run else embedded
     if not config_path.exists():
         return None
     return json.loads(config_path.read_text(encoding="utf-8"))
+
+
+def _read_config(path: Path) -> Mapping[str, Any] | None:
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return config if isinstance(config, Mapping) else None
 
 
 def _require_run_config_or_environment(
@@ -421,8 +491,32 @@ def _load_training_args(
     hyperparameters = metadata.get("hyperparameters", {})
     if isinstance(hyperparameters, Mapping):
         _apply_mapping_to_args(args, hyperparameters)
+        _apply_recorded_net_arch(args, hyperparameters)
         _log_restored_policy_modules(args, hyperparameters)
 
+    buffer_size = _evaluation_buffer_size(args, eval_args)
+    _apply_mapping_to_args(args, _evaluation_overrides(eval_args))
+    if buffer_size is not None:
+        args.buffer_size = buffer_size
+    _apply_mapping_to_args(args, _backend_overrides_from_cli(eval_args))
+    _apply_mapping_to_args(args, entry.training_only_inputs)
+    removed = _removed_fields(args, entry, eval_args, checkpoint)
+    _require_environment_fields(args, eval_args, removed)
+    return args
+
+
+def _evaluation_buffer_size(args: Any, eval_args: EvalCheckpointArgs) -> int | None:
+    """The training run's rows per env, times ``num_eval_envs``: a replay buffer
+    split over the eval envs then passes the same size checks (window length,
+    checkpoint stride) as in training. ``None`` when ``args`` has no integer
+    ``buffer_size`` and ``num_envs``."""
+    buffer_size, num_envs = getattr(args, "buffer_size", None), getattr(args, "num_envs", None)
+    if not (isinstance(buffer_size, int) and isinstance(num_envs, int) and num_envs > 0):
+        return None
+    return max(buffer_size // num_envs, 1) * eval_args.num_eval_envs
+
+
+def _evaluation_overrides(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
     environment_overrides = {
         "env_backend": eval_args.env_backend,
         "env_id": eval_args.env_id,
@@ -464,10 +558,130 @@ def _load_training_args(
         value = getattr(eval_args, name)
         if value is not None:
             overrides[name] = value
-    _apply_mapping_to_args(args, overrides)
-    _apply_mapping_to_args(args, _backend_overrides_from_cli(eval_args))
-    _apply_mapping_to_args(args, entry.training_only_inputs)
-    return args
+    return overrides
+
+
+def _leaves(values: Mapping[str, Any], prefix: str = "") -> Iterator[tuple[str, Any]]:
+    for key, value in values.items():
+        if isinstance(value, Mapping) and value:
+            yield from _leaves(value, f"{prefix}{key}.")
+        else:
+            yield f"{prefix}{key}", value
+
+
+def _removed_fields(
+    args: Any, entry: Any, eval_args: EvalCheckpointArgs, checkpoint: Mapping[str, Any]
+) -> list[str]:
+    """The fields of ``args`` whose absolute path was removed from the
+    checkpoint and neither the run's ``config.json`` nor the eval CLI gives."""
+    config = _run_config(eval_args, checkpoint) or {}
+    layers = [_config_args(config), _config_backend_section(config)]
+    hyperparameters = checkpoint.get("metadata", {}).get("hyperparameters", {})
+    if isinstance(hyperparameters, Mapping):
+        layers.append(hyperparameters)
+    removed, given = set(), set()
+    for name, value in (leaf for layer in layers for leaf in _leaves(layer)):
+        if holds_removed_path(value):
+            removed.add(name)
+        elif value is not None and not (isinstance(value, str) and value == ""):
+            given.add(name)
+    for layer in (
+        _evaluation_overrides(eval_args),
+        _backend_overrides_from_cli(eval_args),
+        entry.training_only_inputs,
+    ):
+        given.update(name for name, _ in _leaves(layer))
+    return sorted(
+        name
+        for name in removed - given
+        if name.partition(".")[0] not in given and hasattr(args, name.partition(".")[0])
+    )
+
+
+def _where_to_give(names: list[str], eval_args: EvalCheckpointArgs) -> str:
+    """``names``, each with its eval flag if it has one, and ``--config-path``."""
+
+    def described(name: str) -> str:
+        owner = eval_args
+        for part in name.split("."):
+            owner = getattr(owner, part, _NO_FLAG)
+        flag = "--" + name.replace("_", "-")
+        return name if owner is _NO_FLAG else f"{name} ({flag})"
+
+    beside = _default_config_path(Path(eval_args.checkpoint_path))
+    return (
+        f"{', '.join(described(name) for name in names)}: a checkpoint holds no absolute paths, "
+        f"and {beside} is not the config.json of the run that saved it. Pass the flag, or "
+        "--config-path with that run's config.json."
+    )
+
+
+_NO_FLAG = object()
+
+
+def _require_environment_fields(
+    args: Any, eval_args: EvalCheckpointArgs, removed: list[str]
+) -> None:
+    """Exit when the evaluation environment would be made without a value the
+    run's had: another environment, possibly without an error."""
+    sections = ("obs.", f"{getattr(args, 'env_backend', None)}.")
+    names = [
+        name for name in removed if name in ("env_id", "control_mode") or name.startswith(sections)
+    ]
+    if names:
+        raise SystemExit(f"The run's environment needs {_where_to_give(names, eval_args)}")
+
+
+def _apply_recorded_net_arch(args: Any, hyperparameters: Mapping[str, Any]) -> None:
+    """The CQL family's builders make ``net_arch`` from a width and two depths:
+    set those fields to the recorded networks'."""
+    net_arch = hyperparameters.get("net_arch")
+    if "use_cql_loss" not in hyperparameters or net_arch is None:
+        return
+    if not isinstance(net_arch, Mapping):
+        net_arch = {"pi": net_arch, "qf": net_arch}
+    actor, critic = net_arch.get("pi"), net_arch.get("qf")
+    if not actor or not critic or len({*actor, *critic}) != 1:
+        return
+    _apply_mapping_to_args(
+        args,
+        {
+            "hidden_dim": actor[0],
+            "actor_hidden_layers": len(actor),
+            "critic_hidden_layers": len(critic),
+        },
+    )
+
+
+def _reject_other_net_arch(agent: Any, hyperparameters: Mapping[str, Any]) -> None:
+    """Exit when the builder gave a CQL-family agent other networks than the
+    checkpoint records, which its load would report as a shape mismatch."""
+
+    def per_network(net_arch: Any) -> dict[str, list[int]]:
+        if not isinstance(net_arch, Mapping):
+            net_arch = {"pi": net_arch, "qf": net_arch}
+        return {name: list(layers) for name, layers in net_arch.items()}
+
+    recorded, built = hyperparameters.get("net_arch"), getattr(agent, "net_arch", None)
+    if "use_cql_loss" not in hyperparameters or recorded is None or built is None:
+        return
+    if per_network(recorded) != per_network(built):
+        raise SystemExit(
+            f"The checkpoint's networks are {per_network(recorded)}, but the selected entry "
+            f"builds {per_network(built)}; its arguments cannot express the recorded ones."
+        )
+
+
+def _training_stage(agent: Any, checkpoint: Mapping[str, Any]) -> str | None:
+    """The stage of the evaluated off2on agent, ``"unknown"`` when a checkpoint
+    of an off2on class records none."""
+    stage = getattr(agent, "training_stage", None)
+    if stage is None or "online_start_step" in checkpoint["state"].get("extra", {}):
+        return stage
+    registered = _registered_by_class_name(
+        _PHASES, checkpoint["metadata"].get("algorithm_class")
+    )
+    return "unknown" if any(phase == "off2on" for phase, _ in registered) else stage
 
 
 def _log_restored_policy_modules(args: Any, hyperparameters: Mapping[str, Any]) -> None:
@@ -793,7 +1007,17 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
     eval_env = make_evaluation_env(args.env_backend, _env_request(args, eval_args))
     try:
         with checkpoint_evaluation(evaluation), _encoder_weights_from_checkpoint():
-            agent = _build_agent(phase, algorithm, args, eval_env)
+            try:
+                agent = _build_agent(phase, algorithm, args, eval_env)
+            except (Exception, SystemExit):
+                entry = _registry_for_phase(phase).entries()[algorithm]
+                removed = _removed_fields(args, entry, eval_args, checkpoint)
+                if removed:
+                    _logger.error(
+                        "The agent was built without %s", _where_to_give(removed, eval_args)
+                    )
+                raise
+        _reject_other_net_arch(agent, checkpoint["metadata"].get("hyperparameters", {}))
         agent.load(
             checkpoint_path,
             strict=eval_args.strict,
@@ -827,6 +1051,9 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
         "headline": _headline_metrics(metrics),
         "metrics": metrics,
     }
+    training_stage = _training_stage(agent, checkpoint)
+    if training_stage is not None:
+        result["training_stage"] = training_stage
     if eval_args.output_json:
         result["output_json"] = eval_args.output_json
         _write_json(eval_args.output_json, result)
@@ -836,6 +1063,8 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
 def main() -> None:
     result = evaluate_checkpoint(tyro.cli(EvalCheckpointArgs))
     print("=== Evaluation Results ===", flush=True)
+    if "training_stage" in result:
+        print(f"training_stage: {result['training_stage']}", flush=True)
     for key, value in result["headline"].items():
         print(f"{key}: {value:.4f}", flush=True)
     print("--- all metrics ---", flush=True)

@@ -19,7 +19,10 @@ def build_gail(
     """Build ``algorithm_cls`` (``GAIL`` when ``None``) from ``args``;
     ``extra_kwargs`` go to its constructor next to the PPO and GAIL kwargs."""
     from rl_garden.training.inspection import construct_agent
-    from rl_garden.training.online.entrypoints.ppo import ppo_common_kwargs
+    from rl_garden.training.online.entrypoints.ppo import (
+        ppo_common_kwargs,
+        ppo_observation_kwargs,
+    )
 
     if algorithm_cls is None:
         from rl_garden.algorithms import GAIL
@@ -27,7 +30,9 @@ def build_gail(
         algorithm_cls = GAIL
     agent = construct_agent(
         algorithm_cls,
-        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, {}),
+        **ppo_common_kwargs(
+            args, env, eval_env, logger, checkpoint_dir, ppo_observation_kwargs(args)
+        ),
         demo_env_id=args.demo_env_id,
         demo_dataset_backend=args.demo_dataset_backend,
         demo_buffer_size=args.demo_buffer_size,
@@ -71,17 +76,13 @@ from rl_garden.training.online.registry import registry  # noqa: E402
 class GAILArgs(GAILTrainingArgs, ObservationArgs, EnvBackendArgs):
     """GAIL (Ho & Ermon 2016) -- PPO generator + adversarial discriminator.
 
-    State-only in practice: ``build_gail`` never forwards
-    ``encoder_config``/``obs_groups``/``critic_encoder_config`` from the CLI
-    (it calls ``ppo_common_kwargs`` with an empty ``image_kwargs``), even
-    though ``ObservationArgs`` is present (for CLI/config uniformity --
-    ``--obs.rgb`` parses but is silently unused by this entrypoint). This is
-    a CLI-wiring choice, not a discriminator limitation:
-    ``GAILDiscriminator`` reads critic-role features
-    (``self.policy.extract_critic_features``/``critic_features_dim``, see
-    ``rl_garden/algorithms/gail.py``) and is schema-agnostic, so direct
-    construction with ``obs_groups``/``critic_encoder_config`` (bypassing
-    this CLI entrypoint) already supports asymmetric/image observations.
+    Observation and encoder flags (``--obs.*``, ``--encoder.*``,
+    ``--obs-groups.*``, ``--critic-encoder.*``, ``--encoder-sharing``,
+    ``--policy-graph``) reach the agent exactly as for ``ppo``. The
+    discriminator reads critic-role features, so its input is whatever the
+    critic group selects. The demo dataset only provides a flat ``state``
+    key, so the critic group must resolve to ``state`` alone; any other
+    critic key raises ``ObservationContractError`` at construction.
 
     Env backend: ``--env_backend d4rl_legacy`` (D4RL MuJoCo locomotion).
     Expert demonstrations are loaded separately via ``--demo_env_id``

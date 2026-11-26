@@ -162,7 +162,8 @@ Evaluate the resumed checkpoint:
      --num-eval-envs 1 \
      --num-eval-episodes 5
 
-The automatic selector matches the checkpoint algorithm class to a registry entry.
+The automatic selector takes the registry entry named by the run configuration
+in the checkpoint, or matches the checkpoint algorithm class to one.
 The evaluator uses that entry's builder to reconstruct the agent.
 It then loads weights for inference without replay or optimizer state.
 It creates one evaluation environment and no replay storage.
@@ -171,6 +172,8 @@ The datasets and other files the run was trained with are not needed.
 
 The run configuration is embedded in the checkpoint, so the environment and
 observation settings travel with the file.
+Absolute paths and the command line do not: they stay in ``config.json``.
+See :ref:`checkpoint-no-absolute-paths`.
 An explicit ``--config-path`` replaces it.
 A checkpoint without one falls back to ``config.json`` in its run directory.
 See :ref:`checkpoint-evaluating-a-checkpoint`

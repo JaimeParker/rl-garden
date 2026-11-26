@@ -170,15 +170,17 @@ or `default`; the agent records the last one as `<ClassName> default`). You may
 explicitly set `--encoder-sharing` to override the default, but a non-`separate`
 value that contradicts asymmetric groups is an error: on the CLI a preflight
 `Configuration error:`, in the Python API an `ObservationContractError` at
-construction. `dagger` and `flash_sac` register no algorithm class for preflight
-to read, so `encoder_sharing` is not resolved before construction for them.
+construction.
 
 Asymmetric `obs_groups` apply to algorithms whose critic or value head can have
 its own encoder. They do not apply to:
 
 - algorithms without such a critic: BC, DiffusionBC, FlowBC, MeanFlowBC, A2ABC,
-  ConsistencyDistillBC, DAgger, HILP, OPAL and PolicyDistillation (which rejects
-  any explicit `obs_groups` with a `ValueError` when its agent is built);
+  ConsistencyDistillBC, DAgger, HILP, OPAL and PolicyDistillation, whose
+  `encoder_sharing_choices` have no `separate`, so asymmetric groups and an
+  explicit `--encoder-sharing separate` are rejected at preflight
+  (PolicyDistillation also rejects any explicit `obs_groups` with a `ValueError`
+  when its agent is built). Pass the same keys to both groups to select inputs;
 - recurrent and transformer algorithms (RecurrentSAC, RecurrentPPO,
   TransformerSAC, TransformerPPO): one sequence model sits between the encoder
   and the heads, so `separate` is not among their `encoder_sharing_choices` and
@@ -186,7 +188,8 @@ its own encoder. They do not apply to:
 - DreamerV3, NCRL and TDMPC2, whose world model is the only encoder (`shared` is
   their only choice; asymmetric groups are rejected as above), and RSSMPretrain and
   PWM, which have no `obs_groups` field;
-- SuperMimic and FlashSAC, which do not read `obs_groups`.
+- SuperMimic, which does not read `obs_groups`, and FlashSAC, which does not read
+  them either and rejects asymmetric groups at preflight.
 
 **Activation rule:** `obs_groups` and `encoder_sharing` are always active.
 `critic_encoder` and the image-specific fields of `encoder` (all except

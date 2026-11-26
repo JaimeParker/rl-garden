@@ -249,3 +249,29 @@ def test_cuda_smoke():
     assert torch.all(action >= -1.0) and torch.all(action <= 1.0)
     for p in agent.policy.parameters():
         assert p.grad is None
+
+
+def test_offline_spot_entrypoint_builds_with_the_corl_network():
+    from rl_garden.training.offline.entrypoints.spot import SPOTArgs, build_spot
+
+    args = SPOTArgs(
+        buffer_size=1000, buffer_device="cpu", batch_size=32, device="cpu", vae_hidden_dim=16
+    )
+    agent = build_spot(args, _state_env(), None)
+    assert agent.net_arch == [256, 256]
+
+
+def test_offline_and_off2on_spot_entrypoints_use_the_same_network():
+    from unittest.mock import MagicMock
+
+    from rl_garden.training.off2on.entrypoints.spot import SPOTOff2OnArgs, build_spot
+
+    env = MagicMock()
+    env.num_envs = 2
+    env.single_observation_space = spaces.Box(-1, 1, (6,), np.float32)
+    env.single_action_space = spaces.Box(-1, 1, (3,), np.float32)
+    env.action_space = spaces.Box(-1, 1, (2, 3), np.float32)
+    args = SPOTOff2OnArgs(
+        buffer_size=100, buffer_device="cpu", batch_size=8, vae_hidden_dim=16
+    )
+    assert build_spot(args, env, None, None, None).net_arch == [256, 256]

@@ -11,7 +11,7 @@
 # word ("navigate") immediately before "singletask"; the env id drops it --
 # see docs/guides/ogbench-integration.md's "env-id vs dataset-name" section.
 #
-# online_replay_mode: append (not Off2OnCommonArgs's own "empty" default):
+# online_replay_mode: append (FloQOff2OnArgs' own default):
 # floq keeps one buffer across offline pretraining and online fine-tuning
 # and appends new online transitions to it, it does not discard the offline
 # data at the offline/online boundary.

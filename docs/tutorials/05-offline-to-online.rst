@@ -166,6 +166,12 @@ See :doc:`/design/wsrl-overview` for the detailed choices.
 The off2on runner can reload an offline dataset when continuing a checkpoint
 with zero offline updates and an explicit dataset path.
 That supports retaining source data without requiring a replay snapshot.
+A dataset given to a fresh run with zero offline updates in the ``append`` or
+``mixed`` mode is loaded too, with the setup the offline stage does on it
+(observation statistics, SPOT's VAE, FAC's BC flow), as the reference
+implementations keep their dataset for the online phase; ``empty`` ignores it.
+A checkpoint saved after the switch continues in its saved replay mode,
+which then decides where the dataset goes; see :ref:`checkpoint-loading`.
 It is unnecessary for this empty-replay exercise.
 Choose the mode before deciding which large artifacts to copy.
 

@@ -182,7 +182,7 @@ def test_off2on_fac_checkpoint_roundtrip_preserves_online_flag(tmp_path):
     agent.train(5)
     agent.switch_to_online_mode(online_replay_mode="mixed", offline_data_ratio=0.5)
     agent.train(2)
-    ckpt = agent.save(tmp_path / "fac.pt")
+    ckpt = agent.save(tmp_path / "fac.pt", include_replay_buffer=True)
 
     agent2 = _make_agent()
     agent2.load(ckpt)
@@ -236,3 +236,12 @@ def test_off2on_fac_checkpoint_roundtrip_preserves_online_flag(tmp_path):
     for key in _ONLINE_METRIC_KEYS:
         assert key in losses
         assert np.isfinite(losses[key]), (key, losses[key])
+
+
+def test_off2on_fac_restores_the_flag_its_checkpoint_holds(tmp_path):
+    agent = _make_agent()
+    agent._online_finetuning = True
+    path = agent.save(tmp_path / "fac.pt")
+    loaded = _make_agent()
+    loaded.load(path)
+    assert loaded._online_finetuning is True

@@ -37,6 +37,10 @@ State-only: ``features = concat(obs["state"], skill)`` assumes a
 every state-only backend), matching every other algorithm's state-only
 scope.
 
+Devices: the decoder and ``skill`` share the policy's device. An env on another
+device (a CPU simulator under a CUDA policy) has its ``state`` copied to it
+before each decode and the decoded action copied back.
+
 Deliberate simplification vs. upstream: ``MetaPolicyActionWrapper`` isn't
 actually a clean one-fresh-rollout-per-``step()`` wrapper -- it keeps a
 persistent sliding observation/action window *across* ``step()`` calls
@@ -58,11 +62,12 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.common.types import Obs
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 from rl_garden.envs.wrappers.chunk_accumulator import ChunkAccumulator
 from rl_garden.networks.actor_critic import UnsquashedGaussianActor
 
 
-class SkillActionWrapper(gym.Wrapper):
+class SkillActionWrapper(BatchedEnvWrapper):
     """``action`` has shape ``(num_envs, skill_dim)``.
 
     Reward is summed across the horizon; ``terminated``/``truncated`` are
@@ -71,7 +76,7 @@ class SkillActionWrapper(gym.Wrapper):
 
     def __init__(
         self,
-        env: gym.Env,
+        env: gym.Env | gym.vector.VectorEnv,
         decoder: UnsquashedGaussianActor,
         *,
         horizon: int,
@@ -92,11 +97,6 @@ class SkillActionWrapper(gym.Wrapper):
         self.decoder = decoder
         self.horizon = int(horizon)
         self.deterministic = deterministic
-        # gym.Wrapper has no __getattr__ fallback for these rl-garden/ManiSkill
-        # vector-env conventions -- same reasoning as ActionChunkWrapper.
-        self.num_envs = env.num_envs
-        self.single_observation_space = env.single_observation_space
-        self.observation_space = env.observation_space
         # Preserved for callers (SUPE.__init__ reconstructs its own frozen
         # OPALVAE from an opal_checkpoint path) that need the true action
         # bounds after this wrapper overwrites single_action_space/
@@ -121,13 +121,14 @@ class SkillActionWrapper(gym.Wrapper):
     def step(self, skill: torch.Tensor):
         self._chunk.begin()
         for _ in range(self.horizon):
-            features = torch.cat([self._last_obs["state"], skill], dim=-1)
+            state = self._last_obs["state"]
+            features = torch.cat([state.to(skill.device), skill], dim=-1)
             with torch.no_grad():
                 if self.deterministic:
                     raw_action = self.decoder.deterministic_action(features)
                 else:
                     raw_action, _ = self.decoder.action_log_prob(features)
-            obs, reward, terminated, truncated, infos = self.env.step(raw_action)
+            obs, reward, terminated, truncated, infos = self.env.step(raw_action.to(state.device))
             self._last_obs = obs
             self._chunk.add(reward, terminated, truncated, infos)
         return obs, *self._chunk.finish(obs, infos)

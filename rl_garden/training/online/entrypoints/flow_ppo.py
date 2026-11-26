@@ -11,7 +11,7 @@ from __future__ import annotations
 
 
 def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
-    from rl_garden.common.cli_args import resolve_obs_groups_config
+    from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.algorithms import FlowPPO
     from rl_garden.envs.wrappers import ActionChunkWrapper
     from rl_garden.training.inspection import construct_agent
@@ -20,12 +20,13 @@ def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
     if eval_env is not None:
         eval_env = ActionChunkWrapper(eval_env, act_steps=args.horizon_length)
 
-    # FlowPPO only accepts encoder_config/obs_groups (no distinct critic
-    # encoder or encoder_sharing override yet).
     image_kwargs = dict(
         encoder_config=args.encoder if args.obs.is_visual else None,
         obs_groups=resolve_obs_groups_config(args),
+        critic_encoder_config=resolve_critic_encoder_config(args),
     )
+    if args.encoder_sharing is not None:
+        image_kwargs["encoder_sharing"] = args.encoder_sharing
 
     agent = construct_agent(
         FlowPPO,

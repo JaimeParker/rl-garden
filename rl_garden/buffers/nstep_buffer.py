@@ -46,6 +46,8 @@ class NStepReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
         Discount factor for n-step reward accumulation (default 0.99).
     """
 
+    _window_state_absent_from_old_files = NStepSamplingMixin.window_state_attrs
+
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -197,6 +199,10 @@ class NStepReplayBuffer(NStepSamplingMixin, BaseReplayBuffer):
     # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------
+
+    def _state_attrs(self) -> tuple[str, ...]:
+        next_obs = () if self.next_obs is None else ("next_obs",)
+        return (*super()._state_attrs(), *next_obs, *self.window_state_attrs)
 
     def _build_next_obs_storage(
         self,
@@ -382,6 +388,24 @@ class LazyNextNStepReplayBuffer(FinalObsTableMixin, NStepReplayBuffer):
         episode_end_bool: torch.Tensor,
     ) -> None:
         self._store_final_obs_for_episode_ends(self.pos, episode_end_bool, next_obs)
+
+    def cut_running_episodes(self) -> None:
+        """The last row's next observation was never stored, so that one
+        transition becomes unsampleable and the episode ends one row earlier,
+        with the last row's ``obs`` as its final observation."""
+        if len(self) == 0:
+            return
+        last = (self.pos - 1) % self.per_env_buffer_size
+        before_last = (last - 1) % self.per_env_buffer_size
+        running = ~self.episode_ends[last] & (self._ep_id[last] >= 0)
+        continued = (
+            running
+            & (self._ep_id[before_last] == self._ep_id[last])
+            & (self._step_id[before_last] == self._step_id[last] - 1)
+        )
+        self.episode_ends[before_last] |= continued
+        self._ep_id[last] = torch.where(running, -1, self._ep_id[last])
+        self._current_ep_id += running.long()
 
     def _final_obs_at_slots(self, slots: torch.Tensor) -> dict[str, torch.Tensor]:
         return self._final_obs[slots]

@@ -10,6 +10,8 @@ from typing import Optional
 
 import torch
 
+from rl_garden.buffers.base import restored_storage
+
 
 class SumTree:
     """Flat, complete-binary-tree-backed sum-tree over ``capacity`` leaves.
@@ -84,20 +86,40 @@ class SumTree:
         self._propagate(idxes)
 
     def sample(
-        self, num_samples: int, generator: Optional[torch.Generator] = None
+        self,
+        num_samples: int,
+        generator: Optional[torch.Generator] = None,
+        *,
+        num_stratified: Optional[int] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Returns ``(leaf_indices, is_weights)``, both length ``num_samples``."""
+        """Returns ``(leaf_indices, is_weights)``, both length ``num_samples``.
+
+        The first ``num_stratified`` (default: all) samples take one from each
+        of that many equal slices of the total priority, in ascending leaf
+        order; the rest are independent."""
         p_sum = self.tree[0]
         if p_sum <= 0:
             raise RuntimeError(
                 "SumTree.sample called with zero total priority -- no transitions "
                 "have been added/updated yet."
             )
-        interval = p_sum / num_samples
-        offsets = (
-            torch.arange(num_samples, dtype=torch.float64, device=self.device)
-            * interval
-        )
+        if num_stratified is None or num_stratified == num_samples:
+            interval = p_sum / num_samples
+            offsets = (
+                torch.arange(num_samples, dtype=torch.float64, device=self.device)
+                * interval
+            )
+        else:
+            slice_width = p_sum / max(num_stratified, 1)
+            independent = num_samples - num_stratified
+            interval = torch.cat((slice_width.expand(num_stratified), p_sum.expand(independent)))
+            offsets = torch.cat(
+                (
+                    torch.arange(num_stratified, dtype=torch.float64, device=self.device)
+                    * slice_width,
+                    torch.zeros(independent, dtype=torch.float64, device=self.device),
+                )
+            )
         jitter = (
             torch.rand(
                 num_samples, generator=generator, device=self.device, dtype=torch.float64
@@ -117,12 +139,19 @@ class SumTree:
                 went_right, prefix_sums - self.tree[idxes - 1], prefix_sums
             )
 
-        priorities = self.tree[idxes]
-        min_p = priorities.min().clamp_min(self.eps)
-        is_weights = (priorities / min_p).pow(-self.beta).to(torch.float32)
-
         leaf_indices = idxes - self._leaf_offset
-        return leaf_indices, is_weights
+        return leaf_indices, self.importance_weights(leaf_indices)
+
+    def importance_weights(self, leaf_indices: torch.Tensor) -> torch.Tensor:
+        """``(priority / smallest priority among leaf_indices) ** -beta``: the
+        importance weights of a batch drawn in proportion to priority."""
+        priorities = self.tree[leaf_indices + self._leaf_offset]
+        min_p = priorities.min().clamp_min(self.eps)
+        return (priorities / min_p).pow(-self.beta).to(torch.float32)
+
+    def load_tree(self, tree: torch.Tensor) -> None:
+        """Adopt the node values of a tree of the same capacity."""
+        self.tree = restored_storage(self.tree, tree, "priority_tree")
 
     @property
     def total(self) -> torch.Tensor:

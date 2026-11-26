@@ -254,6 +254,11 @@ def load_h5_dataset_to_replay_buffer(
             obs, next_obs, actions, rewards, dones, episode_ends = _load_traj_transitions(
                 traj, storage_device
             )
+            if hasattr(buffer, "episode_ends"):
+                # Windows of consecutive rows must stop at the group's last step even
+                # where no field of the file marks it.
+                episode_ends = episode_ends.clone()
+                episode_ends[-1] = True
             if reward_scale != 1.0 or reward_bias != 0.0:
                 rewards = rewards * reward_scale + reward_bias
             if sparse_reward_mc:

@@ -1,6 +1,9 @@
 """Unit tests for FlashSAC components (CPU, no ManiSkill dependency)."""
 from __future__ import annotations
 
+import functools
+import warnings
+
 import numpy as np
 import pytest
 import torch
@@ -54,30 +57,29 @@ def policy(obs_space, act_space):
 
 
 class _FakeEnv:
-    def __init__(self):
-        self.num_envs = NUM_ENVS
+    def __init__(self, num_envs: int = NUM_ENVS):
+        self.num_envs = num_envs
         self.single_observation_space = spaces.Box(-1, 1, (OBS_DIM,), np.float32)
         self.single_action_space = spaces.Box(-1, 1, (ACT_DIM,), np.float32)
-        self.observation_space = spaces.Box(-1, 1, (NUM_ENVS, OBS_DIM), np.float32)
-        self.action_space = spaces.Box(-1, 1, (NUM_ENVS, ACT_DIM), np.float32)
+        self.observation_space = spaces.Box(-1, 1, (num_envs, OBS_DIM), np.float32)
+        self.action_space = spaces.Box(-1, 1, (num_envs, ACT_DIM), np.float32)
 
     def reset(self, seed=None):
-        return torch.randn(NUM_ENVS, OBS_DIM), {}
+        return torch.randn(self.num_envs, OBS_DIM), {}
 
     def step(self, actions):
         return (
-            torch.randn(NUM_ENVS, OBS_DIM),
-            torch.randn(NUM_ENVS),
-            torch.zeros(NUM_ENVS, dtype=torch.bool),
-            torch.zeros(NUM_ENVS, dtype=torch.bool),
+            torch.randn(self.num_envs, OBS_DIM),
+            torch.randn(self.num_envs),
+            torch.zeros(self.num_envs, dtype=torch.bool),
+            torch.zeros(self.num_envs, dtype=torch.bool),
             {},
         )
 
 
-@pytest.fixture
-def agent():
-    return FlashSAC(
-        env=_FakeEnv(),
+def _agent(num_envs: int = NUM_ENVS, **overrides) -> FlashSAC:
+    kwargs = dict(
+        env=_FakeEnv(num_envs),
         eval_env=None,
         buffer_size=400,
         buffer_device="cpu",
@@ -105,6 +107,12 @@ def agent():
         eval_freq=0,
         save_final_checkpoint=False,
     )
+    return FlashSAC(**{**kwargs, **overrides})
+
+
+@pytest.fixture
+def agent():
+    return _agent()
 
 
 def test_flash_sac_rejects_dict_observation_space_with_images():
@@ -338,3 +346,112 @@ def test_zeta_noise_repeats_for_same_env(agent):
     agent._zeta_n[:] = 100
     actions2, _, _ = agent._rollout_action(obs, learning_has_started=True)
     assert torch.allclose(actions1, actions2, atol=1e-5), "Noise was not repeated"
+
+
+def test_flash_sac_args_carry_every_field_the_shared_env_request_reads():
+    from rl_garden.common.cli_args import resolve_eval_record_dir
+    from rl_garden.common.env_args import make_env_request
+    from rl_garden.training.online.entrypoints.flash_sac import FlashSACArgs
+
+    args = FlashSACArgs()
+    assert resolve_eval_record_dir(args, "run").endswith("run/eval_videos")
+    assert make_env_request(args, "run").eval_record_dir is not None
+    args.eval_output_dir = "/tmp/elsewhere"
+    assert resolve_eval_record_dir(args, "run") == "/tmp/elsewhere"
+
+
+# ---------------------------------------------------------------------------
+# Reward-normalizer state in checkpoints (the official agent saves and loads
+# G_r, G_r_max and the mean/var/count of the return statistics)
+# ---------------------------------------------------------------------------
+
+_STATE_KEYS = {"G_r", "G_r_max", "G_rms_mean", "G_rms_var", "G_rms_count"}
+_learner = functools.partial(_agent, normalize_reward=True, learning_starts=10_000)
+
+
+def _trained(**kwargs) -> FlashSAC:
+    agent = _learner(**kwargs)
+    agent.learn(total_timesteps=40)
+    return agent
+
+
+def _normalizer_warnings(record) -> list[str]:
+    return [str(w.message) for w in record if "normalizer" in str(w.message)]
+
+
+def test_checkpoint_restores_the_reward_normalizer(tmp_path):
+    agent = _trained()
+    saved = {k: v.clone() for k, v in agent.reward_normalizer.state_dict().items()}
+    assert set(saved) == _STATE_KEYS and saved["G_r"].shape == (NUM_ENVS,)
+    agent.save(tmp_path / "c.pt")
+    resumed = _learner()
+    resumed.load(tmp_path / "c.pt")
+    for key, value in resumed.reward_normalizer.state_dict().items():
+        assert torch.equal(value, saved[key]), key
+    rewards = torch.linspace(-3.0, 3.0, 8)
+    expected = agent.reward_normalizer.normalize_rewards(rewards)
+    assert torch.equal(resumed.reward_normalizer.normalize_rewards(rewards), expected)
+    assert not torch.equal(_learner().reward_normalizer.normalize_rewards(rewards), expected)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        resumed.learn(total_timesteps=60)
+    assert _normalizer_warnings(record) == []
+    assert resumed.reward_normalizer.G_rms.count == saved["G_rms_count"] + 20
+
+
+def test_checkpoint_without_a_normalizer_state_warns_when_training_starts(tmp_path):
+    agent = _trained()
+    agent.save(tmp_path / "c.pt")
+    checkpoint = torch.load(tmp_path / "c.pt", weights_only=False)
+    checkpoint["state"]["extra"].pop("reward_normalizer")
+    torch.save(checkpoint, tmp_path / "old.pt")
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        resumed = _learner()
+        resumed.load(tmp_path / "old.pt")
+        assert _normalizer_warnings(record) == []
+        assert resumed.reward_normalizer.G_rms.count == 0
+        resumed.learn(total_timesteps=60)
+        resumed.learn(total_timesteps=80)
+    assert len(_normalizer_warnings(record)) == 1
+
+
+@pytest.mark.parametrize("saved_envs, loaded_envs", [(2, 3), (3, 1), (1, 3)])
+def test_other_number_of_envs_keeps_the_statistics_and_restarts_the_running_returns(
+    saved_envs, loaded_envs, tmp_path
+):
+    agent = _trained(num_envs=saved_envs)
+    agent.save(tmp_path / "c.pt")
+    resumed = _learner(num_envs=loaded_envs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        resumed.load(tmp_path / "c.pt")  # evaluation stops here
+    step = agent._global_step
+    with pytest.warns(UserWarning, match=f"running returns of {saved_envs} envs, this run has {loaded_envs}"):
+        resumed._on_training_start(step)
+    assert torch.equal(resumed.reward_normalizer.G_r, torch.zeros(1))
+    for key in _STATE_KEYS - {"G_r"}:
+        assert torch.equal(resumed.reward_normalizer.state_dict()[key], agent.reward_normalizer.state_dict()[key])
+    resumed.learn(total_timesteps=step + 6)
+    assert resumed.reward_normalizer.G_r.shape == (loaded_envs,)
+
+
+@pytest.mark.parametrize("saved_with", [False, True])
+def test_checkpoints_load_with_the_other_normalize_reward_setting(saved_with, tmp_path):
+    agent = _agent(normalize_reward=saved_with, learning_starts=10_000)
+    agent.learn(total_timesteps=20)
+    agent.save(tmp_path / "c.pt")
+    extra = torch.load(tmp_path / "c.pt", weights_only=False)["state"]["extra"]
+    assert ("reward_normalizer" in extra) is saved_with
+    _agent(normalize_reward=not saved_with).load(tmp_path / "c.pt")
+
+
+@pytest.mark.parametrize("loaded_envs", [3, 1])
+def test_all_zero_running_returns_of_another_number_of_envs_restart_too(loaded_envs, tmp_path):
+    agent = _trained(num_envs=2)
+    agent.reward_normalizer.G_r = torch.zeros(2)  # e.g. every env ended on the last step
+    agent.save(tmp_path / "c.pt")
+    resumed = _learner(num_envs=loaded_envs, learning_starts=0)
+    resumed.load(tmp_path / "c.pt", load_replay_buffer=False)
+    resumed.learn(total_timesteps=agent._global_step + 2 * loaded_envs)
+    assert resumed.reward_normalizer.G_r.shape == (loaded_envs,)

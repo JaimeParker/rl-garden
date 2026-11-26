@@ -172,7 +172,7 @@ def _dependency_preflight() -> dict[str, str | None]:
     if missing:
         raise RuntimeError(
             f"FQL runtime is missing required packages: {', '.join(missing)}. "
-            "See docs/guides/fql-ogbench-reproduction.md for isolated-environment setup."
+            "See baselines/fql/README.md for isolated-environment setup."
         )
     return versions
 

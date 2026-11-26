@@ -285,6 +285,28 @@ def test_reward_scale_and_bias_are_applied():
     env.close()
 
 
+def test_frame_stack_with_reward_transform_scales_rewards_and_stacks_frames():
+    from gymnasium.vector import AutoresetMode
+
+    env = make_gymnasium_env(
+        _pixels_cfg(image_keys=("rgb_front",), frame_stack=3, reward_scale=2.0, reward_bias=0.5)
+    )
+    assert env.metadata["autoreset_mode"] == AutoresetMode.SAME_STEP
+    assert env.single_observation_space["rgb_front"].shape == (3, 16, 16, 3)
+    env.reset()
+    for _ in range(3):
+        obs, rewards, _, truncated, infos = env.step(torch.zeros((2, 1)))
+        assert torch.allclose(rewards.float(), torch.full((2,), 2.5))
+
+    assert bool(truncated.all())
+    rgb = obs["rgb_front"]
+    assert torch.equal(rgb[:, 0], rgb[:, 2])
+    assert infos["final_observation"]["rgb_front"].shape == (2, 3, 16, 16, 3)
+    # Episode statistics stay unscaled.
+    assert torch.equal(infos["final_info"]["episode"]["r"].float(), torch.full((2,), 3.0))
+    env.close()
+
+
 def test_unregistered_env_id_error_explains_registration():
     with pytest.raises(gym.error.Error, match="is not registered in this process"):
         make_gymnasium_env(GymnasiumEnvConfig(env_id="RlgTestMissing-v0", num_envs=1, seed=0))

@@ -88,10 +88,10 @@ Deviations from the reference:
   cache). The reference's ``balanced_sampling`` (half offline dataset, half
   replay buffer, ``main.py:212-216``) maps to this mixin's existing
   ``online_replay_mode="mixed", offline_data_ratio=0.5`` combination rather
-  than a new mechanism; neither ``Off2OnFAC`` nor ``Off2OnFINO``/``Off2OnFloQ``
-  override ``Off2OnCommonArgs``'s default (``online_replay_mode="empty"``,
-  ``offline_data_ratio=0.0``), so balanced sampling is opt-in via CLI flags,
-  not the default. ``_bc_update`` keeps stepping ``self._lr_schedulers[2]``
+  than a new mechanism and is opt-in, like the reference's flag
+  (``main.py:54``). The CLI default is ``online_replay_mode="append"``: online
+  transitions join the dataset in one buffer, which every online batch is
+  sampled from (``main.py:90-93,218``). ``_bc_update`` keeps stepping ``self._lr_schedulers[2]``
   (the BC optimizer's scheduler) on every online gradient step, same as
   offline -- a no-op under the default ``lr_schedule="constant"``
   (``make_lr_scheduler`` returns ``None``), but under a non-default schedule
@@ -673,6 +673,16 @@ class FACCore(FQLCore):
                 )
         if self.std_log:
             print(f"[fac] bc_prelude done: phase_step={self._phase_step}", flush=True)
+
+    def pretrain_bc_flow(self) -> None:
+        """Run the BC-flow prelude and the dataset-logp pass on the replay
+        buffer now (the reference does both before any actor-critic step,
+        ``main.py:129-152``), as ``train()`` otherwise does on its first call."""
+        bc_pretrain_steps = self._resolve_bc_pretrain_steps()
+        if self._phase_step < bc_pretrain_steps:
+            self._run_bc_prelude(bc_pretrain_steps, self._resolve_bc_batch_size())
+        if self._logp_table is None:
+            self._compute_dataset_logp()
 
     def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
         """FAC update loop matching the reference's phase order

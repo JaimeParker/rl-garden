@@ -53,7 +53,7 @@ def build_recurrent_sac(
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:
-        agent.load(args.load_checkpoint, load_replay_buffer=False)
+        agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     return agent
 
 
@@ -89,7 +89,7 @@ class RecurrentSACArgs(VisionRecurrentSACTrainingArgs, EnvBackendArgs):
     """RecurrentSAC — LSTM/GRU latent module + R2D2-style (stored hidden state
     + burn-in + n-step + priority replay) recurrent buffer.
 
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default) or any other registered backend.
     """
 
 

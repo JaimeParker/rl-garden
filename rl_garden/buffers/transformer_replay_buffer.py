@@ -41,6 +41,14 @@ class TransformerReplayBufferSample:
     rewards: torch.Tensor                       # (learning_len, B) -- pre-accumulated n-step
     discounts: torch.Tensor                     # (learning_len, B)
     episode_starts: torch.Tensor                # (window_len, B)
+    # The final observations of the K truncated episodes that some learning row
+    # bootstraps from, the row (from the first learning row) and column where each
+    # episode ends, and which of the K a learning row uses (-1: the row forward_len
+    # later, or no bootstrap).
+    final_obs: Obs                              # (K, *obs_shape)
+    final_steps: torch.Tensor                   # (K,)
+    final_columns: torch.Tensor                 # (K,)
+    final_index: torch.Tensor                   # (learning_len, B)
     priority_indices: torch.Tensor              # (B,) LongTensor, flat leaf indices
     is_weights: torch.Tensor                    # (B,)
 
@@ -127,6 +135,10 @@ class TransformerReplayBuffer(SequenceReplayBuffer):
             episode_starts,
             rewards,
             discounts,
+            final_obs,
+            final_steps,
+            final_columns,
+            final_index,
         ) = self._sample_common(batch_size, generator=generator)
 
         return TransformerReplayBufferSample(
@@ -136,6 +148,10 @@ class TransformerReplayBuffer(SequenceReplayBuffer):
             rewards=rewards.to(self.sample_device),
             discounts=discounts.to(self.sample_device),
             episode_starts=episode_starts.to(self.sample_device),
+            final_obs=_tree_to_device(final_obs, self.sample_device),
+            final_steps=final_steps.to(self.sample_device),
+            final_columns=final_columns.to(self.sample_device),
+            final_index=final_index.to(self.sample_device),
             priority_indices=leaf_indices.to(self.sample_device),
             is_weights=is_weights.to(self.sample_device),
         )

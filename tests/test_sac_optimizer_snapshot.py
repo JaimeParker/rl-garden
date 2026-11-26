@@ -429,28 +429,32 @@ def rlpd_optimizer_group_layout(**overrides: Any):
     return optimizer_group_layout(agent.policy, agent.q_optimizer, agent.actor_optimizer)
 
 
-# Recorded with ``freeze_trunk=False`` at the pre-fix commit (where freezing
-# the trunk made no difference: no optimizer stepped it).
+# ``recurrent_encoder``: recorded with ``freeze_trunk=False`` at the pre-fix
+# commit (where freezing the trunk made no difference: no optimizer stepped
+# it). The other modules were re-recorded with ``freeze_trunk=True`` once the
+# windows were sampled in proportion to their priority
+# (``RecurrentSamplingMixin._sample_valid_window_starts``), which changes the
+# batches of a seeded run.
 SEQUENCE_SNAPSHOT: dict[str, dict[str, tuple[float, float]]] = {
     "recurrent_gru": {
-        "actor": (-0.381474374094978, 6.937358114305656),
-        "actor_extractor": (29.502477833106013, 94.86034884975405),
-        "critic": (3.0927228393265978, 13.059209539622607),
-        "critic_target": (2.978650687262416, 13.083046108631939),
+        "actor": (-0.358234961720882, 6.9364067265674185),
+        "actor_extractor": (32.404806845798475, 94.88782700558485),
+        "critic": (3.0957868403056636, 13.054175523872743),
+        "critic_target": (2.97840145311784, 13.082813598732734),
         "recurrent_encoder": (1.2423858494439628, 29.852167164422923),
     },
     "recurrent_lstm": {
-        "actor": (-0.5244752033613622, 7.8313934843532005),
-        "actor_extractor": (28.617532920313124, 94.82503905305259),
-        "critic": (2.3432669585454278, 13.130921405893629),
-        "critic_target": (2.2805274858837947, 13.107951786256383),
+        "actor": (-0.5424229176715016, 7.846113795058093),
+        "actor_extractor": (32.24881480379986, 94.91986873441192),
+        "critic": (2.4505022782832384, 13.154058718967113),
+        "critic_target": (2.2894856853818055, 13.109797592029661),
         "recurrent_encoder": (3.730789840890793, 40.360332885501215),
     },
     "transformer": {
-        "actor": (-0.9532658503740095, 7.150439701147091),
-        "actor_extractor": (77.07433391976451, 95.2117636947306),
-        "critic": (1.409211655438412, 12.344771781587767),
-        "critic_target": (1.2540900961103034, 12.338573574918083),
+        "actor": (-1.069945523981005, 7.1464889427435185),
+        "actor_extractor": (35.018955505945314, 94.88041589055312),
+        "critic": (1.5360036524944007, 12.357559997020157),
+        "critic_target": (1.2650731553076184, 12.339460584275436),
         "recurrent_encoder": (52.18729507320677, 137.12575441751443),
     },
 }

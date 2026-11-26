@@ -1,5 +1,6 @@
 from rl_garden.envs.wrappers.action_chunk import ActionChunkWrapper
 from rl_garden.envs.wrappers.action_repeat import ActionRepeatWrapper
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 from rl_garden.envs.wrappers.dict_state import (
     DictStateObservationWrapper,
     VectorizedDictStateWrapper,
@@ -13,6 +14,7 @@ from rl_garden.envs.wrappers.skill_action_wrapper import SkillActionWrapper
 __all__ = [
     "ActionChunkWrapper",
     "ActionRepeatWrapper",
+    "BatchedEnvWrapper",
     "DictStateObservationWrapper",
     "VectorizedDictStateWrapper",
     "require_state_only_observation",

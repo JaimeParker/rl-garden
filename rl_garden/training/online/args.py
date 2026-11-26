@@ -22,6 +22,7 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     # critic encoder (sac/rlpd/rlpd_hybrid); unset keeps today's exact
     # behavior (actor/critic share one backbone_type).
     critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
+
     total_timesteps: int = 1_000_000
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
@@ -238,6 +239,7 @@ class DreamerV3TrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     # outside). This port's default (False) matches r2dreamer -- see
     # RSSM's own docstring.
     contdisc: bool = False
+
     horizon: float = 333.0
     batch_size: int = 16
     batch_length: int = 64
@@ -332,6 +334,7 @@ class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     # (4096 + 32*48) * 4 B = 22 KiB), ~34 KiB/step -> ~8 GiB on buffer_device;
     # 500 prior episodes x 500 steps add another ~8 GiB.
     buffer_size: int = 250_000
+
     buffer_device: str = "cuda"
     compute_dtype: Optional[Literal["float32", "bfloat16"]] = None
 
@@ -429,6 +432,7 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs, PolicyModuleArgs):
     # Episode ends whose GAE target bootstraps from final_observation:
     # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
+
     detach_encoder_on_actor: Optional[bool] = None
     weight_decay: float = 0.0
     use_adamw: bool = False
@@ -456,6 +460,7 @@ class PPOTrainingArgs(EnvRunArgs, CheckpointArgs, PolicyModuleArgs):
     # critic); every PPO-family entrypoint reads this unconditionally
     # (state or visual), unlike SAC-family's vision-gated equivalent.
     critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
+
     log_std_init: float = -0.5
     # Per-action-dimension initial log-std; overrides ``log_std_init`` and
     # must have one entry per action dimension.
@@ -581,7 +586,10 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     # Episode ends whose GAE target bootstraps from final_observation:
     # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
+
+    # Evaluate every this many updates (0 disables).
     eval_freq: int = 25
+    # Vector-env steps per evaluation.
     num_eval_steps: int = 50
 
 
@@ -634,7 +642,10 @@ class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     # Episode ends whose GAE target bootstraps from final_observation:
     # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
+
+    # Evaluate every this many updates (0 disables).
     eval_freq: int = 25
+    # Vector-env steps per evaluation.
     num_eval_steps: int = 50
 
 
@@ -662,7 +673,7 @@ class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, ObservationAr
 
 
 @dataclass
-class FlashSACTrainingArgs(LoggingArgs):
+class FlashSACTrainingArgs(EnvRunArgs, CheckpointArgs):
     env_id: str = "PickCube-v1"
     num_envs: int = 512
     num_eval_envs: int = 8
@@ -703,21 +714,14 @@ class FlashSACTrainingArgs(LoggingArgs):
     use_amp: bool = False
     capture_video: bool = False
     video_fps: int = 20
-    seed: int = 1
-    checkpoint_freq: int = 0
-    save_replay_buffer: bool = False
-    save_final_checkpoint: bool = True
-    load_checkpoint: Optional[str] = None
 
 
 @dataclass
 class DAggerTrainingArgs(EnvRunArgs, CheckpointArgs):
-    """DAgger (Ross et al. 2011). State-only (Box observations) for this
-    CLI entrypoint -- ``DAgger`` itself also supports Dict/vision
-    observations via BC's dispatch when constructed programmatically, but a
-    live scripted expert is task-specific (see ``expert`` below), so a
-    minimal CLI-selectable set of mock experts is what's wired here; a real
-    expert is expected to be supplied by constructing ``DAgger`` directly."""
+    """DAgger (Ross et al. 2011). A live scripted expert is task-specific (see
+    ``expert`` below), so a minimal CLI-selectable set of mock experts is
+    what's wired here; a real expert is expected to be supplied by
+    constructing ``DAgger`` directly."""
 
     total_timesteps: int = 100_000
     expert: Literal["zero", "random_uniform"] = "random_uniform"

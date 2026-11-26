@@ -138,6 +138,7 @@ def build_rlpd_hybrid(
             reward_scale=args.reward_scale,
             reward_bias=args.reward_bias,
             success_key=args.success_key,
+            backend_config=getattr(args, args.dataset_backend, None),
         )
     return agent
 

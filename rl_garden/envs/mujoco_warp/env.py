@@ -60,9 +60,4 @@ def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig):
             env, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
         )
 
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        env = RewardScaleBiasVectorWrapper(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
-
     return env

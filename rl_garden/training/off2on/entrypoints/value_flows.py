@@ -128,9 +128,13 @@ class ValueFlowsOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     CNN-based Dict/RGBD observations.
     """
 
+    # One buffer holds the dataset and the online transitions (main.py:45,86-88,176).
+    online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
     # 10.0: the reference's own get_config alpha, matching FQL's actor-side
     # BC coefficient unchanged.
     alpha: float = 10.0
+
     flow_steps: int = 10
     q_agg: Literal["mean", "min"] = "mean"
     normalize_q_loss: bool = False

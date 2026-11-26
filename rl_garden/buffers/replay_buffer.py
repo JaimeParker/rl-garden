@@ -155,6 +155,8 @@ class DictArray:
 
 
 class ReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
+    _columns_absent_from_old_files = ("grasp_penalty",)
+
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -266,6 +268,15 @@ class ReplayBuffer(WithoutReplaceSamplerMixin, BaseReplayBuffer):
         if self._mmap_store is not None:
             self._persist_cursor()
             self._mmap_store.flush()
+
+    def _state_attrs(self) -> tuple[str, ...]:
+        # base_actions/next_base_actions: columns a residual-RL subclass may allocate.
+        optional = ("grasp_penalty", "base_actions", "next_base_actions")
+        return (
+            *super()._state_attrs(),
+            "next_obs",
+            *(attr for attr in optional if hasattr(self, attr)),
+        )
 
     def add(
         self,

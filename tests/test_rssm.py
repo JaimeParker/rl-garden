@@ -227,7 +227,7 @@ def test_model_loss_gradients_flow_to_encoder_and_dynamics():
     assert dyn_grad is not None and torch.isfinite(dyn_grad).all()
 
 
-def test_model_loss_masks_reward_and_continue_on_is_last_rows():
+def test_model_loss_masks_reward_and_continue_on_reset_rows_of_an_unknown_final_observation():
     action_dim = 3
     rssm, obs_space, _ = _build_rssm(action_dim=action_dim)
     with torch.no_grad():  # the reward head starts at zero output, which ignores its target
@@ -237,7 +237,7 @@ def test_model_loss_masks_reward_and_continue_on_is_last_rows():
     torch.manual_seed(0)
     batch = _fill_buffer_and_sample(rssm, obs_space, action_space, horizon=4)
     batch.is_last = torch.zeros_like(batch.is_last)
-    batch.is_last[1, 0] = True
+    batch.is_last[1, 0] = batch.is_first[1, 0] = True
 
     def _losses(reward_value: float, terminated_value: bool):
         reward = batch.reward.clone()
@@ -254,8 +254,8 @@ def test_model_loss_masks_reward_and_continue_on_is_last_rows():
     torch.testing.assert_close(swapped["rew"], base["rew"])
     torch.testing.assert_close(swapped["con"], base["con"])
 
-    # Same swap on an unmasked row does change both losses.
-    batch.is_last = torch.zeros_like(batch.is_last)
+    # Same swap on a final-observation row (is_last only) does change both losses.
+    batch.is_first[1, 0] = False
     assert not torch.allclose(_losses(7.5, True)["rew"], _losses(0.0, False)["rew"])
     assert not torch.allclose(_losses(7.5, True)["con"], _losses(0.0, False)["con"])
 
