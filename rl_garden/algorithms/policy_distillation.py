@@ -125,6 +125,8 @@ def select_role_observation(obs: dict, obs_space: spaces.Dict, keys: Sequence[st
 class PolicyDistillation(OnPolicyAlgorithm):
     """On-policy teacher-student distillation: regress a student's action
     onto a frozen teacher's action, collected via the student's own rollout.
+    Only ``learn()`` reads the teacher: with ``teacher_policy=None`` the
+    student can act and load a checkpoint but not train.
 
     TODO(dagger-variant): a future variant could mix in the teacher's action
     as the *executed* rollout action per a beta schedule (see the comment at
@@ -133,11 +135,13 @@ class PolicyDistillation(OnPolicyAlgorithm):
     """
 
     _compatible_checkpoint_algorithms = ("PolicyDistillation",)
+    # There is no critic encoder, so "separate" does not exist.
+    encoder_sharing_choices = ("shared_critic_grad", "shared")
 
     def __init__(
         self,
         env: Any,
-        teacher_policy: BasePolicy,
+        teacher_policy: Optional[BasePolicy],
         teacher_obs_keys: Sequence[str],
         student_obs_keys: Sequence[str],
         eval_env: Optional[Any] = None,
@@ -215,10 +219,12 @@ class PolicyDistillation(OnPolicyAlgorithm):
         self.teacher_obs_keys = list(teacher_obs_keys)
         self.student_obs_keys = list(student_obs_keys)
 
-        self.teacher_policy = teacher_policy.to(self.device)
-        self.teacher_policy.eval()
-        for param in self.teacher_policy.parameters():
-            param.requires_grad_(False)
+        self.teacher_policy: Optional[BasePolicy] = None
+        if teacher_policy is not None:
+            self.teacher_policy = teacher_policy.to(self.device)
+            self.teacher_policy.eval()
+            for param in self.teacher_policy.parameters():
+                param.requires_grad_(False)
 
         self.num_learning_epochs = num_learning_epochs
         self.num_minibatches = num_minibatches
@@ -348,6 +354,8 @@ class PolicyDistillation(OnPolicyAlgorithm):
     # --- outer loop (see module docstring for why this can't be inherited) ---
 
     def learn(self, total_timesteps: int) -> "PolicyDistillation":
+        if self.teacher_policy is None:
+            raise RuntimeError("PolicyDistillation cannot train without a teacher_policy.")
         obs, _ = self.env.reset(seed=self.seed)
         cumulative: dict[str, float] = defaultdict(float)
 

@@ -20,6 +20,7 @@ See `.agents/runbooks/testing.md` for the testing procedure.
 - Pull Python examples in with `literalinclude` and paired `# docs: start <name>` / `# docs: end <name>` markers.
 - Execute each tutorial example through `tests/test_tutorial_examples.py` with a small CPU smoke budget.
 - Keep every documented training/evaluation argv in `tests/test_tutorial_commands.py`; training uses static preflight validation.
+- Commands in `docs/guides/*.md` are checked by `tests/test_guide_commands.py`, which parses training commands with `--print-config` and evaluation commands against their Args; keep every command well formed and its flags valid.
 - Regenerate registry tables with `python tools/docs/gen_tables.py` and verify byte equality with `--check` and `tests/test_docs_generated.py`.
 - Build with `scripts/test.sh docs`, which enforces Sphinx `-W -n --keep-going`.
 
@@ -63,7 +64,6 @@ docs/guides/ogbench-integration.md
 docs/guides/policy-graphs.md
 docs/guides/rlbench-integration.md
 docs/guides/robomimic-integration.md
-docs/guides/robotwin.md
 docs/guides/supermimic.md
 docs/guides/wsrl-reproduction.md
 docs/index.rst

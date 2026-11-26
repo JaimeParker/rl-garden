@@ -59,6 +59,11 @@ with 0 and off-policy truncations bootstrap from the reset observation.
 
 Action repeat: ``cfg.action_repeat > 1`` wraps the adapter in
 ``ActionRepeatWrapper`` (inside the frame stack, so frames are per decision).
+
+Reward transform: a non-trivial ``cfg.reward_scale``/``cfg.reward_bias`` adds
+``RewardScaleBiasWrapper`` outermost, so the bias is added once per decision
+and the adapter's episode statistics keep the raw reward (see the reward
+paragraph of section 7 in ``docs/guides/extending.md``).
 """
 from __future__ import annotations
 
@@ -74,6 +79,7 @@ from rl_garden.common.obs_utils import tree_where
 from rl_garden.envs.episode_statistics import EpisodeStatistics
 from rl_garden.envs.isaaclab.config import IsaacLabEnvConfig
 from rl_garden.envs.isaaclab.detect import generation
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 from rl_garden.observations.schema import ObservationContractError
 
 
@@ -377,16 +383,7 @@ def make_isaaclab_env(cfg: IsaacLabEnvConfig):
         wrapped = ImageFrameStackWrapper(
             env, frame_stack=cfg.frame_stack, autoreset_in_step=True
         )
-        # ImageFrameStackWrapper doesn't forward arbitrary attributes -- copy
-        # the rl-garden env-shape attributes onto the outermost object.
-        # single_observation_space is already the post-frame-stack space at
-        # this point (ImageFrameStackWrapper.__init__ calls update_obs_space
-        # on the adapter before returning).
-        wrapped.num_envs = adapter.num_envs
-        wrapped.device = adapter.device
-        wrapped.single_action_space = adapter.single_action_space
-        wrapped.single_observation_space = adapter.single_observation_space
-        wrapped.post_update_sync = adapter.post_update_sync
-        return wrapped
+
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     return env

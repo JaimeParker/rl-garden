@@ -8,10 +8,12 @@ re-triggerable), and only ends the episode once every stage has fired.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any
 
-import gymnasium as gym
 import torch
 from gymnasium.vector import AutoresetMode
+
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
 ClassifierFn = Callable[[dict], torch.Tensor]
 
@@ -22,7 +24,7 @@ def _obs_device(obs) -> torch.device:
     return obs.device
 
 
-class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
+class MultiStageBinaryRewardClassifierWrapper(BatchedEnvWrapper):
     """``classifier_fns[i](obs) -> success_prob`` (batched, any shape that
     reshapes to ``(num_envs,)``) for each stage. A stage's reward (1.0) is
     granted exactly once, the first step its classifier crosses
@@ -41,7 +43,7 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
 
     def __init__(
         self,
-        env: gym.Env,
+        env: Any,
         classifier_fns: Sequence[ClassifierFn],
         threshold: float = 0.75,
     ) -> None:
@@ -54,11 +56,6 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
         self.classifier_fns = tuple(classifier_fns)
         self.threshold = threshold
         self._received: torch.Tensor | None = None  # (num_envs, num_stages) bool
-
-    def __getattr__(self, name: str):
-        # See RewardClassifierWrapper -- gymnasium.Wrapper (>=1.0) no longer
-        # forwards arbitrary attributes to self.env.
-        return getattr(self.env, name)
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)

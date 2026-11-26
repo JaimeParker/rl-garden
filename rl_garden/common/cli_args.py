@@ -21,8 +21,14 @@ class LoggingArgs:
     log_dir: str = "runs"
     exp_name: Optional[str] = None
     log_freq: int = 1_000
+    # Evaluation interval, 0 disables: env steps for off-policy and
+    # model-based algorithms, updates for on-policy algorithms, gradient
+    # updates for offline algorithms.
     eval_freq: int = 10_000
+    # Vector-env steps per evaluation; with action chunking one step is a
+    # whole chunk.
     num_eval_steps: int = 50
+
     std_log: bool = True
     log_type: Literal["tensorboard", "wandb", "none"] = "tensorboard"
     log_keywords: Optional[str] = None

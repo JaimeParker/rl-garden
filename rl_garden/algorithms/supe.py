@@ -30,10 +30,12 @@ pass -- not a random subsample), inserted directly as tensors via
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import torch
+import torch.nn as nn
 from gymnasium import spaces
 
 from rl_garden.algorithms.explore import ExPLORe
@@ -43,6 +45,31 @@ from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.networks.opal_vae import OPALVAE
 
 
+def build_frozen_opal_vae(
+    hyperparameters: Mapping[str, Any],
+    state_dict: Mapping[str, torch.Tensor],
+    obs_dim: int,
+    action_space: spaces.Box,
+    *,
+    device: str | torch.device,
+) -> OPALVAE:
+    """``obs_dim``/``action_space`` come from the caller (the *raw*, pre-skill-
+    wrapping env): a checkpoint's space metadata (``space_metadata``) does not
+    record the ``low``/``high`` bounds ``UnsquashedGaussianActor`` registers as
+    buffers."""
+    vae = OPALVAE(
+        obs_dim, action_space, hyperparameters["skill_dim"], hyperparameters["chunk_size"],
+        hidden_size=hyperparameters["hidden_size"],
+        prior_hidden_dims=hyperparameters["vae_hidden_dims"],
+        decoder_hidden_dims=hyperparameters["vae_hidden_dims"],
+    ).to(device)
+    vae.load_state_dict(state_dict)
+    vae.eval()
+    for p in vae.parameters():
+        p.requires_grad_(False)
+    return vae
+
+
 def load_opal_vae(
     checkpoint_path: str,
     obs_dim: int,
@@ -50,35 +77,55 @@ def load_opal_vae(
     *,
     device: str | torch.device,
 ) -> OPALVAE:
-    """Reconstructs a frozen ``OPALVAE`` from an ``OPAL`` checkpoint.
-
-    ``obs_dim``/``action_space`` come from the caller (the *raw*, pre-skill-
-    wrapping env) rather than the checkpoint's own stored space metadata --
-    that metadata (``checkpoint.py::space_metadata``) only records
-    shape/dtype for compatibility checks, not the actual ``low``/``high``
-    bounds ``UnsquashedGaussianActor`` needs to register as buffers. Mirrors
-    ``DPPO``'s own ``bc_checkpoint`` loading (``dppo.py:313-316``): reads the
-    raw checkpoint file directly rather than instantiating a full ``OPAL``
-    algorithm (which would require a dummy dataset path just to read out the
-    network).
-    """
+    """The frozen ``OPALVAE`` of an ``OPAL`` checkpoint file, read directly
+    rather than through a full ``OPAL`` (which needs a dataset path)."""
+    if not checkpoint_path or not Path(checkpoint_path).exists():
+        raise FileNotFoundError(
+            f"OPAL checkpoint {checkpoint_path!r} does not exist. SUPE needs it to train from "
+            "scratch, and to load a SUPE checkpoint that does not embed its OPAL VAE."
+        )
     checkpoint = load_checkpoint_file(checkpoint_path, map_location=device)
-    meta = checkpoint["metadata"]["hyperparameters"]
-    vae = OPALVAE(
-        obs_dim, action_space, meta["skill_dim"], meta["chunk_size"],
-        hidden_size=meta["hidden_size"],
-        prior_hidden_dims=meta["vae_hidden_dims"],
-        decoder_hidden_dims=meta["vae_hidden_dims"],
-    ).to(device)
-    vae.load_state_dict(checkpoint["state"]["policy"])
-    vae.eval()
-    for p in vae.parameters():
-        p.requires_grad_(False)
-    return vae
+    return build_frozen_opal_vae(
+        checkpoint["metadata"]["hyperparameters"],
+        checkpoint["state"]["policy"],
+        obs_dim,
+        action_space,
+        device=device,
+    )
+
+
+def _linear_widths(module: nn.Module) -> list[int]:
+    return [layer.out_features for layer in module.modules() if isinstance(layer, nn.Linear)]
+
+
+def opal_vae_record(vae: OPALVAE) -> dict[str, Any]:
+    """What a ``SUPE`` checkpoint embeds to rebuild ``vae``
+    (``build_frozen_opal_vae``'s first two arguments)."""
+    return {
+        "hyperparameters": {
+            "skill_dim": vae.skill_dim,
+            "chunk_size": vae.chunk_size,
+            "hidden_size": _linear_widths(vae.obs_mlp)[0],
+            "vae_hidden_dims": _linear_widths(vae.prior_trunk),
+        },
+        "state_dict": vae.state_dict(),
+    }
+
+
+def embedded_opal_vae(checkpoint: Optional[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """The ``opal_vae_record`` in a ``SUPE`` checkpoint, ``None`` without one."""
+    if checkpoint is None:
+        return None
+    return checkpoint["state"].get("extra", {}).get("opal_vae")
 
 
 class SUPE(ExPLORe):
-    """SUPE as a thin extension of ExPLORe. See module docstring."""
+    """SUPE as a thin extension of ExPLORe. See module docstring.
+
+    ``opal_vae`` is the VAE whose decoder ``env`` (a ``SkillActionWrapper``)
+    acts through; without it the VAE is read from ``opal_checkpoint``. A
+    checkpoint embeds the VAE, and loading one restores it in place, so an
+    ``env`` built on this agent's ``opal_vae.decoder`` follows."""
 
     _compatible_checkpoint_algorithms = ("SUPE",)
 
@@ -87,16 +134,20 @@ class SUPE(ExPLORe):
         env: Any,
         opal_checkpoint: str,
         eval_env: Optional[Any] = None,
+        *,
+        opal_vae: Optional[OPALVAE] = None,
         **explore_kwargs: Any,
     ) -> None:
         self.opal_checkpoint = opal_checkpoint
         super().__init__(env, eval_env, **explore_kwargs)
-        # State-only by construction (ExPLORe.__init__ rejects images), so
-        # the Dict contract's single "state" key is always present.
-        obs_dim = int(np.prod(self.env.single_observation_space["state"].shape))
-        self.opal_vae = load_opal_vae(
-            opal_checkpoint, obs_dim, self.env.raw_action_space, device=self.device,
-        )
+        if opal_vae is None:
+            # State-only by construction (ExPLORe.__init__ rejects images), so
+            # the Dict contract's single "state" key is always present.
+            obs_dim = int(np.prod(self.env.single_observation_space["state"].shape))
+            opal_vae = load_opal_vae(
+                opal_checkpoint, obs_dim, self.env.raw_action_space, device=self.device,
+            )
+        self.opal_vae = opal_vae.to(self.device)
 
     def load_skill_relabeled_offline_buffer(
         self,
@@ -167,3 +218,11 @@ class SUPE(ExPLORe):
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {**super()._checkpoint_metadata(), "opal_checkpoint": self.opal_checkpoint}
+
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        return {**super()._extra_checkpoint_state(), "opal_vae": opal_vae_record(self.opal_vae)}
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        if "opal_vae" in state:
+            self.opal_vae.load_state_dict(state["opal_vae"]["state_dict"])

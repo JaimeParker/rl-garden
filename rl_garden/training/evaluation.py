@@ -14,8 +14,8 @@ Example:
       --num-eval-envs 16 --num-eval-episodes 50 \
       --capture-video false --output-json /tmp/calql_eval.json
 
-Training args are rebuilt in layers, each overriding the previous: the run's
-``config.json`` (``inputs``, then the selected backend's sub-config from
+Training args are rebuilt in layers, each overriding the previous: the run
+configuration (``inputs``, then the selected backend's sub-config from
 ``active_environment``), the checkpoint's hyperparameters, the eval CLI's
 environment/device fields, and finally any backend sub-config field set on
 the eval CLI to a non-default value (e.g. ``--gymnasium.device cuda:1``).
@@ -24,6 +24,17 @@ values only when passed; left out, the run's values stand. ``--obs.*``
 overrides the run's observation config only when the result differs from the
 default ``ObservationConfig()``. Backend sub-config fields left at their
 default on the eval CLI keep the run's values.
+
+The run configuration is the file ``--config-path`` names, else the one the
+checkpoint embeds (``metadata["run_config"]``), else the ``config.json`` of the
+checkpoint's run directory. Without any, ``--env-backend`` and ``--env-id`` are
+required and every setting the checkpoint does not record takes its Args
+default, with a warning.
+
+Evaluation needs the checkpoint and one evaluation environment, nothing else a
+run was given: the entry's
+``training_only_inputs`` are set to their absent values and no encoder reads a
+pretrained-weights file, since the checkpoint holds every weight.
 
 The agent is built by the registry entry's ``build_agent``; an entry
 registered without one is looked up by module path
@@ -38,7 +49,8 @@ import json
 import logging
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -56,16 +68,16 @@ from rl_garden.common.env_args import (
     MinariConfig,
     MujocoConfig,
     MujocoWarpConfig,
-    RoboTwinConfig,
 )
 from rl_garden.common.eval_metrics import EVAL_METRIC_ALIASES, EVAL_METRIC_DROP
 from rl_garden.common.resolved_config import resolved_config_json
 from rl_garden.envs.backend_registry import (
     EnvRequest,
+    _get_backend,
     make_evaluation_env,
-    make_training_envs,
 )
 from rl_garden.observations import ObservationConfig
+from rl_garden.training.inspection import CheckpointEvaluation, checkpoint_evaluation
 
 Phase = Literal["auto", "online", "offline", "off2on"]
 
@@ -86,14 +98,22 @@ class EvalCheckpointArgs(EnvBackendArgs):
     # Replaces the run's value only when it differs from ObservationConfig():
     # an Optional dataclass would turn ``--obs.*`` into tyro subcommands.
     obs: ObservationConfig = field(default_factory=ObservationConfig)
+
     control_mode: str | None = None
     render_mode: str = "rgb_array"
     num_eval_envs: int = 16
     num_eval_episodes: int = 50
+    # Steps of the env the agent acts in: with a builder that wraps it in action
+    # chunking, one step covers a whole chunk. None allows 1000 per episode.
     max_eval_steps: int | None = None
+
     seed: int = 1
+    # Device of the agent, for every algorithm whose constructor takes one.
     device: str = "auto"
-    buffer_device: str = "cpu"
+    # Evaluation reads no replay buffer, so it is built without storage ("meta").
+    # "cpu" or "cuda" allocate the run's full buffer there, for a custom buffer
+    # that cannot be built on "meta".
+    buffer_device: str = "meta"
 
     reward_scale: float = 1.0
     reward_bias: float = 0.0
@@ -118,8 +138,14 @@ class EvalCheckpointArgs(EnvBackendArgs):
     # extensions instead of growing this dataclass indefinitely.
     guidance_weight: float | None = None
 
+    # JSRL-only: the guide file of a checkpoint that embeds no guide. None uses
+    # the path recorded in training.
+    guide_checkpoint: str | None = None
+    # SUPE-only: the OPAL file of a checkpoint that embeds no VAE. None uses the
+    # path recorded in training.
+    opal_checkpoint: str | None = None
+
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
-    robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
     minari: MinariConfig = field(default_factory=MinariConfig)
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
@@ -288,22 +314,57 @@ def _apply_mapping_to_args(args: Any, values: Mapping[str, Any]) -> None:
         _set_existing_attr(args, key, value)
 
 
-def _config_args(config_path: Path) -> Mapping[str, Any]:
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+def _run_config(
+    eval_args: EvalCheckpointArgs, checkpoint: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    """The run configuration to evaluate with (see the module docstring)."""
+    if eval_args.config_path is not None:
+        config_path = Path(eval_args.config_path)
+    else:
+        embedded = checkpoint.get("metadata", {}).get("run_config")
+        if embedded is not None:
+            return embedded
+        config_path = _default_config_path(Path(eval_args.checkpoint_path))
+    if not config_path.exists():
+        return None
+    return json.loads(config_path.read_text(encoding="utf-8"))
+
+
+def _require_run_config_or_environment(
+    eval_args: EvalCheckpointArgs, checkpoint: Mapping[str, Any]
+) -> None:
+    if eval_args.config_path is not None and not Path(eval_args.config_path).exists():
+        raise SystemExit(f"--config-path {eval_args.config_path} does not exist.")
+    if _run_config(eval_args, checkpoint) is not None:
+        return
+    beside = _default_config_path(Path(eval_args.checkpoint_path))
+    missing = f"The checkpoint embeds no run configuration and {beside} does not exist"
+    if eval_args.env_backend is None or eval_args.env_id is None:
+        raise SystemExit(
+            f"{missing}; pass --config-path, or --env-backend and --env-id (with any --obs.* "
+            "and backend flags the run used)."
+        )
+    _logger.warning(
+        "%s: every setting not recorded in the checkpoint's hyperparameters or passed here "
+        "takes its default, which may differ from the run's",
+        missing,
+    )
+
+
+def _config_args(config: Mapping[str, Any]) -> Mapping[str, Any]:
     args = config.get("inputs", config.get("args", config))
     if not isinstance(args, Mapping):
-        raise SystemExit(f"Config {config_path} does not contain an args mapping.")
+        raise SystemExit("The run configuration does not contain an args mapping.")
     return args
 
 
-def _config_backend_section(config_path: Path) -> dict[str, Mapping[str, Any]]:
+def _config_backend_section(config: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     """The run's env-backend sub-config as ``{section name: values}``.
 
-    ``inputs`` in config.json drops every backend sub-config; the selected
+    ``inputs`` in the run configuration drops every backend sub-config; the selected
     backend's values live under ``active_environment``. Configs without that
     block (older or hand-written ones) yield nothing.
     """
-    config = json.loads(config_path.read_text(encoding="utf-8"))
     active_environment = config.get("active_environment")
     if not isinstance(active_environment, Mapping):
         return {}
@@ -351,14 +412,10 @@ def _load_training_args(
     entry = registry.entries()[algorithm]
     args = entry.args_cls()
 
-    config_path = (
-        Path(eval_args.config_path)
-        if eval_args.config_path is not None
-        else _default_config_path(Path(eval_args.checkpoint_path))
-    )
-    if config_path.exists():
-        _apply_mapping_to_args(args, _config_args(config_path))
-        _apply_mapping_to_args(args, _config_backend_section(config_path))
+    config = _run_config(eval_args, checkpoint)
+    if config is not None:
+        _apply_mapping_to_args(args, _config_args(config))
+        _apply_mapping_to_args(args, _config_backend_section(config))
 
     metadata = checkpoint.get("metadata", {})
     hyperparameters = metadata.get("hyperparameters", {})
@@ -385,6 +442,9 @@ def _load_training_args(
         "seed": eval_args.seed,
         "device": eval_args.device,
         "buffer_device": eval_args.buffer_device,
+        # Disk-backed or lazily-read replay storage needs a real CPU buffer.
+        "mmap_dir": None,
+        "replay_lazy_next_obs": False,
         "reward_scale": eval_args.reward_scale,
         "reward_bias": eval_args.reward_bias,
         "capture_video": eval_args.capture_video,
@@ -400,10 +460,13 @@ def _load_training_args(
         "save_replay_buffer": False,
         "save_final_checkpoint": False,
     }
-    if eval_args.guidance_weight is not None:
-        overrides["guidance_weight"] = eval_args.guidance_weight
+    for name in ("guidance_weight", "guide_checkpoint", "opal_checkpoint"):
+        value = getattr(eval_args, name)
+        if value is not None:
+            overrides[name] = value
     _apply_mapping_to_args(args, overrides)
     _apply_mapping_to_args(args, _backend_overrides_from_cli(eval_args))
+    _apply_mapping_to_args(args, entry.training_only_inputs)
     return args
 
 
@@ -482,29 +545,43 @@ def _builder_from_module(module: Any, algorithm: str):
     return builders[0]
 
 
-def _build_agent(
-    phase: str,
-    algorithm: str,
-    args: Any,
-    eval_args: EvalCheckpointArgs,
-):
-    logger = Logger(log_type="none")
-    req = _env_request(args, eval_args)
-    build_agent = _registered_builder(phase, algorithm)
+@contextmanager
+def _encoder_weights_from_checkpoint() -> Iterator[None]:
+    """Encoders built in this scope skip their pretrained-weights file
+    (``--encoder.pretrained-weights``, or the same field of a policy graph's
+    encoder node): the checkpoint loaded next holds those weights."""
+    from rl_garden.encoders.resnet import ResNetEncoder
 
+    load_pretrained = ResNetEncoder.load_pretrained
+    ResNetEncoder.load_pretrained = lambda self, name, strict=False: []
+    try:
+        yield
+    finally:
+        ResNetEncoder.load_pretrained = load_pretrained
+
+
+def _build_agent(phase: str, algorithm: str, args: Any, eval_env: Any) -> Any:
+    """The agent the entry's builder makes with ``eval_env`` as its only
+    environment; builders and constructors read its spaces and ``num_envs``
+    and never step it."""
+    logger = Logger(log_type="none")
+    build_agent = _registered_builder(phase, algorithm)
     if phase == "offline":
-        eval_env = make_evaluation_env(args.env_backend, req)
         env_spec = OfflineEnvSpec(
             eval_env.single_observation_space,
             eval_env.single_action_space,
             num_envs=1,
         )
-        agent = build_agent(args, env_spec, logger, eval_env)
-        return agent, None, eval_env
+        return build_agent(args, env_spec, logger, eval_env)
+    return build_agent(args, eval_env, eval_env, logger, None)
 
-    train_env, eval_env = make_training_envs(args.env_backend, req)
-    agent = build_agent(args, train_env, eval_env, logger, None)
-    return agent, train_env, eval_env
+
+def _policy_eval_env(agent: Any, eval_env: Any) -> Any:
+    """The env the agent's policy acts in: the one its builder gave it, which
+    may wrap the backend's ``eval_env`` (action chunking, skill actions), or
+    ``eval_env`` itself when the agent holds none."""
+    agent_eval_env = getattr(agent, "eval_env", None)
+    return eval_env if agent_eval_env is None else agent_eval_env
 
 
 def _reset_env(env: Any, seed: int):
@@ -554,6 +631,13 @@ def _append_metric_values(
     return appended
 
 
+def _to_agent_device(agent: Any, value: Any) -> Any:
+    device = getattr(agent, "device", None)
+    if device is None or not isinstance(value, torch.Tensor):
+        return value
+    return value.to(device)
+
+
 def evaluate_agent(
     agent: Any,
     eval_env: Any,
@@ -582,12 +666,13 @@ def evaluate_agent(
                 obs, rewards, terminations, truncations, infos = eval_env.step(
                     env_action
                 )
+                # The env may live on another device than the agent.
                 agent._eval_step_hook(
                     obs_before,
                     critic_action,
-                    rewards,
-                    terminations,
-                    truncations,
+                    _to_agent_device(agent, rewards),
+                    _to_agent_device(agent, terminations),
+                    _to_agent_device(agent, truncations),
                     infos,
                 )
 
@@ -675,6 +760,15 @@ def _reject_unevaluable_algorithm(phase: str, algorithm: str) -> None:
         )
 
 
+def _reject_unknown_env_backend(env_backend: str) -> None:
+    try:
+        _get_backend(env_backend)
+    except KeyError as exc:
+        raise SystemExit(
+            f"{exc.args[0]} Pass --env-backend to evaluate the checkpoint on another backend."
+        ) from exc
+
+
 def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
     if not eval_args.checkpoint_path:
         raise SystemExit("--checkpoint-path is required.")
@@ -683,6 +777,7 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
 
     checkpoint_path = Path(eval_args.checkpoint_path)
     checkpoint = load_checkpoint_file(checkpoint_path, map_location="cpu")
+    _require_run_config_or_environment(eval_args, checkpoint)
     phase, algorithm = _resolve_phase_and_algorithm(
         eval_args.phase,
         eval_args.algorithm,
@@ -690,11 +785,15 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
     )
     _reject_unevaluable_algorithm(phase, algorithm)
     args = _load_training_args(phase, algorithm, eval_args, checkpoint)
+    _reject_unknown_env_backend(args.env_backend)
     seed_everything(args.seed)
     enable_fast_math()
 
-    agent, train_env, eval_env = _build_agent(phase, algorithm, args, eval_args)
+    evaluation = CheckpointEvaluation(checkpoint_path, checkpoint, eval_args.device)
+    eval_env = make_evaluation_env(args.env_backend, _env_request(args, eval_args))
     try:
+        with checkpoint_evaluation(evaluation), _encoder_weights_from_checkpoint():
+            agent = _build_agent(phase, algorithm, args, eval_env)
         agent.load(
             checkpoint_path,
             strict=eval_args.strict,
@@ -706,16 +805,13 @@ def evaluate_checkpoint(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
         )
         metrics = evaluate_agent(
             agent,
-            eval_env,
+            _policy_eval_env(agent, eval_env),
             seed=eval_args.seed,
             num_eval_episodes=eval_args.num_eval_episodes,
             max_eval_steps=max_eval_steps,
         )
     finally:
-        if eval_env is not None:
-            eval_env.close()
-        if train_env is not None:
-            train_env.close()
+        eval_env.close()
 
     result = {
         "checkpoint_path": str(checkpoint_path),

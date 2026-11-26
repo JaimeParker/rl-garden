@@ -24,10 +24,7 @@ convention `AGENTS.md` requires for other optional backends. `3rd_party/
 RLinf` is a read-only vendored reference copy; nothing under it is edited
 by any of this.
 
-Verification records (exact launch commands, GPU/cluster state, every bug
-hit and its fix) live in the machine-local, gitignored `.agents/local/
-6017.md` and `9990.md` — this document explains the *shape* of what was
-built and *why*, those files have the blow-by-blow.
+This document explains the *shape* of what was built and *why*.
 
 ## Why RLinf, and the two adapter shapes
 
@@ -191,8 +188,7 @@ optimizer construction and checkpointing both flow through RLinf's
 ### Five real bugs, and the general lessons behind each
 
 None were guessable from static reading; all five surfaced only by
-actually launching against a real Ray/FSDP cluster (see `.agents/local/
-6017.md` for the literal error text and fix commits). Each has a lesson
+actually launching against a real Ray/FSDP cluster. Each has a lesson
 that generalizes past this one adapter:
 
 1. **RLinf's model registry (`register_model`) is a plain in-process

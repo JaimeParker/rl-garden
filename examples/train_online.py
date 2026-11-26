@@ -20,8 +20,8 @@ Usage:
     python examples/train_online.py sac --env_id PickCube-v1 \\
         --obs.rgb base_camera --encoder.backbone plain_conv
 
-    # SAC – RoboTwin backend
-    python examples/train_online.py sac --env_backend robotwin --env_id place_shoe
+    # SAC – Gymnasium backend
+    python examples/train_online.py sac --env_backend gymnasium --env_id Pendulum-v1
 
     # DrQ-v2 (requires image observations)
     python examples/train_online.py drqv2 --env_id PickCube-v1 --obs.rgb base_camera

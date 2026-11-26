@@ -62,10 +62,6 @@ Environment backend registry
      - ``rl_garden.envs.backends.robomimic.RobomimicBackend``
      - ``robomimic``
      - :doc:`/guides/robomimic-integration`
-   * - ``robotwin``
-     - ``rl_garden.envs.backends.robotwin.RoboTwinBackend``
-     - ``robotwin``
-     - :doc:`/guides/robotwin`
 
 An em dash means pyproject.toml declares no dedicated extra with that backend name.
 Consult the linked page for core dependencies or separate simulator installation.

@@ -2,15 +2,15 @@
 
 This guide covers installing the `robomimic` env backend, downloading its
 datasets, and running RLPD offline-to-online training against them. It
-complements `.agents/rules/adding-env-backend.md`,
-which this backend follows structurally (mirrors the already-shipped
-`d4rl_legacy` backend).
+mirrors the structure of the `d4rl_legacy` backend.
 
 `robomimic` (ARISE-Initiative) wraps `robosuite`/MuJoCo single-arm
 manipulation tasks with an old-style 4-tuple gym API and HuggingFace-hosted
 demonstration datasets. Scope of this integration: `low_dim` (state)
 observations only, `ph`/`mh` dataset types, single-arm tasks (`lift`, `can`,
-`square`, `transport`, `tool_hang`). Image observations and the `mg`
+`square`, `tool_hang`). `transport` can be downloaded and loaded, but the
+flattened state holds only `object` and `robot0_*` fields, so observations
+from any additional robot are not part of it. Image observations and the `mg`
 dataset type are out of scope for now.
 
 Producer mapping (see [Configuration System](configuration.md#h5-dataset-observation-layout)
@@ -52,9 +52,8 @@ python -m robomimic.scripts.download_datasets \
   --hdf5_types low_dim
 ```
 
-- `--tasks`: one or more of `lift`, `can`, `square`, `transport`,
-  `tool_hang` (plus others upstream hosts; these five are what this
-  integration has been scoped/tested against).
+- `--tasks`: one or more of `lift`, `can`, `square`, `tool_hang` (plus others
+  upstream hosts; `transport` is subject to the state limit noted above).
 - `--dataset_types`: `ph` (proficient-human) or `mh` (multi-human).
   `mg` (machine-generated) is out of scope — its sparse/dense reward
   variant selection hasn't been verified against this backend's
@@ -66,8 +65,7 @@ python -m robomimic.scripts.download_datasets \
 Files download by default under `<robomimic_repo>/datasets/<task>/<dataset_type>/`
 (pass `--download_dir` to redirect). They are small: `lift/ph/low_dim_v15.hdf5`
 is ~21MB (200 demos, 9666 transitions) — cheap enough to download in full
-rather than truncating. Larger tasks (`transport`, `tool_hang`) are bigger
-but still MB-scale for `low_dim`, not GB-scale.
+rather than truncating. Larger tasks (`transport`, `tool_hang`) are bigger.
 
 Keep downloaded datasets outside the repository, same convention as
 `d4rl_legacy` (see
@@ -109,10 +107,6 @@ python examples/train_online.py rlpd \
   --num-envs 4 --num-eval-envs 2 \
   --total-timesteps 100000 --learning-starts 1000 --batch-size 256
 ```
-
-This exact shape (smaller step counts) was run as a real end-to-end smoke
-test — actual robosuite/MuJoCo sim, actual downloaded dataset, full RLPD
-training loop to completion — during implementation.
 
 ### Key config fields (`--robomimic.<field>`)
 
@@ -156,8 +150,8 @@ would misalign RLPD's mixed batches without any other test catching it
 - `low_dim` only; no `image` observation support yet.
 - `mg` dataset type untested (sparse/dense reward variant selection not
   verified).
-- `can`/`square`/`transport`/`tool_hang` are architecturally supported
-  (same hdf5 schema, same metadata-driven construction) but only `lift`
-  has been run end to end so far.
+- `can`/`square`/`tool_hang` share the hdf5 schema and metadata-driven
+  construction, but only `lift` has been run end to end.
+- `transport`'s state covers `object` and `robot0_*` fields only.
 - No confirmed `seed()`-equivalent on robosuite's env for
   `reset(seed=...)` — seed is accepted by the adapter but not forwarded.

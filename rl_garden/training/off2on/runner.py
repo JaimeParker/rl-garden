@@ -318,7 +318,8 @@ def _run_off2on(
         derived=materialized_derived,
     )
     persist_effective_config(materialized, config_path)
-    logger.update_config(json_value(materialized))
+    agent.run_config = json_value(materialized)
+    logger.update_config(agent.run_config)
 
     # Offline training phase
     if args.num_offline_steps > 0:

@@ -24,7 +24,6 @@ SIM_FILE_KEYWORDS = (
     "robomimic",
     "d4rl",
     "metaworld",
-    "robotwin",
     "isaaclab",
     "gym_env",
     "vector_env",

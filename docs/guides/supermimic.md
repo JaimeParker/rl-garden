@@ -223,7 +223,10 @@ transitions; its default (1M) is only a placeholder, since the right budget is t
 
 ## 4. Commands
 
-Learned heads on any env that emits the keys you declare (state-only works too):
+Learned heads on an env that emits the keys you declare (state-only works too). The
+`gymnasium` backend and external backends can supply extra state keys; every other
+in-tree backend rejects `--obs.extra_state` at environment construction with
+"`<backend>` has no extra state sources":
 
 ```bash
 rl-garden-train-online supermimic \
@@ -240,7 +243,8 @@ rl-garden-train-online supermimic \
   --obs_history_len 10 --buffer_size 4096000
 ```
 
-`--print-config` validates the flags, and `--dry-run` builds the env and the agent without
+`--print-config` validates the flags (it does not check that the backend emits the declared
+keys), and `--dry-run` builds the env and the agent without
 training. `--obs.extra_state` is the only observation flag that matters here: `--encoder.*`,
 `--obs_groups.*`, `--critic_encoder.*` and `--encoder_sharing` have no effect because the
 policy trains no observation encoder.
@@ -308,7 +312,7 @@ policy trains no observation encoder.
   <https://supermimic.github.io>.
 - Official implementation (the authority for defaults and MLP architecture):
   <https://github.com/HybridRobotics/supermimic>.
-- Two independent reproductions informed the original integration's state representation
+- Two independent reproductions informed the state representation
   and task interfaces: `supermimic_vibed` (Chong Zhang, ETH
   Zurich, MIT license, <https://github.com/zita-ch/supermimic_vibed>) and `Uni-SuperMimic`
   (Motphys, Apache-2.0, <https://github.com/Motphys/Uni-SuperMimic>).

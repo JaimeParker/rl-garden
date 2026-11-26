@@ -18,41 +18,20 @@ A non-default ``reward_scale``/``reward_bias`` is applied to the reward
 """
 from __future__ import annotations
 
-import functools
 from typing import Any
 
 import gymnasium as gym
 
 from rl_garden.envs.maniskill.config import ManiSkillEnvConfig
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 from rl_garden.observations.schema import ObservationContractError
-
-
-@functools.cache
-def _scaled_reward_vector_env_class() -> type:
-    """Define the reward-scaling ``ManiSkillVectorEnv`` subclass on first use,
-    keeping ``mani_skill`` a lazy import."""
-    from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
-
-    class _ScaledRewardManiSkillVectorEnv(ManiSkillVectorEnv):
-        """``ManiSkillVectorEnv`` that returns ``reward_scale * reward + reward_bias``
-        after its own ``step`` has recorded the raw reward in the episode metrics."""
-
-        def __init__(self, env, num_envs: int, *, reward_scale: float, reward_bias: float, **kwargs) -> None:
-            super().__init__(env, num_envs, **kwargs)
-            self.reward_scale = float(reward_scale)
-            self.reward_bias = float(reward_bias)
-
-        def step(self, actions):
-            obs, reward, terminated, truncated, infos = super().step(actions)
-            return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, infos
-
-    return _ScaledRewardManiSkillVectorEnv
 
 
 def make_maniskill_env(cfg: ManiSkillEnvConfig):
     """Build a ManiSkill vectorized env according to ``cfg``.
 
-    Returns the wrapped ``ManiSkillVectorEnv`` instance.
+    Returns the ``ManiSkillVectorEnv``, inside a ``RewardScaleBiasWrapper`` when
+    the reward transform is not the identity.
     """
     if cfg.frame_stack < 1:
         raise ObservationContractError("frame_stack must be at least 1")
@@ -147,16 +126,10 @@ def make_maniskill_env(cfg: ManiSkillEnvConfig):
             video_fps=cfg.video_fps,
         )
 
-    vector_kwargs: dict[str, Any] = {
-        "ignore_terminations": cfg.ignore_terminations,
-        "record_metrics": cfg.record_metrics,
-    }
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        return _scaled_reward_vector_env_class()(
-            env,
-            cfg.num_envs,
-            reward_scale=cfg.reward_scale,
-            reward_bias=cfg.reward_bias,
-            **vector_kwargs,
-        )
-    return ManiSkillVectorEnv(env, cfg.num_envs, **vector_kwargs)
+    env = ManiSkillVectorEnv(
+        env,
+        cfg.num_envs,
+        ignore_terminations=cfg.ignore_terminations,
+        record_metrics=cfg.record_metrics,
+    )
+    return apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)

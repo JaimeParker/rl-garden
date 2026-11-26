@@ -22,7 +22,8 @@ run directly through `--env_backend isaaclab --env_id <task-id>`. See
 The two generations cannot share a Python environment. At env construction
 the backend detects the installed generation (`rl_garden.envs.isaaclab.detect`):
 if the `isaaclab_physx` package is importable it is 3.0, otherwise if
-`isaaclab` is importable it is 2.x, otherwise it raises `ImportError`. It then
+`isaaclab` is importable it is 2.x (a 3.x install without `isaaclab_physx`
+raises `ImportError`, as does having neither package). It then
 builds the env with `rl_garden.envs.isaaclab.v3` or `rl_garden.envs.isaaclab.v2`.
 The adapter, the zero-frame guard, frame stacking, `IsaacLabEnvConfig` and
 the CLI are shared.
@@ -75,7 +76,7 @@ same code runs on both generations:
 |---|---|---|
 | `_joint_pos() -> Tensor` / `_joint_vel() -> Tensor` | `robot.data.joint_pos.torch` / `joint_vel.torch` | `robot.data.joint_pos` / `joint_vel` |
 | `_apply_joint_effort(target, joint_ids) -> None` | `robot.set_joint_effort_target_index(target=, joint_ids=)` | `robot.set_joint_effort_target(target, joint_ids=)` |
-| `_camera_rgb() -> Tensor` | `camera.data.output["rgb"].torch.clone()` | `camera.data.output["rgb"]` |
+| `_camera_rgb() -> Tensor` | `camera.data.output["rgb"].torch.clone()` | `camera.data.output["rgb"].clone()` |
 | `_sample_reset_state(env_ids, joint_pos, joint_vel)` | reset-randomization hook, see below | same |
 
 `self.robot.find_joints(...)`, `self.actions`, `self.reset_terminated`,
@@ -110,7 +111,7 @@ generation's own writer API.
 
 | | Isaac Lab 3.0 | Isaac Lab 2.x |
 |---|---|---|
-| Asset/sensor data | `ProxyArray`; read through `.torch` (zero-copy view). Without `.torch` the adapter sees a warp dtype and builds the wrong space. | plain `torch.Tensor` |
+| Asset/sensor data | `ProxyArray`; read through `.torch` (zero-copy view). Without `.torch` the adapter does not get a tensor: a declared `Dict` space raises `ObservationContractError`, and an int-placeholder space is inferred wrongly. | plain `torch.Tensor` |
 | Quaternions | `(x, y, z, w)`, identity `(0.0, 0.0, 0.0, 1.0)` | `(w, x, y, z)`, identity `(1.0, 0.0, 0.0, 0.0)` |
 | Camera cfg | `CameraCfg` (tiled) + `renderer_cfg` | `TiledCameraCfg` (`CameraCfg` is the slow per-camera path); no `renderer_cfg` |
 | Physics cfg | `SimulationCfg(physics=...)`, presets | `SimulationCfg(dt, render_interval)`, always PhysX |
@@ -127,7 +128,7 @@ Always write the literal with a comment naming the order.
 Logic, written once:
 
 ```python
-# rl_garden/envs/isaaclab/tasks_common/my_task.py
+# rl_garden/envs/isaaclab/tasks_common/<my_task>.py
 from __future__ import annotations
 
 import torch
@@ -155,7 +156,7 @@ class MyTaskLogic:
 3.0 cfg:
 
 ```python
-# rl_garden/envs/isaaclab/v3/tasks/my_task.py
+# rl_garden/envs/isaaclab/v3/tasks/<my_task>.py
 from __future__ import annotations
 
 import gymnasium as gym
@@ -210,7 +211,7 @@ gym.register(
 2.x cfg, the same module under `v2/tasks/` with the 2.x scaffold:
 
 ```python
-# rl_garden/envs/isaaclab/v2/tasks/my_task.py
+# rl_garden/envs/isaaclab/v2/tasks/<my_task>.py
 from rl_garden.envs.isaaclab.v2.direct_env import RLGardenDirectEnvCfg, RLGardenDirectRLEnv, RLGardenSceneCfg
 
 # MyTaskSceneCfg / MyTaskEnvCfg / MyTaskEnv / gym.register(...): same bodies as above.
@@ -329,6 +330,8 @@ no other key names are accepted anywhere in rl-garden):
   camera set/resolution into the task registration rather than reading it
   from `ObservationConfig.rgb`/`.depth`/`.image_size` at runtime, so any
   non-empty name works). Bare `"rgb"`/`"depth"` keys are **not** valid.
+- `"state_<name>"` — additional named state vectors are valid in the shared
+  vocabulary, but this backend rejects `extra_state` requests.
 
 This is what lets the resulting env plug directly into rl-garden's existing
 `ImageFrameStackWrapper` (`rl_garden/envs/wrappers`) with zero extra code —
@@ -340,10 +343,8 @@ normalization that IsaacLab's own cartpole camera task does for "better
 training results." rl-garden's image encoders (`rl_garden/encoders/base.py:
 image_needs_normalization`) decide whether to apply `/255` normalization
 based on the declared space's dtype/range (your `cfg.observation_space`
-entry, or inferred from your tensor's actual dtype). Pre-normalized input
-is **silently handled wrong** (double-normalized), not rejected with an
-error. This is a training-quality bug, not a crash, so test suites won't
-catch it. See `CartpoleCameraLogic` in `tasks_common/cartpole.py` for a
+entry, or inferred from your tensor's actual dtype). RGB must be `uint8` in `[0, 255]`: a float
+`rgb_*` tensor raises `ObservationContractError` at env construction. See `CartpoleCameraLogic` in `tasks_common/cartpole.py` for a
 correct example.
 
 The `/255` rule is RGB-only. `"depth_<camera_name>"` keys are passed to the
@@ -456,8 +457,8 @@ mis-sizes the camera sensor's per-env buffers.
 
 On 3.0 the `.torch` view of `output["rgb"]` is non-contiguous: it strides
 into an RGBA buffer, and the next render overwrites it. The 3.0
-`_camera_rgb()` therefore returns a `.clone()`. The 2.x accessor returns
-Isaac Lab's tensor as-is.
+`_camera_rgb()` therefore returns a `.clone()`. The 2.x accessor also
+returns a `.clone()`, so both accessors return an owned copy.
 
 **On 3.0, always set `renderer_cfg` explicitly.** Leaving it at the default
 `RendererCfg()` resolves to Kit RTX.
@@ -466,9 +467,11 @@ Isaac Lab's tensor as-is.
 `PlainConv` image encoder (`rl_garden/encoders/plain_conv.py`) accepts any
 height and width of 16 or more and raises `ValueError` below that. Its default
 `flatten` pooling sizes a `Linear` layer from the image, so that layer grows
-with image area; `--encoder.plain_conv_pooling gap` keeps it fixed. This
-backend doesn't consult `--obs.image_size`: the camera's pixel resolution is
-baked into the camera cfg's `width`/`height` in the task registration. The
+with image area; `--encoder.plain_conv_pooling gap` keeps it fixed. Do
+not pass `--obs.image_size` on this backend; it raises
+`ObservationContractError` when the env is built. The camera's pixel
+resolution is baked into the camera cfg's `width`/`height` in the task
+registration. The
 in-tree camera tasks use 64×64.
 
 **⚠️ Kit RTX needs a driver Kit accepts.** On a rejected driver (e.g.
@@ -478,7 +481,7 @@ frames. The adapter checks the first observation and raises `RuntimeError`
 ("produced only zero frames") instead of training on black images; the
 3.0 default Newton renderer is unaffected. 2.x has no non-RTX camera
 renderer. See [`isaaclab-camera-stall.md`](isaaclab-camera-stall.md) for the
-history of the 2.x stall and the 3.0 measurements. State-only tasks (no
+2.x stall, its resolution, and the driver facts. State-only tasks (no
 camera) are unaffected.
 
 ## Episode metrics
@@ -486,8 +489,9 @@ camera) are unaffected.
 The backend computes each env's episode `return` and `episode_len` itself and
 reports them through `infos["final_info"]`, so they show up in the `[train]`
 line and as `train/return` / `train/episode_len` without any task code.
-`return` is the sum of the raw env rewards, before `--reward_scale` and
-`--reward_bias`.
+`return` is the sum of the raw env rewards. `--reward_scale` and
+`--reward_bias` apply to the live env reward the algorithm trains on, not to
+the reported return.
 
 Per-env episode metrics come from `self.extras["episode_metrics"]`, a dict of
 `(num_envs,)` tensors. Assign it on every step where some env ends (e.g. in

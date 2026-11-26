@@ -29,9 +29,10 @@ output is disabled.
    optimizer state alone do not preserve replay distribution.
 4. Save with `--save_replay_buffer` when the checkpoint is intended for exact
    off-policy continuation. Replay snapshots are separate
-   `_replay_buffer.pt` files and can be large.
-5. Pass `--load_checkpoint <path>` for loading. Keep replay loading enabled only
-   when a matching replay snapshot should be restored.
+   `replay_buffer_<suffix>.pt` files (`replay_buffer_final.pt` for `final.pt`)
+   and can be large.
+5. Pass `--load_checkpoint <path>` for loading. Add
+   `--load_replay_buffer` only when a matching replay snapshot should be restored.
 6. Validate the resolved arguments with `--print-config` before a long resumed run.
 
 Example offline load:

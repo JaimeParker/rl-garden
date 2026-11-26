@@ -43,6 +43,7 @@ registry.register(
     run_fn,            # run_fn(args): trains
     algorithm_cls=...,  # zero-arg callable returning the algorithm class
     build_agent=...,    # the builder run_fn constructs its agent with
+    training_only_inputs=...,  # Args fields only training needs (evaluation)
 )
 ```
 
@@ -54,6 +55,16 @@ registry.register(
 - `build_agent` is `build_agent(args, env, eval_env, logger, checkpoint_dir)`
   for the online and off2on phases and `build_agent(args, env_spec, logger,
   eval_env)` for the offline phase. Evaluation rebuilds the agent with it.
+- `training_only_inputs` names the Args fields that point at something only
+  training needs: a dataset, a warm-start, teacher or demonstration source, a
+  disk-backed replay directory. Evaluation sets them to their absent value
+  before it calls `build_agent`, so the builder must build an agent without
+  them (a run that requires one checks it in `run_fn` or, for a fresh start,
+  in the builder). A tuple of names uses each field's default, which must be
+  `None` or `""`; a mapping gives the value itself, e.g.
+  `{"demo_env_id": None, "online_ratio": 1.0}`. An unknown field raises
+  `ValueError`. Without the argument every field reaches the builder as the
+  run had it.
 - A duplicate name or a reused Args type raises `ValueError`. Dispatch matches
   the exact Args type, so a subclassed Args needs its own registration.
 
@@ -72,7 +83,7 @@ this group, once per process, before it parses a command. The module may
 register on any phase. A module that fails to import raises a `RuntimeError`
 naming its entry point; an external name that clashes with an in-tree one
 fails in its `register` call. The same pattern exists for env backends
-(`rlgarden.env_backends`) and policy-graph nodes (`rlgarden.graph_nodes`).
+(`rlgarden.env_backends`, see [Environment backends](#7-environment-backends)) and policy-graph nodes (`rlgarden.graph_nodes`).
 
 A package that is not installed imports its registering module from its own
 launcher before calling `registry.run_cli()`.
@@ -150,8 +161,8 @@ helpers `ppo_common_kwargs` / `ppo_observation_kwargs`
 (`rl_garden/training/online/entrypoints/ppo.py`) or `sac_common_kwargs` /
 `sac_observation_kwargs` (`.../sac.py`), and must construct the agent through
 `rl_garden.training.inspection.construct_agent(cls, **kwargs)`: it records the
-call for `--print-config` and `--dry-run`, and a run whose builder bypassed it
-fails.
+call for `--dry-run` and the materialized `config.json`, and a run whose builder
+bypassed it fails.
 
 ## 3. The algorithm subclass
 
@@ -351,10 +362,11 @@ contract.
 `DPPO` and `FlowPPO` (and `DiffusionCMDistillOnline`, a `DPPO`) train a
 denoising or flow chain with PPO's clip ratio applied per chain step. They are
 not `PPO` subclasses: both subclass `ChainPPOCore(OnPolicyAlgorithm)`
-(`rl_garden/algorithms/chain_ppo_core.py`, which replaces the former
-`DPPOCore` / `FlowPPOCore`). The core owns the rollout step and the stored
-chain, the advantages (normalized and quantile-clamped once over the rollout's
-env steps), the pair-minibatch loop, the two-optimizer step with critic warmup
+(`rl_garden/algorithms/chain_ppo_core.py`). The core owns the rollout step and
+the stored chain, the advantages (normalized and quantile-clamped over the
+population the class attribute `advantage_normalization` names: `"minibatch"` for
+each minibatch's pairs, as in `DPPO`, or `"rollout"` for the rollout's env steps,
+as in `FlowPPO` and by default), the pair-minibatch loop, the two-optimizer step with critic warmup
 and the actor gradient clip over the actor optimizer's parameters, `target_kl`
 checked after each step, the LR schedulers (checkpoint key
 `lr_scheduler_states`), the averaged metrics and explained variance. A subclass
@@ -440,12 +452,13 @@ different keyword set, so a subclass of it extends its own `_policy_kwargs`
 
 ### Off-policy loop and replay seams
 
-These are stable contract points from now on: the real-world package
+These are stable contract points: the real-world package
 (`real_world_rl`, in the downstream `real-world-rl` repository,
 which carries rl-garden as a submodule) subclasses `SAC`, `RLPD` and `RLPDHybrid` through
 them, so a change to a signature or to when the loop calls a hook updates this
 table and `tests/test_off_policy_seams.py` in the same commit. `learn()` runs,
-per environment step: `_rollout_action`, `env.step`, `_replay_buffer_add_kwargs`
+per environment step: `_rollout_action`, `env.step`, `_on_env_step`,
+`_replay_buffer_add_kwargs`
 and `_replay_buffer_step_kwargs` (merged into one `replay_buffer.add(obs,
 real_next_obs, replay_action, rewards, stop_bootstrap, **kwargs)` call), then
 `_post_rollout_step`.
@@ -454,6 +467,7 @@ real_next_obs, replay_action, rewards, stop_bootstrap, **kwargs)` call), then
 |---|---|---|---|
 | `OffPolicyAlgorithm._rollout_action` | `(obs, learning_has_started: bool) -> (replay_action, env_action, action_context)` | `_policy_action(obs)` mixed with `_explore_action(obs)` at `random_action_prob` while an initial training phase is active; otherwise `_explore_action` before `learning_starts` and `_policy_action` after; returns `(actions, actions, None)`. `replay_action` is stored in the buffer, `env_action` goes to `env.step`, `action_context` (a dict or `None`) reaches `_replay_buffer_add_kwargs` and `_post_rollout_step` of the same step | `DDPG`, `FlashSAC`, `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `NCRL`, `SuperMimic`, `_SPOTRolloutTrainingShell` |
 | `OffPolicyAlgorithm._explore_action` | `(obs) -> Tensor` | uniform in `[-1, 1]`, shaped like `env.action_space` (all envs), on the algorithm's device | `NCRL`, `SuperMimic` |
+| `OffPolicyAlgorithm._on_env_step` | `(rewards, terminations, truncations) -> None` | no-op; called right after every training `env.step` with the tensors it returned, before the replay write | `FlashSAC` (updates its reward normalizer) |
 | `OffPolicyAlgorithm._replay_buffer_add_kwargs` | `(action_context, obs, next_obs, real_next_obs, infos, need_final_obs) -> dict` | `{}`; the dict is passed as extra keywords to `replay_buffer.add` | `RLPDHybrid` (`grasp_penalty` from `infos`), `SequenceSAC`, `TransformerSAC`, `DreamerV3`, `SuperMimic` |
 | `OffPolicyAlgorithm._replay_buffer_step_kwargs` | `(terminations, truncations) -> dict` | `{}` (`SAC`: `{"episode_end": terminations \| truncations}` when `nstep > 1`); merged after the add keywords, so a key present in both takes this value | `SAC`, `DDPG`, `FlashSAC`, `SequenceSAC`, `RLPDHybrid`, `ACRLPDCore`, `_CalQLRolloutTrainingShell`, `ModelBasedAlgorithm` |
 | `OffPolicyAlgorithm._on_env_reset` | `(obs) -> None` | no-op; called once by `learn()` right after its `env.reset(seed=...)` (later resets happen inside `env.step`, see `terminations` / `truncations` in `_post_rollout_step`) | `SequenceSAC`, `JSRL`, `ChunkedRolloutMixin`, `TDMPC2`, `DreamerV3`, `NCRL`, `SuperMimic` |
@@ -464,7 +478,7 @@ real_next_obs, replay_action, rewards, stop_bootstrap, **kwargs)` call), then
 | `BaseAlgorithm._eval_step_hook` | `(obs_before, critic_action, rewards, terminations, truncations, infos) -> None` | no-op; called after every eval `env.step` (`SACCore` accumulates Q-vs-MC when `q_mc_diagnostics`) | same classes as `_eval_start_hook` |
 | `SAC._build_replay_buffer` | `() -> BaseReplayBuffer` | `NStepReplayBuffer` when `nstep > 1`, else `ReplayBuffer` over `num_envs` envs; called once in `_setup_model` | `RecurrentSAC`, `TransformerSAC`, `RLPDHybrid`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `SO2Core`, `CalQLCore` |
 | `SAC._policy_action_space` | `() -> spaces.Box` | `env.single_action_space`; read by `_policy_kwargs` and by the buffer builders of the overriders | `ACRLPDCore`, `QAMCore`, `QGFCore`, `ACFQLCore` |
-| `SACCore._sample_train_batch` | `(batch_size) -> sample` | `replay_buffer.sample(batch_size)`; called once per gradient step (once per group under high UTD). The sample is a dataclass with `obs`, `next_obs`, `actions`, `rewards`, `dones` and the fields named by `_extra_batch_slice_keys` | `PriorDataReplayMixin` (mixes in the prior-data buffer), `Off2OnReplayMixin`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `OfflineSAC`, `CQL` |
+| `SACCore._sample_train_batch` | `(batch_size) -> sample` | `replay_buffer.sample(batch_size)`; called once per gradient step (once per group under high UTD). The sample is a dataclass with `obs`, `next_obs`, `actions`, `rewards`, `dones` and the fields named by `_extra_batch_slice_keys` | `PriorDataReplayMixin` (mixes in the prior-data buffer), `ExPLORe`, `Off2OnReplayMixin`, `ACRLPDCore`, `QAMCore`, `QGFCore`, `OfflineSAC`, `CQL` |
 | `SACCore._target_action_log_prob` | `(data) -> (next_action, next_log_prob, next_actor_features)` | `_actor_action_log_prob(data.next_obs)`; the TD target's next action under the current actor | `SO2Core` |
 | `SACCore._actor_loss_from_batch` | `(data) -> (loss, detached log_prob)` | `_actor_loss(data.obs)` | `SequenceSAC`, `ACRLPDCore` |
 | `SACCore._extra_batch_slice_keys` (class attribute) | `tuple[str, ...]` | `()`; the sample fields `_slice_batch` copies into each high-UTD minibatch, which it rebuilds as `type(batch)(**kwargs)`: a sample field with no default that is not listed here fails the slice with a `TypeError`. Extend with `(*self._extra_batch_slice_keys, "field")` | `SAC` (`"discounts"` when `nstep > 1`), `RLPDHybrid` (`"grasp_penalty"`), `ACRLPDCore`, `CalQLCore` |
@@ -513,13 +527,42 @@ for its `aux_logit_mean` metric).
 `--phase auto --algorithm auto`):
 
 1. picks the registry entry whose `algorithm_cls` has the checkpoint's class
-   name (the registering module is imported through the entry point);
-2. rebuilds the Args: the entry's Args class, the run's `config.json` (including
+   name (the registering module is imported through the entry point); it exits
+   when no entry or several entries match, so an ambiguous class needs `--phase`
+   (in tree, `WSRL`) and one no entry declares needs `--algorithm` (`SACDDP`);
+2. rebuilds the Args: the entry's Args class, the run configuration (including
    the env backend's sub-config), then the checkpoint's hyperparameters, then
-   the eval CLI. Extra Args fields round-trip; `--env-backend`, `--env-id`,
+   the eval CLI. The run configuration is the file `--config-path` names, else
+   `metadata["run_config"]`, else the `config.json` of the run directory. The
+   phase runners set it on the agent (`BaseAlgorithm.run_config`, plain JSON
+   data) and `save` writes it; a package with its own run function sets the
+   attribute itself to make its checkpoints self-contained. Fields the Args
+   class does not have are ignored. Extra Args fields round-trip; `--env-backend`, `--env-id`,
    `--control-mode` and `--obs.*` change the run's environment only when given;
-3. builds the agent with the entry's `build_agent` and loads the weights
-   (`strict` by default).
+   the entry's `training_only_inputs` are set to their absent values;
+3. creates one evaluation environment, builds the agent with the entry's
+   `build_agent` and loads the weights (`strict` by default). An online or
+   off2on builder receives that environment as both `env` and `eval_env`: it
+   and the constructor may read its spaces and `num_envs` but not step it;
+4. steps `agent.eval_env`, so a builder that wraps the eval env it is given
+   (action chunking, for example) is evaluated on the wrapped one, or the
+   backend's own eval env when the agent holds none. `--max-eval-steps` counts
+   steps of that env, so one covers a whole action chunk.
+
+Evaluation needs the checkpoint and the environment; everything the policy acts with must be in the checkpoint. A
+network that came from another file belongs in `_extra_checkpoint_state`, with
+what rebuilds it, as `SUPE` (the OPAL VAE) and `JSRL` (the guide policy) do.
+When the builder itself needs it, `rl_garden.training.inspection` offers
+`checkpoint_to_restore(args)` (the evaluated or `--load-checkpoint` checkpoint,
+`None` for a fresh run) and `current_evaluation()` (`None` unless the agent is
+being rebuilt for evaluation).
+
+`--device` reaches the whole build: `construct_agent` passes it to every
+constructor that takes `device` (directly or through `**kwargs` to a parent),
+also over a `device` the builder passes, and `get_device("auto")` resolves to it.
+Replay buffers are built on the `meta` device, without storage;
+`--buffer-device cpu` gives real ones, for a custom buffer that cannot be built
+that way.
 
 An algorithm whose policy cannot act in the environment evaluation builds (a
 pretraining stage, say) sets the class attribute
@@ -542,3 +585,203 @@ time, in a module every RLinf worker process imports:
 
 A taken name raises `ValueError`. See
 [RLinf Integration](../design/rlinf-integration.md) for the contracts.
+
+(extending-env-backends)=
+
+## 7. Environment backends
+
+A registered single-instance `gymnasium.Env` needs no backend
+([Training on your own gymnasium envs](gymnasium-custom-envs.md)). A backend is a
+class that turns a backend-neutral `EnvRequest` into a vector env; the API is
+`rl_garden.envs.backend_registry`.
+
+### Registration
+
+```python
+from rl_garden.envs.backend_registry import EnvBackend, EnvRequest, register_env_backend
+
+
+class MyBackend(EnvBackend):
+    api_version = 2
+    config_field = "my_backend"
+
+    @classmethod
+    def resolve_config(cls, req: EnvRequest, *, is_eval: bool):
+        from my_package.env import MyEnvConfig
+
+        return MyEnvConfig(
+            env_id=req.env_id,
+            num_envs=req.num_eval_envs if is_eval else req.num_envs,
+            seed=req.seed,
+            reward_scale=req.reward_scale,
+            reward_bias=req.reward_bias,
+        )
+
+    @classmethod
+    def make_train_env(cls, req: EnvRequest):
+        from my_package.env import make_env
+
+        return make_env(cls.resolve_config(req, is_eval=False))
+
+    @classmethod
+    def make_eval_env(cls, req: EnvRequest):
+        from my_package.env import make_env
+
+        return make_env(cls.resolve_config(req, is_eval=True))
+
+
+register_env_backend("my_backend", MyBackend)
+```
+
+`register_env_backend(name, cls)` raises `ValueError` for a taken name and
+`TypeError` unless all of these hold:
+
+- `api_version = 2` is set in the class's own body;
+- `config_field` is a `str` set in the class's own body and equals `name`;
+- `resolve_config`, `make_train_env` and `make_eval_env` are in the class's own
+  `__dict__`. Inherited methods do not count: a subclass of an existing backend
+  defines all three, delegating to `super()` where it changes nothing.
+
+An installed package declares the module that registers the backend, which then
+is selectable with `--env_backend my_backend`:
+
+```toml
+[project.entry-points."rlgarden.env_backends"]
+my_backend = "my_package.backend"
+```
+
+The registry imports the in-tree backends and then every module of this group,
+once per process, the first time a backend is looked up. `--print-config` already
+looks one up, so import the simulator inside the methods, not at module level. A
+package that is not installed imports its backend module from its own launcher
+before `registry.run_cli()`.
+
+### Methods
+
+| Method | Called |
+|---|---|
+| `config_from_args(args)` | by preflight and whenever an `EnvRequest` is built; the result becomes `req.backend_config`. The default returns `getattr(args, config_field)` and raises `ValueError` when Args has no such field. Override it to read an existing section (see [Backend-specific named knobs](gymnasium-custom-envs.md#backend-specific-named-knobs), also for adding a section) |
+| `resolve_config(req, *, is_eval)` | when a run or `--dry-run` is materialized, in addition to your own calls, once for train and, if `req.create_eval_env`, once for eval. Returns the concrete config that `config.json` records; it must not create an environment |
+| `make_train_env(req)` | once per online or off2on run. Offline runs and checkpoint evaluation never call it |
+| `make_eval_env(req)` | when `req.create_eval_env`, for an offline run's live evaluation, and for checkpoint evaluation of every phase, which creates only this env. A backend that cannot host a second env raises `NotImplementedError`; its runs then need `--eval_freq 0` |
+
+Under DDP an online run needs a dataclass `req.backend_config`: each rank
+rewrites its string fields named `device` or `sim_device` that hold `cuda*`, and `sim_backend` or
+`render_backend` that hold `gpu*`, to its own GPU before `make_train_env`.
+
+### `EnvRequest`
+
+| Field | Meaning |
+|---|---|
+| `env_id`, `control_mode`, `render_mode`, `seed` | the CLI values |
+| `num_envs` / `num_eval_envs` | number of train / eval envs; the same request serves both, `is_eval` says which |
+| `observation` | the `ObservationConfig` to honor, below |
+| `reward_scale`, `reward_bias` | the reward transform, below |
+| `create_eval_env` | whether an online or off2on run builds an eval env |
+| `num_eval_steps` | env steps per evaluation |
+| `eval_record_dir`, `capture_video`, `video_fps` | eval video: recorded only when `capture_video` is set, into `eval_record_dir` (`None` when there is none) |
+| `backend_config` | the `config_from_args` result; `None` in a request built without one |
+
+**Reward.** Nothing outside the backend applies `reward_scale` and
+`reward_bias` to live rewards: `step()` of the training env returns
+`reward_scale * reward + reward_bias`. `RewardScaleBiasWrapper` does this;
+`apply_reward_transform(env, scale=..., bias=...)`
+(`rl_garden.envs.wrappers.reward_transform`) adds it unless the transform is the
+identity. Its place in the stack is fixed by two rules:
+
+- outside the episode statistics, so that the reported episode `return` stays the
+  sum of raw rewards;
+- once per `step()` of the env the backend returns: outside the backend's own
+  action repeat, inside action chunks and skills, which the algorithm adds. The
+  offline loaders apply the same transform once per stored transition, and one
+  `step()` of the returned env is one transition, so a bias such as `-1` means the
+  same online and offline.
+
+The order is fixed because it changes the reward: `ActionRepeatWrapper`,
+`ActionChunkWrapper` and `SkillActionWrapper` sum rewards, so a transform inside
+them adds the bias once per counted step and one outside adds it once per sum. Frame
+stacking does not touch the reward. In-tree stacks, innermost first:
+
+| Backend | Stack | Bias added |
+|---|---|---|
+| gymnasium, ogbench, rlbench, metaworld | adapter (gymnasium: then `obs_key_map`), transform, frame stack | per env step |
+| dm_control | single env with its action repeat, adapter, transform, frame stack | per decision |
+| mujoco_warp | task, transform, frame stack | per env step |
+| custom, mujoco, d4rl_legacy, robomimic | adapter, transform | per env step |
+| maniskill | frame stack, `ManiSkillVectorEnv`, transform | per env step |
+| isaaclab | adapter, `ActionRepeatWrapper`, frame stack, transform | per decision |
+| minari | adapter | no transform |
+
+A builder that adds `ActionChunkWrapper` or `SkillActionWrapper` puts it outside all
+of these, so a chunk contains the bias once per counted `step()` of the backend's env
+(on isaaclab and dm_control, per decision).
+
+### Observation contract
+
+Right after construction the registry runs `validate_observation_space` on
+`env.single_observation_space` and requires its keys to equal
+`req.observation.expected_keys` exactly; otherwise it raises
+`ObservationContractError`. The keys are `rgb_<cam>` and `depth_<cam>` per
+requested camera, `state` unless `--obs.no-state`, and `state_<name>` per
+`extra_state` name; shapes and dtypes are those in
+[Observation keys](gymnasium-custom-envs.md#observation-keys), and an image may
+have a leading frame-stack dimension. The check compares key names, not
+`image_size` or `frame_stack`: a backend honors those too, or raises
+`ObservationContractError` itself. A state-only backend calls
+`require_state_only_observation(req.observation, backend="my_backend")`
+(`rl_garden.envs.wrappers`) in `resolve_config`.
+
+### Env surface
+
+The returned env has `num_envs`, `single_observation_space`,
+`single_action_space` and the batched `action_space`. `reset(seed=...)` returns
+`(obs, infos)` and `step(actions)` returns `(obs, rewards, terminations,
+truncations, infos)`, with torch tensors (observations a dict of them) on the
+env's device. An env that resets itself inside `step()` sets
+`metadata["autoreset_mode"]` to `AutoresetMode.SAME_STEP` and reports an ended
+episode in `infos`:
+
+- `final_info["episode"]`: per-env tensors, `return` and `episode_len` (or
+  gymnasium's `r` and `l`), optionally `success_once` and `success_at_end`;
+- `_final_info`: the `(num_envs,)` bool mask of the rows that ended, required
+  with `final_info`;
+- `final_observation`: like `obs`, with the terminal observation in the ended
+  rows. Without it on-policy algorithms bootstrap an ended episode with 0 and
+  off-policy algorithms store the returned post-reset observation as the
+  successor.
+
+`infos["decision"]` and `infos["decision_components"]` are optional, see
+[Decision-Level PPO](decision-level-ppo.md#2-env-contract).
+`rl_garden.envs.vector_env.TorchVectorEnvAdapter` provides this surface for a NumPy
+`gymnasium.vector.VectorEnv` created with `SAME_STEP` whose single envs are wrapped
+in `gymnasium.wrappers.RecordEpisodeStatistics`.
+`tests/test_vector_env_contract.py` and
+`tests/test_episode_boundary_contract.py` check it on in-tree adapters and envs.
+
+### Wrapping a batched env
+
+At and below the NumPy-to-torch adapter, and directly on a torch-native vector env,
+wrappers are gymnasium's: `gymnasium.Wrapper` on a single env,
+`gymnasium.vector.VectorWrapper` on the vector env (`TorchVectorEnvAdapter` itself;
+`SeededResetVectorEnv` in the same module, which makes `reset()` without a seed
+replay the configured one). Every wrapper above that derives from
+`BatchedEnvWrapper` (`rl_garden.envs.wrappers.batched_env`), accepts any batched env
+and so stacks in any order with the others. The orders are not equivalent: see the
+reward rules above.
+
+`BatchedEnvWrapper` is a `gymnasium.Wrapper` that accepts both a batched
+`gymnasium.Env` and a `gymnasium.vector.VectorEnv`, and it forwards
+every attribute it does not define (`num_envs`, `device`, the `single_*_space`s,
+`post_update_sync`, ...) to the wrapped env on each access, so do not copy them. A
+subclass that changes the observation or action contract sets both the
+`single_*_space` and the batched space; otherwise callers read the wrapped env's.
+Writes do not forward: an assignment, also through `set_wrapper_attr`, stays on the
+wrapper. The wrapped result is not a `VectorEnv`, so do not test
+`isinstance(env, VectorEnv)` on an env a backend returns, and wrap it in
+`VectorWrapper`s only below the first `BatchedEnvWrapper`.
+
+In-tree subclasses: `RewardScaleBiasWrapper`, `ImageFrameStackWrapper`,
+`ActionRepeatWrapper`, `ActionChunkWrapper`, `SkillActionWrapper`,
+`MultitaskPadWrapper`, `GAILRewardWrapper`, `VectorizedDictStateWrapper`,
+`RewardClassifierWrapper`, `MultiStageBinaryRewardClassifierWrapper` and
+`FWBWResetFreeWrapper`.

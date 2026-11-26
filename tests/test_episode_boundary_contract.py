@@ -22,14 +22,12 @@ from gymnasium import spaces
 from gymnasium.vector import AutoresetMode, SyncVectorEnv
 from gymnasium.wrappers import RecordEpisodeStatistics
 from test_isaaclab_adapter import NUM_ENVS, _ScriptedExtrasEnv
-from test_robotwin_env import FakeExecutor
 
 from rl_garden.common.eval_metrics import canonical_episode_metric_key
 from rl_garden.envs.isaaclab.env import _IsaacLabVecEnvAdapter
-from rl_garden.envs.robotwin import RoboTwinEnv, RoboTwinEnvConfig
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
 from rl_garden.envs.wrappers import ActionRepeatWrapper
-from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
+from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
 
 
 class NonDoneFinalObservationMismatch(AssertionError):
@@ -48,8 +46,8 @@ class ScaledEpisodeReturn(AssertionError):
 
 
 def _env_device(env: Any) -> torch.device:
-    # gymnasium's VectorWrapper does not forward attributes; walk down to the
-    # env that owns ``device``.
+    # VectorWrapper (torch-native envs' seeding) forwards no attributes; walk
+    # down to the env that owns ``device``.
     while not hasattr(env, "device"):
         env = env.env
     device = torch.device(env.device)
@@ -108,8 +106,8 @@ def _assert_final_info(infos: dict, done: torch.Tensor, num_envs: int, device: t
         _assert_batch_vector(f"final_info['episode'][{key!r}]", value, num_envs, device)
     missing = {"return", "episode_len"} - set(_canonical_episode(episode))
     assert not missing, f"final_info['episode'] lacks {sorted(missing)}, keys {sorted(episode)}"
-    # Only tensor leaves are checked outside "episode": RoboTwin passes its
-    # per-env instruction strings through final_info.
+    # Only tensor leaves are checked outside "episode": an env may pass per-env
+    # non-tensor values (e.g. strings) through final_info.
     for name, value in _tree_leaves(final_info, "final_info"):
         if isinstance(value, torch.Tensor):
             _assert_on_device(name, value, device)
@@ -141,8 +139,7 @@ def _assert_final_observation(obs: Any, infos: dict, done: torch.Tensor, device:
 
 
 def _is_maniskill_vector_env(env: Any) -> bool:
-    # make_maniskill_env returns a ManiSkillVectorEnv subclass when it scales rewards.
-    return any(cls.__module__.split(".")[0] == "mani_skill" for cls in type(env).__mro__)
+    return type(env.unwrapped).__module__.startswith("mani_skill")
 
 
 def assert_episode_boundary(env, obs, reward, terminated, truncated, infos) -> None:
@@ -226,7 +223,7 @@ def _gymnasium_adapter(*, dict_obs: bool = False, reward_scale: float = 1.0):
     vec = SyncVectorEnv([make(2, None), make(None, 3)], autoreset_mode=AutoresetMode.SAME_STEP)
     env = TorchVectorEnvAdapter(vec, device="cpu")
     if reward_scale != 1.0:
-        env = RewardScaleBiasVectorWrapper(env, scale=reward_scale)
+        env = RewardScaleBiasWrapper(env, scale=reward_scale)
     return env
 
 
@@ -264,9 +261,8 @@ def _isaaclab_adapter():
 
 
 def _action_repeat_over_isaaclab():
-    # ActionRepeatWrapper is a gym.Wrapper, which only wraps a gym.Env such as
-    # the Isaac Lab adapter. env0 terminates on sub-step 2 of decision 1,
-    # env1 truncates on sub-step 2 of decision 2.
+    # env0 terminates on sub-step 2 of decision 1, env1 truncates on sub-step 2
+    # of decision 2.
     script = [
         ([1.0, 1.0], _F, _F),
         ([2.0, 1.0], _T, _F),
@@ -276,14 +272,6 @@ def _action_repeat_over_isaaclab():
         ([1.0, 1.0], _F, _F),
     ]
     return ActionRepeatWrapper(_IsaacLabVecEnvAdapter(_CountingIsaacLabEnv(script), seed=0), 3)
-
-
-def _robotwin(reward_scale: float):
-    # FakeExecutor ends both envs on step 2 and returns raw task rewards.
-    cfg = RoboTwinEnvConfig(
-        num_envs=NUM_ENVS, device="cpu", image_size=(8, 8), max_episode_steps=10, reward_scale=reward_scale
-    )
-    return RoboTwinEnv(cfg, executor=FakeExecutor(num_envs=NUM_ENVS))
 
 
 def _mujoco_warp_pendulum():
@@ -322,7 +310,6 @@ _DICT = _Producer(lambda: _gymnasium_adapter(dict_obs=True), max_steps=3)
 _SCALED = _Producer(lambda: _gymnasium_adapter(reward_scale=2.0), max_steps=3, reward_scale=2.0)
 _ISAACLAB = _Producer(_isaaclab_adapter, max_steps=4)
 _ACTION_REPEAT = _Producer(_action_repeat_over_isaaclab, max_steps=2)
-_ROBOTWIN = _Producer(lambda: _robotwin(reward_scale=2.0), max_steps=4, reward_scale=2.0)
 _MUJOCO_WARP = _Producer(_mujoco_warp_pendulum, max_steps=200)
 # PickCube-v1 registers max_episode_steps=50; every env truncates there.
 _MANISKILL = _Producer(lambda: _maniskill_pick_cube(reward_scale=2.0), max_steps=100, reward_scale=2.0)
@@ -346,7 +333,6 @@ def _opened(producer: _Producer):
         pytest.param(_DICT, id="torch-adapter-dict"),
         pytest.param(_SCALED, id="torch-adapter-reward-scale"),
         pytest.param(_ISAACLAB, id="isaaclab-adapter"),
-        pytest.param(_ROBOTWIN, id="robotwin"),
         pytest.param(_ACTION_REPEAT, id="action-repeat-over-isaaclab"),
         pytest.param(_MUJOCO_WARP, id="mujoco-warp-pendulum", marks=_GPU),
         pytest.param(_MANISKILL, id="maniskill-pick-cube", marks=_GPU),
@@ -367,7 +353,6 @@ def test_every_step_satisfies_the_episode_boundary_contract(producer: _Producer)
         pytest.param(_DICT, id="torch-adapter-dict"),
         pytest.param(_SCALED, id="torch-adapter-reward-scale"),
         pytest.param(_ISAACLAB, id="isaaclab-adapter"),
-        pytest.param(_ROBOTWIN, id="robotwin"),
         pytest.param(_MUJOCO_WARP, id="mujoco-warp-pendulum", marks=_GPU),
         pytest.param(_MANISKILL, id="maniskill-pick-cube", marks=_GPU),
     ],

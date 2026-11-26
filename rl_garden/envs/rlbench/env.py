@@ -19,7 +19,8 @@ from rl_garden.buffers.rlbench_dataset import (
     build_rlbench_observation,
 )
 from rl_garden.envs.rlbench.config import RLBenchEnvConfig
-from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.vector_env import SeededResetVectorEnv, TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 from rl_garden.observations.schema import ObservationContractError
 
 
@@ -132,20 +133,6 @@ class RLBenchGymEnv(gym.Env):
         self._env.shutdown()
 
 
-class _SeededRLBenchVecEnv(TorchVectorEnvAdapter):
-    """Defaults ``reset()`` to the configured seed when the caller doesn't
-    pass one explicitly -- tiny duplicate of every other backend's own
-    ``_Seeded*VecEnv`` (not shared: module-private in each source file, one
-    trivial wrapper per call site is not worth a shared parent)."""
-
-    def __init__(self, vec_env, device: str, seed: int) -> None:
-        super().__init__(vec_env, device=device)
-        self._default_seed = seed
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        return super().reset(seed=seed if seed is not None else self._default_seed, options=options)
-
-
 def _make_env_fn(cfg: RLBenchEnvConfig):
     def _env_fn():
         env = RLBenchGymEnv(cfg)
@@ -160,7 +147,8 @@ def make_rlbench_env(cfg: RLBenchEnvConfig):
     env_fns = [_make_env_fn(cfg) for _ in range(cfg.num_envs)]
     vector_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
     vec_env = vector_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
-    adapter: gym.vector.VectorEnv = _SeededRLBenchVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+    env = TorchVectorEnvAdapter(SeededResetVectorEnv(vec_env, cfg.seed), device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     if cfg.frame_stack > 1:
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
@@ -168,12 +156,7 @@ def make_rlbench_env(cfg: RLBenchEnvConfig):
         image_keys = tuple(f"rgb_{cam}" for cam in cfg.rgb_cameras) + tuple(
             f"depth_{cam}" for cam in cfg.depth_cameras
         )
-        adapter = ImageFrameStackWrapper(
-            adapter, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
+        env = ImageFrameStackWrapper(
+            env, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
         )
-
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        adapter = RewardScaleBiasVectorWrapper(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
-    return adapter
+    return env

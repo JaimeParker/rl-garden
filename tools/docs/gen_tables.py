@@ -64,7 +64,6 @@ BACKEND_PAGES = {
     "ogbench": "guides/ogbench-integration",
     "rlbench": "guides/rlbench-integration",
     "robomimic": "guides/robomimic-integration",
-    "robotwin": "guides/robotwin",
 }
 
 

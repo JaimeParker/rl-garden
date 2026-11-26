@@ -22,6 +22,7 @@ from rl_garden.buffers.robomimic_dataset import (
     flatten_robomimic_obs,
 )
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
 
 def _load_env_meta(cfg) -> dict:
@@ -153,12 +154,6 @@ def make_robomimic_env(cfg):
     # AsyncVectorEnv gives real speedup above num_envs=1.
     vector_cls = gym.vector.AsyncVectorEnv if cfg.num_envs > 1 else gym.vector.SyncVectorEnv
     vec_env = vector_cls(env_fns, autoreset_mode=gym.vector.AutoresetMode.SAME_STEP)
-    adapter: gym.vector.VectorEnv = TorchVectorEnvAdapter(vec_env, device=cfg.device)
-
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        adapter = RewardScaleBiasVectorWrapper(
-            adapter, scale=cfg.reward_scale, bias=cfg.reward_bias
-        )
-    return adapter
+    env = TorchVectorEnvAdapter(vec_env, device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
+    return env

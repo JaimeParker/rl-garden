@@ -479,7 +479,7 @@ from rl_garden.training.online.registry import registry
 class MyAlgoArgs(MyAlgoTrainingArgs, EnvBackendArgs):
     """MyAlgo — brief description.
 
-    Env backend: ``--env_backend maniskill`` (default) or ``--env_backend robotwin``.
+    Env backend: ``--env_backend maniskill`` (default) or another registered backend.
     """
 
 def _my_algo_algorithm_cls() -> type:

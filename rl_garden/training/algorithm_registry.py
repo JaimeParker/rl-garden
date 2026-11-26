@@ -23,11 +23,11 @@ import pkgutil
 import sys
 import threading
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import tyro
 
@@ -99,6 +99,36 @@ class AlgorithmEntry:
     #: eval_env)`` for the offline phase. Checkpoint evaluation rebuilds the
     #: agent through it.
     build_agent: Optional[Callable] = None
+    #: Args field -> the value checkpoint evaluation gives it before it calls
+    #: ``build_agent``, for every field naming an input only training needs
+    #: (a dataset, a warm-start or teacher checkpoint, a disk-backed buffer).
+    #: ``register()`` also takes plain field names, which stand for "absent".
+    training_only_inputs: Mapping[str, Any] = field(default_factory=dict)
+
+
+def _training_only_inputs(
+    name: str, args_cls: type, inputs: Mapping[str, Any] | Sequence[str]
+) -> dict[str, Any]:
+    if not inputs:
+        return {}
+    args_fields = {args_field.name: args_field for args_field in fields(args_cls)}
+    unknown = sorted(set(inputs) - args_fields.keys())
+    if unknown:
+        raise ValueError(
+            f"{name!r}: training_only_inputs {unknown} are not fields of {args_cls.__name__}."
+        )
+    if isinstance(inputs, Mapping):
+        return dict(inputs)
+    values = {}
+    for input_name in inputs:
+        default = args_fields[input_name].default
+        if default is MISSING or default not in (None, ""):
+            raise ValueError(
+                f"{name!r}: the default of training-only input {input_name!r} is not None or "
+                "'', so its absent value is unknown; pass training_only_inputs as a mapping."
+            )
+        values[input_name] = default
+    return values
 
 
 @dataclass(frozen=True)
@@ -131,12 +161,19 @@ class BaseAlgorithmRegistry:
         *,
         algorithm_cls: Optional[Callable[[], type]] = None,
         build_agent: Optional[Callable] = None,
+        training_only_inputs: Mapping[str, Any] | Sequence[str] = (),
     ) -> None:
         if name in self._entries:
             raise ValueError(f"Algorithm {name!r} already registered")
         if any(entry.args_cls is args_cls for entry in self._entries.values()):
             raise ValueError(f"Args type {args_cls.__name__!r} already registered")
-        self._entries[name] = AlgorithmEntry(args_cls, run_fn, algorithm_cls, build_agent)
+        self._entries[name] = AlgorithmEntry(
+            args_cls,
+            run_fn,
+            algorithm_cls,
+            build_agent,
+            _training_only_inputs(name, args_cls, training_only_inputs),
+        )
 
     def entries(self) -> dict[str, AlgorithmEntry]:
         return dict(self._entries)

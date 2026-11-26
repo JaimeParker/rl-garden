@@ -2,7 +2,7 @@
 
 Usage:
     python examples/replay_maniskill_demo.py \
-        demos/pegonly/trajectory.state.pd_ee_twist.physx_cpu.h5 --capture-video
+        demos/pegonly/trajectory.state.pd_ee_delta_pose.physx_cpu.h5 --capture-video
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _require_h5py():
         import h5py  # type: ignore
     except ImportError as exc:  # pragma: no cover - depends on runtime env.
         raise ImportError(
-            "Replay requires h5py. Use the ManiSkill/RoboTwin environment or install h5py."
+            "Replay requires h5py. Use the ManiSkill environment or install h5py."
         ) from exc
     return h5py
 

@@ -13,11 +13,14 @@ wrapper does not need to cast dtype itself.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.common.spaces import canonicalize_floating_observation_space
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 from rl_garden.observations.config import ObservationConfig
 from rl_garden.observations.schema import ObservationContractError
 
@@ -65,7 +68,7 @@ class DictStateObservationWrapper(gym.ObservationWrapper):
         # Already-vectorized envs (e.g. ManiSkill's GPU sim) expose a
         # separate `single_observation_space` (per-env) distinct from
         # `observation_space` (batched). Resolve through the wrapper stack
-        # explicitly: Gymnasium 1.x no longer proxies arbitrary attributes.
+        # explicitly: gym.Wrapper does not proxy arbitrary attributes.
         # Mirror the per-env space so it matches observation().
         base_single_space = (
             env.get_wrapper_attr("single_observation_space")
@@ -84,36 +87,28 @@ class DictStateObservationWrapper(gym.ObservationWrapper):
         return {"state": observation}
 
 
-class VectorizedDictStateWrapper:
-    """Wraps an already-vectorized env whose ``single_observation_space`` is a
+class VectorizedDictStateWrapper(BatchedEnvWrapper):
+    """Wraps an already-batched env whose ``single_observation_space`` is a
     bare ``Box`` into ``Dict({"state": Box})``, at the algorithm-construction
     boundary (``BaseAlgorithm.__init__``).
 
-    Unlike ``DictStateObservationWrapper`` above (a ``gym.ObservationWrapper``
-    applied to a single, pre-vectorization ``gym.Env`` inside a backend's
-    ``_make_env_fn``), the env here is already vectorized: a real
-    ``TorchVectorEnvAdapter`` (``rl_garden.envs.vector_env``), or a duck-typed
-    vectorized test double. Neither is necessarily a
-    ``gymnasium.Env``/``gymnasium.vector.VectorEnv`` instance -- test doubles
-    are plain objects, and ``TorchVectorEnvAdapter`` is a
-    ``gymnasium.vector.VectorWrapper``, not a ``gym.Env`` -- and both
-    ``gym.Wrapper.__init__``/``VectorWrapper.__init__`` hard-assert
-    ``isinstance(env, Env)``/``isinstance(env, VectorEnv)``. So this is a
-    plain duck-typed proxy (attribute passthrough via ``__getattr__``), not a
-    subclass of either.
+    ``DictStateObservationWrapper`` above is applied to a single,
+    pre-vectorization ``gym.Env`` inside a backend's ``_make_env_fn`` instead.
+    The env here may also be an ``OfflineEnvSpec``, which has spaces but no
+    ``reset``/``step``.
 
     Observations here are already batched torch tensors of shape
     ``(num_envs, *shape)``; wrapping is just ``{"state": tensor}``.
     """
 
-    def __init__(self, env) -> None:
+    def __init__(self, env: Any) -> None:
         base_space = env.single_observation_space
         if not isinstance(base_space, spaces.Box):
             raise TypeError(
                 "VectorizedDictStateWrapper requires a Box single_observation_space, "
                 f"got {type(base_space).__name__}"
             )
-        self.env = env
+        super().__init__(env)
         base_space = canonicalize_floating_observation_space(base_space)
         self.single_observation_space = spaces.Dict({"state": base_space})
         self.observation_space = batch_space(self.single_observation_space, env.num_envs)
@@ -134,12 +129,3 @@ class VectorizedDictStateWrapper:
         close = getattr(self.env, "close", None)
         if close is not None:
             close()
-
-    def __getattr__(self, name: str):
-        # Only reached when normal attribute lookup (instance __dict__, class
-        # dict) fails -- ``self.env`` is set in __init__ and found there
-        # directly, so this does not recurse. Guarded anyway in case an
-        # instance is accessed before __init__ runs (e.g. during unpickling).
-        if name == "env":
-            raise AttributeError(name)
-        return getattr(self.env, name)

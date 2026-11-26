@@ -6,8 +6,10 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.algorithms import AWAC, IQL, JSRL, CalQL, OfflineEnvSpec
+from rl_garden.algorithms import AWAC, IQL, JSRL, WSRL, CalQL, OfflineEnvSpec
 from rl_garden.algorithms.jsrl import _load_guide_policy
+from rl_garden.encoders.config import EncoderConfig
+from rl_garden.observations import ObsGroups
 
 _OBS_DIM = 6
 _ACTION_DIM = 2
@@ -45,6 +47,18 @@ def _make_calql_checkpoint(tmp_path, **overrides) -> str:
     kwargs.update(overrides)
     agent = CalQL(**kwargs)
     path = str(tmp_path / "calql.pt")
+    agent.save(path)
+    return path, agent
+
+
+def _make_wsrl_checkpoint(tmp_path, **overrides) -> str:
+    kwargs = {
+        "env": _ScriptedVecEnv([1_000]), "device": "cpu", "buffer_device": "cpu",
+        "buffer_size": 16, "net_arch": {"pi": [8], "qf": [8]},
+    }
+    kwargs.update(overrides)
+    agent = WSRL(**kwargs)
+    path = str(tmp_path / "wsrl.pt")
     agent.save(path)
     return path, agent
 
@@ -137,12 +151,155 @@ def test_load_guide_policy_iql_matches_source_policy(tmp_path):
         assert not p.requires_grad
 
 
-def test_load_guide_policy_raises_on_mismatched_std_parameterization(tmp_path):
-    ckpt, agent = _make_iql_checkpoint(tmp_path, std_parameterization="uniform")
-    with pytest.raises(RuntimeError, match="required key"):
+def _edit_checkpoint(path: str, edit) -> None:
+    contents = torch.load(path)
+    edit(contents)
+    torch.save(contents, path)
+
+
+def _forget_actor_options(contents) -> None:
+    """What checkpoints that recorded no actor option beyond these look like."""
+    hyperparameters = contents["metadata"]["hyperparameters"]
+    for name in (
+        "actor_use_layer_norm", "actor_use_group_norm", "num_groups", "actor_dropout_rate",
+        "kernel_init", "backbone_type", "std_parameterization",
+        "policy_log_std_multiplier", "policy_log_std_offset",
+    ):
+        hyperparameters.pop(name, None)
+
+
+def _assert_guide_matches(checkpoint, algorithm, agent, **kwargs) -> None:
+    guide = _load_guide_policy(
+        checkpoint, algorithm, agent.env.single_observation_space, agent.env.single_action_space,
+        device=torch.device("cpu"), **kwargs,
+    )
+    obs = {
+        key: torch.randn(4, *space.shape)
+        for key, space in agent.env.single_observation_space.spaces.items()
+    }
+    agent.policy.eval()
+    assert torch.allclose(
+        guide.predict(obs, deterministic=True), agent.policy.predict(obs, deterministic=True)
+    )
+    torch.manual_seed(0)
+    sampled = guide.predict(obs, deterministic=False)
+    torch.manual_seed(0)
+    assert torch.allclose(sampled, agent.policy.predict(obs, deterministic=False))
+
+
+# Differing critic options must not matter to the guide; the actor's all do.
+_ACTOR_OPTIONS = {
+    "layer_norm": {"actor_use_layer_norm": True, "critic_use_layer_norm": True},
+    "group_norm": {
+        "actor_use_layer_norm": False, "actor_use_group_norm": True, "num_groups": 2},
+    "dropout": {"actor_dropout_rate": 0.5, "net_arch": [8, 8]},
+    "layer_norm_dropout": {
+        "actor_use_layer_norm": True, "actor_dropout_rate": 0.5, "net_arch": [8, 8]},
+    "resnet": {"backbone_type": "mlp_resnet", "net_arch": [8, 8]},
+    "resnet_layer_norm": {
+        "backbone_type": "mlp_resnet", "actor_use_layer_norm": True, "net_arch": [8, 8]},
+    "uniform_std": {"std_parameterization": "uniform"},
+    "kernel_init": {"kernel_init": "orthogonal_near_zero_output"},
+    "separate_encoders": {"encoder_sharing": "separate"},
+}
+# What a guide checkpoint without recorded actor options is still rebuilt with.
+_WEIGHTS_DECIDE = {
+    "actor_use_layer_norm", "critic_use_layer_norm", "std_parameterization", "kernel_init",
+    "encoder_sharing",
+}
+_MAKE_CHECKPOINT = {
+    "iql": _make_iql_checkpoint,
+    "awac": _make_awac_checkpoint,
+    "calql": _make_calql_checkpoint,
+    "wsrl": _make_wsrl_checkpoint,
+}
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["recorded", "legacy"])
+@pytest.mark.parametrize("options", _ACTOR_OPTIONS.values(), ids=_ACTOR_OPTIONS.keys())
+@pytest.mark.parametrize("algorithm", ["iql", "awac", "calql", "wsrl"])
+def test_guide_is_rebuilt_with_the_options_it_was_trained_with(
+    algorithm, options, legacy, tmp_path
+):
+    if legacy and not options.keys() <= _WEIGHTS_DECIDE:
+        pytest.skip("a legacy checkpoint does not determine these options")
+    checkpoint, agent = _MAKE_CHECKPOINT[algorithm](tmp_path, **options)
+    if legacy:
+        _edit_checkpoint(checkpoint, _forget_actor_options)
+    _assert_guide_matches(checkpoint, algorithm, agent)
+
+
+@pytest.mark.parametrize(
+    "algorithm,options",
+    [
+        ("iql", {"backbone_type": "mlp_resnet", "net_arch": [8, 8]}),
+        ("awac", {"actor_dropout_rate": 0.5, "net_arch": [8, 8]}),
+        ("calql", {"policy_log_std_multiplier": 1.0, "policy_log_std_offset": -1.0}),
+    ],
+)
+def test_legacy_guide_with_undetermined_options_is_refused(algorithm, options, tmp_path):
+    checkpoint, agent = _MAKE_CHECKPOINT[algorithm](tmp_path, **options)
+    _edit_checkpoint(checkpoint, _forget_actor_options)
+    with pytest.raises(RuntimeError, match=r"actor\."):
+        _assert_guide_matches(checkpoint, algorithm, agent)
+
+
+@pytest.mark.parametrize("algorithm", ["calql", "wsrl"])
+def test_guide_keeps_the_learned_log_std_scale(algorithm, tmp_path):
+    checkpoint, agent = _MAKE_CHECKPOINT[algorithm](
+        tmp_path, policy_log_std_multiplier=1.0, policy_log_std_offset=-1.0
+    )
+    _assert_guide_matches(checkpoint, algorithm, agent)
+
+
+def test_legacy_guide_with_a_norm_of_unrecorded_kind_is_taken_as_layer_norm(tmp_path, caplog):
+    checkpoint, agent = _make_iql_checkpoint(tmp_path, actor_use_layer_norm=True)
+    _edit_checkpoint(checkpoint, _forget_actor_options)
+    _assert_guide_matches(checkpoint, "iql", agent)
+    assert "assuming LayerNorm" in caplog.text
+
+
+def test_guide_keeps_its_observation_normalizer_and_groups(tmp_path):
+    spec = OfflineEnvSpec(
+        spaces.Dict({
+            "state": spaces.Box(-1.0, 1.0, (_OBS_DIM,), dtype=np.float32),
+            "state_priv": spaces.Box(-1.0, 1.0, (3,), dtype=np.float32),
+        }),
+        spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32),
+        num_envs=1,
+    )
+    checkpoint, agent = _make_iql_checkpoint(
+        tmp_path,
+        env=spec,
+        obs_groups=ObsGroups(actor=("state",), critic=("state", "state_priv")),
+        encoder_config=EncoderConfig(normalize_obs=True),
+    )
+    agent.policy.train()
+    agent.policy.update_normalizer(
+        {"state": torch.randn(50, _OBS_DIM) * 3 + 1, "state_priv": torch.randn(50, 3)}
+    )
+    agent.save(checkpoint)
+    _assert_guide_matches(checkpoint, "iql", agent)
+
+
+@pytest.mark.parametrize(
+    "recorded,match",
+    [
+        ({"std_parameterization": "exp"}, "fc_logstd.*log_stds"),
+        ({"actor_use_layer_norm": True}, "actor.trunk"),
+    ],
+)
+def test_guide_mismatch_names_the_keys(recorded, match, tmp_path):
+    checkpoint, agent = _make_iql_checkpoint(
+        tmp_path, std_parameterization="uniform", net_arch=[8, 8]
+    )
+    _edit_checkpoint(
+        checkpoint, lambda c: c["metadata"]["hyperparameters"].update(recorded)
+    )
+    with pytest.raises(RuntimeError, match=match):
         _load_guide_policy(
-            ckpt, "iql", agent.env.single_observation_space, agent.env.single_action_space,
-            device=torch.device("cpu"), std_parameterization="exp",
+            checkpoint, "iql", agent.env.single_observation_space,
+            agent.env.single_action_space, device=torch.device("cpu"),
         )
 
 
@@ -293,3 +450,32 @@ def test_checkpoint_roundtrip_preserves_curriculum_state(tmp_path):
     metadata = agent._checkpoint_metadata()
     assert metadata["guide_checkpoint"] == ckpt
     assert metadata["guide_algorithm"] == "iql"
+
+
+def test_checkpoint_embeds_the_guide(tmp_path):
+    ckpt, source = _make_iql_checkpoint(tmp_path, actor_use_layer_norm=True, net_arch=[8, 8])
+    agent = _make_jsrl_agent(ckpt, max_horizon=4)
+    agent.save(tmp_path / "jsrl.pt")
+    extra = torch.load(tmp_path / "jsrl.pt")["state"]["extra"]
+    assert not any(key.startswith(("critic", "value")) for key in extra["guide"]["policy"])
+
+    restored = _make_jsrl_agent(None, max_horizon=4)
+    obs = {"state": torch.randn(2, _OBS_DIM)}
+    with pytest.raises(RuntimeError, match="no guide policy"):
+        restored._guide_action(obs, deterministic=True)
+    restored.load(tmp_path / "jsrl.pt", load_replay_buffer=False)
+    assert restored.guide_checkpoint == ckpt
+    assert torch.allclose(
+        restored.guide_policy.predict(obs, deterministic=True),
+        source.policy.predict(obs, deterministic=True),
+    )
+    assert not any(p.requires_grad for p in restored.guide_policy.parameters())
+
+    restored.save(tmp_path / "again.pt")
+    again = torch.load(tmp_path / "again.pt")["state"]["extra"]["guide"]
+    assert again["source"] == ckpt
+
+
+def test_missing_guide_checkpoint_is_named(tmp_path):
+    with pytest.raises(FileNotFoundError, match="gone.pt"):
+        _make_jsrl_agent(str(tmp_path / "gone.pt"))

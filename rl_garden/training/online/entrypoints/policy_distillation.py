@@ -50,9 +50,10 @@ def _build_teacher_policy(args, env: Any):
 
 def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import PolicyDistillation
-    from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.inspection import construct_agent, current_evaluation
 
-    if not args.teacher_checkpoint:
+    evaluating = current_evaluation() is not None
+    if not args.teacher_checkpoint and not evaluating:
         raise ValueError("policy_distillation requires --teacher_checkpoint.")
     if not args.teacher_obs_keys or not args.student_obs_keys:
         raise ValueError(
@@ -71,7 +72,7 @@ def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
             f"sense left unset; got an explicit ObsGroups: {args.obs_groups}."
         )
 
-    teacher_policy = _build_teacher_policy(args, env)
+    teacher_policy = None if evaluating else _build_teacher_policy(args, env)
     agent = construct_agent(
         PolicyDistillation,
         env=env,
@@ -158,4 +159,5 @@ registry.register(
     run_policy_distillation,
     algorithm_cls=_policy_distillation_algorithm_cls,
     build_agent=build_policy_distillation,
+    training_only_inputs=("teacher_checkpoint",),
 )

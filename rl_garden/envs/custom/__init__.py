@@ -1,5 +1,5 @@
 """``custom`` env backend: a template for authoring a brand-new environment
-that isn't wrapping an existing simulator (ManiSkill, MuJoCo, RoboTwin, ...).
+that isn't wrapping an existing simulator (ManiSkill, MuJoCo, RLBench, ...).
 
 Copy this whole directory to start a new backend: rename the package,
 replace ``point_reach_env.py`` with your own ``gymnasium.Env`` subclass

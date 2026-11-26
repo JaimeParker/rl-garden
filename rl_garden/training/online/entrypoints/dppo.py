@@ -139,5 +139,10 @@ def _dppo_algorithm_cls() -> type:
 
 
 registry.register(
-    "dppo", DPPOArgs, run_dppo, algorithm_cls=_dppo_algorithm_cls, build_agent=build_dppo
+    "dppo",
+    DPPOArgs,
+    run_dppo,
+    algorithm_cls=_dppo_algorithm_cls,
+    build_agent=build_dppo,
+    training_only_inputs=("bc_checkpoint",),
 )

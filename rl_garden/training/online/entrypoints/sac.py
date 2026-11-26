@@ -195,5 +195,10 @@ def _sac_algorithm_cls() -> type:
 
 
 registry.register(
-    "sac", SACArgs, run_sac, algorithm_cls=_sac_algorithm_cls, build_agent=build_sac
+    "sac",
+    SACArgs,
+    run_sac,
+    algorithm_cls=_sac_algorithm_cls,
+    build_agent=build_sac,
+    training_only_inputs=("load_actor_checkpoint",),
 )

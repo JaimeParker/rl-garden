@@ -7,7 +7,7 @@ Inherit :class:`EnvBackendArgs` alongside any algorithm Args class to add
     class SACArgs(VisionSACTrainingArgs, EnvBackendArgs):
         pass
 
-    # CLI: python train_online.py sac --env_backend robotwin --robotwin.task_name pick_cube
+    # CLI: python train_online.py sac --env_backend gymnasium --env_id Pendulum-v1
     # CLI: python train_online.py sac --maniskill.sim-backend physx_cpu
 """
 from __future__ import annotations
@@ -45,40 +45,6 @@ class ManiSkillConfig:
     # takes precedence over any named field there. Escape hatch for task-specific
     # kwargs (e.g. peg overrides) without adding named fields here per task.
     env_kwargs_json: str = "{}"
-
-
-@dataclass
-class RoboTwinConfig:
-    """RoboTwin-specific env settings. CLI prefix: ``--robotwin.<field>``"""
-
-    # camera / rendering
-    random_light: bool = False
-    crazy_random_light_rate: float = 0.0
-    head_camera_type: str = "D435"
-    wrist_camera_type: str = "D435"
-    render_every_control_step: bool = False
-    control_step_cap: Optional[int] = None
-    profile_timing: bool = False
-    profile_interval: int = 100
-
-    # task / planner
-    robotwin_root: Optional[str] = None
-    assets_path: Optional[str] = None
-    seeds_path: Optional[str] = None
-    step_lim: int = 400
-    planner_backend: str = "mplib"
-    embodiment: list = field(default_factory=lambda: ["aloha-agilex"])
-    reward_mode: str = "dense"
-    disable_topp: bool = False
-
-    # control scaling
-    joint_delta_scale: float = 0.05
-    gripper_delta_scale: float = 0.2
-    ee_delta_pos_scale: float = 0.03
-    ee_delta_rot_scale: float = 0.15
-
-    # device
-    device: str = "auto"
 
 
 @dataclass
@@ -276,7 +242,6 @@ class EnvBackendArgs:
 
     env_backend: str = "maniskill"
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
-    robotwin: RoboTwinConfig = field(default_factory=RoboTwinConfig)
     minari: MinariConfig = field(default_factory=MinariConfig)
     d4rl_legacy: D4RLLegacyConfig = field(default_factory=D4RLLegacyConfig)
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)

@@ -20,7 +20,7 @@ def test_calql_print_config_matches_paper_aligned_defaults(tmp_path):
             "--log-dir",
             str(tmp_path),
             "--env-backend",
-            "robotwin",
+            "rlbench",
         ],
     )
     assert result.returncode == 0, result.stderr
@@ -46,7 +46,7 @@ def test_wsrl_print_config_unaffected_by_calql_defaults(tmp_path):
             "--log-dir",
             str(tmp_path),
             "--env-backend",
-            "robotwin",
+            "rlbench",
         ],
     )
     assert result.returncode == 0, result.stderr

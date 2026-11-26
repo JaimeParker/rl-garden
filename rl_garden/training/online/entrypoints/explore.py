@@ -185,4 +185,5 @@ registry.register(
     run_explore,
     algorithm_cls=_explore_algorithm_cls,
     build_agent=build_explore,
+    training_only_inputs=("offline_dataset",),
 )

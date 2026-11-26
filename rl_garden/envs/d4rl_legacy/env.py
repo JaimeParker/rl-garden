@@ -9,6 +9,7 @@ from gymnasium import spaces
 
 from rl_garden.buffers.d4rl_legacy_dataset import is_locomotion_env_id
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
 
 def _convert_space(space: Any) -> spaces.Space:
@@ -180,14 +181,6 @@ def make_d4rl_legacy_env(cfg):
     # throughput, so keep Sync there.
     vector_cls = gym.vector.AsyncVectorEnv if cfg.num_envs > 1 else gym.vector.SyncVectorEnv
     vec_env = vector_cls(env_fns, autoreset_mode=gym.vector.AutoresetMode.SAME_STEP)
-    adapter: gym.vector.VectorEnv = TorchVectorEnvAdapter(vec_env, device=cfg.device)
-
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import (
-            RewardScaleBiasVectorWrapper,
-        )
-
-        adapter = RewardScaleBiasVectorWrapper(
-            adapter, scale=cfg.reward_scale, bias=cfg.reward_bias
-        )
-    return adapter
+    env = TorchVectorEnvAdapter(vec_env, device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
+    return env

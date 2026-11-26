@@ -7,9 +7,8 @@ fork rl-garden and you do not write a backend. The backend calls
 itself, and adapts them to rl-garden's torch env contract.
 
 Write a dedicated backend (see
-`.agents/rules/adding-env-backend.md`)
-only when the simulator is already batched (GPU sims), needs process-global
-state such as one app per process, or needs named, cross-task CLI knobs.
+[Environment backends](extending.md#7-environment-backends)) only when the
+simulator is already batched (GPU sims), needs process-global state such as one app per process, or needs named, cross-task CLI knobs.
 
 ## Quick start
 
@@ -109,7 +108,7 @@ with an `ObservationContractError` asking for a Dict observation.
 
 After construction, the registry checks that the env's keys equal exactly
 the keys `--obs.*` asks for: image keys from `--obs.rgb`/`--obs.depth`, then
-`state` unless `--obs.state false`, then `state_<name>` from
+`state` unless `--obs.no-state`, then `state_<name>` from
 `--obs.extra_state`. For an env that emits `rgb_front` and `state`:
 
 ```bash
@@ -212,10 +211,10 @@ train PPO with `--decision-level`; see [Decision-Level PPO](decision-level-ppo.m
 - `async`: one OS process per env. Use it when a step is expensive or the
   env renders: each worker owns its own renderer or GL context.
 
-Both paths return CPU torch tensors (`--gymnasium.device cpu`). The
-algorithm's `--buffer_device` and update device stay independent. Only a
-torch-native `vector_env_factory` (next section) returns tensors on another
-device.
+Both paths step the envs on CPU NumPy data and return torch tensors on
+`--gymnasium.device` (default `cpu`). The algorithm's `--buffer_device` and
+update device stay independent. Only a torch-native `vector_env_factory` (next
+section) avoids the NumPy conversion.
 
 ## Bringing your own vector env
 
@@ -334,14 +333,38 @@ reads the config with `getattr(args, config_field)`.
 A backend that needs no knobs of its own can instead read an existing section
 of the stock CLI by overriding `config_from_args`. It is then selectable with
 `--env_backend <name>` from the stock entrypoints, configured through that
-section, and the section counts as active for preflight validation:
+section, and the section counts as active for preflight validation.
+Registration requires `resolve_config`, `make_train_env` and `make_eval_env` in
+the class body, so a subclass of an in-tree backend delegates explicitly:
 
 ```python
-class MyIsaacLabTasksBackend(IsaacLabBackend):  # registered as "my_isaaclab_tasks"
+from rl_garden.envs.backend_registry import register_env_backend
+from rl_garden.envs.backends.isaaclab import IsaacLabBackend
+
+
+class MyIsaacLabTasksBackend(IsaacLabBackend):
     api_version = 2
     config_field = "my_isaaclab_tasks"
 
     @classmethod
     def config_from_args(cls, args):
         return args.isaaclab  # python examples/train_online.py ppo --env_backend my_isaaclab_tasks --isaaclab.<field> ...
+
+    @classmethod
+    def resolve_config(cls, req, *, is_eval):
+        return super().resolve_config(req, is_eval=is_eval)
+
+    @classmethod
+    def make_train_env(cls, req):
+        return super().make_train_env(req)
+
+    @classmethod
+    def make_eval_env(cls, req):
+        return super().make_eval_env(req)
+
+
+register_env_backend("my_isaaclab_tasks", MyIsaacLabTasksBackend)
 ```
+
+See [Environment backends](extending.md#7-environment-backends) for the
+registration rules.

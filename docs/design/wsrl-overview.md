@@ -246,7 +246,7 @@ python examples/train_off2on.py wsrl --env_id <id> --offline_dataset <h5> \
 # Cal-QL retention recipe
 python examples/train_off2on.py wsrl --env_id <id> --offline_dataset <h5> \
     --num_offline_steps 200000 --num_online_steps 200000 \
-    --online_use_cql_loss True --online_cql_alpha 5.0 \
+    --online_use_cql_loss --online_cql_alpha 5.0 \
     --online_replay_mode mixed --offline_data_ratio 0.5
 ```
 
@@ -312,7 +312,7 @@ AntMaze environment, not the Minari-recovered one: install the
 | Actor log_std affine | multiplier=1.0, offset=-1.0 | multiplier=1.0, offset=-1.0 | `--policy_log_std_multiplier 1.0 --policy_log_std_offset -1.0` |
 | Offline / online steps | 1M / 1M | 1M / 1M | `--num_offline_steps 1000000` / `--num_online_steps 1000000` |
 | Offline/online mix ratio | 0.5 | 0.5 | `--online_replay_mode mixed --offline_data_ratio 0.5` — set explicitly; rl-garden's off2on default is `"auto"`, an adaptive scheme unique to rl-garden that matches neither reference |
-| Online CQL | stays active, same `cql_alpha=5.0` | stays active, same `cql_alpha=5.0` | `--online_use_cql_loss True --online_cql_alpha 5.0` |
+| Online CQL | stays active, same `cql_alpha=5.0` | stays active, same `cql_alpha=5.0` | `--online_use_cql_loss --online_cql_alpha 5.0` |
 | Online Cal-QL calibration (`max(Q, mc_return)` bound) | **stays active** — `enable_calql` is one static flag never toggled at the online switch, and online MC returns are computed per-trajectory, not placeholders | **disabled** at the online switch via `switch_calibration()` | rl-garden's `use_calql` is one static value for the whole run — matches JAX as-is; **cannot reproduce CORL's online-off behavior** (Gap 3 below) |
 | Eval episodes | script uses 20; use 100 to reduce sparse-success-rate noise | 100 | `--num_eval_episodes 100 --eval_episode_horizon 1000` for both — AntMaze episodes need up to 1000 steps to finish; without `--eval_episode_horizon` the eval step budget silently defaults to 50 and no episode ever completes (`eval/episodes_completed` stays 0) |
 | Env / dataset | legacy D4RL | legacy D4RL | `--env_backend d4rl_legacy --dataset_backend d4rl_legacy` |
@@ -361,7 +361,7 @@ python examples/train_off2on.py calql \
     --load_checkpoint <offline_checkpoint.pt> \
     --env_backend d4rl_legacy --dataset_backend d4rl_legacy \
     --online_replay_mode mixed --offline_data_ratio 0.5 \
-    --online_use_cql_loss True --online_cql_alpha 5.0 \
+    --online_use_cql_loss --online_cql_alpha 5.0 \
     --num_online_steps 1000000 \
     --num_eval_episodes 100 --eval_episode_horizon 1000
 ```
@@ -661,13 +661,13 @@ pytest tests/test_cql_calql.py tests/test_sac_core.py tests/test_wsrl*.py -v
 
 1. **Out of memory**: Reduce `--batch_size` or `--n_critics`
 2. **Slow training**: Increase `--utd` for more gradient steps per env step
-3. **Unstable training**: Reduce `--cql_alpha` or disable with `--use_cql_loss False`
+3. **Unstable training**: Reduce `--cql_alpha` or disable with `--no-use_cql_loss`
 
 ### Performance Tips
 
 - Use `--n_critics 10` with `--critic_subsample_size 2` for best offline performance (REDQ)
 - CLI defaults already match WSRL paper recipe (`--utd 4.0`,
-  `--online_use_cql_loss False`, `--online_cql_alpha 0.0`,
+  `--no-online_use_cql_loss`, `--online_cql_alpha 0.0`,
   `--online_replay_mode empty`); override only if you want Cal-QL retention
   behavior or a different update-to-data ratio
 - For state-based WSRL, the default `--utd 4.0` follows paper Table 1

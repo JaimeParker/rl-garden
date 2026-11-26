@@ -5,7 +5,7 @@ from rl_garden.common.resolved_config import persist_resolved_config
 
 
 def test_persist_resolved_config_writes_recursive_json(tmp_path):
-    args = EnvBackendArgs(env_backend="robotwin")
+    args = EnvBackendArgs(env_backend="rlbench")
 
     config = persist_resolved_config(
         args,
@@ -17,5 +17,5 @@ def test_persist_resolved_config_writes_recursive_json(tmp_path):
 
     path = tmp_path / "run" / "config.json"
     assert json.loads(path.read_text()) == config
-    assert config["args"]["env_backend"] == "robotwin"
-    assert isinstance(config["args"]["robotwin"], dict)
+    assert config["args"]["env_backend"] == "rlbench"
+    assert isinstance(config["args"]["rlbench"], dict)

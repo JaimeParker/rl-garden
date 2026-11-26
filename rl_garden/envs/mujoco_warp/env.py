@@ -14,10 +14,9 @@ backend).
 """
 from __future__ import annotations
 
-import gymnasium as gym
-
 from rl_garden.envs.mujoco_warp.config import MujocoWarpEnvConfig
 from rl_garden.envs.mujoco_warp.custom_mujoco_warp_env import CustomMujocoWarpEnv
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
 _TASKS: dict[str, type[CustomMujocoWarpEnv]] = {}
 
@@ -28,7 +27,7 @@ def register_mujoco_warp_task(name: str, cls: type[CustomMujocoWarpEnv]) -> None
     _TASKS[name] = cls
 
 
-def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.vector.VectorEnv:
+def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig):
     import rl_garden.envs.mujoco_warp.tasks  # noqa: F401  (triggers task registration)
 
     if cfg.env_id not in _TASKS:
@@ -36,7 +35,7 @@ def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.vector.VectorEnv:
             f"Unknown mujoco_warp task {cfg.env_id!r}. Available: {sorted(_TASKS)}."
         )
     task_cls = _TASKS[cfg.env_id]
-    env: gym.vector.VectorEnv = task_cls(
+    env = task_cls(
         nworld=cfg.num_envs,
         device=cfg.device,
         render_width=cfg.render_width,
@@ -46,8 +45,9 @@ def make_mujoco_warp_env(cfg: MujocoWarpEnvConfig) -> gym.vector.VectorEnv:
         **cfg.env_kwargs,
     )
 
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
+
     if cfg.frame_stack > 1:
-        from rl_garden.envs.mujoco_warp.custom_mujoco_warp_env import CustomMujocoWarpEnv
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
         camera = CustomMujocoWarpEnv.CAMERA_NAME

@@ -1,11 +1,15 @@
-"""Shared state and serializers for training dry runs."""
+"""Shared state and serializers for training dry runs, and the agent-construction
+seam every registered builder goes through (``construct_agent``)."""
 
 from __future__ import annotations
 
+import inspect
+import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from rl_garden.common.effective_config import (
@@ -17,6 +21,9 @@ from rl_garden.common.effective_config import (
     resolve_effective_config,
     runtime_metadata,
 )
+
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -31,6 +38,80 @@ _SESSION: ContextVar[InspectionSession | None] = ContextVar(
 _AGENT_BUILD: ContextVar[dict[str, Any] | None] = ContextVar(
     "rl_garden_agent_build", default=None
 )
+
+
+@dataclass(frozen=True)
+class CheckpointEvaluation:
+    """The checkpoint an agent is being rebuilt for, and the device it runs on."""
+
+    path: Path
+    checkpoint: Mapping[str, Any]
+    device: str
+
+
+_EVALUATION: ContextVar[CheckpointEvaluation | None] = ContextVar(
+    "rl_garden_checkpoint_evaluation", default=None
+)
+
+
+@contextmanager
+def checkpoint_evaluation(evaluation: CheckpointEvaluation) -> Iterator[None]:
+    """Scope in which a registered builder rebuilds the agent of
+    ``evaluation``'s checkpoint: ``construct_agent`` and ``get_device("auto")``
+    put it on ``evaluation.device`` and ``current_evaluation()`` returns
+    ``evaluation``."""
+    from rl_garden.common.utils import auto_device
+
+    token = _EVALUATION.set(evaluation)
+    try:
+        with auto_device(evaluation.device):
+            yield
+    finally:
+        _EVALUATION.reset(token)
+
+
+def current_evaluation() -> CheckpointEvaluation | None:
+    """The checkpoint evaluation the agent is being rebuilt for, ``None`` when
+    it is being built to train."""
+    return _EVALUATION.get()
+
+
+def checkpoint_to_restore(args: Any) -> Mapping[str, Any] | None:
+    """The checkpoint the agent under construction will load: the evaluated
+    one, or ``args.load_checkpoint`` (read on CPU); ``None`` for a fresh run.
+    For a builder that needs to know what the checkpoint embeds before the
+    agent exists."""
+    evaluation = current_evaluation()
+    if evaluation is not None:
+        return evaluation.checkpoint
+    if args.load_checkpoint is None:
+        return None
+    from rl_garden.common.checkpoint import load_checkpoint_file
+
+    return load_checkpoint_file(args.load_checkpoint, map_location="cpu")
+
+
+def warn_if_superseded(
+    flag: str, path: str | None, embedded: Mapping[str, Any]
+) -> None:
+    """Warn when the weights ``path`` (an algorithm checkpoint's policy) holds
+    differ from the ``embedded`` ones a resumed checkpoint restores instead."""
+    if current_evaluation() is not None or not path or not Path(path).exists():
+        return
+    import torch
+
+    from rl_garden.common.checkpoint import load_checkpoint_file
+
+    policy = load_checkpoint_file(path, map_location="cpu")["state"]["policy"]
+    if not all(
+        key in policy and torch.equal(policy[key], value.cpu())
+        for key, value in embedded.items()
+    ):
+        _logger.warning(
+            "%s %s is not the network embedded in the resumed checkpoint; the embedded one is used",
+            flag,
+            path,
+        )
 
 
 @contextmanager
@@ -155,8 +236,30 @@ def _constructor_kwarg_value(name: str, value: Any) -> Any:
     return json_value(value)
 
 
+def _accepts_device(target: Any) -> bool:
+    """Whether ``target(device=...)`` reaches a ``device`` parameter, following
+    ``**kwargs`` constructors to the parent they forward to."""
+    if not inspect.isclass(target):
+        return "device" in inspect.signature(target).parameters
+    for cls in target.__mro__:
+        init = vars(cls).get("__init__")
+        if init is None:
+            continue
+        parameters = inspect.signature(init).parameters
+        if "device" in parameters:
+            return True
+        if not any(p.kind is p.VAR_KEYWORD for p in parameters.values()):
+            return False
+    return False
+
+
 def construct_agent(target: Any, /, **kwargs: Any) -> Any:
-    """Capture the exact constructor call used by a registered builder."""
+    """Capture the exact constructor call used by a registered builder. While
+    a checkpoint is being evaluated (``checkpoint_evaluation``) its device
+    replaces the builder's."""
+    evaluation = current_evaluation()
+    if evaluation is not None and _accepts_device(target):
+        kwargs["device"] = evaluation.device
     serialized = {name: _constructor_kwarg_value(name, value) for name, value in kwargs.items()}
     _AGENT_BUILD.set(
         {

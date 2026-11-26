@@ -36,8 +36,6 @@ differ from modern simulator stacks.
      - Dependencies
    * - ``maniskill``
      - ``mani_skill``
-   * - ``robotwin``
-     - ``pillow``, ``pyyaml``
    * - ``minari``
      - ``minari[hf]``, ``gymnasium-robotics``
    * - ``d4rl-legacy``
@@ -66,8 +64,8 @@ dependencies. The CPU quickstart explicitly selects CPU; installing the core
 package alone does not configure a GPU simulator.
 
 Some backends need an external simulator installation beyond a Python extra.
-Follow :doc:`/guides/isaaclab-custom-tasks`,
-:doc:`/guides/rlbench-integration` or :doc:`/guides/robotwin` for those systems.
+Follow :doc:`/guides/isaaclab-custom-tasks` or
+:doc:`/guides/rlbench-integration` for those systems.
 Optional backends are loaded when selected, so you can inspect the CLI before
 installing every simulator.
 

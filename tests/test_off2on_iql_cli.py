@@ -17,7 +17,7 @@ def test_iql_print_config_matches_paper_aligned_defaults(tmp_path):
             "--log-dir",
             str(tmp_path),
             "--env-backend",
-            "robotwin",
+            "rlbench",
         ],
     )
     assert result.returncode == 0, result.stderr

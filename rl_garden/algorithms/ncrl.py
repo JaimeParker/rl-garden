@@ -64,7 +64,7 @@ import copy
 import dataclasses
 import math
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal, Optional
+from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
 import numpy as np
 import torch
@@ -117,8 +117,14 @@ def load_rssm_pretrain_checkpoint(path: str | Path) -> dict[str, Any]:
 
 
 def pretrained_observation_space(checkpoint: dict[str, Any]) -> spaces.Dict:
-    """The image-only Dict observation space the pretrained encoder expects."""
-    image_shape = checkpoint["metadata"]["hyperparameters"]["image_shape"]
+    """The image-only Dict observation space the RSSM encoder expects (an
+    ``NCRL`` checkpoint records it as its env's observation space)."""
+    metadata = checkpoint["metadata"]
+    image_shape = metadata["hyperparameters"].get("image_shape")
+    if image_shape is None:
+        image_shape = {
+            key: space["shape"] for key, space in metadata["observation_space"]["spaces"].items()
+        }
     return spaces.Dict(
         {key: spaces.Box(low=0, high=255, shape=tuple(shape), dtype=np.uint8) for key, shape in image_shape.items()}
     )
@@ -416,7 +422,7 @@ class NCRL(DreamerV3):
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        pretrained_world_model: str,
+        pretrained_world_model: str | Mapping[str, Any],
         backbone: Literal["dreamer_v3", "ncrl"] = "dreamer_v3",
         retrieval_db: Optional[str] = None,
         prior_dataset_dir: Optional[str] = None,
@@ -492,8 +498,14 @@ class NCRL(DreamerV3):
         if kind != "linear" or decay_steps <= 0:
             raise ValueError(f"guidance_schedule must be ('linear', start, end, steps>0), got {guidance_schedule}.")
 
-        checkpoint = load_rssm_pretrain_checkpoint(pretrained_world_model)
-        hyper = checkpoint["metadata"]["hyperparameters"]
+        if isinstance(pretrained_world_model, Mapping):
+            # A loaded NCRL checkpoint, which describes and holds its own RSSM.
+            checkpoint = pretrained_world_model
+            hyper = checkpoint["metadata"]["hyperparameters"]
+            pretrained_world_model = hyper["pretrained_world_model"]
+        else:
+            checkpoint = load_rssm_pretrain_checkpoint(pretrained_world_model)
+            hyper = checkpoint["metadata"]["hyperparameters"]
         if backbone != pretrained_backbone(checkpoint):
             raise ValueError(
                 f"{pretrained_world_model} was pretrained with backbone {pretrained_backbone(checkpoint)!r}, "

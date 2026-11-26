@@ -61,9 +61,7 @@ class EnvRequest:
     render_mode: str
     seed: int
     # "What is observed" -- state / rgb / depth cameras, image size, frame
-    # stacking. Replaces the old per-field observation-mode/camera-resolution/
-    # frame-stacking knobs this request used to carry directly (deleted). A
-    # backend must produce exactly ``observation.expected_keys`` or raise
+    # stacking. A backend must produce exactly ``observation.expected_keys`` or raise
     # ``ObservationContractError``; see ``rl_garden.observations``.
     observation: ObservationConfig = field(kw_only=True)
     reward_scale: float = 1.0
@@ -77,7 +75,7 @@ class EnvRequest:
     # Set to False to skip eval env creation (e.g. DrQv2 when eval_freq == 0).
     create_eval_env: bool = True
     # Backend-specific extras, opaque to the registry:
-    backend_config: Any = None  # e.g. ManiSkillConfig | RoboTwinConfig
+    backend_config: Any = None  # e.g. ManiSkillConfig | GymnasiumConfig
 
 
 class EnvBackend:
@@ -173,8 +171,7 @@ def should_create_eval_env(args: Any) -> bool:
 
     Single source of truth for the "build an eval env only if periodic
     evaluation was actually requested" decision, shared by the online,
-    offline, and off2on training entrypoints so they don't each re-derive it
-    (and potentially disagree, as online/off2on previously did). Off2on's
+    offline, and off2on training entrypoints so they cannot disagree. Off2on's
     phase-specific ``offline_eval_freq``/``online_eval_freq`` (not present on
     the online/offline-only entrypoints, hence ``getattr``) can each
     independently trigger evaluation even when the general ``eval_freq`` is 0.

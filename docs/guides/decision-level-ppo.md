@@ -11,7 +11,7 @@ and dilute the advantage statistics.
 which steps those are through an optional info key, and PPO computes returns,
 advantages and the policy loss accordingly. Everything else about the run
 (rollout length, `--total_timesteps`, `--gamma`, logged episode statistics) is
-counted in env steps, as before.
+counted in env steps.
 
 Supported by `ppo`, `recurrent_ppo` and `transformer_ppo`.
 
@@ -37,10 +37,8 @@ simpler and cheaper. The two cannot be combined (see
 
 ## 2. Env contract
 
-The authoritative statement is rules 9 and 10 of the episode boundary contract
-in `.agents/rules/adding-env-backend.md`;
-the consumer-side validation is `rl_garden/algorithms/decision_mask.py`. In
-short, `step()` (never `reset()`) returns one of two optional keys in `infos`:
+The consumer-side validation is `rl_garden/algorithms/decision_mask.py`.
+`step()` (never `reset()`) returns one of two optional keys in `infos`:
 
 | key | dtype / shape | row `i` (column `j`) is true iff |
 |---|---|---|
@@ -77,7 +75,7 @@ Backend support:
 | Isaac Lab adapter and the pass-through wrappers (e.g. `ImageFrameStackWrapper`) | forward both keys unchanged |
 | gymnasium `TorchVectorEnvAdapter` | converts gymnasium's batched numpy value and its `_decision`/`_decision_components` presence mask into one dense `(N, ...)` `torch.bool` tensor; an ended row reads the flag from `final_info`; raises `ValueError` if any row did not report |
 | `ActionRepeatWrapper`, `ActionChunkWrapper`, `SkillActionWrapper` (via `ChunkAccumulator`) | raise `ValueError`: one outer action spans several inner steps, so it has no defined flag |
-| ManiSkill, mujoco_warp, RoboTwin | do not emit the keys (their `infos` are rebuilt on done steps, built by the backend, or list-valued) |
+| ManiSkill, mujoco_warp | do not emit the keys (their `infos` are rebuilt on done steps or built by the backend) |
 
 Backend how-tos: [Isaac Lab](isaaclab-custom-tasks.md#decision-steps),
 [gymnasium envs](gymnasium-custom-envs.md#decision-steps).
@@ -128,11 +126,13 @@ to the loss and gradients even if non-finite.
 
 - **Zero-decision minibatch.** All masked means are 0 (no division by zero),
   advantage normalization is a no-op for fewer than two decision rows,
-  `approx_kl` is 0 so `--target-kl` never stops on it, and no NaN reaches the
-  parameters. The value loss of such a minibatch still trains the critic when
+  `approx_kl` is 0, so in a single process `--target-kl` never stops on it, and
+  no NaN reaches the parameters. The value loss of such a minibatch still trains the critic when
   `--per-step-critic` is on.
-- **DDP.** Each rank normalizes by its own decision count; gradients and the
-  adaptive-KL statistic are all-reduced as in the plain path.
+- **DDP.** Each rank normalizes by its own decision count; gradients, the
+  adaptive-KL statistic and the `--target-kl` stopping test's `approx_kl` are
+  averaged over the ranks as in the plain path, so a rank whose minibatch has no
+  decisions stops when the average exceeds the target.
 - **Per-dimension actor contract.** Decision-level PPO requires both actor
   log-probability methods to support `sum_dims=False`, even when an environment
   reports only `decision`. An actor returning no entropy needs `ent_coef=0`;
@@ -166,7 +166,7 @@ Why on by default: the rollout bootstraps from the value of non-decision states.
 A window usually ends mid-hold (`last_values`), and a truncation can land
 mid-hold (`final_observation`); a critic trained only at decisions is never fit
 where those bootstraps read it. With an all-true mask both settings give the
-same value loss. `train/explained_variance` is computed over the rows the
+same value loss. `losses/explained_variance` is computed over the rows the
 critic is trained on.
 
 ### Decision masks and policy graphs
@@ -228,8 +228,8 @@ Incompatible combinations:
 
 ## 5. Metrics
 
-Logged only with `--decision-level`, and only for a window whose steps carried
-the key:
+Logged only with `--decision-level`. All but `policy/log_std/<j>` need a window
+whose steps carried the key; `policy/log_std/<j>` needs a Gaussian actor instead:
 
 | metric | meaning |
 |---|---|
@@ -244,7 +244,7 @@ the key:
 Unchanged: `_global_step`, `--total_timesteps`, `--num_steps`, `--log_freq`,
 `train/return`, `train/episode_len` and the other episode statistics are all
 per env step, and the existing `losses/*` entries (policy, value, entropy, KL,
-clipfrac) are now means over decision rows (policy side) as described above.
+clipfrac) are means over decision rows (policy side) as described above.
 
 ## 6. Bit-identity guarantee
 

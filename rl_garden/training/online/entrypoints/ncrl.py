@@ -26,8 +26,12 @@ def build_ncrl(args, env, eval_env, logger, checkpoint_dir):
 
     from rl_garden.algorithms.ncrl import NCRL
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
-    from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.inspection import construct_agent, current_evaluation
 
+    evaluation = current_evaluation()
+    pretrained_world_model = (
+        args.pretrained_world_model if evaluation is None else evaluation.checkpoint
+    )
     # Informational only: NCRL rebuilds the pretrained RSSM encoder (per --backbone).
     encoder_config = dataclasses.replace(args.encoder, backbone="dreamer_conv")
     episode_frames, action_repeat = resolve_episode_timing(args)
@@ -36,7 +40,7 @@ def build_ncrl(args, env, eval_env, logger, checkpoint_dir):
         NCRL,
         env=env,
         eval_env=eval_env,
-        pretrained_world_model=args.pretrained_world_model,
+        pretrained_world_model=pretrained_world_model,
         backbone=args.backbone,
         retrieval_db=args.retrieval_db,
         prior_dataset_dir=args.prior_dataset_dir,
@@ -128,7 +132,9 @@ class NCRLArgs(NCRLTrainingArgs, EnvBackendArgs):
     env_id: str = "walker-walk"
     num_envs: int = 1
     num_eval_envs: int = 5
+    # Evaluation interval in policy steps (not frames).
     eval_freq: int = 5_000
+    # Vector-env steps per evaluation.
     num_eval_steps: int = 500
 
 
@@ -139,5 +145,16 @@ def _ncrl_algorithm_cls() -> type:
 
 
 registry.register(
-    "ncrl", NCRLArgs, run_ncrl, algorithm_cls=_ncrl_algorithm_cls, build_agent=build_ncrl
+    "ncrl",
+    NCRLArgs,
+    run_ncrl,
+    algorithm_cls=_ncrl_algorithm_cls,
+    build_agent=build_ncrl,
+    training_only_inputs={
+        "pretrained_world_model": "",
+        "retrieval_db": None,
+        "prior_dataset_dir": None,
+        # Rehearsal and execution guidance only act in training.
+        "online_ratio": 1.0,
+    },
 )

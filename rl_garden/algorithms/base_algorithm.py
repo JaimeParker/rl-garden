@@ -69,6 +69,11 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
     #: registry entry's builder.
     checkpoint_eval_unsupported_reason: Optional[str] = None
 
+    #: The run's resolved configuration (what its ``config.json`` holds, as
+    #: plain JSON data), set by the training runner and written to every
+    #: checkpoint; ``None`` for an agent built without one.
+    run_config: Optional[dict[str, Any]] = None
+
     def __init__(
         self,
         env: Any,
@@ -374,6 +379,8 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             state=self.state_dict(),
             replay_buffer_path=replay_path.name if replay_path is not None else None,
         )
+        if self.run_config is not None:
+            checkpoint["metadata"]["run_config"] = self.run_config
         save_checkpoint_file(checkpoint_path, checkpoint)
         if replay_path is not None:
             save_replay_buffer_file(replay_path, self.replay_buffer)

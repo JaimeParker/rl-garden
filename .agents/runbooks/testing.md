@@ -27,7 +27,7 @@ Registered in `pyproject.toml` with `--strict-markers`: `gpu`, `sim`, `smoke`, `
 | marker | auto rule |
 |---|---|
 | `smoke` | `test_*_smoke*.py` |
-| `sim` | name contains `maniskill`, `dm_control`, `mujoco`, `ogbench`, `robomimic`, `d4rl`, `metaworld`, `robotwin`, `isaaclab`, `gym_env`, `vector_env` |
+| `sim` | name contains `maniskill`, `dm_control`, `mujoco`, `ogbench`, `robomimic`, `d4rl`, `metaworld`, `isaaclab`, `gym_env`, `vector_env` |
 | `gpu` | files listed in `GPU_FILES` in `tests/conftest.py` (those that skip without CUDA) |
 | `slow` | explicit only |
 

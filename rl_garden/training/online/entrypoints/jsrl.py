@@ -12,12 +12,17 @@ from __future__ import annotations
 
 def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import JSRL
+    from rl_garden.algorithms.jsrl import embedded_guide, require_guide_checkpoint
     from rl_garden.common.cli_args import (
         policy_module_kwargs,
         resolve_critic_encoder_config,
         resolve_obs_groups_config,
     )
-    from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.inspection import (
+        checkpoint_to_restore,
+        construct_agent,
+        warn_if_superseded,
+    )
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
     net_arch = {
@@ -32,11 +37,18 @@ def build_jsrl(args, env, eval_env, logger, checkpoint_dir):
     if args.encoder_sharing is not None:
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
+    # The checkpoint to load restores the guide it embeds.
+    guide = embedded_guide(checkpoint_to_restore(args))
+    if guide is None:
+        require_guide_checkpoint(args.guide_checkpoint)
+    else:
+        warn_if_superseded("--guide-checkpoint", args.guide_checkpoint, guide["policy"])
+
     agent = construct_agent(
         JSRL,
         env=env,
         eval_env=eval_env,
-        guide_checkpoint=args.guide_checkpoint,
+        guide_checkpoint=args.guide_checkpoint if guide is None else None,
         guide_algorithm=args.guide_algorithm,
         max_horizon=args.max_horizon,
         n_curriculum_stages=args.n_curriculum_stages,

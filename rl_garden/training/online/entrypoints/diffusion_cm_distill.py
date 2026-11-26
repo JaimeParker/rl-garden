@@ -156,4 +156,5 @@ registry.register(
     run_diffusion_cm_distill,
     algorithm_cls=_diffusion_cm_distill_algorithm_cls,
     build_agent=build_diffusion_cm_distill,
+    training_only_inputs=("bc_checkpoint",),
 )

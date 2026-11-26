@@ -7,7 +7,7 @@ It works for both state-based and image-based observations.
 
 This implementation is ported from the official JAX codebase and
 [r2dreamer](https://github.com/NM512/r2dreamer) (PyTorch reference, `rep_loss="dreamer"`
-branch) and follows the decisions in `.agents/rules/adding-algorithm.md`.
+branch).
 
 ## Quick Start
 
@@ -25,10 +25,10 @@ python examples/train_online.py dreamer_v3 \
   --config configs/online/dreamer_v3_maniskill_pushcube_rgb.yaml
 ```
 
-This config sets `buffer_device: cpu` and a smaller `buffer_size` (100,000):
-a GPU-resident (`buffer_device: cuda`, the default) uint8 image replay
-buffer at the default `buffer_size` (1,000,000) can exceed a shared 24 GB
-GPU's memory on its own -- see the config file's header comment for the math.
+This config keeps the replay buffer on CUDA (`buffer_device: cuda`) and shrinks
+`buffer_size` to 100,000: a uint8 image buffer at the default `buffer_size`
+(1,000,000) can exceed a shared 24 GB GPU's memory on its own -- see the config
+file's header comment for the math.
 
 ## Configuration and Hyperparameters
 
@@ -36,7 +36,7 @@ Key hyperparameters (see `rl_garden/training/online/args.py::DreamerV3TrainingAr
 
 | Parameter | Default | Description |
 |---|---|---|
-| `size` | `12M` | Model size preset (`12M`, `25M`, `50M`, `100M`, `200M`, `400M`) |
+| `size` | `12M` | Model size preset (`12M`, `25M`, `50M`, `100M`, `200M`, `400M`, `ncrl_m`) |
 | `batch_size` | `16` | Batch size for training |
 | `batch_length` | `64` | Sequence length for training windows |
 | `train_ratio` | `512.0` | Gradient steps per environment step (train_ratio ÷ (batch_size × batch_length)) |
@@ -66,22 +66,22 @@ For rapid prototyping, use `12M`; scale up for complex visual tasks.
 
 The `contdisc` flag controls how the model handles episode termination:
 
-- **Default (False)**: Matches r2dreamer behavior. Terminal states set discount to 0;
-  imagined rollouts ignore the continue head's prediction.
-- **Official JAX default (True)**: Continue head output is multiplied by `1 − 1/horizon`;
-  imagined rollouts use `disc = 1`.
+- **Default (False)**: Matches r2dreamer behavior. The continue head's target is
+  `1 − terminated`, and imagination applies `disc = 1 − 1/horizon`.
+- **Official JAX default (True)**: The continue head's target is
+  multiplied by `1 − 1/horizon`, and imagination uses `disc = 1`.
 
-Set `--contdisc true` to match official JAX semantics; the default here (`False`)
-aligns with the r2dreamer port.
+In both modes imagined rollouts weight steps by the continue head's prediction. Pass
+`--contdisc` to match official JAX semantics; the default here (`False`) aligns with the
+r2dreamer port.
 
 ### Precision (`compute_dtype`)
 
 - **On CUDA** (default): Uses `bfloat16` via `torch.autocast` (no loss scaling).
 - **On CPU** (or explicit `--compute_dtype float32`): Falls back to `float32`.
 
-Official JAX uses jit-compilation for performance; this port does not yet use
-`torch.compile` (tracked for follow-up). Enable it experimentally by setting
-`compute_dtype` and consulting `rl_garden/algorithms/dreamer_v3.py`'s docstring.
+Official JAX uses jit-compilation for performance; this port does not use
+`torch.compile`, and `compute_dtype` only selects the autocast dtype.
 
 ## Limitations
 
@@ -90,22 +90,20 @@ The following are not currently supported:
 - **Unequal image sizes**: All RGB images must have the same width and height.
 - **Depth observations**: Only RGB images are processed by the decoder.
 - **Frame stacking**: DreamerV3 is recurrent and maintains latent history; frame
-  stacking is rejected at preflight (set `frame_stack=1` or omit the flag).
+  stacking is rejected when the agent is constructed (keep `--obs.frame_stack` at 1).
 - **Mixed Dict actions**: Action spaces must be homogeneous (all Box, no mixed
   continuous + discrete). Purely discrete action spaces are not yet ported.
-- **dm_control backend**: Only `mujoco`, `maniskill`, and other standard backends
-  are available for online training.
 
 ## Architecture Overview
 
 DreamerV3's components live in `rl_garden`:
 
 - **`rl_garden/world_models/rssm.py`**: Recurrent state-space model
-  (RSSMSize presets table; observe, step, reward, continue, model_loss, decode).
+  (RSSMSize presets table; observe, step, reward, continue_, model_loss, decode).
 - **`rl_garden/encoders/dreamer_conv.py`**: Convolutional image encoder for
-  visual observations (state vectors bypassed).
-- **`rl_garden/policies/dreamer_policy.py`**: Actor-critic policy that wraps the
-  RSSM's imagination loop (predict, actor head, critic head).
+  visual observations (state vectors go through a symlog MLP in the same encoder).
+- **`rl_garden/policies/dreamer_policy.py`**: Actor-critic policy (predict, actor head,
+  critic head). The imagination loop is `DreamerV3._imagination_losses`.
 - **`rl_garden/algorithms/dreamer_v3.py`**: Main algorithm class (rollout hooks,
   model/actor-critic training, replay buffer carry-state).
 - **`rl_garden/world_models/imagine.py`**: Imagination rollout for planning within
@@ -117,12 +115,11 @@ DreamerV3's components live in `rl_garden`:
 
 - `ModelBasedAlgorithm`: Base class for world-model-based algorithms
   (`rl_garden/algorithms/model_based.py`).
-- `SequenceReplayBuffer`: Tolerant, cross-episode sequence buffer with learned
-  state carry (`rl_garden/buffers/sequence_replay_buffer.py`).
+- `SequenceReplayBuffer`: Cross-episode sequence buffer with learned
+  state carry (DreamerV3 uses its uniform sampling mode) (`rl_garden/buffers/sequence_replay_buffer.py`).
 
 ## Further Reading
 
-- Plan: `.agents/rules/dreamer-v3.md` (decisions and design for this port).
 - Ported from: [r2dreamer](https://github.com/NM512/r2dreamer) (Naoki et al.).
 - Official JAX: [dreamerv3](https://github.com/danijar/dreamerv3) (Hafner et al.,
   arXiv:2301.04104, Nature 2025).

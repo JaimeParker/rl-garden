@@ -10,7 +10,11 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasWrapper
+from rl_garden.envs.wrappers import BatchedEnvWrapper
+from rl_garden.envs.wrappers.reward_transform import (
+    RewardScaleBiasWrapper,
+    apply_reward_transform,
+)
 
 
 class _DummyEnv(gym.Env):
@@ -98,39 +102,33 @@ def test_reward_scale_bias_wrapper_forwards_env_attributes():
         env.not_an_attribute
 
 
-def test_reward_scale_bias_vector_wrapper_applies_transform():
+def test_reward_scale_bias_wrapper_wraps_a_vector_env():
     from gymnasium.vector import AutoresetMode, SyncVectorEnv
-
-    from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
 
     def make():
         return _DummyEnv([0.0, 1.0, 0.5])
 
     vec = SyncVectorEnv([make, make], autoreset_mode=AutoresetMode.SAME_STEP)
-    env = RewardScaleBiasVectorWrapper(vec, scale=2.0, bias=-0.5)
-    env.reset()
-    _, r0, *_ = env.step(np.zeros((2, 1), dtype=np.float32))
-    _, r1, *_ = env.step(np.zeros((2, 1), dtype=np.float32))
-    np.testing.assert_allclose(r0, [2.0 * 0.0 - 0.5, 2.0 * 0.0 - 0.5])
-    np.testing.assert_allclose(r1, [2.0 * 1.0 - 0.5, 2.0 * 1.0 - 0.5])
-
-
-def test_reward_scale_bias_vector_wrapper_is_a_vector_env():
-    from gymnasium.vector import AutoresetMode, SyncVectorEnv, VectorEnv
-
-    from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-    vec = SyncVectorEnv(
-        [lambda: _DummyEnv([1.0]), lambda: _DummyEnv([1.0])],
-        autoreset_mode=AutoresetMode.SAME_STEP,
-    )
-    env = RewardScaleBiasVectorWrapper(vec)
-    assert isinstance(env, VectorEnv)
+    env = RewardScaleBiasWrapper(vec, scale=2.0, bias=-0.5)
+    assert isinstance(env, BatchedEnvWrapper)
     assert env.num_envs == 2
     assert env.single_observation_space.shape == (2,)
     assert env.observation_space.shape == (2, 2)
     assert env.single_action_space.shape == (1,)
     assert env.action_space.shape == (2, 1)
+    env.reset()
+    _, r0, *_ = env.step(np.zeros((2, 1), dtype=np.float32))
+    _, r1, *_ = env.step(np.zeros((2, 1), dtype=np.float32))
+    np.testing.assert_allclose(r0, [2.0 * 0.0 - 0.5, 2.0 * 0.0 - 0.5])
+    np.testing.assert_allclose(r1, [2.0 * 1.0 - 0.5, 2.0 * 1.0 - 0.5])
+    env.close()
+    assert vec.closed
+
+
+def test_identity_reward_transform_adds_no_wrapper():
+    env = _DummyEnv([0.0])
+    assert apply_reward_transform(env, scale=1.0, bias=0.0) is env
+    assert isinstance(apply_reward_transform(env, scale=1.0, bias=0.5), RewardScaleBiasWrapper)
 
 
 def test_maniskill_env_config_accepts_reward_transform_fields():

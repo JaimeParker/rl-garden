@@ -47,8 +47,7 @@ renders pure background with no error.
 
 RGB: ``rc.rgb_data`` is a flat packed ``0xRRGGBB`` ``uint32`` array (not
 ``wp.vec3f`` -- confirmed by reading ``mujoco_warp/_src/render_test.py``'s
-``_unpack_rgb`` helper after an earlier wrong-dtype guess crashed with a real
-CUDA illegal memory access). PyTorch doesn't support bitwise ops on
+``_unpack_rgb`` helper; a wrong dtype is a CUDA illegal memory access). PyTorch doesn't support bitwise ops on
 ``uint32`` CUDA tensors, so unpacking upcasts to ``int64`` first. Output is
 raw uint8 ``[0, 255]`` per channel, matching
 ``rl_garden.encoders.base.image_needs_normalization``'s convention.

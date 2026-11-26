@@ -97,5 +97,10 @@ def _gail_algorithm_cls() -> type:
 
 
 registry.register(
-    "gail", GAILArgs, run_gail, algorithm_cls=_gail_algorithm_cls, build_agent=build_gail
+    "gail",
+    GAILArgs,
+    run_gail,
+    algorithm_cls=_gail_algorithm_cls,
+    build_agent=build_gail,
+    training_only_inputs={"demo_env_id": None},
 )

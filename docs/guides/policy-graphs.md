@@ -85,7 +85,9 @@ does not: its `encoder` nodes carry their own `config`, and non-default
 `--encoder.*` flags next to it raise `ConfigError`. Because the
 graph decides gradient routing, `--encoder-sharing`,
 `--detach-encoder-on-actor`, `--obs-groups` and `--critic-encoder.*` are
-rejected next to any `--policy-graph`.
+rejected next to any `--policy-graph`. On PPO, `--actor-factory` raises `ValueError`
+and `--actor-extractor` / `--critic-extractor` conflict with the graph's
+`policy_kwargs`; both fail when the algorithm is constructed, not at `--print-config`.
 
 ## 2. YAML reference
 
@@ -262,13 +264,14 @@ possible, names the node, edge or loss.
 | loss: one `info.<key>` used with two layouts (*) | `target 'info.<key>' is used by losses that need different layouts` |
 | stateful node behind a token-layout (ViT) encoder (*) | `NotImplementedError: encoder node '<n>' feeds stateful node '<m>'` |
 | stateful graph under `ppo`, or the reverse | `<Algorithm> needs a stateful/stateless policy graph` |
-| `--encoder-sharing`, `--obs-groups`, ... next to a graph | `policy_graph expresses the encoder routing ... must not be set alongside it` |
+| `--encoder-sharing`, `--obs-groups`, ... next to a graph | CLI: `--policy-graph expresses the encoder routing ...; drop ...`; constructor: `policy_graph expresses the encoder routing ... must not be set alongside it` |
 
 `GraphSpec.parse` checks the rules without a mark; it needs no observation
 space, so the CLI preflight runs it before any environment is created. The rows
 marked (*) need node widths, the action width or the built encoders and fire
 when the policy is built. The last two rows are checked by the CLI preflight and again when the
-algorithm is constructed.
+algorithm is constructed (`--actor-factory`, `--actor-extractor` and `--critic-extractor`
+are checked only at construction).
 
 ## 3. Worked examples
 
@@ -641,8 +644,8 @@ parses it (the trainer, `eval_checkpoint`, RLinf workers). Two ways:
 - A project-local package that is not installed registers its node and loss
   types at import time, from a module that the project's own entry script
   imports before the CLI parses the graph. Env backends register the same way
-  (`register_env_backend` at import, see
-  `.agents/rules/adding-env-backend.md`).
+  (`register_env_backend` at import; installed packages use the
+  `rlgarden.env_backends` entry point, see [Extending rl-garden](extending.md)).
 
 ### New loss types
 

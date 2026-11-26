@@ -11,22 +11,11 @@ indices) translated into the dense ``infos["final_observation"]``;
 (their ``_decision*`` presence masks are dropped). See the episode boundary
 contract in ``.agents/rules/adding-env-backend.md``.
 
-Replaces two backend-specific adapters that duplicated this translation with
-a latent divergence between them: ``rl_garden.envs.minari.env
-._TorchVectorEnvAdapter`` preserved ``final_info`` but filled non-terminated
-``final_observation`` slots with zeros; ``rl_garden.envs.mujoco.env
-._MujocoVecEnvAdapter`` filled non-terminated slots with the env's actual
-current observation (matching ManiSkillVectorEnv) but silently dropped
-``final_info``. This adapter combines the correct half of each: MuJoCo's
-per-slot fill strategy for ``final_observation``, Minari's preservation of
-``final_info``.
+``SeededResetVectorEnv`` gives an env a fixed seed for ``reset()`` calls without
+one; backends put it directly on the vector env, below the adapter.
 
-Note on ``VectorWrapper`` attribute assignment (verified against the
-installed gymnasium version, not assumed): ``num_envs`` has no setter on
-``VectorWrapper`` -- it's a read-only property forwarding to the wrapped
-env -- so it is intentionally *not* assigned here.
-``single_observation_space``/``single_action_space``/``action_space``/
-``metadata`` all have setters and are assigned directly.
+Both are ``VectorWrapper``s; wrappers above the adapter derive from
+``rl_garden.envs.wrappers.BatchedEnvWrapper`` (see its module docstring).
 """
 from __future__ import annotations
 
@@ -49,9 +38,24 @@ def _row_present(values: Any, present: Any, row: int) -> bool:
     return values is not None and (present is None or bool(present[row]))
 
 
+class SeededResetVectorEnv(VectorWrapper):
+    """``reset()`` without a seed replays the configured one, so every
+    evaluation round, which resets without a seed, sees the same episodes."""
+
+    def __init__(self, vec_env: VectorEnv, seed: int) -> None:
+        super().__init__(vec_env)
+        self._seed = seed
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        return self.env.reset(seed=self._seed if seed is None else seed, options=options)
+
+
 class TorchVectorEnvAdapter(VectorWrapper):
     """Wraps a numpy ``gymnasium.vector.VectorEnv`` to emit rl-garden's torch
-    env contract. See the module docstring for the ``final_*`` translation."""
+    env contract. See the module docstring for the ``final_*`` translation.
+
+    Non-terminated rows of ``final_observation`` hold the env's current
+    observation, as in ManiSkillVectorEnv."""
 
     def __init__(self, vec_env: VectorEnv, device: str) -> None:
         super().__init__(vec_env)

@@ -193,7 +193,8 @@ def _run_offline(
         derived=materialized_derived,
     )
     persist_effective_config(materialized, config_path)
-    logger.update_config(json_value(materialized))
+    agent.run_config = json_value(materialized)
+    logger.update_config(agent.run_config)
     loaded = load_offline_dataset(agent.replay_buffer, args)
     logger.add_summary("offline/loaded_transitions", loaded)
     if args.std_log:

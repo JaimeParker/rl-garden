@@ -312,33 +312,6 @@ def test_rgbd_wsrl_pure_online_path_switches_mode() -> None:
     }
 
 
-def _make_rt_req(
-    rt,
-    *,
-    num_envs: int = 2,
-    num_eval_envs: int = 2,
-    capture_video: bool = False,
-    reward_scale: float = 1.0,
-    reward_bias: float = 0.0,
-    rgb: tuple = ("head", "left_wrist", "right_wrist"),
-):
-    from rl_garden.envs.backend_registry import EnvRequest
-
-    return EnvRequest(
-        env_id="place_shoe",
-        num_envs=num_envs,
-        num_eval_envs=num_eval_envs,
-        observation=ObservationConfig(rgb=rgb),
-        control_mode="delta_joint_pos",
-        render_mode="rgb_array",
-        seed=1,
-        capture_video=capture_video,
-        reward_scale=reward_scale,
-        reward_bias=reward_bias,
-        backend_config=rt,
-    )
-
-
 def _make_ms_req(ms):
     from rl_garden.envs.backend_registry import EnvRequest
 
@@ -767,30 +740,12 @@ def test_isaaclab_backend_make_eval_env_not_supported_in_v1() -> None:
         IsaacLabBackend.make_eval_env(req)
 
 
-def test_robotwin_config_defaults() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-
-    rt = RoboTwinConfig()
-
-    assert rt.reward_mode == "dense"
-    assert rt.step_lim == 400
-    assert rt.planner_backend == "mplib"
-    assert rt.embodiment == ["aloha-agilex"]
-    assert rt.wrist_camera_type == "D435"
-    assert rt.head_camera_type == "D435"
-    assert rt.device == "auto"
-    assert rt.joint_delta_scale == 0.05
-    assert rt.gripper_delta_scale == 0.2
-    assert rt.disable_topp is False
-    assert rt.random_light is False
-
-
 def test_env_backend_args_resolves_registered_config_without_algorithm_branching() -> None:
     from rl_garden.common.env_args import EnvBackendArgs
 
-    args = EnvBackendArgs(env_backend="robotwin")
+    args = EnvBackendArgs(env_backend="rlbench")
 
-    assert args.resolve_backend_config() is args.robotwin
+    assert args.resolve_backend_config() is args.rlbench
 
 
 def test_env_backend_args_rejects_unknown_backend() -> None:
@@ -798,141 +753,8 @@ def test_env_backend_args_rejects_unknown_backend() -> None:
 
     args = EnvBackendArgs(env_backend="missing")
 
-    with pytest.raises(KeyError, match="Available.*maniskill.*robotwin"):
+    with pytest.raises(KeyError, match="Available.*maniskill.*rlbench"):
         args.resolve_backend_config()
-
-
-def test_robotwin_backend_make_cfg_64px() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-
-    rt = RoboTwinConfig()
-    req = _make_rt_req(rt, num_envs=3, num_eval_envs=3, capture_video=True)
-
-    cfg = RoboTwinBackend._make_cfg(req, is_eval=True)
-
-    assert cfg.num_envs == 3
-    assert cfg.image_size == (64, 64)
-    assert cfg.render_every_control_step is False
-    assert cfg.control_step_cap is None
-    assert cfg.random_light is False
-    assert cfg.crazy_random_light_rate == 0.0
-    assert cfg.head_camera_type == "D435"
-    assert cfg.task_config["camera"]["head_camera_type"] == "D435"
-    assert cfg.task_config["camera"]["collect_wrist_camera"] is True
-    assert cfg.task_config["camera"]["collect_head_camera"] is True
-    assert cfg.task_config["eval_video_log"] is True
-
-
-def test_robotwin_backend_make_cfg_device() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-
-    rt = RoboTwinConfig()
-    req = _make_rt_req(rt, num_envs=2)
-
-    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
-
-    assert cfg.num_envs == 2
-    assert cfg.device == "auto"
-    assert cfg.image_size == (64, 64)
-    assert cfg.render_every_control_step is False
-    assert cfg.control_step_cap is None
-    assert cfg.random_light is False
-    assert cfg.crazy_random_light_rate == 0.0
-    assert cfg.head_camera_type == "D435"
-    assert cfg.task_config["camera"]["head_camera_type"] == "D435"
-    assert cfg.task_config["domain_randomization"]["random_light"] is False
-    assert cfg.task_config["camera"]["collect_wrist_camera"] is True
-
-
-def test_robotwin_backend_omits_wrist_cameras_when_not_requested() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-
-    rt = RoboTwinConfig()
-    req = _make_rt_req(rt, num_envs=2, rgb=("head",))
-
-    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
-
-    assert cfg.task_config["camera"]["collect_wrist_camera"] is False
-    assert cfg.task_config["camera"]["collect_head_camera"] is True
-
-
-def test_robotwin_backend_rejects_unknown_camera() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-    from rl_garden.observations import ObservationContractError
-
-    rt = RoboTwinConfig()
-    req = _make_rt_req(rt, rgb=("front",))
-
-    with pytest.raises(ObservationContractError):
-        RoboTwinBackend._make_cfg(req, is_eval=False)
-
-
-def test_robotwin_backend_rejects_depth() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backend_registry import EnvRequest
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-    from rl_garden.observations import ObservationContractError
-
-    req = EnvRequest(
-        env_id="place_shoe",
-        num_envs=1,
-        num_eval_envs=1,
-        observation=ObservationConfig(depth=("head",)),
-        control_mode="delta_joint_pos",
-        render_mode="rgb_array",
-        seed=1,
-        backend_config=RoboTwinConfig(),
-    )
-
-    with pytest.raises(ObservationContractError):
-        RoboTwinBackend._make_cfg(req, is_eval=False)
-
-
-def test_robotwin_backend_forwards_all_options() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-
-    rt = RoboTwinConfig(
-        profile_timing=True,
-        profile_interval=7,
-        render_every_control_step=True,
-        control_step_cap=16,
-        random_light=True,
-        crazy_random_light_rate=0.1,
-        head_camera_type="Train_D435_128x96",
-    )
-    req = _make_rt_req(rt, num_envs=2, reward_scale=2.0, reward_bias=-1.0)
-
-    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
-
-    assert cfg.profile_timing is True
-    assert cfg.profile_interval == 7
-    assert cfg.render_every_control_step is True
-    assert cfg.control_step_cap == 16
-    assert cfg.random_light is True
-    assert cfg.crazy_random_light_rate == 0.1
-    assert cfg.head_camera_type == "Train_D435_128x96"
-    assert cfg.task_config["render_every_control_step"] is True
-    assert cfg.task_config["control_step_cap"] == 16
-    assert cfg.task_config["camera"]["head_camera_type"] == "Train_D435_128x96"
-    assert cfg.reward_scale == 2.0
-    assert cfg.reward_bias == -1.0
-
-
-def test_robotwin_backend_disable_topp() -> None:
-    from rl_garden.common.env_args import RoboTwinConfig
-    from rl_garden.envs.backends.robotwin import RoboTwinBackend
-
-    rt = RoboTwinConfig(disable_topp=True)
-    req = _make_rt_req(rt, num_envs=2)
-
-    cfg = RoboTwinBackend._make_cfg(req, is_eval=False)
-
-    assert cfg.task_config["need_topp"] is False
 
 
 def test_state_wsrl_defaults_match_existing_cli() -> None:

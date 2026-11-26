@@ -1,10 +1,10 @@
-"""``MultitaskPadWrapper``: present one task's vector env in a multitask
+"""``MultitaskPadWrapper``: present one task's batched env in a multitask
 model's padded shapes (TD-MPC2 ``MultitaskWrapper._pad_obs``/``step``).
 
 - ``obs["state"]`` (and ``infos["final_observation"]["state"]``) is
   zero-padded on the last dim from the task's own dim to ``obs_dim``.
-- The action space becomes ``(action_dim,)``; ``step`` keeps only the
-  task's own leading action dims.
+- The last dim of the action space becomes ``action_dim``; ``step`` keeps only
+  the task's own leading action dims.
 - ``infos["task"]`` carries the task id, ``(num_envs,)`` long.
 
 The task's true dims must equal the dataset manifest's dims for that task
@@ -13,20 +13,21 @@ observation layout differs from the one the model was trained on.
 """
 from __future__ import annotations
 
-import gymnasium as gym
+from typing import Any
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
-_VectorWrapperBase = getattr(gym.vector, "VectorWrapper", None) or gym.vector.VectorEnvWrapper
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
 
-class MultitaskPadWrapper(_VectorWrapperBase):
+class MultitaskPadWrapper(BatchedEnvWrapper):
     def __init__(
         self,
-        env: gym.vector.VectorEnv,
+        env: Any,
         *,
         obs_dim: int,
         action_dim: int,
@@ -63,7 +64,8 @@ class MultitaskPadWrapper(_VectorWrapperBase):
             }
         )
         self.observation_space = batch_space(self.single_observation_space, env.num_envs)
-        self.single_action_space = spaces.Box(-1.0, 1.0, (self.padded_action_dim,), dtype=np.float32)
+        action_shape = (*env.single_action_space.shape[:-1], self.padded_action_dim)
+        self.single_action_space = spaces.Box(-1.0, 1.0, action_shape, dtype=np.float32)
         self.action_space = batch_space(self.single_action_space, env.num_envs)
 
     def _pad(self, obs):

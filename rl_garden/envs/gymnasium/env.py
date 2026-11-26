@@ -23,7 +23,7 @@ wrapper chain already has one (a second instance asserts on its own info
 key), since training/eval logging reads ``final_info["episode"]``.
 
 ``obs_key_map`` renames the env's Dict observation keys to contract keys
-once, at the vector level after the numpy-to-torch adapter, so it applies to
+once, above the numpy-to-torch adapter, so it applies to
 both the ``gym.make`` path and the ``vector_env_factory`` path.
 
 ``vector_env_factory`` (``"pkg.module:function"``) replaces ``gym.make`` +
@@ -44,46 +44,21 @@ from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.gymnasium.config import GymnasiumEnvConfig
-from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.vector_env import SeededResetVectorEnv, TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
 
-class _SeededGymnasiumVecEnv(TorchVectorEnvAdapter):
-    """Defaults ``reset()`` to the configured ``seed`` when the caller omits
-    one, so repeated evaluation rounds replay the same fixed episodes
-    (mirrors ``rl_garden.envs.mujoco.env._SeededMujocoVecEnv`` -- duplicated
-    rather than shared since it's a module-private helper, not a
-    subclassing hook)."""
-
-    def __init__(self, vec_env: gym.vector.VectorEnv, device: str, seed: int) -> None:
-        super().__init__(vec_env, device)
-        self._seed = seed
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        return super().reset(seed=seed if seed is not None else self._seed, options=options)
-
-
-class _SeededTorchVecEnv(gym.vector.VectorWrapper):
-    """``reset()`` without a seed replays the configured seed, for a
-    torch-native factory env that bypasses ``_SeededGymnasiumVecEnv``."""
-
-    def __init__(self, vec_env: gym.vector.VectorEnv, seed: int) -> None:
-        super().__init__(vec_env)
-        self._seed = seed
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        return self.env.reset(seed=seed if seed is not None else self._seed, options=options)
-
-
-class _RenameObservationKeys(gym.vector.VectorWrapper):
+class _RenameObservationKeys(BatchedEnvWrapper):
     """Renames Dict observation keys (``key_map``: env key -> contract key)
     in the observation spaces, every ``reset``/``step`` observation, and
     ``infos["final_observation"]``; unmapped keys pass through."""
 
-    def __init__(self, vec_env: gym.vector.VectorEnv, key_map: dict[str, str]) -> None:
+    def __init__(self, env: gym.vector.VectorEnv, key_map: dict[str, str]) -> None:
         from rl_garden.observations.schema import ObservationContractError
 
-        super().__init__(vec_env)
-        single_space = vec_env.single_observation_space
+        super().__init__(env)
+        single_space = env.single_observation_space
         if not isinstance(single_space, spaces.Dict):
             raise ObservationContractError(
                 "gymnasium backend: obs_key_map requires a Dict observation space, "
@@ -104,7 +79,7 @@ class _RenameObservationKeys(gym.vector.VectorWrapper):
             )
         self._key_map = key_map
         self.single_observation_space = spaces.Dict(self._rename(single_space.spaces))
-        self.observation_space = batch_space(self.single_observation_space, vec_env.num_envs)
+        self.observation_space = batch_space(self.single_observation_space, env.num_envs)
 
     def _rename(self, mapping: dict[str, Any]) -> dict[str, Any]:
         return {self._key_map.get(key, key): value for key, value in mapping.items()}
@@ -224,15 +199,15 @@ def _make_factory_vec_env(cfg: GymnasiumEnvConfig) -> gym.vector.VectorEnv:
             f"space (or use obs_key_map); got {space!r}"
         )
     if cfg.vector_env_returns_torch:
-        return _SeededTorchVecEnv(vec_env, seed=cfg.seed)
-    return _SeededGymnasiumVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+        return SeededResetVectorEnv(vec_env, cfg.seed)
+    return TorchVectorEnvAdapter(SeededResetVectorEnv(vec_env, cfg.seed), device=cfg.device)
 
 
 def make_gymnasium_env(cfg: GymnasiumEnvConfig):
     from gymnasium.vector import AsyncVectorEnv, AutoresetMode, SyncVectorEnv
 
     if cfg.vector_env_factory:
-        adapter = _make_factory_vec_env(cfg)
+        env = _make_factory_vec_env(cfg)
     else:
         env_fns = [
             _make_env_fn(cfg.env_id, cfg.env_kwargs, tuple(cfg.import_modules))
@@ -240,28 +215,21 @@ def make_gymnasium_env(cfg: GymnasiumEnvConfig):
         ]
         vec_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
         vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
-        adapter = _SeededGymnasiumVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+        env = TorchVectorEnvAdapter(SeededResetVectorEnv(vec_env, cfg.seed), device=cfg.device)
 
     if cfg.obs_key_map:
-        adapter = _RenameObservationKeys(adapter, cfg.obs_key_map)
+        env = _RenameObservationKeys(env, cfg.obs_key_map)
+
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     if cfg.frame_stack > 1:
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
-        adapter = ImageFrameStackWrapper(
-            adapter,
+        env = ImageFrameStackWrapper(
+            env,
             frame_stack=cfg.frame_stack,
             image_keys=cfg.image_keys,
             autoreset_in_step=True,
         )
 
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import (
-            RewardScaleBiasVectorWrapper,
-        )
-
-        adapter = RewardScaleBiasVectorWrapper(
-            adapter, scale=cfg.reward_scale, bias=cfg.reward_bias
-        )
-
-    return adapter
+    return env

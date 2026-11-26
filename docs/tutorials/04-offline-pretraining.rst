@@ -165,7 +165,8 @@ Use the same dataset and action bounds to isolate the algorithm change:
 The critic count is deliberately small for this CPU exercise.
 Neither this update budget nor the synthetic data is a benchmark recipe.
 Look for finite losses and a written checkpoint before scaling up.
-See :doc:`/guides/offline-acceleration` when throughput becomes the next concern.
+See :doc:`/guides/offline-acceleration` for the compile and fast-math options
+(``cql``, ``calql`` and ``wsrl`` expose ``--use-compile``; IQL does not).
 
 Inspect a conservative alternative
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

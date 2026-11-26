@@ -158,7 +158,7 @@ def test_empty_image_keys_raises():
 class _FakeMultiCameraEnv(gym.Env):
     """Generic-path fixture with two image keys (rgb + depth) alongside
     state -- exercises stacking multiple heterogeneous image keys at once,
-    matching how mujoco_warp/robotwin/ogbench call the generic path with
+    matching how mujoco_warp/rlbench/ogbench call the generic path with
     more than one ``rgb_<cam>``/``depth_<cam>`` key."""
 
     num_envs = 1

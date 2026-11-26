@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from rl_garden.envs.custom.config import CustomEnvConfig
 from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
 
 def _make_env_fn():
@@ -45,13 +46,6 @@ def make_custom_env(cfg: CustomEnvConfig):
 
     env_fns = [_make_env_fn() for _ in range(cfg.num_envs)]
     vec_env = SyncVectorEnv(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
-    adapter = TorchVectorEnvAdapter(vec_env, device=cfg.device)
-
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        adapter = RewardScaleBiasVectorWrapper(
-            adapter, scale=cfg.reward_scale, bias=cfg.reward_bias
-        )
-
-    return adapter
+    env = TorchVectorEnvAdapter(vec_env, device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
+    return env

@@ -14,17 +14,40 @@ import numpy as np
 
 def build_supe(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import SUPE
-    from rl_garden.algorithms.supe import load_opal_vae
+    from rl_garden.algorithms.supe import (
+        build_frozen_opal_vae,
+        embedded_opal_vae,
+        load_opal_vae,
+    )
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
-    from rl_garden.common.utils import get_device
     from rl_garden.envs.wrappers import SkillActionWrapper
-    from rl_garden.training.inspection import construct_agent
+    from rl_garden.observations import ObservationContractError
+    from rl_garden.training.inspection import (
+        checkpoint_to_restore,
+        construct_agent,
+        warn_if_superseded,
+    )
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
-    obs_dim = int(np.prod(env.single_observation_space.shape))
-    opal_vae = load_opal_vae(
-        args.opal_checkpoint, obs_dim, env.single_action_space, device=get_device("auto"),
-    )
+    obs_keys = set(env.single_observation_space.spaces)
+    if obs_keys != {"state"}:
+        raise ObservationContractError(
+            "SUPE is state-only: OPAL's skill decoder reads the 'state' observation "
+            f"alone, got keys {sorted(obs_keys)!r}."
+        )
+    obs_dim = int(np.prod(env.single_observation_space["state"].shape))
+    # The agent moves the VAE, and with it the wrappers' decoder, to its device.
+    record = embedded_opal_vae(checkpoint_to_restore(args))
+    if record is not None:
+        warn_if_superseded("--opal-checkpoint", args.opal_checkpoint, record["state_dict"])
+        opal_vae = build_frozen_opal_vae(
+            record["hyperparameters"], record["state_dict"], obs_dim, env.single_action_space,
+            device="cpu",
+        )
+    else:
+        opal_vae = load_opal_vae(
+            args.opal_checkpoint, obs_dim, env.single_action_space, device="cpu",
+        )
     skill_dim = opal_vae.skill_dim
 
     # Both envs decode stochastically: upstream's MetaPolicyActionWrapper.step()
@@ -63,6 +86,7 @@ def build_supe(args, env, eval_env, logger, checkpoint_dir):
         env=env,
         eval_env=eval_env,
         opal_checkpoint=args.opal_checkpoint,
+        opal_vae=opal_vae,
         mmap_dir=args.mmap_dir,
         mmap_mode=args.mmap_mode,
         n_critics=args.n_critics,
@@ -209,5 +233,10 @@ def _supe_algorithm_cls() -> type:
 
 
 registry.register(
-    "supe", SUPEArgs, run_supe, algorithm_cls=_supe_algorithm_cls, build_agent=build_supe
+    "supe",
+    SUPEArgs,
+    run_supe,
+    algorithm_cls=_supe_algorithm_cls,
+    build_agent=build_supe,
+    training_only_inputs=("offline_dataset",),
 )

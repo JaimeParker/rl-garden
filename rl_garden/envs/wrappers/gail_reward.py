@@ -5,42 +5,32 @@ Same family as ``rl_garden.envs.wrappers.reward_classifier.RewardClassifierWrapp
 (replace env reward with a learned model's output at ``step()``), but the
 discriminator needs the *pre-step* observation plus the action rather than
 just the post-step observation, so it caches ``obs`` across ``reset()``/
-``step()`` calls instead.
-
-Plain duck-typed proxy (attribute passthrough via ``__getattr__``), not a
-``gym.vector.VectorWrapper`` subclass -- unlike
-``rl_garden.envs.wrappers.reward_transform.RewardScaleBiasVectorWrapper``,
-this wraps ``self.env`` from inside ``BaseAlgorithm``/``GAIL._setup_model``,
-where ``self.env`` is already the boundary's own
-``rl_garden.envs.wrappers.dict_state.VectorizedDictStateWrapper`` for any
-backend that starts out Box -- itself a duck-typed proxy, not a genuine
-``gymnasium.vector.VectorEnv`` instance, which ``VectorWrapper.__init__``
-hard-asserts (mirrors ``VectorizedDictStateWrapper``'s own reasoning for not
-subclassing ``gym.Wrapper``/``VectorWrapper``).
+``step()`` calls instead. ``GAIL._setup_model`` applies it to the training env only.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 import torch
+
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
 RewardFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
 def _clone_obs(obs):
-    """Clone a Dict or plain-tensor obs (the env boundary always normalizes
-    to Dict now, but this stays generic rather than assuming a key set)."""
+    """Clone a Dict or plain-tensor obs."""
     if isinstance(obs, dict):
         return {k: v.clone() for k, v in obs.items()}
     return obs.clone()
 
 
-class GAILRewardWrapper:
+class GAILRewardWrapper(BatchedEnvWrapper):
     """``reward_fn(obs, action) -> reward`` (batched, shape ``(num_envs,)``),
     substituted for the wrapped vector env's own reward every ``step()``."""
 
-    def __init__(self, env, reward_fn: RewardFn) -> None:
-        self.env = env
+    def __init__(self, env: Any, reward_fn: RewardFn) -> None:
+        super().__init__(env)
         self.reward_fn = reward_fn
         self._last_obs = None
 
@@ -63,12 +53,3 @@ class GAILRewardWrapper:
         close = getattr(self.env, "close", None)
         if close is not None:
             close()
-
-    def __getattr__(self, name: str):
-        # Only reached when normal attribute lookup (instance __dict__, class
-        # dict) fails -- ``self.env`` is set in __init__ and found there
-        # directly, so this does not recurse. Guarded anyway in case an
-        # instance is accessed before __init__ runs (e.g. during unpickling).
-        if name == "env":
-            raise AttributeError(name)
-        return getattr(self.env, name)

@@ -128,7 +128,8 @@ active one.
 
 **Rules:**
 - `resolve_config` must be side-effect-free: it builds the concrete train/eval
-  config used by `--print-config`/`--dry-run` without initializing a simulator.
+  config recorded in `config.json` (real runs and `--dry-run`; `--print-config`
+  does not call it) without initializing a simulator.
 - `make_train_env`/`make_eval_env` must return a vectorised env exposing
   `num_envs`, `single_observation_space`, `single_action_space`, and
   `step`/`reset` returning **GPU torch tensors** (or CPU tensors for CPU-backed
@@ -144,11 +145,10 @@ does.
 
 ## 4. Step 2 — Backend implementation package (`rl_garden/envs/my_backend/`)
 
-Create a sub-package holding the config dataclass and the env factory. Three
+Create a sub-package holding the config dataclass and the env factory. Two
 reference tiers, pick the closest: `rl_garden/envs/maniskill/` (minimal — wraps
 an existing GPU simulator with a thin config-translation + wrapper-application
-layer), `rl_garden/envs/robotwin/` (heavier — wraps a simulator behind a
-threaded executor), or `rl_garden/envs/custom/` for a brand-new environment
+layer) or `rl_garden/envs/custom/` for a brand-new environment
 authored from scratch. Copy `custom/` whole to start; it's a runnable,
 fully-wired template (`--env_backend custom --env_id PointReach-v0`) — see its
 `__init__.py` docstring.
@@ -207,12 +207,9 @@ def make_my_backend_env(cfg: MyBackendConfig):
     vec_env = SyncVectorEnv(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
     adapter = TorchVectorEnvAdapter(vec_env, device=cfg.device)
 
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
+    from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
-        adapter = RewardScaleBiasVectorWrapper(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
-
-    return adapter
+    return apply_reward_transform(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
 ```
 
 **Env contract** — algorithms depend on this surface regardless of backend,
@@ -257,8 +254,7 @@ rules; `tests/test_episode_boundary_contract.py` checks them across backends.
    e.g. `RecordEpisodeStatistics`'s `r`/`l`), and optionally `success_once`,
    `success_at_end` and task-specific metrics. Other top-level keys of
    `final_info` are allowed; tensor leaves there live on the env device, and
-   non-tensor entries (RoboTwin's per-env instruction strings and seeds,
-   ManiSkill's copied info dict) are allowed but ignored by consumers. Exception:
+   non-tensor entries (ManiSkill's copied info dict) are allowed but ignored by consumers. Exception:
    ManiSkill with `record_metrics=False` emits no `"episode"`; consumers then
    log no episode metrics.
 3. `infos["_final_info"]` is an `(N,)` bool tensor on the env device, emitted
@@ -311,8 +307,8 @@ rules; `tests/test_episode_boundary_contract.py` checks them across backends.
     action (`ActionRepeatWrapper`, `ActionChunkWrapper`,
     `SkillActionWrapper`, via `ChunkAccumulator`) raise on either key,
     because the outer action has no defined flag. ManiSkill (its autoreset
-    replaces `infos` on done steps), mujoco_warp (builds `infos` itself) and
-    RoboTwin (list-valued infos) do not emit these keys.
+    replaces `infos` on done steps) and mujoco_warp (builds `infos` itself) do
+    not emit these keys.
 
 ## 5. Step 3 — Register the config in `EnvBackendArgs`
 
@@ -338,7 +334,7 @@ class MyBackendConfig:
 class EnvBackendArgs:
     env_backend: str = "maniskill"
     maniskill: ManiSkillConfig = field(default_factory=ManiSkillConfig)
-    # ... existing backends (robotwin, minari, d4rl_legacy, mujoco,
+    # ... existing backends (minari, d4rl_legacy, mujoco,
     # mujoco_warp, isaaclab, custom, robomimic, ogbench, rlbench, metaworld)
     my_backend: MyBackendConfig = field(default_factory=MyBackendConfig)  # ← add
 
@@ -376,8 +372,7 @@ gets the env:
 | `require_state_only_observation` | State-only backend: raises `ObservationContractError` unless `req.observation` asks only for state |
 | `ImageFrameStackWrapper` | Visual obs with `frame_stack > 1` |
 | `PerCameraRGBDWrapper` | Multi-camera envs where each camera feeds a separate encoder |
-| `RewardScaleBiasWrapper` | Dense reward normalisation (`r * scale + bias`) on a single-env `gym.Wrapper` chain, pre-vectorization |
-| `RewardScaleBiasVectorWrapper` | Same, applied to a `TorchVectorEnvAdapter` output post-vectorization |
+| `RewardScaleBiasWrapper` | `r * scale + bias` on the batched env, through `apply_reward_transform` (position: extending guide, section 7) |
 
 **Algorithm-owned** — applied in the run file's `build_*` function, after the
 registry returns the env, since they encode algorithm-specific semantics the
@@ -442,8 +437,7 @@ robomimic) call `require_state_only_observation(req.observation, backend=...)`
 `gym.Env` in `DictStateObservationWrapper` to emit `Dict({"state": Box})` —
 every state-only backend uses this wrapper instead of hand-rolling the same
 one-key dict. A backend with cameras names them by its own sensor vocabulary
-(e.g. ManiSkill `base_camera`/`hand_camera`, RoboTwin `head`/`left_wrist`/
-`right_wrist`) and validates unknown names against that vocabulary before
+(e.g. ManiSkill `base_camera`/`hand_camera`, RLBench `front`/`wrist`) and validates unknown names against that vocabulary before
 touching the simulator.
 
 **Key vocabulary is strict and enforced centrally** — only `state`,
@@ -538,6 +532,5 @@ they enforce the lazy-import invariant across every backend.
 | `ogbench` | [`docs/guides/ogbench-integration.md`](../../docs/guides/ogbench-integration.md) |
 | `rlbench` | [`docs/guides/rlbench-integration.md`](../../docs/guides/rlbench-integration.md) |
 | `robomimic` | [`docs/guides/robomimic-integration.md`](../../docs/guides/robomimic-integration.md) |
-| `robotwin` | [`docs/guides/robotwin.md`](../../docs/guides/robotwin.md) |
 | `franka_real` (external, `real-world-rl` repo, entry-point registered) | — |
 

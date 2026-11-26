@@ -195,7 +195,7 @@ def test_print_config_is_recursive_and_does_not_create_run_dir(tmp_path):
             "--log-dir",
             str(tmp_path),
             "--env-backend",
-            "robotwin",
+            "rlbench",
         ],
         cwd=repo_root,
         env=env,
@@ -209,10 +209,10 @@ def test_print_config_is_recursive_and_does_not_create_run_dir(tmp_path):
     assert config["status"] == "preflight"
     assert config["selection"] == {"training_phase": "online", "algorithm": "sac"}
     assert config["inputs"]["log_type"] == "none"
-    assert config["inputs"]["env_backend"] == "robotwin"
-    assert "robotwin" not in config["inputs"]
+    assert config["inputs"]["env_backend"] == "rlbench"
+    assert "rlbench" not in config["inputs"]
     assert "maniskill" not in config["inputs"]
-    assert config["active_environment"]["backend"] == "robotwin"
+    assert config["active_environment"]["backend"] == "rlbench"
     assert isinstance(config["active_environment"]["config"], dict)
     assert config["algorithm"] == {}
     assert list(tmp_path.iterdir()) == []
@@ -260,7 +260,7 @@ def test_checked_in_presets_pass_static_preflight():
         (online, "sac", "configs/online/sac_rgb_resnet.yaml"),
         (online, "ppo", "configs/online/ppo_state.yaml"),
         (online, "ppo", "configs/online/ppo_rgb.yaml"),
-        (online, "ppo", "configs/online/ppo_robotwin_place_empty_cup_rgb.yaml"),
+        (online, "dreamer_v3", "configs/online/dreamer_v3_halfcheetah_state.yaml"),
         (online, "drqv2", "configs/online/drqv2_rgbd.yaml"),
         (online, "td3", "configs/online/td3_rgbd.yaml"),
         (online, "tdmpc2", "configs/online/tdmpc2_rgb.yaml"),
@@ -293,37 +293,39 @@ def test_train_off2on_script_launches():
     assert "--print-config" in result.stdout
 
 
-def test_robotwin_launcher_keeps_dependency_env_and_forwards_cli_override():
-    repo_root = Path(__file__).resolve().parents[1]
-    env = os.environ | {
-        "MPLCONFIGDIR": "/tmp",
-        "RLG_ROBOTWIN_ROOT": "/tmp/robotwin",
-        "RLG_ROBOTWIN_ASSETS_PATH": "/tmp/default-assets",
-    }
-    result = subprocess.run(
-        [
-            "scripts/train_ppo_robotwin_place_empty_cup_rgbd.sh",
-            "--robotwin.assets-path",
-            "/tmp/cli-assets",
-            "--log-type",
-            "none",
-            "--print-config",
-        ],
-        cwd=repo_root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+def test_preset_backend_section_is_resolved_and_overridden_by_cli(tmp_path):
+    from rl_garden.training.online import registry
 
-    config = json.loads(result.stdout)
-    assert config["active_environment"]["config"]["robotwin_root"] == (
-        "/tmp/robotwin"
+    preset = tmp_path / "ppo_gymnasium_rgb.yaml"
+    preset.write_text(
+        """
+env_backend: gymnasium
+env_id: MyCameraTask-v0
+gymnasium:
+  import_modules: [my_pkg.envs]
+  vectorization: async
+  device: cpu
+obs:
+  rgb: [front]
+  image_size: [64, 64]
+encoder:
+  backbone: plain_conv
+""",
+        encoding="utf-8",
     )
-    assert config["active_environment"]["config"]["assets_path"] == (
-        "/tmp/cli-assets"
+    command = registry.parse_command(
+        ["ppo", "--config", str(preset), "--gymnasium.device", "cuda:1"]
     )
-    assert config["sources"]["robotwin.assets_path"]["kind"] == "CLI"
+    config = registry._preflight_config(command)
+
+    assert config.active_environment["backend"] == "gymnasium"
+    backend_config = config.active_environment["config"]
+    assert tuple(backend_config["import_modules"]) == ("my_pkg.envs",)
+    assert backend_config["vectorization"] == "async"
+    assert backend_config["device"] == "cuda:1"
+    assert command.args.obs.rgb == ("front",)
+    assert config.sources["gymnasium.device"].kind == "CLI"
+    assert config.sources["gymnasium.vectorization"].kind != "CLI"
 
 
 def test_runtime_normalization_is_reflected_in_inputs_and_sources(monkeypatch):
@@ -437,10 +439,10 @@ def test_preflight_rejects_explicit_inactive_backend_field():
     from rl_garden.training.online import registry
 
     command = registry.parse_command(
-        ["sac", "--env-backend", "maniskill", "--robotwin.step-lim", "12"]
+        ["sac", "--env-backend", "maniskill", "--dm-control.action-repeat", "4"]
     )
 
-    with pytest.raises(ConfigError, match="robotwin.step_lim.*inactive"):
+    with pytest.raises(ConfigError, match="dm_control.action_repeat.*inactive"):
         registry._preflight_config(command)
 
 
@@ -646,7 +648,8 @@ from rl_garden.training.online import registry
 registry.discover()
 import sys
 assert 'rl_garden.envs.backends.maniskill' not in sys.modules
-assert 'rl_garden.envs.backends.robotwin' not in sys.modules
+assert 'rl_garden.envs.backends.rlbench' not in sys.modules
+assert 'rl_garden.envs.rlbench' not in sys.modules
 assert 'mani_skill' not in sys.modules
 """
     subprocess.run(

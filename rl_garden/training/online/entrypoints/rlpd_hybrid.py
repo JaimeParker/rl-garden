@@ -207,6 +207,7 @@ class RLPDHybridArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
     # Literal: a new backend registers itself, no CLI arg change needed here.
     dataset_backend: str = "h5"
+
     offline_dataset: str | None = None
     offline_num_traj: int | None = None
     offline_buffer_size: int | None = None
@@ -232,4 +233,5 @@ registry.register(
     run_rlpd_hybrid,
     algorithm_cls=_rlpd_hybrid_algorithm_cls,
     build_agent=build_rlpd_hybrid,
+    training_only_inputs=("offline_dataset",),
 )

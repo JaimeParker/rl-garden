@@ -62,7 +62,7 @@ The replay snapshot is a separate file referenced by model metadata.
 
 Keep both checkpoint files together.
 Moving the model alone breaks a referenced replay load.
-Preserve the saved configuration beside the checkpoints for evaluation.
+The checkpoint embeds the run configuration, so evaluation needs no other file.
 
 The command disables periodic evaluation for this short exercise.
 It still collects experience and performs updates before the final save.
@@ -138,7 +138,7 @@ The saved training state contains step and update counters.
 For the format inventory, use
 :ref:`checkpoint-what-gets-saved`.
 Keep the distinction between metadata and model tensors clear.
-The configuration file provides the surrounding run settings.
+The embedded run configuration provides the surrounding run settings.
 
 Importable actor-factory paths can be recorded in hyperparameters.
 Evaluation must be able to import the package providing those paths.
@@ -165,10 +165,14 @@ Evaluate the resumed checkpoint:
 The automatic selector matches the checkpoint algorithm class to a registry entry.
 The evaluator uses that entry's builder to reconstruct the agent.
 It then loads weights for inference without replay or optimizer state.
+It creates one evaluation environment and no replay storage.
+The datasets and other files the run was trained with are not needed.
+``--device cpu`` puts the policy on the CPU.
 
-The run configuration is read from the checkpoint's parent run directory
-unless an explicit configuration path is supplied.
-The environment and observation settings therefore remain available.
+The run configuration is embedded in the checkpoint, so the environment and
+observation settings travel with the file.
+An explicit ``--config-path`` replaces it.
+A checkpoint without one falls back to ``config.json`` in its run directory.
 See :ref:`checkpoint-evaluating-a-checkpoint`
 for precedence and override details.
 

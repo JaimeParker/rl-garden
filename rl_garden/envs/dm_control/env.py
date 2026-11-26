@@ -37,7 +37,8 @@ from gymnasium import spaces
 
 from rl_garden.envs.dm_control.config import DMControlEnvConfig
 from rl_garden.envs.dm_control.tasks import parse_task_id
-from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.vector_env import SeededResetVectorEnv, TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 from rl_garden.observations.schema import ObservationContractError
 
 # The single camera vocabulary entry: renders MuJoCo camera ``camera_id``.
@@ -207,19 +208,6 @@ class DMControlGymEnv(gym.Env):
         return self._observe(time_step), float(reward), terminated, truncated, {}
 
 
-class _SeededDMControlVecEnv(TorchVectorEnvAdapter):
-    """Defaults ``reset()`` to the configured ``seed`` when the caller omits
-    one, so repeated evaluation rounds replay the same fixed episodes
-    (mirrors ``rl_garden.envs.metaworld.env._SeededMetaWorldVecEnv``)."""
-
-    def __init__(self, vec_env: gym.vector.VectorEnv, device: str, seed: int) -> None:
-        super().__init__(vec_env, device)
-        self._seed = seed
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        return super().reset(seed=seed if seed is not None else self._seed, options=options)
-
-
 def _make_env_fn(cfg: DMControlEnvConfig, seed: int):
     def _env_fn():
         # off_policy.py/base_algorithm.py read infos["final_info"]["episode"]
@@ -249,19 +237,15 @@ def make_dm_control_env(cfg: DMControlEnvConfig):
     vec_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
     env_fns = [_make_env_fn(cfg, cfg.seed + i) for i in range(cfg.num_envs)]
     vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
-    adapter: gym.vector.VectorEnv = _SeededDMControlVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+    env = TorchVectorEnvAdapter(SeededResetVectorEnv(vec_env, cfg.seed), device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     if cfg.frame_stack > 1:
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
 
         image_keys = tuple(f"rgb_{cam}" for cam in cfg.rgb_cameras)
-        adapter = ImageFrameStackWrapper(
-            adapter, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
+        env = ImageFrameStackWrapper(
+            env, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
         )
 
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        adapter = RewardScaleBiasVectorWrapper(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
-
-    return adapter
+    return env

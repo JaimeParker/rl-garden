@@ -164,7 +164,8 @@ def run_online(
                 derived=materialized_derived,
             )
             persist_effective_config(materialized, config_path)
-            logger.update_config(json_value(materialized))
+            agent.run_config = json_value(materialized)
+            logger.update_config(agent.run_config)
         agent.learn(total_timesteps=args.total_timesteps)
         if post_learn is not None:
             post_learn(agent)

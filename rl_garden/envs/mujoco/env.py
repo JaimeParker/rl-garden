@@ -44,22 +44,8 @@ from typing import Any
 import gymnasium as gym
 
 from rl_garden.envs.mujoco.config import MujocoEnvConfig
-from rl_garden.envs.vector_env import TorchVectorEnvAdapter
-
-
-class _SeededMujocoVecEnv(TorchVectorEnvAdapter):
-    """Defaults ``reset()`` to the configured ``seed`` when the caller omits
-    one -- e.g. ``base_algorithm.py``'s ``self.eval_env.reset()`` (no args),
-    called once per evaluation round throughout training. Without this,
-    each evaluation round would continue the RNG stream from wherever it
-    left off instead of always replaying the same fixed episodes."""
-
-    def __init__(self, vec_env: gym.vector.VectorEnv, device: str, seed: int) -> None:
-        super().__init__(vec_env, device)
-        self._seed = seed
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        return super().reset(seed=seed if seed is not None else self._seed, options=options)
+from rl_garden.envs.vector_env import SeededResetVectorEnv, TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 
 
 def _make_env_fn(env_id: str, env_kwargs: dict[str, Any]):
@@ -103,11 +89,6 @@ def make_mujoco_env(cfg: MujocoEnvConfig):
     env_fns = [_make_env_fn(cfg.env_id, cfg.env_kwargs) for _ in range(cfg.num_envs)]
     vec_cls = AsyncVectorEnv if cfg.vectorization == "async" else SyncVectorEnv
     vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
-    adapter: gym.vector.VectorEnv = _SeededMujocoVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
-
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        adapter = RewardScaleBiasVectorWrapper(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
-
-    return adapter
+    env = TorchVectorEnvAdapter(SeededResetVectorEnv(vec_env, cfg.seed), device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
+    return env

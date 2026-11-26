@@ -1,9 +1,11 @@
 # D4RL Legacy Manipulation Baselines
 
-This campaign extends the Cal-QL offline-to-online entrypoint to the legacy
-Adroit Binary, standard D4RL Adroit, Kitchen, and MuJoCo Locomotion
-(HalfCheetah/Hopper/Walker2d) tasks. It intentionally uses the old Gym/D4RL
-stack; install the isolated optional dependencies with:
+This guide covers running the legacy Adroit Binary, standard D4RL Adroit,
+Kitchen, and MuJoCo Locomotion (HalfCheetah/Hopper/Walker2d) tasks through the
+offline-to-online entrypoints. Cal-QL presets cover all of these families, and
+IQL and WSRL presets cover Binary, Kitchen and (for IQL) Locomotion; RLPD
+configs can be used the same way. The legacy tasks use the old Gym/D4RL stack;
+install the isolated optional dependencies with:
 
 ```bash
 python -m pip install -e '.[d4rl-legacy-manip,wandb]'
@@ -19,6 +21,13 @@ git -C "$MJ_ENVS_ROOT" checkout 88fadb11c38e8141dfe7bbde92a8954858c4b9f2
 git -C "$MJ_ENVS_ROOT" submodule update --init --recursive
 python -m pip install -e "$MJ_ENVS_ROOT"
 ```
+
+**Presets that do not work.** The nine
+`configs/off2on/calql_{pen,door,relocate}_{human,cloned,expert}_v1_corl.yaml`
+presets are checked in but are not ready to run: their `-v1` env ids are not
+registered by the installed D4RL fork, and each fails with
+`gym.error.NameNotFound` before any dataset download (details under "Task
+matrix"). Use the `-v0` Binary presets or the other families instead.
 
 Set the MuJoCo 2.1 environment variables required by `mujoco-py` before
 importing the environments. Keep raw datasets, converted H5 files, run logs,
@@ -83,18 +92,14 @@ python examples/train_off2on.py calql \
 - Paper protocol: `pen/door/relocate-binary-v0`, seeds 0-5.
 - Paper protocol: `kitchen-{partial,mixed,complete}-v0`, seeds 0-5.
 - Secondary CORL protocol: `pen/door/relocate-{human,cloned,expert}-v1`.
-  Run seed 0 for all nine combinations, then expand every valid, non-degenerate
-  run to seeds 0-3. These results are not Cal-QL paper reproductions.
-  **Known gap (found 2026-09-02, unresolved)**: the `-v1` suffix is
-  `tinkoff-ai/d4rl`'s (CORL's own fork) naming convention, not
-  `nakamotoo/D4RL`'s — the fork this repo's `d4rl-legacy`/`d4rl-legacy-manip`
-  extras actually install. `nakamotoo/D4RL` only registers these Adroit tasks
-  up to `-v0`; no run history or cached dataset exists for any `-v1`
-  combination, and attempting one against the currently installed
-  dependencies fails with `gym.error.NameNotFound` before reaching a download
-  step at all. Installing `tinkoff-ai/d4rl` instead (or in addition) has not
-  been attempted; its own `-v1` dataset URLs also resolve to
-  `rail.eecs.berkeley.edu` (a different subdirectory, `hand_dapg_v1/`).
+  These are not Cal-QL paper reproductions, and they do not run with the
+  installed dependencies: the `-v1` suffix is `tinkoff-ai/d4rl`'s (CORL's own
+  fork) naming convention, not `nakamotoo/D4RL`'s — the fork this repo's
+  `d4rl-legacy`/`d4rl-legacy-manip` extras install. `nakamotoo/D4RL` only
+  registers these Adroit tasks up to `-v0`, so a `-v1` run fails with
+  `gym.error.NameNotFound` before reaching a download step. Installing
+  `tinkoff-ai/d4rl` instead has not been tried; its `-v1` dataset URLs also
+  resolve to `rail.eecs.berkeley.edu` (subdirectory `hand_dapg_v1/`).
 
 Binary presets use 20K offline updates and 300K online steps for pen or 1M for
 door/relocate. Kitchen presets use 500K offline updates and 1.25M online steps.
@@ -111,7 +116,7 @@ this summary.
 - `bootstrap_at_done: truncated` stops TD bootstrap at task termination but
   retains bootstrap across TimeLimit truncation.
 
-Each actual process is one expnote run. Record the effective config, command,
+For each run, record the effective config, command,
 commit, dependency commits, dataset SHA256, machine, seed, artifact paths,
 failures, and run-level analysis. Aggregate each task family with the mean and
 95% Student-t confidence interval; retain invalid and stopped runs in the record.

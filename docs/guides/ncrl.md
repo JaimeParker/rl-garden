@@ -131,7 +131,7 @@ The environment's observations must match the pretrained encoder's key and shape
 exactly. On backends other than dm_control, also pass `--episode_frames` and
 `--action_repeat`.
 
-Order of operations at the start of `learn()`:
+Order of operations (step 1 happens when the agent is constructed, the rest at the start of `learn()`):
 
 1. The pretrained RSSM is loaded. The reward head, actor and critic are new.
 2. Retrieval runs. Each iteration calls `env.reset()`, takes the first frame and finds
@@ -140,8 +140,9 @@ Order of operations at the start of `learn()`:
 4. BC is trained on the prior buffer.
 5. Online fine-tuning starts.
 
-A resumed run (`--load_checkpoint`) skips steps 2–4. It reloads the checkpointed
-episode ids and BC weights instead.
+A resumed run (`--load_checkpoint`) skips steps 2 and 4 and repeats step 3. It reloads the
+checkpointed episode ids and BC weights, then refills the prior buffer from
+`--prior_dataset_dir`, so the dataset must still be mounted.
 
 Memory: every stored step holds a uint8 frame (12 KiB) and the float32 RSSM carry
 (`ncrl_m`: `(4096 + 32*48) * 4 B` = 22 KiB), about 34 KiB in total. The online buffer
@@ -179,7 +180,8 @@ Deviations specific to stage 2:
     a masked Normal clamped to [-1, 1]. Both backbones use an analytic entropy bonus
     instead of a single-sample estimate.
 - **Training cadence**
-  - Updates run every step, with the same replay ratio.
+  - The replay ratio matches the official one. With the defaults (`train_ratio`
+    256, batch 16, length 64) and one env, that is one update per four policy steps.
   - The online buffer keeps and writes back the RSSM carry (DreamerV3 latent replay).
     Prior rows start from a zero state, as every official chunk does.
 - **Networks**

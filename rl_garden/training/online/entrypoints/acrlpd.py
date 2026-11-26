@@ -202,5 +202,10 @@ def _acrlpd_algorithm_cls() -> type:
     return ACRLPD
 
 registry.register(
-    "acrlpd", ACRLPDArgs, run_acrlpd, algorithm_cls=_acrlpd_algorithm_cls, build_agent=build_acrlpd
+    "acrlpd",
+    ACRLPDArgs,
+    run_acrlpd,
+    algorithm_cls=_acrlpd_algorithm_cls,
+    build_agent=build_acrlpd,
+    training_only_inputs=("offline_dataset",),
 )

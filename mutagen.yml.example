@@ -1,6 +1,6 @@
 sync:
   defaults:
-    mode: "one-way-replica"
+    mode: "one-way-safe"
     ignore:
       vcs: true
       paths:

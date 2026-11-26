@@ -55,7 +55,8 @@ from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
 from gymnasium.vector.utils import batch_space
 
 from rl_garden.envs.metaworld.config import MetaWorldEnvConfig
-from rl_garden.envs.vector_env import TorchVectorEnvAdapter
+from rl_garden.envs.vector_env import SeededResetVectorEnv, TorchVectorEnvAdapter
+from rl_garden.envs.wrappers.reward_transform import apply_reward_transform
 from rl_garden.observations.schema import ObservationContractError
 
 _MULTI_TASK_ENV_IDS = ("MT10", "MT50")
@@ -209,21 +210,6 @@ class _DictStateVectorWrapper(gym.vector.VectorWrapper):
         return {"state": obs}, reward, terminated, truncated, info
 
 
-class _SeededMetaWorldVecEnv(TorchVectorEnvAdapter):
-    """Defaults ``reset()`` to the configured ``seed`` when the caller omits
-    one, so repeated evaluation rounds replay the same fixed episodes
-    (mirrors ``rl_garden.envs.ogbench.env._SeededOGBenchVecEnv`` --
-    duplicated rather than shared since it's a module-private helper, not a
-    subclassing hook)."""
-
-    def __init__(self, vec_env: gym.vector.VectorEnv, device: str, seed: int) -> None:
-        super().__init__(vec_env, device)
-        self._seed = seed
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        return super().reset(seed=seed if seed is not None else self._seed, options=options)
-
-
 def _make_single_task_env_fn(
     env_id: str,
     seed: int,
@@ -300,7 +286,8 @@ def make_metaworld_env(cfg: MetaWorldEnvConfig):
         ]
         vec_env = vec_cls(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)
 
-    adapter: gym.vector.VectorEnv = _SeededMetaWorldVecEnv(vec_env, device=cfg.device, seed=cfg.seed)
+    env = TorchVectorEnvAdapter(SeededResetVectorEnv(vec_env, cfg.seed), device=cfg.device)
+    env = apply_reward_transform(env, scale=cfg.reward_scale, bias=cfg.reward_bias)
 
     if cfg.frame_stack > 1:
         from rl_garden.envs.wrappers import ImageFrameStackWrapper
@@ -308,13 +295,8 @@ def make_metaworld_env(cfg: MetaWorldEnvConfig):
         image_keys = tuple(f"rgb_{cam}" for cam in cfg.rgb_cameras) + tuple(
             f"depth_{cam}" for cam in cfg.depth_cameras
         )
-        adapter = ImageFrameStackWrapper(
-            adapter, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
+        env = ImageFrameStackWrapper(
+            env, frame_stack=cfg.frame_stack, image_keys=image_keys, autoreset_in_step=True
         )
 
-    if cfg.reward_scale != 1.0 or cfg.reward_bias != 0.0:
-        from rl_garden.envs.wrappers.reward_transform import RewardScaleBiasVectorWrapper
-
-        adapter = RewardScaleBiasVectorWrapper(adapter, scale=cfg.reward_scale, bias=cfg.reward_bias)
-
-    return adapter
+    return env

@@ -1,5 +1,5 @@
 """Contract tests for TorchVectorEnvAdapter, plus a conformance check that
-ManiSkill's and RoboTwin's own env objects already satisfy the same
+ManiSkill's own env object already satisfies the same
 algorithm-facing attribute/key surface without needing this adapter."""
 from __future__ import annotations
 
@@ -209,10 +209,3 @@ def test_maniskill_vector_env_already_conforms():
     from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
     assert issubclass(ManiSkillVectorEnv, gym.vector.VectorEnv)
-
-
-def test_robotwin_env_already_conforms():
-    from rl_garden.envs.robotwin.env import RoboTwinEnv
-
-    assert issubclass(RoboTwinEnv, gym.Env)
-    assert hasattr(RoboTwinEnv, "step") and hasattr(RoboTwinEnv, "reset")

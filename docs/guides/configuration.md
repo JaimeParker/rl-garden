@@ -18,17 +18,12 @@ Values are resolved from lowest to highest priority:
      checkpoint) and `rl_garden/common/env_args.py` (environment) -- the
      generic baseline every algorithm inherits unchanged.
    - An algorithm's own `*Args` subclass, which may re-declare one of those
-     fields with a different default (e.g. `DrQv2Args`/`TD3Args` overriding
-     `load_replay_buffer`). This should stay the exception: most algorithms
+     fields with a different default (e.g. `DPPOArgs` overriding
+     `eval_freq`). This should stay the exception: most algorithms
      never need to touch a shared field's default, and doing so is a visible
      redeclaration in that subclass, not a hidden global change.
 2. One strict YAML preset passed with `--config`.
 3. Explicit CLI flags.
-
-A launcher in `scripts/` is a thin wrapper around a checked-in preset. Its preset
-fields are identified as `preset` in `sources`; flags appended to the launcher
-remain explicit CLI overrides. To choose a different preset, invoke the Python
-entrypoint directly instead of passing a second `--config` to a launcher.
 
 ```bash
 python examples/train_online.py sac \
@@ -59,24 +54,28 @@ maniskill:
 
 Backend dataclasses are omitted from `inputs`; the selected backend appears once
 under `active_environment`. Explicitly
-setting an inactive field is also an error—for example, setting `robotwin.step_lim`
-while `env_backend` is `maniskill`, or setting `encoder.*` to a non-default value
+setting an inactive field is also an error—for example, setting
+`dm_control.action_repeat` while `env_backend` is `maniskill`, or setting `encoder.*` to a non-default value
 while `obs` requests no `rgb`/`depth` cameras (state-only observations have
 nothing to encode). This catches overrides that would otherwise look valid but
 have no effect.
 
-Training and logging values are configured only through YAML and CLI. Environment
-variables are reserved for third-party runtime requirements such as renderer,
-cache, or external simulator paths. The removed logging variables map directly to
+Training and logging values are configured only through YAML and CLI; logging uses
 `--std-log`/`--no-std-log`, `--log-type`, `--log-keywords`, `--wandb-project`,
-`--wandb-entity`, and `--log-group`.
+`--wandb-entity`, and `--log-group`. Environment variables carry only runtime
+requirements such as renderer, cache, or external simulator paths, including
+`RL_GARDEN_PRETRAINED_DIR` (the directory of pretrained backbone weights, see
+{doc}`/tutorials/03-observations-and-encoders`).
 
 (configuration-observation-and-encoder-configuration)=
 
 ## Observation and encoder configuration
 
-Every algorithm shares one `obs`/`encoder`/`obs_groups`/`critic_encoder`/
+Algorithms share one `obs`/`encoder`/`obs_groups`/`critic_encoder`/
 `encoder_sharing` surface (`ObservationArgs`, `rl_garden/common/cli_args.py`).
+`rssm_pretrain` and `pwm` have none of these fields, and an algorithm may read
+only some of them: `supermimic` trains no observation encoder and reads only
+`obs`.
 `obs` decides *what* is observed (state / cameras / image size / frame
 stacking); it is a backend/dataset-side request, honored exactly or rejected:
 
@@ -89,7 +88,7 @@ obs:
   image_size: [64, 64]     # (H, W); omit to use the backend's own default
   frame_stack: 1
 encoder:
-  backbone: plain_conv    # plain_conv | resnet10 | resnet18 | vit | drqv2_conv | cnn3d
+  backbone: plain_conv    # plain_conv | resnet10 | resnet18 | vit | drqv2_conv | cnn3d | dreamer_conv
   features_dim: 256
 ```
 
@@ -97,11 +96,10 @@ State-only is the default (`obs: {state: true}` implicitly); omit `obs`
 entirely for a state preset. `encoder` is only meaningful once `obs` requests
 at least one camera -- setting `encoder.*` to a non-default value with no
 `rgb`/`depth` cameras is a preflight error (see above). Camera names are
-backend-specific: ManiSkill sensor names (e.g. `base_camera`), RoboTwin
-`head`/`left_wrist`/`right_wrist`, OGBench's single visual camera `ogbench`,
-RLBench (`left_shoulder`/`right_shoulder`/`overhead`/`wrist`/`front`), and
-Meta-World's six fixed cameras (`corner`/`corner2`/`corner3`/`corner4`/
-`behindGripper`/`gripperPOV`).
+backend-specific: ManiSkill sensor names (e.g. `base_camera`), OGBench's
+single visual camera `ogbench`, RLBench
+(`left_shoulder`/`right_shoulder`/`overhead`/`wrist`/`front`), and Meta-World's six fixed
+cameras (`corner`/`corner2`/`corner3`/`corner4`/`behindGripper`/`gripperPOV`).
 
 (configuration-low-dim-observations-and-privileged-state)=
 
@@ -141,7 +139,9 @@ obs_groups:
 CLI equivalent:
 
 ```bash
---obs.state true --obs.extra-state object_pose \
+python examples/train_online.py sac \
+  --env_backend gymnasium --env_id MyReach-v0 \
+  --obs.extra-state object_pose \
   --obs-groups.actor state --obs-groups.critic state state_object_pose
 ```
 
@@ -166,18 +166,27 @@ When asymmetric `obs_groups` are provided (actor observes different keys than
 critic), `encoder_sharing` is automatically inferred to `separate`. Use
 `--print-config` or `--explain-param encoder_sharing` to inspect the resolved
 value and its origin (`inferred (asymmetric obs_groups)`, `inferred (critic_encoder)`,
-or `<algo> default`). You may explicitly set `--encoder-sharing` to override
-the default, but a non-`separate` value that contradicts asymmetric groups
-raises `ObservationContractError` at construction time.
+or `default`; the agent records the last one as `<ClassName> default`). You may
+explicitly set `--encoder-sharing` to override the default, but a non-`separate`
+value that contradicts asymmetric groups is an error: on the CLI a preflight
+`Configuration error:`, in the Python API an `ObservationContractError` at
+construction. `dagger` and `flash_sac` register no algorithm class for preflight
+to read, so `encoder_sharing` is not resolved before construction for them.
 
-Algorithms that support asymmetric `obs_groups` all have a critic/value head
-(every algorithm except BC-only families: BC, DiffusionBC, FlowBC, MeanFlowBC,
-A2ABC, ConsistencyDistillBC, DAgger). Algorithms with recurrent or transformer
-state abstractions (RecurrentSAC, RecurrentPPO, TransformerSAC, TransformerPPO)
-cannot use separate encoders (both cannot use `encoder_sharing="separate"`) because
-there is only one RNN/attention mechanism shared between the encoder and the heads;
-attempting to pass asymmetric `obs_groups` to these families raises
-`ObservationContractError` at construction time.
+Asymmetric `obs_groups` apply to algorithms whose critic or value head can have
+its own encoder. They do not apply to:
+
+- algorithms without such a critic: BC, DiffusionBC, FlowBC, MeanFlowBC, A2ABC,
+  ConsistencyDistillBC, DAgger, HILP, OPAL and PolicyDistillation (which rejects
+  any explicit `obs_groups` with a `ValueError` when its agent is built);
+- recurrent and transformer algorithms (RecurrentSAC, RecurrentPPO,
+  TransformerSAC, TransformerPPO): one sequence model sits between the encoder
+  and the heads, so `separate` is not among their `encoder_sharing_choices` and
+  asymmetric groups are rejected as above;
+- DreamerV3, NCRL and TDMPC2, whose world model is the only encoder (`shared` is
+  their only choice; asymmetric groups are rejected as above), and RSSMPretrain and
+  PWM, which have no `obs_groups` field;
+- SuperMimic and FlashSAC, which do not read `obs_groups`.
 
 **Activation rule:** `obs_groups` and `encoder_sharing` are always active.
 `critic_encoder` and the image-specific fields of `encoder` (all except
@@ -190,9 +199,9 @@ Offline H5 trajectory files (`rl_garden/buffers/h5_dataset.py`) are held to
 the same strict key vocabulary as a live env: each `traj_*/obs` (or
 `/observations`) node is either a flat `Dataset` -- inferred as a state-only
 observation, wrapped into `Dict({"state": Box})` -- or a `Group` whose child
-keys must already be exactly `state`, `rgb_<cam>`, or `depth_<cam>`. Any
-other key name (e.g. a producer's own `left_shoulder_rgb`, `proprio`) raises
-`ObservationContractError` at load time; this generic loader does no
+keys must already be exactly `state`, `state_<name>`, `rgb_<cam>`, or
+`depth_<cam>`. Any other key name (e.g. a producer's own `left_shoulder_rgb`,
+`proprio`) raises `ObservationContractError` at load time; this generic loader does no
 renaming of its own. A producer with different native field names (RLBench,
 robomimic) maps them onto the contract in its own dataset loader before the
 data ever reaches an H5 file this loader reads -- see
@@ -203,7 +212,7 @@ own mappings.
 ### `frame_stack` vs `cond_steps`
 
 `obs.frame_stack` (`ObservationConfig`) and `cond_steps` (the chunked-BC
-family's own args, e.g. `DiffusionBCTrainingArgs`) both add a leading
+algorithms' own args, e.g. `DiffusionBCTrainingArgs`) both add a leading
 dimension to an observation, but at different layers and for different
 reasons -- they are deliberately not merged:
 
@@ -213,9 +222,8 @@ reasons -- they are deliberately not merged:
   algorithm. It only applies to image keys (`rgb_<cam>`/`depth_<cam>`);
   vector `state` stays single-frame.
 - `cond_steps` is an **algorithm-side** concern specific to the chunked-BC
-  imitation family (`BC`, `DiffusionBC`, `FlowBC`, `MeanFlowBC`, `A2ABC`,
-  `ConsistencyDistillBC`): it is how much observation *history* (as a time
-  dimension) the chunked-dataset loader (`load_h5_dataset_as_chunks`,
+  algorithms (`DiffusionBC`, `A2ABC`, `ConsistencyDistillBC`): it is how much
+  observation *history* (as a time dimension) the chunked-dataset loader (`load_h5_dataset_as_chunks`,
   `horizon_steps`/`cond_steps`) keeps per training example, independent of
   whether the underlying observation is state or image.
 
@@ -290,9 +298,12 @@ Inspection and persisted `config.json` files use the same schema:
 normalization, excluding backend dataclasses. `sources` is intentionally sparse:
 it contains only fields actually overridden by a preset, CLI, or runtime
 normalization. An absent path means the dataclass default won. `derived` records
-changed runtime values as
-`before`/`after`/`reason`; this currently covers CUDA buffer fallback,
-evaluation-budget resolution, and Minari live-environment selection.
+fields changed by runtime normalization as `before`/`after`/`reason`: CUDA buffer
+fallback, evaluation-budget resolution, Minari live-environment selection, the
+resolved `encoder_sharing`, and the canonical `policy_graph` text. The snapshots of
+a run or a dry run also put runner values there as plain entries: `run_name`,
+`checkpoint_dir` and, in online runs, `steps_per_env` and
+`grad_steps_per_iteration`.
 Normal runs atomically write a `preflight` snapshot to
 `{log_dir}/{run_name}/config.json`, then replace it with a `materialized` snapshot
 after environment and agent construction. Evaluation accepts v3 `inputs` and
@@ -319,11 +330,10 @@ keep synchronized with Python code. When a field must reach a builder or multipl
 consumers, add an algorithm-near test that asserts the exact resulting kwargs or
 runner behavior; this is more reliable than a global name-based inference table.
 
-Experiment-specific values belong in one `configs/<phase>/*.yaml` file. Launcher
-scripts should only select a fixed algorithm and preset, then append user CLI flags
-unchanged. Do not duplicate or interpret training parameters in shell code. New
-presets do not need a matching launcher. Keep shell scripts for third-party runtime
-setup or release-time reproduction workflows that coordinate more than one command.
+Experiment-specific values belong in one `configs/<phase>/*.yaml` file, passed with
+`--config`. Do not duplicate or interpret training parameters in shell code. Keep
+shell scripts for third-party runtime setup or release-time reproduction workflows
+that coordinate more than one command.
 
 Before committing a new field:
 

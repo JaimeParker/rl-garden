@@ -151,4 +151,5 @@ registry.register(
     run_sac_flow,
     algorithm_cls=_sac_flow_algorithm_cls,
     build_agent=build_sac_flow,
+    training_only_inputs=("load_actor_checkpoint",),
 )

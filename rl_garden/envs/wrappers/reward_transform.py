@@ -8,56 +8,30 @@ and offline H5-loaded rewards via ``load_h5_dataset_to_replay_buffer``.
 """
 from __future__ import annotations
 
-import gymnasium as gym
+from typing import Any
 
-# gymnasium >=1.0 exposes the vector wrapper base class as ``gym.vector.VectorWrapper``;
-# gymnasium 0.29.x (pinned by ManiSkill) only has the equivalent ``VectorEnvWrapper``.
-_VectorWrapperBase = getattr(gym.vector, "VectorWrapper", None) or gym.vector.VectorEnvWrapper
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
 
-class RewardScaleBiasWrapper(gym.Wrapper):
+class RewardScaleBiasWrapper(BatchedEnvWrapper):
     """Multiply reward by ``scale`` and add ``bias`` on each step.
 
-    Works with ManiSkill envs that emit torch tensor rewards because the
-    arithmetic ``scale * reward + bias`` is identical for tensors and scalars.
+    Works on tensor, numpy and scalar rewards.
     """
 
-    def __init__(self, env: gym.Env, scale: float = 1.0, bias: float = 0.0) -> None:
+    def __init__(self, env: Any, scale: float = 1.0, bias: float = 0.0) -> None:
         super().__init__(env)
         self.reward_scale = float(scale)
         self.reward_bias = float(bias)
 
-    def step(self, action):
+    def step(self, action: Any):
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, info
 
-    def __getattr__(self, name: str):
-        # gymnasium >= 1.0 stopped forwarding unknown attributes through
-        # gym.Wrapper; batch-of-1 torch envs (the real-robot envs) expose
-        # num_envs/single_observation_space/action_contract that callers
-        # above this wrapper read.
-        if name == "env":  # not yet set during gym.Wrapper.__init__
-            raise AttributeError(name)
-        return getattr(self.env, name)
 
-
-class RewardScaleBiasVectorWrapper(_VectorWrapperBase):
-    """Multiply reward by ``scale`` and add ``bias`` on each step, for vector envs.
-
-    ``RewardScaleBiasWrapper`` above subclasses ``gym.Wrapper``, whose
-    ``__init__`` asserts its wrapped env is a ``gymnasium.Env`` --
-    ``gymnasium.vector.VectorEnv`` does not subclass ``gymnasium.Env``, so
-    vector envs need this separate ``VectorWrapper``-based twin with
-    identical arithmetic (``rl_garden.envs.vector_env.TorchVectorEnvAdapter``
-    and ``rl_garden.envs.mujoco_warp.CustomMujocoWarpEnv`` are both
-    ``VectorEnv``s).
-    """
-
-    def __init__(self, env: gym.vector.VectorEnv, scale: float = 1.0, bias: float = 0.0) -> None:
-        super().__init__(env)
-        self.reward_scale = float(scale)
-        self.reward_bias = float(bias)
-
-    def step(self, actions):
-        obs, reward, terminated, truncated, info = self.env.step(actions)
-        return obs, self.reward_scale * reward + self.reward_bias, terminated, truncated, info
+def apply_reward_transform(env: Any, *, scale: float, bias: float) -> Any:
+    """``env`` in a ``RewardScaleBiasWrapper``, or ``env`` itself when the
+    transform is the identity."""
+    if scale == 1.0 and bias == 0.0:
+        return env
+    return RewardScaleBiasWrapper(env, scale=scale, bias=bias)

@@ -60,7 +60,10 @@ from rl_garden.networks.discriminator import GAILDiscriminator
 
 class GAIL(PPO):
     """GAIL: PPO generator with reward substituted by an adversarially
-    trained discriminator."""
+    trained discriminator.
+
+    ``demo_env_id=None`` builds an agent without demonstrations, which can act
+    and load a checkpoint but not train."""
 
     _compatible_checkpoint_algorithms = ("GAIL",)
     _supports_decision_level = False
@@ -70,7 +73,7 @@ class GAIL(PPO):
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        demo_env_id: str,
+        demo_env_id: Optional[str],
         demo_dataset_backend: str = "d4rl_legacy",
         demo_buffer_size: int = 1_000_000,
         demo_batch_size: int = 1024,
@@ -109,12 +112,14 @@ class GAIL(PPO):
             lr=self.disc_lr,
             use_adamw=self.disc_use_adamw,
         )
-        self._demo_buffer = self._build_demo_buffer()
-        if self.demo_batch_size > self.rollout_buffer.buffer_size:
-            raise ValueError(
-                f"demo_batch_size ({self.demo_batch_size}) must be <= "
-                f"num_steps * num_envs ({self.rollout_buffer.buffer_size})."
-            )
+        self._demo_buffer: Optional[ReplayBuffer] = None
+        if self.demo_env_id is not None:
+            self._demo_buffer = self._build_demo_buffer()
+            if self.demo_batch_size > self.rollout_buffer.buffer_size:
+                raise ValueError(
+                    f"demo_batch_size ({self.demo_batch_size}) must be <= "
+                    f"num_steps * num_envs ({self.rollout_buffer.buffer_size})."
+                )
         # Wrap only the training env -- eval_env stays unwrapped so
         # evaluation reports ground-truth env reward.
         self.env = GAILRewardWrapper(self.env, reward_fn=self._discriminator_reward)
@@ -180,6 +185,8 @@ class GAIL(PPO):
         return -F.logsigmoid(-logits)
 
     def train(self) -> dict[str, float]:
+        if self._demo_buffer is None:
+            raise RuntimeError("GAIL cannot train without demonstrations; set demo_env_id.")
         losses = super().train()
         disc_losses = []
         disc_accs = []

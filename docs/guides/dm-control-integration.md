@@ -1,7 +1,6 @@
 # dm_control Integration
 
-This guide covers installing and using the `dm_control` env backend. It
-complements `.agents/rules/adding-env-backend.md`.
+This guide covers installing and using the `dm_control` env backend.
 
 [dm_control](https://github.com/google-deepmind/dm_control) is DeepMind's
 MuJoCo continuous-control suite (cheetah, walker, quadruped, ...). The backend

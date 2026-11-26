@@ -608,19 +608,17 @@ def test_eval_env_count_need_not_divide_by_the_run_num_minibatches(
     checkpoint = load_checkpoint_file(path, map_location="cpu")
     assert checkpoint["metadata"]["hyperparameters"]["num_minibatches"] == 2
 
-    def make_three_env_pair(env_backend, request):
-        del env_backend, request
-        return (
-            _FixedHoldVecEnv(emit_decisions=False, holds=(1, 2, 3)),
-            _FixedHoldVecEnv(emit_decisions=False, holds=(1, 2, 3)),
-        )
-
-    monkeypatch.setattr(eval_checkpoint, "make_training_envs", make_three_env_pair)
+    monkeypatch.setattr(
+        eval_checkpoint,
+        "make_evaluation_env",
+        lambda env_backend, request: _FixedHoldVecEnv(emit_decisions=False, holds=(1, 2, 3)),
+    )
 
     result = eval_checkpoint.evaluate_checkpoint(
         eval_checkpoint.EvalCheckpointArgs(
             checkpoint_path=str(path),
-            config_path=str(tmp_path / "missing.json"),
+            env_backend="gymnasium",
+            env_id="Toy-v0",
             num_eval_envs=3,
             num_eval_episodes=2,
             max_eval_steps=20,
@@ -713,3 +711,229 @@ def test_eval_builds_the_agent_with_the_registry_entry_builder(monkeypatch):
     # Without a declared builder, the entry's module in the phase's
     # entrypoints package supplies it.
     assert eval_checkpoint._registered_builder("online", "ppo") is ppo_module.build_ppo
+
+
+@pytest.mark.parametrize("inputs_key", ["inputs", "args"])
+def test_eval_ignores_a_section_of_a_backend_that_no_longer_exists(tmp_path, inputs_key):
+    """Saved args may carry the sub-config of every backend that existed when
+    the run was recorded; only the selected backend's section matters."""
+    import json
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    removed_section = {"robotwin": {"step_lim": 400, "embodiment": ["aloha-agilex"]}}
+    inputs = {
+        "env_backend": "gymnasium",
+        "env_id": "MyToy-v0",
+        "gymnasium": {"device": "cuda:0"},
+        **removed_section,
+    }
+    (run_dir / "config.json").write_text(json.dumps({inputs_key: inputs}))
+    eval_args = eval_checkpoint.EvalCheckpointArgs(
+        checkpoint_path=str(run_dir / "checkpoints" / "checkpoint.pt")
+    )
+
+    args = eval_checkpoint._load_training_args(
+        "online", "ppo", eval_args, {"metadata": {"hyperparameters": dict(removed_section)}}
+    )
+
+    assert not hasattr(args, "robotwin")
+    request = eval_checkpoint._env_request(args, eval_args)
+    assert request.env_id == "MyToy-v0"
+    assert request.backend_config is args.gymnasium
+    assert request.backend_config.device == "cuda:0"
+
+
+def test_eval_of_a_run_on_a_backend_that_no_longer_exists_exits_with_the_choices(
+    tmp_path, monkeypatch
+):
+    import json
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    config = {
+        "inputs": {"env_backend": "robotwin", "env_id": "place_shoe"},
+        "active_environment": {"backend": "robotwin", "config": {"step_lim": 400}},
+    }
+    (run_dir / "config.json").write_text(json.dumps(config))
+    monkeypatch.setattr(
+        eval_checkpoint,
+        "load_checkpoint_file",
+        lambda *args, **kwargs: {"metadata": {"algorithm_class": "PPO"}},
+    )
+
+    with pytest.raises(SystemExit, match="'robotwin'.*gymnasium.*--env-backend"):
+        eval_checkpoint.evaluate_checkpoint(
+            eval_checkpoint.EvalCheckpointArgs(
+                checkpoint_path=str(run_dir / "checkpoints" / "checkpoint.pt"), device="cpu"
+            )
+        )
+
+
+def _count_closes(env, closes: list[str], label: str):
+    close = env.close
+
+    def counted_close(*args, **kwargs):
+        closes.append(label)
+        return close(*args, **kwargs)
+
+    env.close = counted_close
+    return env
+
+
+@pytest.mark.parametrize(
+    "algorithm,cli",
+    [
+        pytest.param("dppo", ["--act-steps", "4", "--horizon-steps", "4"], id="dppo"),
+        pytest.param("flow_ppo", ["--horizon-length", "3"], id="flow_ppo"),
+        pytest.param(
+            "diffusion_cm_distill_online",
+            ["--act-steps", "4", "--horizon-steps", "4"],
+            id="diffusion_cm_distill_online",
+        ),
+        pytest.param("ppo", [], id="ppo"),
+    ],
+)
+def test_evaluation_steps_the_env_the_agent_was_built_with(
+    tmp_path, monkeypatch, algorithm, cli
+):
+    """A builder that wraps the env it is given (action chunking) leaves the
+    wrapped one in ``agent.eval_env``; the backend's own env would be stepped
+    with a whole chunk."""
+    import json
+
+    from rl_garden.common.effective_config import json_value
+    from rl_garden.common.env_args import make_env_request
+    from rl_garden.envs.backend_registry import make_evaluation_env, make_training_envs
+    from rl_garden.training.online import registry
+
+    args = registry.parse_args(
+        [
+            algorithm,
+            *cli,
+            "--env-backend",
+            "gymnasium",
+            "--env-id",
+            "Pendulum-v1",
+            "--num-envs",
+            "2",
+            "--num-eval-envs",
+            "2",
+            "--log-type",
+            "none",
+        ]
+    )
+    builder = eval_checkpoint._registered_builder("online", algorithm)
+    env, eval_env = make_training_envs("gymnasium", make_env_request(args))
+    try:
+        path = builder(args, env, eval_env, None, None).save(
+            tmp_path / "run" / "checkpoints" / "checkpoint.pt"
+        )
+    finally:
+        env.close()
+        eval_env.close()
+    (tmp_path / "run" / "config.json").write_text(json.dumps({"inputs": json_value(args)}))
+
+    closes: list[str] = []
+
+    def make_counted_env(env_backend, request):
+        return _count_closes(make_evaluation_env(env_backend, request), closes, "eval")
+
+    monkeypatch.setattr(eval_checkpoint, "make_evaluation_env", make_counted_env)
+
+    result = eval_checkpoint.evaluate_checkpoint(
+        eval_checkpoint.EvalCheckpointArgs(
+            checkpoint_path=str(path), num_eval_envs=2, num_eval_episodes=2
+        )
+    )
+
+    metrics = result["metrics"]
+    assert metrics["episodes_completed"] == 2.0
+    # Pendulum-v1 truncates at 200 env steps; a step of a chunked env covers several.
+    assert metrics["episode_len"] == 200.0
+    chunk = {"ppo": 1, "flow_ppo": 3}.get(algorithm, 4)
+    assert metrics["eval_steps"] == -(-200 // chunk)
+    assert closes == ["eval"]
+
+
+class _RewardReplacingEnv:
+    """What an algorithm that learns from its own reward does to its env."""
+
+    def __init__(self, env):
+        self._env = env
+
+    def step(self, action):
+        raise AssertionError("evaluation must not step the training env")
+
+
+@pytest.mark.parametrize("keeps_eval_env", [True, False], ids=["raw-eval-env", "unset-eval-env"])
+def test_evaluation_uses_the_backend_env_when_the_agent_holds_no_wrapped_one(
+    tmp_path, monkeypatch, keeps_eval_env
+):
+    """``GAIL`` wraps only ``agent.env``; an algorithm may also leave
+    ``eval_env`` unset. Both are scored on the backend's eval env."""
+
+    class _ClosableEvalEnv(_VectorEvalEnv):
+        closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    eval_env = _ClosableEvalEnv()
+    agent = _Agent()
+    agent.env = _RewardReplacingEnv(eval_env)
+    agent.eval_env = eval_env if keeps_eval_env else None
+    agent.load = lambda *args, **kwargs: None
+    monkeypatch.setattr(eval_checkpoint, "make_evaluation_env", lambda *args: eval_env)
+    monkeypatch.setattr(eval_checkpoint, "_build_agent", lambda *args: agent)
+    monkeypatch.setattr(
+        eval_checkpoint,
+        "load_checkpoint_file",
+        lambda *args, **kwargs: {"metadata": {"algorithm_class": "PPO"}},
+    )
+
+    result = eval_checkpoint.evaluate_checkpoint(
+        eval_checkpoint.EvalCheckpointArgs(
+            checkpoint_path=str(tmp_path / "checkpoint.pt"),
+            env_backend="gymnasium",
+            env_id="Toy-v0",
+            num_eval_episodes=2,
+            device="cpu",
+        )
+    )
+
+    assert result["metrics"]["return"] == pytest.approx(16.5)
+    assert eval_env.closed == 1
+
+
+def test_run_configuration_precedence(tmp_path):
+    """eval CLI > --config-path > embedded > config.json beside the checkpoint;
+    the checkpoint's own hyperparameters stay above any of the configurations."""
+    import json
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps({"inputs": {"env_id": "Beside-v0"}}))
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text(json.dumps({"inputs": {"env_id": "Explicit-v0"}}))
+    path = str(run_dir / "checkpoints" / "checkpoint.pt")
+    hyperparameters = {"hyperparameters": {"gamma": 0.5}}
+    embedded = {
+        "metadata": {
+            **hyperparameters, "run_config": {"inputs": {"env_id": "Embedded-v0", "gamma": 0.1}}
+        }
+    }
+
+    def env_id(checkpoint, **kwargs):
+        args = eval_checkpoint._load_training_args(
+            "online", "ppo",
+            eval_checkpoint.EvalCheckpointArgs(checkpoint_path=path, **kwargs), checkpoint,
+        )
+        assert args.gamma == 0.5
+        return args.env_id
+
+    assert env_id({"metadata": hyperparameters}) == "Beside-v0"
+    assert env_id(embedded) == "Embedded-v0"
+    assert env_id(embedded, config_path=str(explicit)) == "Explicit-v0"
+    assert env_id(embedded, config_path=str(explicit), env_id="Cli-v0") == "Cli-v0"
+    assert env_id(embedded, env_id="Cli-v0") == "Cli-v0"

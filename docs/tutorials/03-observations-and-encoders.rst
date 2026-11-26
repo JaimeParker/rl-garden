@@ -172,7 +172,7 @@ ResNet freezing and image fusion
 When loading pretrained weights, use ``--encoder.freeze-resnet-backbone`` to freeze the stem and residual blocks while training the pooling/bottleneck head.
 With pretrained weights, use ``--encoder.freeze-resnet-encoder`` to freeze the full visual extractor.
 The ``stack_channels`` fusion concatenates images before encoding; ``per_key`` encodes each image key independently and concatenates features.
-Backbones include ``plain_conv``, ``resnet10``, ``resnet18``, ``drqv2_conv``, ``cnn3d`` and ``vit``; see :ref:`configuration-observation-and-encoder-configuration` for their options.
+Backbones include ``plain_conv``, ``resnet10``, ``resnet18``, ``drqv2_conv``, ``cnn3d``, ``dreamer_conv`` and ``vit``; see :ref:`configuration-observation-and-encoder-configuration` for their options.
 
 What you ran
 ------------

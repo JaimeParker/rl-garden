@@ -128,7 +128,7 @@ Algorithm registry
      - Fujimoto et al. 2018, `arXiv:1802.09477 <https://arxiv.org/abs/1802.09477>`_
    * - ``tdmpc2``
      - online
-     - —
+     - ``rl_garden.algorithms.tdmpc2.TDMPC2``
      - :doc:`/algorithms/model-based`
      - Hansen et al. 2023, `arXiv:2310.16828 <https://arxiv.org/abs/2310.16828>`_
    * - ``transformer_ppo``

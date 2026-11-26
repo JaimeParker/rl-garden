@@ -20,26 +20,18 @@ env wrapper.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-import gymnasium as gym
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
 Direction = Literal["forward", "backward"]
 
 
-class FWBWResetFreeWrapper(gym.Wrapper):
-    def __init__(self, env: gym.Env, initial_direction: Direction = "forward") -> None:
+class FWBWResetFreeWrapper(BatchedEnvWrapper):
+    def __init__(self, env: Any, initial_direction: Direction = "forward") -> None:
         super().__init__(env)
         assert initial_direction in ("forward", "backward")
         self._direction: Direction = initial_direction
-
-    def __getattr__(self, name: str):
-        # gymnasium.Wrapper (>=1.0) no longer forwards arbitrary attributes to
-        # ``self.env`` -- but this repo's env-backend contract (num_envs,
-        # single_observation_space, ...) relies on direct attribute access,
-        # not ``get_wrapper_attr()``, so this wrapper must still be
-        # transparent to algorithm code built against the unwrapped env.
-        return getattr(self.env, name)
 
     @property
     def direction(self) -> Direction:

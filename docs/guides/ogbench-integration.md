@@ -2,15 +2,13 @@
 
 This guide covers installing the `ogbench` env backend, the standard
 (non-goal-conditioned) offline RL usage OGBench itself documents, the
-task-family matrix, and regenerating OGBench's own datasets. It complements
-`.agents/rules/adding-env-backend.md`,
-which this backend follows structurally (mirrors the already-shipped
-`mujoco` backend almost exactly).
+task-family matrix, and regenerating OGBench's own datasets. The backend
+mirrors the structure of the `mujoco` backend.
 
-OGBench (`3rd_party/ogbench`, ARISE — actually seohongpark/ogbench) provides
+OGBench ([seohongpark/ogbench](https://github.com/seohongpark/ogbench)) provides
 `mujoco`/`dm_control`-based locomotion and manipulation tasks under a
 standard Gymnasium API, with HuggingFace/berkeley-hosted demonstration
-datasets. Scope of this integration: **all 8 task families**
+datasets. Scope of this integration: **all 7 standard-RL task families**
 (locomotion: `pointmaze`/`antmaze`/`humanoidmaze`/`antsoccer`; manipulation:
 `cube`/`scene`/`puzzle`), **both state and pixel observations**, consuming
 the `*-singletask-*` variants OGBench itself provides for standard
@@ -135,20 +133,25 @@ python examples/train_online.py rlpd \
 
 ## Dataset regeneration
 
-OGBench's own `data_gen_scripts/` (in `3rd_party/ogbench`, not part of the
-installed PyPI package) can regenerate any dataset from scratch. Save the
+OGBench's own `data_gen_scripts/` are not part of the installed PyPI package;
+clone the repository to use them:
+
+```bash
+git clone https://github.com/seohongpark/ogbench.git 3rd_party/ogbench
+```
+
+They can regenerate any dataset from scratch. Save the
 regenerated file(s) at `<dataset_dir>/<family>-<variant>-<dataset_type>-v0.npz`
 (**no** `singletask`/`task[n]` in the filename — see the naming gotcha
 above) — `ogbench.make_env_and_datasets` only downloads a dataset when the
 expected file is missing at `dataset_dir` (default `~/.ogbench/data`, same
 default `load_ogbench_dataset_to_replay_buffer` uses), so a file already
-sitting there is picked up transparently, no code changes needed. Verified
-end to end this session: regenerated `cube-single-play-v0.npz` (+ its
+sitting there is picked up transparently, no code changes needed. For example,
+a locally regenerated `cube-single-play-v0.npz` (+ its
 `-val.npz`, both required — `ogbench`'s own loader reads both
-unconditionally) with 15 episodes locally, dropped both at
-`~/.ogbench/data/`, then loaded `cube-single-play-singletask-v0` through
-`load_ogbench_dataset_to_replay_buffer` with **zero network access** — 15000
-transitions loaded, correctly relabeled (544 task-success transitions).
+unconditionally) placed at `~/.ogbench/data/` loads as
+`cube-single-play-singletask-v0` through
+`load_ogbench_dataset_to_replay_buffer` with no network access.
 
 ### Manipulation/puzzle (zero extra dependencies)
 
@@ -173,11 +176,9 @@ Locomotion regeneration needs OGBench's own `impls` codebase
 (`from agents import SACAgent`) — `jax[cuda12]`/`flax`/`distrax`/
 `ml_collections` — plus pretrained expert policy checkpoints. This must
 **never** land in rl-garden's main (PyTorch-native) venv. Use a throwaway
-venv, same spirit as
-`.agents/runbooks/baseline-install.md`'s
-per-baseline JAX venv pattern — but this is dataset-generation tooling, not
-an RL algorithm baseline, so it is **not** registered in
-`baselines/baselines.yaml`:
+venv; this is dataset-generation tooling, not an RL algorithm baseline, so it
+is **not** registered in `baselines/baselines.yaml`. It assumes the clone from
+above:
 
 ```bash
 python -m venv /tmp/ogbench-datagen && source /tmp/ogbench-datagen/bin/activate
@@ -213,9 +214,10 @@ mujoco/dm_control install required).
   `ogbench.download_datasets`'s normal naming (only a manually-downloaded
   100M-transition dataset); the env itself is fully supported for online
   rollout.
-- Only `cube-single`/`antmaze-large` have been exercised in this
-  integration's own smoke tests so far; every other family/variant is
-  architecturally identical (same env-id-driven construction, same
-  `relabel_dataset()`-based reward labeling) but individually untested.
-- No confirmed `seed()`-forwarding beyond `gymnasium.make(env_id)`'s own
-  default `reset(seed=...)` handling.
+- Checked-in presets cover `cube-single`, `cube-double`, `scene`, `puzzle`,
+  `antsoccer`, `antmaze-large` and `humanoidmaze`; the other families and
+  variants use the same env-id-driven construction and `relabel_dataset()`
+  reward labeling but are not exercised by a preset.
+- `reset()` without a seed defaults to the configured seed
+  (`SeededResetVectorEnv`), so repeated evaluation rounds replay the same
+  episodes; there is no other seed forwarding beyond `gymnasium.make(env_id)`.

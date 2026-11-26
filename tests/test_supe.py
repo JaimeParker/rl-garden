@@ -3,12 +3,16 @@ from __future__ import annotations
 import gymnasium as gym
 import h5py
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
+from gymnasium.vector import AutoresetMode, SyncVectorEnv
 
 from rl_garden.algorithms import OPAL, SUPE, OfflineEnvSpec
-from rl_garden.algorithms.supe import load_opal_vae
+from rl_garden.algorithms.supe import build_frozen_opal_vae, load_opal_vae, opal_vae_record
+from rl_garden.envs.vector_env import TorchVectorEnvAdapter
 from rl_garden.envs.wrappers import SkillActionWrapper
+from rl_garden.observations import ObservationContractError
 
 _OBS_DIM = 6
 _ACTION_DIM = 2
@@ -222,3 +226,97 @@ def test_checkpoint_metadata_includes_opal_checkpoint(tmp_path):
     opal_checkpoint, _ = _make_opal_checkpoint(tmp_path)
     agent = _make_supe_agent(opal_checkpoint)
     assert agent._checkpoint_metadata()["opal_checkpoint"] == opal_checkpoint
+
+
+class _SingleEnv(gym.Env):
+    def __init__(self, obs_keys: tuple[str, ...]) -> None:
+        self.observation_space = spaces.Dict(
+            {key: spaces.Box(-np.inf, np.inf, (_OBS_DIM,), np.float32) for key in obs_keys}
+        )
+        self.action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), np.float32)
+
+    def _obs(self):
+        return {key: np.zeros(_OBS_DIM, np.float32) for key in self.observation_space}
+
+    def reset(self, *, seed=None, options=None):
+        return self._obs(), {}
+
+    def step(self, action):
+        return self._obs(), 1.0, False, False, {}
+
+
+def _vector_env(*obs_keys: str) -> TorchVectorEnvAdapter:
+    return TorchVectorEnvAdapter(
+        SyncVectorEnv(
+            [lambda: _SingleEnv(obs_keys) for _ in range(2)], autoreset_mode=AutoresetMode.SAME_STEP
+        ),
+        device="cpu",
+    )
+
+
+def test_entrypoint_wraps_a_state_only_vector_env(tmp_path, monkeypatch):
+    from rl_garden.training.online.entrypoints import supe
+
+    opal_checkpoint, _ = _make_opal_checkpoint(tmp_path)
+    monkeypatch.setattr("rl_garden.common.utils.get_device", lambda device: torch.device("cpu"))
+    monkeypatch.setattr(
+        "rl_garden.training.inspection.construct_agent",
+        lambda cls, **kwargs: (kwargs["env"], kwargs["eval_env"]),
+    )
+    args = supe.SUPEArgs(opal_checkpoint=opal_checkpoint, horizon=_CHUNK_SIZE)
+
+    for env in supe.build_supe(args, _vector_env("state"), _vector_env("state"), None, None):
+        env.reset()
+        assert env.single_action_space.shape == (_SKILL_DIM,)
+        _, reward, *_ = env.step(torch.zeros(2, _SKILL_DIM))
+        assert reward.tolist() == [float(_CHUNK_SIZE)] * 2
+        env.close()
+
+
+def test_entrypoint_rejects_an_env_that_is_not_state_only():
+    from rl_garden.training.online.entrypoints import supe
+
+    with pytest.raises(ObservationContractError, match="state_goal"):
+        supe.build_supe(supe.SUPEArgs(), _vector_env("state", "state_goal"), None, None, None)
+
+
+def test_checkpoint_embeds_the_opal_vae_and_restores_the_decoder_the_env_uses(tmp_path):
+    opal_checkpoint, opal_agent = _make_opal_checkpoint(tmp_path)
+    _make_supe_agent(opal_checkpoint).save(tmp_path / "supe.pt")
+
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other_checkpoint, _ = _make_opal_checkpoint(other_dir)
+    raw_env = DummyVecEnv()
+    vae = load_opal_vae(other_checkpoint, _OBS_DIM, raw_env.single_action_space, device="cpu")
+    env = SkillActionWrapper(
+        raw_env, vae.decoder, horizon=_CHUNK_SIZE, skill_dim=_SKILL_DIM, deterministic=False
+    )
+    agent = _make_supe_agent(other_checkpoint, env=env, opal_vae=vae)
+    agent.load(tmp_path / "supe.pt", load_replay_buffer=False)
+    for key, value in opal_agent.policy.decoder.state_dict().items():
+        assert torch.equal(env.decoder.state_dict()[key], value), key
+
+
+def test_opal_record_rebuilds_the_vae(tmp_path):
+    opal_checkpoint, _ = _make_opal_checkpoint(tmp_path)
+    vae = load_opal_vae(
+        opal_checkpoint, _OBS_DIM, DummyVecEnv().single_action_space, device="cpu"
+    )
+    record = opal_vae_record(vae)
+    assert record["hyperparameters"] == {
+        "skill_dim": _SKILL_DIM, "chunk_size": _CHUNK_SIZE, "hidden_size": 8,
+        "vae_hidden_dims": [8, 8],
+    }
+    rebuilt = build_frozen_opal_vae(
+        record["hyperparameters"], record["state_dict"], _OBS_DIM,
+        DummyVecEnv().single_action_space, device="cpu",
+    )
+    assert not any(p.requires_grad for p in rebuilt.parameters())
+
+
+def test_missing_opal_checkpoint_is_named(tmp_path):
+    with pytest.raises(FileNotFoundError, match="gone.pt"):
+        load_opal_vae(
+            str(tmp_path / "gone.pt"), _OBS_DIM, DummyVecEnv().single_action_space, device="cpu"
+        )

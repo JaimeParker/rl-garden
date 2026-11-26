@@ -1,16 +1,15 @@
 # RLBench Integration
 
 This guide covers installing the `rlbench` env backend, the design choices
-behind it, and how to train/eval rl-garden's imitation-learning algorithms
-(BC, DiffusionBC, FlowBC, A2ABC, DAgger; TD3BC/BCQ ride the same offline
-path) against RLBench tasks. It complements
-`.agents/rules/adding-env-backend.md`.
+behind it, and how to train rl-garden's imitation-learning algorithms against
+RLBench tasks. BC, FlowBC, TD3BC and BCQ train and evaluate on RLBench through
+the shared offline path; DiffusionBC and A2ABC read H5 datasets only and build
+no eval env; DAgger is online and offers mock experts only.
 
 [RLBench](https://github.com/stepjam/RLBench) is a manipulation benchmark
 built on CoppeliaSim + PyRep, with 107 tasks and both state and (5-camera)
-vision observations. Unlike every other backend added so far (`ogbench`,
-`minari`, `robomimic`, `d4rl_legacy`), this one **does not delegate to
-`gymnasium.make()`** — RLBench's own `rlbench.gym.RLBenchEnv` doesn't match
+vision observations. Unlike the `ogbench`, `minari` and `d4rl_legacy` backends, this one
+**does not delegate to `gymnasium.make()`** (nor does `robomimic`) — RLBench's own `rlbench.gym.RLBenchEnv` doesn't match
 rl-garden's conventions closely enough to reuse (see "Design" below), so
 `rl_garden/envs/rlbench/env.py` builds `rlbench.environment.Environment`/
 `TaskEnvironment` directly.
@@ -20,10 +19,8 @@ rl-garden's conventions closely enough to reuse (see "Design" below), so
 There is no pip extra for this backend (unlike `ogbench`): RLBench has no
 PyPI wheel, and PyRep needs a separately-downloaded CoppeliaSim binary built
 against native Qt/OpenGL libraries — this cannot be expressed as a `pip
-install -e '.[rlbench]'` line. Same stance as
-[`docs/guides/robotwin.md`](robotwin.md)'s own external, non-vendored
-simulator: RLBench must already be importable in whatever environment runs
-rl-garden.
+install -e '.[rlbench]'` line. RLBench must already be importable in whatever
+environment runs rl-garden.
 
 ```bash
 # 1. CoppeliaSim (pinned to v4.1.0, what RLBench/PyRep are built against)
@@ -38,13 +35,11 @@ tar -xf CoppeliaSim_Edu_V4_1_0_Ubuntu20_04.tar.xz -C "$COPPELIASIM_ROOT" --strip
 # 2. PyRep, then RLBench. Neither is on PyPI (verified: `pip install rlbench`
 #    fails with "No matching distribution found" -- there is no such
 #    package), so both install straight from source, same as PyRep above.
-#    Prefer the vendored 3rd_party/RLBench checkout as the install source if
-#    you have it cloned -- keeps whatever's installed in sync with the task
-#    list/dataset_generator.py referenced elsewhere in this guide; a plain
-#    `pip install .` here, never `-e`, so no .egg-info is written into the
-#    read-only 3rd_party/ checkout. Otherwise `pip install
-#    git+https://github.com/stepjam/RLBench.git` works identically.
+#    Installing from a local clone keeps the installed package in sync with
+#    the task list and dataset_generator.py. Use a plain `pip install .`,
+#    never `-e`, so no .egg-info is written into the clone.
 pip install git+https://github.com/stepjam/PyRep.git
+git clone https://github.com/stepjam/RLBench.git 3rd_party/RLBench
 pip install 3rd_party/RLBench   # or: pip install git+https://github.com/stepjam/RLBench.git
 ```
 
@@ -71,20 +66,18 @@ rl-garden's conventions:
 
 - It keeps every low-dim field as its own Dict key (`joint_velocities`,
   `gripper_open`, `gripper_pose`, ...) instead of one flattened `"state"`
-  key. rl-garden's BC/vision-BC kwargs already assume a single
-  `state_key="state"` (see `rl_garden/training/offline/entrypoints/bc.py:_bc_kwargs`).
+  key, which is the single state key rl-garden's observation schema expects.
 - It names image keys `left_shoulder_rgb`/`front_rgb`/... (suffix
   `_rgb`/`_depth`) instead of rl-garden's strict `rgb_<cam>`/`depth_<cam>`
   key vocabulary (`rl_garden.observations.schema.validate_observation_space`)
   — keeping RLBench's native names would fail that validation.
 
 So this integration builds the observation itself
-(`rl_garden.buffers.rlbench_dataset.build_rlbench_observation`): a flat
-`"state"` `Box` when `ObservationConfig` requests no cameras (matching every
-other backend's own state-is-flat-Box convention), or a `Dict` (`"state"`
-plus `rgb_<camera>`/`depth_<camera>` keys, `camera` ∈ `{left_shoulder,
-right_shoulder, overhead, wrist, front}`) when `--obs.rgb`/`--obs.depth`
-names one or more of those cameras. This is the producer mapping referenced
+(`rl_garden.buffers.rlbench_dataset.build_rlbench_observation`): the live env
+and the dataset specs are always a `Dict`: `"state"` plus an
+`rgb_<camera>`/`depth_<camera>` key for each camera named in
+`--obs.rgb`/`--obs.depth` (`camera` ∈ `{left_shoulder, right_shoulder,
+overhead, wrist, front}`). This is the producer mapping referenced
 from [Configuration System](configuration.md#h5-dataset-observation-layout)
 -- RLBench's own `left_shoulder_rgb`/`front_rgb`/... field names never reach
 the H5 file or the live env's observation space; both are built from this
@@ -92,10 +85,10 @@ one shared helper instead.
 
 This same helper module is the single source of truth for both the live env
 (`rl_garden/envs/rlbench/env.py`) and the offline dataset loader below —
-RLBench's live env and its stored demos are literally built from the same
-`Observation` class, so there's no metadata-mismatch risk to guard against
-(unlike `robomimic_dataset.py`, whose live env and offline HDF5 are two
-independently-evolving things).
+RLBench's live env and its stored demos are built from the same `Observation`
+class, and both expose exactly the state/rgb/depth keys requested by
+`--obs.*`, so the dataset and eval observation spaces match for the same
+flags.
 
 ## Action mode
 
@@ -140,21 +133,19 @@ python examples/pretrain_offline.py flow_bc \
   --dataset_backend rlbench --offline_dataset /data/rlbench_demos/reach_target
 ```
 
-BC/FlowBC/A2ABC/TD3BC/BCQ (and every other algorithm in
+BC/FlowBC/TD3BC/BCQ (and every other algorithm in
 `rl_garden/training/offline/` that calls `run_offline`) go through the
 shared lifecycle (`rl_garden/training/offline/runner.py`), which already
 builds an eval env from `--env_id`/`--env_backend` whenever one is requested
 — RLBench eval needs no extra wiring beyond registering this backend.
-`diffusion_bc` is a standalone script hardcoded to the
-H5 dataset format (never pluggable by `--dataset_backend`) and never builds
-an eval env for *any* backend — pre-existing gaps, not RLBench-specific, so
-RLBench demos aren't consumable by it without a separate H5 conversion
-step (out of scope here).
+`diffusion_bc` and `a2a_bc` are standalone scripts hardcoded to the H5
+dataset format (never pluggable by `--dataset_backend`) and never build an
+eval env for *any* backend, so RLBench demos aren't consumable by them
+without a separate H5 conversion step.
 
-DAgger (`rl_garden/training/online/entrypoints/dagger.py`) is online imitation learning
-and goes through the standard `make_training_envs`/`EnvBackend` path like
-any other online algorithm — expected to work once this backend is
-installed, not separately re-verified in this pass.
+DAgger (`rl_garden/training/online/entrypoints/dagger.py`) builds its training
+env through the standard `make_training_envs`/`EnvBackend` path but creates no
+eval env and offers mock experts only, so it does not use RLBench demos.
 
 ### Key config fields (`--rlbench.<field>`)
 
@@ -178,7 +169,8 @@ a correctness one). `--obs.image_size` sets the shared per-camera render size
 
 `--offline_dataset` is the **task's own demo directory** —
 `<dataset_root>/<task_name>` in RLBench's own on-disk layout
-(`<dataset_root>/<task_name>/variation<N>/episodes/episode<M>/...`), e.g.
+(`<dataset_root>/<task_name>/variation0/episodes/episode<M>/...`; only
+variation 0 is loaded), e.g.
 `/data/rlbench_demos/reach_target`. The loader
 (`rl_garden.buffers.rlbench_dataset.load_rlbench_dataset_to_replay_buffer`)
 splits this back into `dataset_root`/`task_name` itself
@@ -206,9 +198,6 @@ directly:
   (`reward=1.0`, `done=True`; `0.0`/`False` elsewhere) — every
   successfully-collected demo is assumed to end in task success (RLBench's
   own collection retries any failed attempt until it gets a clean run).
-  Verified against real demos (see "Known issues and fixes" below): every
-  loaded demo's `dones` sum matched its demo count exactly, i.e.
-  success-at-last-step held for every demo collected.
 
 `--rlbench.live_demos`-equivalent: `load_rlbench_dataset_to_replay_buffer`'s
 `live_demos=True` kwarg drives RLBench's own motion-planning oracle in real
@@ -266,11 +255,8 @@ without `live_demos=True`, and `infer_specs_from_rlbench`) needs no
 
 - Only one action mode is wired up (`JointVelocity` + `Discrete` gripper).
 - No `seed()` forwarding beyond `np.random.seed()` — RLBench's own
-  `rlbench.gym.RLBenchEnv` has the same limitation (its own `reset()` has a
-  `TODO` to use `self.np_random` instead), mirrored here rather than
-  invented.
-- `diffusion_bc` builds no eval env for any backend today (including its
-  Dict-obs path) (pre-existing gap).
+  `rlbench.gym.RLBenchEnv` has the same limitation.
+- `diffusion_bc` and `a2a_bc` build no eval env for any backend.
 - Real verification so far covers one task (`reach_target`) with
   `SyncVectorEnv` only — an `AsyncVectorEnv`/`vectorization=async` smoke
   test and every other task family are architecturally identical (same

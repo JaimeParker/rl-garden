@@ -6,15 +6,17 @@ learned binary success signal computed from the current observation, and
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
-import gymnasium as gym
 import torch
 from gymnasium.vector import AutoresetMode
+
+from rl_garden.envs.wrappers.batched_env import BatchedEnvWrapper
 
 ClassifierFn = Callable[[dict], torch.Tensor]
 
 
-class RewardClassifierWrapper(gym.Wrapper):
+class RewardClassifierWrapper(BatchedEnvWrapper):
     """``classifier_fn(obs) -> success_prob`` (batched, any shape that
     reshapes to ``(num_envs,)``), thresholded into a ``{0, 1}`` reward.
 
@@ -29,7 +31,7 @@ class RewardClassifierWrapper(gym.Wrapper):
 
     def __init__(
         self,
-        env: gym.Env,
+        env: Any,
         classifier_fn: ClassifierFn,
         threshold: float = 0.5,
         terminate_on_success: bool = True,
@@ -43,14 +45,6 @@ class RewardClassifierWrapper(gym.Wrapper):
         self.classifier_fn = classifier_fn
         self.threshold = threshold
         self.terminate_on_success = terminate_on_success
-
-    def __getattr__(self, name: str):
-        # gymnasium.Wrapper (>=1.0) no longer forwards arbitrary attributes to
-        # ``self.env`` -- but this repo's env-backend contract (num_envs,
-        # single_observation_space, ...) relies on direct attribute access,
-        # not ``get_wrapper_attr()``, so this wrapper must still be
-        # transparent to algorithm code built against the unwrapped env.
-        return getattr(self.env, name)
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)

@@ -38,7 +38,6 @@ rl-garden-eval = "rl_garden.training.cli:eval_checkpoint"
 
 [project.optional-dependencies]
 maniskill = ["mani_skill"]
-robotwin = ["pillow", "pyyaml"]
 # [hf] is required to actually download a hosted dataset (minari.load_dataset(...,
 # download=True)) -- confirmed by reproducing the failure end to end: plain
 # `pip install minari` raises "ImportError: huggingface_hub is not installed"

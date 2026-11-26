@@ -121,7 +121,6 @@ rl-garden
    guides/ogbench-integration
    guides/rlbench-integration
    guides/robomimic-integration
-   guides/robotwin
 
 .. toctree::
    :maxdepth: 2
