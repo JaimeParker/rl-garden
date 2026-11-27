@@ -55,7 +55,7 @@ matching the reference's ``mean((q - target_q)**2)`` over the full
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -63,12 +63,12 @@ import torch.nn.functional as F
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.fql import FQLReferenceParams, FQLParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.factory import build_observation_encoder
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
 from rl_garden.observations import ObsGroups, ObservationSchema, resolve_obs_groups
 from rl_garden.policies.fql_policy import EncoderSharing, FQLPolicy
@@ -91,47 +91,28 @@ class FQLCore:
 
     def _init_fql_params(
         self,
+        params: FQLParams,
         *,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
-        encoder_sharing: Optional[EncoderSharing] = None,
-        encoder_config: Optional[EncoderConfig] = None,
-        obs_groups: Optional[ObsGroups] = None,
-        critic_encoder_config: Optional[EncoderConfig] = None,
-        reference_compatible: bool = False,
+        actor_use_group_norm: bool,
+        alpha: float,
+        critic_dropout_rate: Optional[float],
+        critic_encoder_config: Optional[EncoderConfig],
+        critic_use_group_norm: bool,
+        encoder_config: Optional[EncoderConfig],
+        encoder_sharing: Optional[EncoderSharing],
+        num_groups: int,
+        obs_groups: Optional[ObsGroups],
+        reference_compatible: bool,
     ) -> None:
-        if not (0.0 < tau <= 1.0):
-            raise ValueError(f"tau must be in (0, 1], got {tau}.")
-        if flow_steps < 1:
-            raise ValueError(f"flow_steps must be >= 1, got {flow_steps}.")
-        if q_agg not in ("mean", "min"):
-            raise ValueError(f"q_agg must be 'mean' or 'min', got {q_agg!r}.")
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if not (0.0 < params.tau <= 1.0):
+            raise ValueError(f"tau must be in (0, 1], got {params.tau}.")
+        if params.flow_steps < 1:
+            raise ValueError(f"flow_steps must be >= 1, got {params.flow_steps}.")
+        if params.q_agg not in ("mean", "min"):
+            raise ValueError(f"q_agg must be 'mean' or 'min', got {params.q_agg!r}.")
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
         if reference_compatible:
             invalid = []
@@ -141,13 +122,13 @@ class FQLCore:
                 invalid.append("asymmetric observation encoders/groups")
             if encoder_sharing not in (None, "shared_critic_grad"):
                 invalid.append("encoder_sharing")
-            if n_critics != 2:
+            if params.n_critics != 2:
                 invalid.append("n_critics != 2")
-            if actor_use_layer_norm or not critic_use_layer_norm:
+            if params.actor_use_layer_norm or not params.critic_use_layer_norm:
                 invalid.append("actor_use_layer_norm/critic_use_layer_norm")
             if actor_use_group_norm or critic_use_group_norm or critic_dropout_rate is not None:
                 invalid.append("group norm or critic dropout")
-            if backbone_type != "mlp" or activation_fn != "gelu" or kernel_init != "xavier_uniform":
+            if params.backbone_type != "mlp" or params.activation_fn != "gelu" or params.kernel_init != "xavier_uniform":
                 invalid.append("backbone_type, activation_fn, or kernel_init")
             if invalid:
                 raise ValueError(
@@ -155,33 +136,15 @@ class FQLCore:
                     + ", ".join(invalid)
                 )
 
-        self.tau = tau
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
+        self._bind_params(params)
         self.alpha = alpha
-        self.flow_steps = flow_steps
-        self.q_agg = q_agg
-        self.normalize_q_loss = normalize_q_loss
         self.net_arch: list[int] = (
-            list(net_arch) if net_arch is not None else [512, 512, 512, 512]
+            list(params.net_arch) if params.net_arch is not None else [512, 512, 512, 512]
         )
-        self.n_critics = n_critics
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
         self.actor_use_group_norm = actor_use_group_norm
         self.critic_use_group_norm = critic_use_group_norm
         self.num_groups = num_groups
         self.critic_dropout_rate = critic_dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.activation_fn = activation_fn
         self.encoder_sharing = encoder_sharing
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -194,23 +157,9 @@ class FQLCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
-            "actor_lr": self.actor_lr,
-            "critic_lr": self.critic_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "alpha": self.alpha,
-            "flow_steps": self.flow_steps,
-            "q_agg": self.q_agg,
-            "normalize_q_loss": self.normalize_q_loss,
+            "reference_compatible": self.reference_compatible,
             "net_arch": self.net_arch,
-            "n_critics": self.n_critics,
-            "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -224,7 +173,6 @@ class FQLCore:
                 if self.critic_encoder_config is not None
                 else None
             ),
-            "reference_compatible": self.reference_compatible,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
@@ -605,50 +553,28 @@ class FQL(FQLCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("FQL",)
 
+    params_class = FQLReferenceParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
+        params: Optional[FQLReferenceParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
         batch_size: int = 256,
         gamma: float = 0.99,
-        offline_sampling: str = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
+        offline_sampling: str = 'with_replace',
         actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        reference_compatible: bool = False,
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 0,
         num_eval_steps: int = 50,
         eval_env: Optional[Any] = None,
@@ -656,7 +582,9 @@ class FQL(FQLCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -678,36 +606,17 @@ class FQL(FQLCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
+            alpha=params.alpha,
+            critic_dropout_rate=params.critic_dropout_rate,
             critic_encoder_config=critic_encoder_config,
-            reference_compatible=reference_compatible,
+            critic_use_group_norm=params.critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=params.num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=params.reference_compatible,
         )
 
         self._setup_model()

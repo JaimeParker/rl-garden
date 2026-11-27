@@ -125,7 +125,7 @@ def test_dreamer_v3_asymmetric_obs_groups_rejected_at_preflight():
         obs=ObservationConfig(rgb=("base_camera",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "rgb_base_camera")),
     )
-    command = ParsedCommand(args, "dreamer_v3", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "dreamer_v3", "print_config", {}, (), {})
 
     with pytest.raises(ConfigError, match="only supports"):
         registry._validate_config(command)
@@ -140,7 +140,7 @@ def test_dreamer_v3_critic_encoder_rejected_at_preflight():
 
     registry.discover()
     args = DreamerV3Args(critic_encoder=EncoderConfig(features_dim=17))
-    command = ParsedCommand(args, "dreamer_v3", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "dreamer_v3", "print_config", {}, (), {})
 
     with pytest.raises(ConfigError, match="only supports"):
         registry._validate_config(command)

@@ -42,7 +42,7 @@ Formulas verified against ``spot.py`` directly:
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 
@@ -52,12 +52,12 @@ from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.td3_bc import TD3BCCore
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import KernelInit
-from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.spot import SPOTParams, Off2OnSPOTParams
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.spot_policy import SPOTPolicy
 
@@ -68,115 +68,29 @@ class SPOTCore(TD3BCCore):
     def _init_spot_params(
         self,
         *,
-        tau: float = 0.005,
-        actor_lr: float = 1e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        policy_noise: float = 0.2,
-        noise_clip: float = 0.5,
-        policy_freq: int = 2,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        vae_lr: float = 1e-3,
-        vae_hidden_dim: int = 750,
-        vae_latent_dim: Optional[int] = None,
-        vae_iterations: int = 100_000,
-        beta: float = 0.5,
-        lambd: float = 1.0,
-        num_samples: int = 1,
-        iwae: bool = False,
-        lambd_cool: bool = False,
-        lambd_end: float = 0.2,
-        expl_noise: float = 0.1,
+        params: SPOTParams,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
-        # TD3BCCore._init_td3bc_params owns tau/lrs/net_arch/n_critics/layer
-        # norms/etc.; its `alpha` field is unused here (SPOT's actor loss has
-        # no BC-MSE term to weight) -- left at its default, never read.
         self._init_td3bc_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            policy_noise=policy_noise,
-            noise_clip=noise_clip,
-            policy_freq=policy_freq,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
             encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
-        if vae_iterations < 0:
-            raise ValueError(f"vae_iterations must be >= 0, got {vae_iterations}.")
-        if num_samples <= 0:
-            raise ValueError(f"num_samples must be positive, got {num_samples}.")
-        self.vae_lr = vae_lr
-        self.vae_hidden_dim = vae_hidden_dim
-        self.vae_latent_dim = vae_latent_dim
-        self.vae_iterations = vae_iterations
-        self.beta = beta
-        self.lambd = lambd
-        self.num_samples = num_samples
-        self.iwae = iwae
-        self.lambd_cool = lambd_cool
-        self.lambd_end = lambd_end
-        self.expl_noise = expl_noise
+        if params.vae_iterations < 0:
+            raise ValueError(f"vae_iterations must be >= 0, got {params.vae_iterations}.")
+        if params.num_samples <= 0:
+            raise ValueError(f"num_samples must be positive, got {params.num_samples}.")
         self._vae_pretrained = False
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        meta = super()._checkpoint_metadata()
-        meta.pop("alpha", None)
-        return {
-            **meta,
-            "vae_lr": self.vae_lr,
-            "vae_hidden_dim": self.vae_hidden_dim,
-            "vae_latent_dim": self.vae_latent_dim,
-            "vae_iterations": self.vae_iterations,
-            "beta": self.beta,
-            "lambd": self.lambd,
-            "num_samples": self.num_samples,
-            "iwae": self.iwae,
-            "lambd_cool": self.lambd_cool,
-            "lambd_end": self.lambd_end,
-            "expl_noise": self.expl_noise,
-        }
+        return super()._checkpoint_metadata()
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
         state = super()._extra_checkpoint_state()
@@ -413,6 +327,8 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("SPOT",)
 
+    params_class = SPOTParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
@@ -422,41 +338,7 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
         batch_size: int = 256,
         gamma: float = 0.99,
         offline_sampling: str = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 1e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        policy_noise: float = 0.2,
-        noise_clip: float = 0.5,
-        policy_freq: int = 2,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        vae_lr: float = 1e-3,
-        vae_hidden_dim: int = 750,
-        vae_latent_dim: Optional[int] = None,
-        vae_iterations: int = 100_000,
-        beta: float = 0.5,
-        lambd: float = 1.0,
-        num_samples: int = 1,
-        iwae: bool = False,
-        lambd_cool: bool = False,
-        lambd_end: float = 0.2,
-        expl_noise: float = 0.1,
+        params: Optional[SPOTParams] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -474,7 +356,9 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -496,41 +380,7 @@ class SPOT(SPOTCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_spot_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            policy_noise=policy_noise,
-            noise_clip=noise_clip,
-            policy_freq=policy_freq,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            vae_lr=vae_lr,
-            vae_hidden_dim=vae_hidden_dim,
-            vae_latent_dim=vae_latent_dim,
-            vae_iterations=vae_iterations,
-            beta=beta,
-            lambd=lambd,
-            num_samples=num_samples,
-            iwae=iwae,
-            lambd_cool=lambd_cool,
-            lambd_end=lambd_end,
-            expl_noise=expl_noise,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
@@ -562,6 +412,8 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
        may change without notice.
     """
 
+    params_class = Off2OnSPOTParams
+
     def __init__(
         self,
         env: Any,
@@ -576,47 +428,12 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
         utd: float = 1.0,
         bootstrap_at_done: str = "truncated",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 1e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: ScheduleType = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        policy_noise: float = 0.2,
-        noise_clip: float = 0.5,
-        policy_freq: int = 2,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        vae_lr: float = 1e-3,
-        vae_hidden_dim: int = 750,
-        vae_latent_dim: Optional[int] = None,
-        vae_iterations: int = 100_000,
-        beta: float = 0.5,
-        lambd: float = 1.0,
-        num_samples: int = 1,
-        iwae: bool = False,
-        lambd_cool: bool = False,
-        lambd_end: float = 0.2,
-        expl_noise: float = 0.1,
+        params: Optional[Off2OnSPOTParams] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
-        online_discount: float = 0.995,
         max_online_updates: int = 1_000_000,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -630,8 +447,10 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        **overrides,
     ) -> None:
-        self.online_discount = online_discount
+        params = resolve_params(self.params_class, params, overrides)
+        self.online_discount = params.online_discount
         self.max_online_updates = max_online_updates
         self._spot_online_update_start: Optional[int] = None
         super().__init__(
@@ -659,41 +478,7 @@ class _SPOTRolloutTrainingShell(Off2OnReplayMixin, SPOTCore, OffPolicyAlgorithm)
             initial_training_phase=initial_training_phase,
         )
         self._init_spot_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            policy_noise=policy_noise,
-            noise_clip=noise_clip,
-            policy_freq=policy_freq,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            vae_lr=vae_lr,
-            vae_hidden_dim=vae_hidden_dim,
-            vae_latent_dim=vae_latent_dim,
-            vae_iterations=vae_iterations,
-            beta=beta,
-            lambd=lambd,
-            num_samples=num_samples,
-            iwae=iwae,
-            lambd_cool=lambd_cool,
-            lambd_end=lambd_end,
-            expl_noise=expl_noise,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,

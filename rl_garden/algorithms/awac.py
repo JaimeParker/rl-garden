@@ -24,7 +24,7 @@ rl-garden, both faithful to CORL's actual numerics (not bugs):
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 
@@ -35,11 +35,11 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import KernelInit
-from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.awac import AWACParams
 from rl_garden.observations import ObservationContractError, ObsGroups
 from rl_garden.policies.awac_policy import AWACPolicy
 
@@ -50,73 +50,26 @@ class AWACCore:
     def _init_awac_params(
         self,
         *,
-        tau: float = 5e-3,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        awac_lambda: float = 1.0,
-        exp_adv_max: float = 100.0,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
+        params: AWACParams,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
-        if not (0.0 < tau <= 1.0):
-            raise ValueError(f"tau must be in (0, 1], got {tau}.")
-        if awac_lambda <= 0:
-            raise ValueError(f"awac_lambda must be positive, got {awac_lambda}.")
-        if exp_adv_max <= 0:
-            raise ValueError(f"exp_adv_max must be positive, got {exp_adv_max}.")
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if not (0.0 < params.tau <= 1.0):
+            raise ValueError(f"tau must be in (0, 1], got {params.tau}.")
+        if params.awac_lambda <= 0:
+            raise ValueError(f"awac_lambda must be positive, got {params.awac_lambda}.")
+        if params.exp_adv_max <= 0:
+            raise ValueError(f"exp_adv_max must be positive, got {params.exp_adv_max}.")
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.tau = tau
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
-        self.awac_lambda = awac_lambda
-        self.exp_adv_max = exp_adv_max
-        self.net_arch: list[int] = (
-            list(net_arch) if net_arch is not None else [256, 256, 256]
-        )
-        self.n_critics = n_critics
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.actor_use_group_norm = actor_use_group_norm
-        self.critic_use_group_norm = critic_use_group_norm
-        self.num_groups = num_groups
-        self.actor_dropout_rate = actor_dropout_rate
-        self.critic_dropout_rate = critic_dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.std_parameterization = std_parameterization
+        self._bind_params(params)
+        self.net_arch = list(params.net_arch) if params.net_arch is not None else [256, 256, 256]
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
@@ -129,30 +82,7 @@ class AWACCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
-            "actor_lr": self.actor_lr,
-            "critic_lr": self.critic_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
-            "awac_lambda": self.awac_lambda,
-            "exp_adv_max": self.exp_adv_max,
             "net_arch": self.net_arch,
-            "n_critics": self.n_critics,
-            "actor_use_layer_norm": self.actor_use_layer_norm,
-            "critic_use_layer_norm": self.critic_use_layer_norm,
-            "actor_use_group_norm": self.actor_use_group_norm,
-            "critic_use_group_norm": self.critic_use_group_norm,
-            "num_groups": self.num_groups,
-            "actor_dropout_rate": self.actor_dropout_rate,
-            "critic_dropout_rate": self.critic_dropout_rate,
-            "kernel_init": self.kernel_init,
-            "backbone_type": self.backbone_type,
-            "std_parameterization": self.std_parameterization,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -401,6 +331,8 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
        pretraining use :class:`AWAC`.
     """
 
+    params_class = AWACParams
+
     def __init__(
         self,
         env: Any,
@@ -415,30 +347,7 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
         utd: float = 1.0,
         bootstrap_at_done: str = "truncated",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
-        tau: float = 5e-3,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        awac_lambda: float = 1.0,
-        exp_adv_max: float = 100.0,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
+        params: Optional[AWACParams] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -456,7 +365,9 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -465,7 +376,7 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -483,30 +394,7 @@ class _AWACRolloutTrainingShell(Off2OnReplayMixin, AWACCore, OffPolicyAlgorithm)
             initial_training_phase=initial_training_phase,
         )
         self._init_awac_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            awac_lambda=awac_lambda,
-            exp_adv_max=exp_adv_max,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
@@ -522,6 +410,8 @@ class AWAC(AWACCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("AWAC",)
 
+    params_class = AWACParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
@@ -531,30 +421,7 @@ class AWAC(AWACCore, OfflineRLAlgorithm):
         batch_size: int = 256,
         gamma: float = 0.99,
         offline_sampling: str = "with_replace",
-        tau: float = 5e-3,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        awac_lambda: float = 1.0,
-        exp_adv_max: float = 100.0,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
+        params: Optional[AWACParams] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -572,7 +439,9 @@ class AWAC(AWACCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -594,30 +463,7 @@ class AWAC(AWACCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_awac_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            awac_lambda=awac_lambda,
-            exp_adv_max=exp_adv_max,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,

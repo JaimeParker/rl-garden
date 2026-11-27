@@ -33,15 +33,16 @@ def test_fql_family_inherits_and_forwards_shared_net_arch(
     module_name, args_name, kwargs_name
 ):
     from rl_garden.training.offline.args import OfflineFQLArgs
+    from rl_garden.hyperparameters.fql import FQLReferenceParams
 
     module = importlib.import_module(module_name)
     args_class = getattr(module, args_name)
     kwargs_builder = getattr(module, kwargs_name)
 
-    assert "net_arch" in OfflineFQLArgs.__annotations__
-    assert get_type_hints(OfflineFQLArgs)["net_arch"] == tuple[int, ...]
-    if args_name == "FQLArgs":
-        assert "net_arch" not in args_class.__annotations__
+    assert issubclass(OfflineFQLArgs, FQLReferenceParams)
+    assert "net_arch" in FQLReferenceParams.__dataclass_fields__
+    assert get_type_hints(OfflineFQLArgs)["net_arch"] == tuple[int, ...] | None
+    assert "net_arch" in args_class.__annotations__
 
     default_args = args_class()
     custom_args = args_class(net_arch=(64, 32))

@@ -17,16 +17,17 @@ selected by ``EncoderConfig``/``ObsGroups`` rather than an in-class
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.flow_bc import FlowBCParams
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.flow_bc_policy import FlowBCPolicy
 
@@ -34,6 +35,8 @@ from rl_garden.policies.flow_bc_policy import FlowBCPolicy
 class FlowBC(OfflineRLAlgorithm):
     """Flow-matching Behavioral Cloning: conditional flow-matching regression
     against expert actions."""
+
+    params_class = FlowBCParams
 
     _compatible_checkpoint_algorithms = ("FlowBC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
@@ -53,19 +56,6 @@ class FlowBC(OfflineRLAlgorithm):
         buffer_device: str = "cuda",
         batch_size: int = 256,
         offline_sampling: str = "with_replace",
-        actor_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        net_arch: Optional[Sequence[int]] = None,
-        flow_steps: int = 10,
-        actor_use_layer_norm: bool = False,
-        kernel_init: Optional[KernelInit] = None,
-        activation_fn: Optional[Activation] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         image_augmentation_seed: Optional[int] = None,
@@ -82,7 +72,10 @@ class FlowBC(OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[FlowBCParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -103,26 +96,15 @@ class FlowBC(OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.actor_lr = actor_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
+        self._bind_params(params)
         self.net_arch: list[int] = (
-            list(net_arch) if net_arch is not None else [512, 512, 512, 512]
+            list(params.net_arch) if params.net_arch is not None else [512, 512, 512, 512]
         )
-        self.flow_steps = flow_steps
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.kernel_init = kernel_init
-        self.activation_fn = activation_fn
 
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -139,16 +121,7 @@ class FlowBC(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "actor_lr": self.actor_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "net_arch": self.net_arch,
-            "flow_steps": self.flow_steps,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

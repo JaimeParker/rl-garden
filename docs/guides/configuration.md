@@ -164,7 +164,7 @@ critic_encoder:
 
 When asymmetric `obs_groups` are provided (actor observes different keys than
 critic), `encoder_sharing` is automatically inferred to `separate`. Use
-`--print-config` or `--explain-param encoder_sharing` to inspect the resolved
+`--print-config` to inspect the resolved
 value and its origin (`inferred (asymmetric obs_groups)`, `inferred (critic_encoder)`,
 or `default`; the agent records the last one as `<ClassName> default`). You may
 explicitly set `--encoder-sharing` to override the default, but a non-`separate`
@@ -260,22 +260,7 @@ python examples/train_online.py sac \
   --dry-run | python -m json.tool
 ```
 
-Use `--explain-param` to inspect one field's resolved value and source:
-
-```bash
-python examples/train_online.py sac \
-  --config configs/online/sac_state.yaml \
-  --gamma 0.95 \
-  --explain-param gamma
-```
-
-The JSON contains exactly `path`, `value`, `type`, and `source`. A field that was
-not overridden reports `source.kind: default`; preset, CLI, and runtime-derived
-values report their final source.
-Inactive fields fail instead of returning a misleading value. These commands are
-machine-readable interfaces intended equally for humans, scripts, and coding agents.
-
-The three inspection actions are mutually exclusive.
+The two inspection actions are mutually exclusive.
 
 (configuration-effectiveconfig-v3)=
 
@@ -342,6 +327,6 @@ Before committing a new field:
 
 1. Add focused parsing and invalid-input tests.
 2. Add a builder/runner assertion when the field must be forwarded or transformed.
-3. Run `--print-config` and `--explain-param <field>`.
+3. Run `--print-config`.
 4. Run `--dry-run` when the relevant optional backend is available and inspect the
    captured constructor kwargs.

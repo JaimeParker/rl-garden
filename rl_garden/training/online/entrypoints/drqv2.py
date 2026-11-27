@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.ddpg import DDPGParams
+
 import warnings
 from typing import Literal
 
@@ -33,6 +36,7 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         DDPG,
+        **params_kwargs(args, DDPG.params_class),
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -44,21 +48,9 @@ def build_drqv2(args, env, eval_env, logger, checkpoint_dir):
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        tau=args.tau,
         bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        feature_dim=args.feature_dim,
-        hidden_dim=args.hidden_dim,
-        nstep=args.nstep,
-        stddev_schedule=args.stddev_schedule,
-        stddev_clip=args.stddev_clip,
-        num_expl_steps=args.num_expl_steps,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        grad_clip_norm=args.grad_clip_norm,
         image_augmentation_seed=args.seed + 1_000_003,
         seed=args.seed,
         logger=logger,
@@ -107,7 +99,7 @@ from rl_garden.training.online.registry import registry
 
 
 @dataclass
-class DrQv2Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
+class DrQv2Args(DDPGParams, EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     """DrQ-v2 with multi-env backend support. Requires image observations
     (``DDPG``'s "at least one image observation key" check) -- pass
     ``--obs.rgb <camera>`` (optionally ``--obs.depth <camera>``).
@@ -133,21 +125,9 @@ class DrQv2Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     # --- DDPG ---
 
     gamma: float = 0.99
-    tau: float = 0.01
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     training_freq: int = 32
     utd: float = 0.5
-    policy_lr: float = 1e-4
-    q_lr: float = 1e-4
-    feature_dim: int = 50
-    hidden_dim: int = 1024
-    nstep: int = 3
-    stddev_schedule: str = "linear(1.0,0.1,500000)"
-    stddev_clip: float = 0.3
-    num_expl_steps: int = 2000
-    grad_clip_norm: float | None = None
-    weight_decay: float = 0.0
-    use_adamw: bool = False
 
     # --- Checkpoint (overrides CheckpointArgs' default) ---
 

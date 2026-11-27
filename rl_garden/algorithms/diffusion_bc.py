@@ -46,18 +46,20 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.diffusion_bc import DiffusionBCParams
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import index_obs
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, DiffusionMLP, KernelInit
+from rl_garden.networks import DiffusionMLP
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.diffusion_policy import DiffusionPolicy
 
@@ -74,6 +76,8 @@ class _EMA:
 
 
 class DiffusionBC(OfflineRLAlgorithm):
+    params_class = DiffusionBCParams
+
     _compatible_checkpoint_algorithms = ("DiffusionBC",)
     checkpoint_eval_unsupported_reason = (
         "its policy predicts a whole action chunk (batch, horizon_steps, action_dim) "
@@ -89,34 +93,12 @@ class DiffusionBC(OfflineRLAlgorithm):
         env: OfflineEnvSpec,
         dataset_path: str,
         *,
-        horizon_steps: int = 4,
-        cond_steps: int = 1,
-        denoising_steps: int = 20,
-        mlp_dims: Optional[Sequence[int]] = None,
-        activation_fn: Optional[Activation] = "relu",
-        residual_style: bool = True,
-        time_dim: int = 16,
-        kernel_init: Optional[KernelInit] = None,
-        denoised_clip_value: Optional[float] = 1.0,
-        randn_clip_value: float = 10.0,
-        final_action_clip_value: Optional[float] = None,
-        min_sampling_denoising_std: float = 0.1,
         net_cls: type[nn.Module] = DiffusionMLP,
         net_kwargs: Optional[dict[str, Any]] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         image_augmentation_seed: Optional[int] = None,
-        actor_lr: float = 1e-3,
-        weight_decay: float = 1e-6,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
         batch_size: int = 128,
-        ema_decay: float = 0.995,
-        ema_update_every: int = 10,
-        ema_start_step: Optional[int] = None,
         num_traj: Optional[int] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -126,7 +108,10 @@ class DiffusionBC(OfflineRLAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: Optional[DiffusionBCParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=1,
@@ -149,36 +134,17 @@ class DiffusionBC(OfflineRLAlgorithm):
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self._image_augmentation_seed = image_augmentation_seed
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
         self.dataset_path = dataset_path
-        self.horizon_steps = horizon_steps
-        self.cond_steps = cond_steps
-        self.denoising_steps = denoising_steps
-        self.mlp_dims = list(mlp_dims) if mlp_dims is not None else [512, 512, 512]
-        self.activation_fn = activation_fn
-        self.residual_style = residual_style
-        self.time_dim = time_dim
-        self.kernel_init = kernel_init
-        self.denoised_clip_value = denoised_clip_value
-        self.randn_clip_value = randn_clip_value
-        self.final_action_clip_value = final_action_clip_value
-        self.min_sampling_denoising_std = min_sampling_denoising_std
+        self._bind_params(params)
+        self.mlp_dims = list(params.mlp_dims) if params.mlp_dims is not None else [512, 512, 512]
         self.net_cls = net_cls
         self.net_kwargs = dict(net_kwargs) if net_kwargs is not None else None
-        self.actor_lr = actor_lr
-        self.weight_decay = weight_decay
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
-        self.ema_decay = ema_decay
-        self.ema_update_every = ema_update_every
-        self._ema_start_step_arg = ema_start_step
+        self._ema_start_step_arg = params.ema_start_step
         self.num_traj = num_traj
 
         self._setup_model()
@@ -203,12 +169,7 @@ class DiffusionBC(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "horizon_steps": self.horizon_steps,
-            "cond_steps": self.cond_steps,
-            "denoising_steps": self.denoising_steps,
             "mlp_dims": self.mlp_dims,
-            "activation_fn": self.activation_fn,
-            "residual_style": self.residual_style,
             "net_cls": self.net_cls.__name__,
             "net_kwargs": self.net_kwargs,
             "encoder_sharing": self.encoder_sharing,

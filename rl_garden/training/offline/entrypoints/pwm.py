@@ -134,6 +134,8 @@ def build_pwm(
     ``pwm_task_layout`` values it already read (``task_idx``,
     ``buffer_size``, ``num_eval_steps``), which are otherwise read from
     ``args.dataset_dir``."""
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.pwm import PWMParams
     from rl_garden.training.inspection import construct_agent
 
     if algorithm_cls is None:
@@ -147,6 +149,7 @@ def build_pwm(
         task_layout = pwm_task_layout(args)
         layout = {key: getattr(task_layout, key) for key in layout_keys}
     kwargs = {
+        **params_kwargs(args, PWMParams),
         "env": env_spec,
         "world_model_checkpoint": args.world_model_checkpoint,
         "task_idx": layout["task_idx"],
@@ -154,23 +157,8 @@ def build_pwm(
         "mmap_mode": "create",
         "buffer_size": layout["buffer_size"],
         "batch_size": args.batch_size,
-        "horizon": args.horizon,
         "gamma": args.gamma,
-        "lam": args.lam,
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "lr_final": args.lr_final,
         "lr_decay_steps": args.num_offline_steps,
-        "actor_grad_norm": args.actor_grad_norm,
-        "critic_grad_norm": args.critic_grad_norm,
-        "critic_iterations": args.critic_iterations,
-        "critic_batches": args.critic_batches,
-        "num_critics": args.num_critics,
-        "actor_units": args.actor_units,
-        "critic_units": args.critic_units,
-        "init_logstd": args.init_logstd,
-        "min_logstd": args.min_logstd,
-        "ret_rms": args.ret_rms,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

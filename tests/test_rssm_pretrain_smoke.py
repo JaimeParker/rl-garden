@@ -150,6 +150,6 @@ def test_missing_dataset_dir_rejected():
     from rl_garden.training.offline.args import RSSMPretrainTrainingArgs
 
     registry.discover()
-    command = ParsedCommand(RSSMPretrainTrainingArgs(), "rssm_pretrain", "print_config", None, {}, (), {})
+    command = ParsedCommand(RSSMPretrainTrainingArgs(), "rssm_pretrain", "print_config", {}, (), {})
     with pytest.raises(ConfigError, match="--dataset_dir is required for rssm_pretrain"):
         registry._validate_config(command)

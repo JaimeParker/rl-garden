@@ -8,6 +8,8 @@ ever sees an already-skill-wrapped ``env.single_action_space``.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters.sac import ExPLOReParams
+
 import numpy as np
 
 
@@ -72,31 +74,9 @@ def build_supe(args, env, eval_env, logger, checkpoint_dir):
         opal_vae=opal_vae,
         mmap_dir=args.mmap_dir,
         mmap_mode=args.mmap_mode,
-        actor_dropout_rate=args.actor_dropout_rate,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        use_pnorm=args.use_pnorm,
-        offline_relabel_type=args.offline_relabel_type,
-        use_rnd_offline=args.use_rnd_offline,
-        use_rnd_online=args.use_rnd_online,
-        rnd_coeff=args.rnd_coeff,
-        relabeler_hidden_dims=args.relabeler_hidden_dims,
-        relabeler_lr=args.relabeler_lr,
-        rnd_hidden_dims=args.rnd_hidden_dims,
-        rnd_feature_dim=args.rnd_feature_dim,
-        rnd_lr=args.rnd_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        exclude_bias_from_decay=args.exclude_bias_from_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        std_parameterization=args.std_parameterization,
         **sac_common_kwargs(
             args, env, eval_env, logger, checkpoint_dir, sac_observation_kwargs(args),
+            params_class=ExPLOReParams,
         ),
         **policy_module_kwargs(args),
     )

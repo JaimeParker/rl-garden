@@ -414,16 +414,11 @@ def test_checkpoint_without_a_run_config(
     with pytest.raises(SystemExit, match="--config-path .*absent.json does not exist"):
         evaluate_checkpoint(_eval_args(lone, config_path=str(tmp_path / "absent.json")))
 
-    # With the environment given, a setting the checkpoint does not record (here
-    # a network width) takes its default: warned about, and refused on load.
+    # With the environment given, a setting the checkpoint does not record takes
+    # its default, with a warning. The network widths are recorded (``net_arch``),
+    # so the agent is rebuilt in the size it was trained in.
     flags = {"env_backend": "gymnasium", "env_id": STATE_ENV_ID, "phase": phase, "algorithm": name}
-    if "hidden_dim" in builds.SMALL_VALUES and hasattr(
-        builds._registered(phase)[name].args_cls, "hidden_dim"
-    ):
-        with pytest.raises(RuntimeError, match="size mismatch"):
-            evaluate_checkpoint(_eval_args(lone, **flags))
-    else:
-        evaluate_checkpoint(_eval_args(lone, **flags))
+    evaluate_checkpoint(_eval_args(lone, **flags))
     assert "takes its default" in caplog.text
 
     # The run's config.json, named explicitly.

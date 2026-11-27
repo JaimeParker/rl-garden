@@ -54,10 +54,6 @@ CHAPTER_COMMANDS = {
         "sac", "--config", "configs/online/sac_state.yaml", "--gamma", "0.95",
         "--print-config",
     ],
-    "01-explain": [
-        "sac", "--config", "configs/online/sac_state.yaml", "--gamma", "0.95",
-        "--explain-param", "gamma",
-    ],
     "02-sac": [
         "sac", "--env-backend", "gymnasium", "--env-id", "Pendulum-v1",
         "--num-envs", "1", "--num-eval-envs", "1", "--buffer-device", "cpu",
@@ -148,9 +144,6 @@ def test_chapter_print_config(name: str, tmp_path) -> None:
         checkpoint = tmp_path / "final.pt"
         checkpoint.touch()
         argv[argv.index("--load-checkpoint") + 1] = str(checkpoint)
-    if "--explain-param" in argv:
-        index = argv.index("--explain-param")
-        del argv[index:index + 2]
     if "--print-config" not in argv:
         argv.append("--print-config")
     result = run_entry("train_online", argv)
@@ -160,12 +153,6 @@ def test_chapter_print_config(name: str, tmp_path) -> None:
     assert config["status"] == "preflight"
 
 
-def test_chapter_explain_gamma() -> None:
-    result = run_entry("train_online", CHAPTER_COMMANDS["01-explain"])
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["value"] == 0.95
-    assert payload["source"]["kind"] == "CLI"
 
 
 def test_chapter_unknown_preset_key(tmp_path) -> None:

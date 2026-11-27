@@ -20,17 +20,17 @@ end-to-end by the actor loss, the only loss that ever touches it, and
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.mean_flow_bc import MeanFlowBCParams
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.mean_flow_field import MeanFlowMode
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.mean_flow_bc_policy import MeanFlowBCPolicy
 
@@ -38,6 +38,8 @@ from rl_garden.policies.mean_flow_bc_policy import MeanFlowBCPolicy
 class MeanFlowBC(OfflineRLAlgorithm):
     """MeanFlow Behavioral Cloning: single-stage, one-step-sampleable
     imitation via the MeanFlow identity loss."""
+
+    params_class = MeanFlowBCParams
 
     _compatible_checkpoint_algorithms = ("MeanFlowBC",)
     _SUPPORTED_POLICY_KWARGS = frozenset(
@@ -56,24 +58,6 @@ class MeanFlowBC(OfflineRLAlgorithm):
         buffer_device: str = "cuda",
         batch_size: int = 256,
         offline_sampling: str = "with_replace",
-        actor_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        net_arch: Optional[Sequence[int]] = None,
-        num_sample_steps: int = 1,
-        mode: MeanFlowMode = "i-meanflow",
-        time_dist_mu: float = 0.4,
-        time_dist_sigma: float = 1.0,
-        adaptive_l2_gamma: float = 0.0,
-        adaptive_l2_c: float = 1e-2,
-        actor_use_layer_norm: bool = False,
-        kernel_init: Optional[KernelInit] = None,
-        activation_fn: Optional[Activation] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         image_augmentation_seed: Optional[int] = None,
@@ -90,7 +74,10 @@ class MeanFlowBC(OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[MeanFlowBCParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -111,31 +98,15 @@ class MeanFlowBC(OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.actor_lr = actor_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
+        self._bind_params(params)
         self.net_arch: list[int] = (
-            list(net_arch) if net_arch is not None else [512, 512, 512, 512]
+            list(params.net_arch) if params.net_arch is not None else [512, 512, 512, 512]
         )
-        self.num_sample_steps = num_sample_steps
-        self.mode = mode
-        self.time_dist_mu = time_dist_mu
-        self.time_dist_sigma = time_dist_sigma
-        self.adaptive_l2_gamma = adaptive_l2_gamma
-        self.adaptive_l2_c = adaptive_l2_c
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.kernel_init = kernel_init
-        self.activation_fn = activation_fn
 
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -152,21 +123,7 @@ class MeanFlowBC(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "actor_lr": self.actor_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "net_arch": self.net_arch,
-            "num_sample_steps": self.num_sample_steps,
-            "mode": self.mode,
-            "time_dist_mu": self.time_dist_mu,
-            "time_dist_sigma": self.time_dist_sigma,
-            "adaptive_l2_gamma": self.adaptive_l2_gamma,
-            "adaptive_l2_c": self.adaptive_l2_c,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, ClassVar, Literal, Optional, Sequence
+from typing import Any, ClassVar, Optional, Sequence
 
 import numpy as np
 import torch
@@ -14,8 +14,10 @@ from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.offline_sac import OfflineSACParams
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.contracts import policy_module_checkpoint_metadata
 from rl_garden.policies.sac_policy import SACActorFactory, SACPolicy
@@ -35,35 +37,19 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
     #: ``_policy_kwargs(observation_space)``; a ``SACPolicy`` subclass.
     policy_class: ClassVar[type[SACPolicy]] = SACPolicy
 
+    params_class = OfflineSACParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
+        *,
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
         batch_size: int = 256,
         gamma: float = 0.99,
-        tau: float = 0.005,
         offline_sampling: str = "with_replace",
-        policy_lr: float = 3e-4,
-        q_lr: float = 3e-4,
-        alpha_lr: Optional[float] = None,
-        policy_frequency: int = 1,
-        target_network_frequency: int = 1,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        ent_coef: float | str = "auto",
-        target_entropy: float | str = "auto",
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        critic_subsample_size: Optional[int] = None,
-        backup_entropy: bool = True,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -79,7 +65,16 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         actor_factory: Optional[SACActorFactory] = None,
+        params: OfflineSACParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        q_lr = params.q_lr
+        alpha_lr = params.alpha_lr
+        grad_clip_norm = params.grad_clip_norm
+        ent_coef = params.ent_coef
+        target_entropy = params.target_entropy
+        net_arch = params.net_arch
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -97,20 +92,9 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        self.tau = tau
+        self._bind_params(params)
         self.utd = 1.0
-        self.policy_lr = policy_lr
-        self.q_lr = q_lr
         self.alpha_lr = alpha_lr if alpha_lr is not None else q_lr
-        self.policy_frequency = policy_frequency
-        self.target_network_frequency = target_network_frequency
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
             raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
         self.ent_coef_init = ent_coef
@@ -120,9 +104,6 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
         )
-        self.n_critics = n_critics
-        self.critic_subsample_size = critic_subsample_size
-        self.backup_entropy = backup_entropy
         self.encoder_sharing = encoder_sharing
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
@@ -151,26 +132,11 @@ class OfflineSAC(SACCore, OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
-            "policy_lr": self.policy_lr,
-            "q_lr": self.q_lr,
             "alpha_lr": self.alpha_lr,
-            "policy_frequency": self.policy_frequency,
-            "target_network_frequency": self.target_network_frequency,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
             "net_arch": self.net_arch,
-            "n_critics": self.n_critics,
-            "critic_subsample_size": self.critic_subsample_size,
-            "backup_entropy": self.backup_entropy,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (

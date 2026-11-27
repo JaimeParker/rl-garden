@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.training.offline.args import (
+    OfflineTD3BCArgs,
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineTD3BCArgs,
 )
 from rl_garden.training.offline.registry import registry
 
@@ -20,10 +21,10 @@ if TYPE_CHECKING:
 
 @dataclass
 class TD3BCArgs(
+    OfflineTD3BCArgs,
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineTD3BCArgs,
 ):
     """TD3-BC offline pretraining. Box or Dict (vision) observations."""
 
@@ -33,37 +34,16 @@ def _td3_bc_kwargs(
 ) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
 
+    from rl_garden.algorithms import TD3BC
+
     kwargs = {
+        **params_kwargs(args, TD3BC.params_class),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
         "offline_sampling": args.offline_sampling,
-        "tau": args.tau,
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
-        "policy_noise": args.policy_noise,
-        "noise_clip": args.noise_clip,
-        "policy_freq": args.policy_freq,
-        "alpha": args.alpha,
-        "n_critics": args.n_critics,
-        "actor_use_layer_norm": args.actor_use_layer_norm,
-        "critic_use_layer_norm": args.critic_use_layer_norm,
-        "actor_use_group_norm": args.actor_use_group_norm,
-        "critic_use_group_norm": args.critic_use_group_norm,
-        "num_groups": args.num_groups,
-        "actor_dropout_rate": args.actor_dropout_rate,
-        "critic_dropout_rate": args.critic_dropout_rate,
-        "kernel_init": args.kernel_init,
-        "backbone_type": args.backbone_type,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

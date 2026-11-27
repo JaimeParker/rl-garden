@@ -146,8 +146,8 @@ def prepare_argv(argv: tuple[str, ...], tmp_path: Path) -> list[str]:
         token = argv[index]
         flag, equals, value = token.partition("=")
         normalized = flag.replace("_", "-")
-        if normalized in {"--print-config", "--dry-run", "--explain-param"}:
-            index += 2 if normalized == "--explain-param" and not equals else 1
+        if normalized in {"--print-config", "--dry-run"}:
+            index += 1
             continue
         if flag.startswith("--"):
             if not equals and index + 1 < len(argv) and not argv[index + 1].startswith("--"):
@@ -303,7 +303,7 @@ def test_argument_substitutions(tmp_path: Path, spelling: str, equals: bool) -> 
                 *option("offline-dataset", "runs/data.h5"),
                 *option("config", "/path/to/config.yaml"),
                 *option("checkpoint-freq", "10"),
-                *option("explain-param", "gamma"), "--dry-run", "--print-config")
+                "--dry-run", "--print-config")
     prepared = prepare_argv(original, tmp_path)
     assert prepared[0] == "sac"
     for index in (2, 4, 6):

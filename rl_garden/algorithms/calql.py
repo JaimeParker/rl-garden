@@ -10,7 +10,7 @@ import copy
 import dataclasses
 import warnings
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -22,6 +22,8 @@ from rl_garden.buffers.mc_buffer import MCReplayBuffer
 from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 from rl_garden.common.optim import make_optimizer
 from rl_garden.networks.value import ScalarQNetwork
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.cql import CalQLParams, WSRLParams
 from rl_garden.observations import ObservationSchema, normalize_observation_space
 from rl_garden.observations.schema import ObservationContractError
 
@@ -29,39 +31,19 @@ from rl_garden.observations.schema import ObservationContractError
 class CalQLCore:
     """Shared Cal-QL replay and lower-bound behavior."""
 
-    def _init_calql_params(
-        self,
-        *,
-        use_calql: bool = True,
-        calql_bound_random_actions: bool = False,
-        sparse_reward_mc: bool = False,
-        sparse_negative_reward: float = 0.0,
-        success_threshold: float = 0.5,
-        use_sarsa_reference: bool = False,
-        sarsa_hidden_dims: Sequence[int] = (256, 256),
-        sarsa_lr: float = 3e-4,
-    ) -> None:
-        self.use_calql = use_calql
-        self.calql_bound_random_actions = calql_bound_random_actions
-        self.sparse_reward_mc = sparse_reward_mc
-        self.sparse_negative_reward = sparse_negative_reward
-        self.success_threshold = success_threshold
-        self.use_sarsa_reference = use_sarsa_reference
-        self.sarsa_hidden_dims = tuple(sarsa_hidden_dims)
-        self.sarsa_lr = sarsa_lr
+    def _init_calql_params(self, *, params: CalQLParams) -> None:
+        self.use_calql = params.use_calql
+        self.calql_bound_random_actions = params.calql_bound_random_actions
+        self.sparse_reward_mc = params.sparse_reward_mc
+        self.sparse_negative_reward = params.sparse_negative_reward
+        self.success_threshold = params.success_threshold
+        self.use_sarsa_reference = params.use_sarsa_reference
+        self.sarsa_hidden_dims = tuple(params.sarsa_hidden_dims)
+        self.sarsa_lr = params.sarsa_lr
 
-    def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
-            **super()._checkpoint_metadata(),
-            "use_calql": self.use_calql,
-            "calql_bound_random_actions": self.calql_bound_random_actions,
-            "sparse_reward_mc": self.sparse_reward_mc,
-            "sparse_negative_reward": self.sparse_negative_reward,
-            "success_threshold": self.success_threshold,
-            "use_sarsa_reference": self.use_sarsa_reference,
-            "sarsa_hidden_dims": self.sarsa_hidden_dims,
-            "sarsa_lr": self.sarsa_lr,
-        }
+    def _bind_params(self, params: CalQLParams) -> None:
+        super()._bind_params(params)
+        self.sarsa_hidden_dims = tuple(params.sarsa_hidden_dims)
 
     def _setup_model(self) -> None:
         if self.use_sarsa_reference and ObservationSchema.from_space(
@@ -229,37 +211,27 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
        shell may change without notice.
     """
 
+    params_class = WSRLParams
+
     def __init__(
         self,
-        *args: Any,
-        use_calql: bool = True,
-        calql_bound_random_actions: bool = False,
-        sparse_reward_mc: bool = False,
-        sparse_negative_reward: float = 0.0,
-        success_threshold: float = 0.5,
-        use_sarsa_reference: bool = False,
-        sarsa_hidden_dims: Sequence[int] = (256, 256),
-        sarsa_lr: float = 3e-4,
-        online_cql_alpha: float = 0.0,
-        online_use_cql_loss: bool = False,
-        offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        env: Any,
+        eval_env: Any = None,
+        *,
+        offline_sampling: Literal['with_replace', 'without_replace'] = 'with_replace',
         num_eval_episodes: Optional[int] = None,
+        params: WSRLParams | None = None,
         **kwargs: Any,
     ) -> None:
-        self._init_calql_params(
-            use_calql=use_calql,
-            calql_bound_random_actions=calql_bound_random_actions,
-            sparse_reward_mc=sparse_reward_mc,
-            sparse_negative_reward=sparse_negative_reward,
-            success_threshold=success_threshold,
-            use_sarsa_reference=use_sarsa_reference,
-            sarsa_hidden_dims=sarsa_hidden_dims,
-            sarsa_lr=sarsa_lr,
-        )
-        super().__init__(*args, **kwargs)
-        self.use_calql = use_calql
-        self.online_cql_alpha = online_cql_alpha
-        self.online_use_cql_loss = online_use_cql_loss
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: kwargs.pop(name) for name in tuple(kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        self._init_calql_params(params=params)
+        super().__init__(env=env, eval_env=eval_env, params=params, **kwargs)
+        self.use_calql = params.use_calql
+        self.online_cql_alpha = params.online_cql_alpha
+        self.online_use_cql_loss = params.online_use_cql_loss
         # None preserves OffPolicyAlgorithm's step-capped _evaluate default;
         # set it to switch this shell to exact-episode-count evaluation.
         self.num_eval_episodes = num_eval_episodes
@@ -349,13 +321,6 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         elif not plain and type(self.replay_buffer) is ReplayBuffer:
             self.replay_buffer = self._build_replay_buffer()
 
-    def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
-            **super()._checkpoint_metadata(),
-            "online_cql_alpha": self.online_cql_alpha,
-            "online_use_cql_loss": self.online_use_cql_loss,
-        }
-
     def _replay_buffer_step_kwargs(
         self,
         terminations: torch.Tensor,
@@ -421,30 +386,21 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
 class CalQL(CalQLCore, CQL):
     """Pure offline CQL with Cal-QL MC lower bounds."""
 
+    params_class = CalQLParams
+
     _compatible_checkpoint_algorithms = ("CalQL", "CQL")
 
     def __init__(
         self,
-        *args: Any,
-        use_calql: bool = True,
-        calql_bound_random_actions: bool = False,
-        sparse_reward_mc: bool = False,
-        sparse_negative_reward: float = 0.0,
-        success_threshold: float = 0.5,
-        use_sarsa_reference: bool = False,
-        sarsa_hidden_dims: Sequence[int] = (256, 256),
-        sarsa_lr: float = 3e-4,
+        env: Any,
+        *,
+        params: CalQLParams | None = None,
         **kwargs: Any,
     ) -> None:
-        self._init_calql_params(
-            use_calql=use_calql,
-            calql_bound_random_actions=calql_bound_random_actions,
-            sparse_reward_mc=sparse_reward_mc,
-            sparse_negative_reward=sparse_negative_reward,
-            success_threshold=success_threshold,
-            use_sarsa_reference=use_sarsa_reference,
-            sarsa_hidden_dims=sarsa_hidden_dims,
-            sarsa_lr=sarsa_lr,
-        )
-        super().__init__(*args, **kwargs)
-        self.use_calql = use_calql
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: kwargs.pop(name) for name in tuple(kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        self._init_calql_params(params=params)
+        super().__init__(env=env, params=params, **kwargs)
+        self.use_calql = params.use_calql

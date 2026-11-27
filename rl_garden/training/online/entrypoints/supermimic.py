@@ -20,6 +20,8 @@ def build_supermimic(
     ``extra_kwargs`` go to its constructor next to the common kwargs. The
     policy trains no observation encoder, so ``--encoder``/``--obs_groups``/
     ``--critic_encoder``/``--encoder_sharing`` are not read."""
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.supermimic import SuperMimicParams
     from rl_garden.training.inspection import construct_agent
 
     if algorithm_cls is None:
@@ -29,42 +31,23 @@ def build_supermimic(
 
     agent = construct_agent(
         algorithm_cls,
+        **{
+            **params_kwargs(args, SuperMimicParams),
+            "wm_hidden_dims": tuple(args.wm_hidden_dims),
+            "head_hidden_dims": tuple(args.head_hidden_dims),
+            "goal_encoder_dims": tuple(args.goal_encoder_dims),
+            "decoder_dims": tuple(args.decoder_dims),
+            "critic_dims": tuple(args.critic_dims),
+            "actor_betas": tuple(args.actor_betas),
+        },
         env=env,
         eval_env=eval_env,
-        heads=args.heads,
-        replay_ratio=args.replay_ratio,
         sim_steps_per_iteration=args.sim_steps_per_iteration,
         updates_per_iteration=args.updates_per_iteration,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
-        wm_hidden_dims=tuple(args.wm_hidden_dims),
-        head_hidden_dims=tuple(args.head_hidden_dims),
-        latent_dim=args.latent_dim,
-        goal_encoder_dims=tuple(args.goal_encoder_dims),
-        decoder_dims=tuple(args.decoder_dims),
-        critic_dims=tuple(args.critic_dims),
-        horizon=args.horizon,
-        wm_window=args.wm_window,
-        wm_batches=args.wm_batches,
-        wm_batch_size=args.wm_batch_size,
-        imagination_batch=args.imagination_batch,
         gamma=args.gamma,
-        lam=args.lam,
-        max_step_reward=args.max_step_reward,
-        lr=args.lr,
-        lr_final_ratio=args.lr_final_ratio,
-        lr_decay_updates=args.lr_decay_updates,
-        actor_betas=tuple(args.actor_betas),
-        wm_grad_norm=args.wm_grad_norm,
-        actor_grad_norm=args.actor_grad_norm,
-        actor_grad_value=args.actor_grad_value,
-        critic_grad_norm=args.critic_grad_norm,
-        critic_epochs=args.critic_epochs,
-        critic_minibatches=args.critic_minibatches,
-        action_noise_std=args.action_noise_std,
-        obs_history_len=args.obs_history_len,
-        warmup_updates=args.warmup_updates,
         amp_dtype=args.amp_dtype,
         seed=args.seed,
         logger=logger,

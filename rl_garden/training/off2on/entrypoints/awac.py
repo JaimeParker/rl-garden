@@ -10,6 +10,7 @@ from typing import Literal
 
 from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.training.off2on.args import (
     AWACOff2OnTrainingArgs,
     initial_training_phase_from_args,
@@ -24,6 +25,11 @@ class AWACOff2OnArgs(AWACOff2OnTrainingArgs, ObservationArgs, EnvBackendArgs):
     State-only observations by default; pass ``--obs.rgb <camera>`` for
     Dict/RGBD observations.
     """
+
+    # off2on family default (Off2OnCommonArgs); written here until that class is split
+    n_critics: int = 10
+    actor_use_layer_norm: bool = True
+    critic_use_layer_norm: bool = True
 
     warmup_steps: int = 0
     online_replay_mode: Literal["empty", "append", "mixed"] = "mixed"
@@ -53,6 +59,7 @@ def build_awac(args: AWACOff2OnArgs, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         Off2OnAWAC,
+        **params_kwargs(args, Off2OnAWAC.params_class),
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -63,29 +70,6 @@ def build_awac(args: AWACOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         training_freq=args.training_freq,
         utd=args.utd,
         offline_sampling=args.offline_sampling,
-        tau=args.tau,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        awac_lambda=args.awac_lambda,
-        exp_adv_max=args.exp_adv_max,
-        n_critics=args.n_critics,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        actor_use_group_norm=args.actor_use_group_norm,
-        critic_use_group_norm=args.critic_use_group_norm,
-        num_groups=args.num_groups,
-        actor_dropout_rate=args.actor_dropout_rate,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        std_parameterization=args.std_parameterization,
         initial_training_phase=initial_training_phase_from_args(args),
         seed=args.seed,
         logger=logger,

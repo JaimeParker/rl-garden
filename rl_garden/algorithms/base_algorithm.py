@@ -8,6 +8,7 @@ from __future__ import annotations
 import warnings
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import fields
 from numbers import Real
 from pathlib import Path
 from typing import Any, Optional
@@ -38,6 +39,7 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.training_phase import STANDARD_UPDATE_MASK, TrainingUpdateMask
 from rl_garden.common.utils import get_device, seed_everything
 from rl_garden.envs.wrappers.dict_state import VectorizedDictStateWrapper
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.policies.base import BasePolicy
 
 
@@ -61,6 +63,7 @@ def _normalize_env_observation_space(env: Any) -> Any:
 
 class BaseAlgorithm(ObservationEncoderMixin, ABC):
     policy: BasePolicy
+    params_class: Optional[type] = None
     _last_checkpoint_step: int = -1
 
     # Other algorithm class names whose checkpoints are safe to load, besides
@@ -292,11 +295,19 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             if optimizer is not None:
                 optimizer.load_state_dict(state)
 
+    def _bind_params(self, params: Any) -> None:
+        self.params = params
+        for field in fields(self.params_class):
+            setattr(self, field.name, getattr(params, field.name))
+
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "seed": self.seed,
             "device": str(self.device),
         }
+        if self.params_class is not None:
+            metadata.update(params_kwargs(self, self.params_class))
+        return metadata
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:
         return {}

@@ -12,11 +12,14 @@ from __future__ import annotations
 
 
 def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.flash_sac import FlashSACParams
     from rl_garden.algorithms.flash_sac import FlashSAC
     from rl_garden.training.inspection import construct_agent
 
     agent = construct_agent(
         FlashSAC,
+        **params_kwargs(args, FlashSACParams),
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -24,30 +27,9 @@ def build_flash_sac(args, env, eval_env, logger, checkpoint_dir):
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        tau=args.tau,
         training_freq=args.training_freq,
         utd=args.utd,
-        n_step=args.n_step,
-        actor_hidden_dim=args.actor_hidden_dim,
-        actor_num_blocks=args.actor_num_blocks,
-        critic_hidden_dim=args.critic_hidden_dim,
-        critic_num_blocks=args.critic_num_blocks,
-        num_bins=args.num_bins,
-        min_v=args.min_v,
-        max_v=args.max_v,
         asymmetric_obs_dim=args.asymmetric_obs_dim,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        alpha_lr=args.alpha_lr,
-        actor_update_period=args.actor_update_period,
-        grad_clip_norm=args.grad_clip_norm,
-        temp_initial_value=args.temp_initial_value,
-        target_entropy=args.target_entropy,
-        actor_noise_zeta_mu=args.actor_noise_zeta_mu,
-        actor_noise_zeta_max=args.actor_noise_zeta_max,
-        normalize_reward=args.normalize_reward,
-        normalized_g_max=args.normalized_g_max,
-        bc_alpha=args.bc_alpha,
         use_compile=args.use_compile,
         compile_mode=args.compile_mode,
         use_amp=args.use_amp,

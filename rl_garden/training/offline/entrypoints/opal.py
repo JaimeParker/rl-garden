@@ -9,6 +9,9 @@ non-replay-buffer shape.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.opal import OPALParams
+
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,16 +74,11 @@ def build_opal(
 
         algorithm_cls = OPAL
     kwargs = {
+        **params_kwargs(args, OPALParams),
         "env": env_spec,
         "dataset_path": args.dataset_path,
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
-        "skill_dim": args.skill_dim,
-        "chunk_size": args.chunk_size,
-        "hidden_size": args.hidden_size,
-        "vae_hidden_dims": args.vae_hidden_dims,
-        "kl_coef": args.kl_coef,
-        "lr": args.lr,
         "batch_size": args.batch_size,
         "num_traj": args.offline_num_traj,
         "seed": args.seed,

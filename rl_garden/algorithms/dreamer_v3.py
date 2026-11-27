@@ -56,7 +56,7 @@ an open question, not silently shipped half-working.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 import numpy as np
 import torch
@@ -70,6 +70,8 @@ from rl_garden.common.optim.laprop import LaProp, linear_warmup
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.dreamer_conv import DreamerConvEncoder
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.dreamer import DreamerV3Params
 from rl_garden.networks.returns import lambda_return
 from rl_garden.observations import ObsGroups, normalize_observation_space
 from rl_garden.observations.schema import ObservationSchema
@@ -81,6 +83,11 @@ _MODEL_LOSS_SCALE_KEYS = ("dyn", "rep", "rew", "con")
 
 
 class DreamerV3(ModelBasedAlgorithm):
+    params_class = DreamerV3Params
+    #: Schema read by this constructor; None selects the concrete params_class.
+    #: Sibling-schema subclasses name DreamerV3Params and bind their own snapshot.
+    dreamer_inputs_class: ClassVar[Optional[type[DreamerV3Params]]] = None
+
     _compatible_checkpoint_algorithms = ("DreamerV3",)
     # The RSSM is the sole encoder (world-model-owned representation, see
     # class docstring); there is no separate critic extractor to split
@@ -96,35 +103,7 @@ class DreamerV3(ModelBasedAlgorithm):
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        size: Literal["12M", "25M", "50M", "100M", "200M", "400M", "ncrl_m"] = "12M",
-        stoch: int = 32,
-        unimix: float = 0.01,
-        blocks: int = 8,
-        obs_layers: int = 1,
-        img_layers: int = 2,
-        dyn_layers: int = 1,
-        decoder_layers: int = 3,
-        reward_bins: int = 255,
-        kl_free: float = 1.0,
-        contdisc: bool = False,
-        discount_horizon: float = 333.0,
         batch_size: int = 16,
-        batch_length: int = 64,
-        train_ratio: float = 512.0,
-        imag_horizon: int = 15,
-        lam: float = 0.95,
-        act_entropy: float = 3e-4,
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        recon_scale: float = 1.0,
-        rew_scale: float = 1.0,
-        con_scale: float = 1.0,
-        policy_scale: float = 1.0,
-        value_scale: float = 1.0,
-        repval_scale: float = 0.3,
-        lr: float = 4e-5,
-        warmup: int = 1_000,
-        slow_target_fraction: float = 0.02,
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
         learning_starts: int = 1_024,
@@ -157,7 +136,15 @@ class DreamerV3(ModelBasedAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[DreamerV3Params] = None,
+        **overrides: Any,
     ) -> None:
+        inputs_class = self.dreamer_inputs_class or self.params_class
+        params = resolve_params(inputs_class, params, overrides)
+        batch_length = params.batch_length
+        train_ratio = params.train_ratio
+        size = params.size
+
         if not isinstance(env.single_action_space, spaces.Box):
             raise NotImplementedError(
                 f"{type(self).__name__} only supports spaces.Box action spaces in this "
@@ -210,41 +197,15 @@ class DreamerV3(ModelBasedAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        if inputs_class is self.params_class:
+            self._bind_params(params)
+        else:
+            for field in dataclasses.fields(inputs_class):
+                setattr(self, field.name, getattr(params, field.name))
         # round, not int: training_freq * utd may land at 0.999... for integer ratios.
         self.grad_steps_per_iteration = max(1, round(self.training_freq * self.utd))
 
-        self.size = size
         self._rssm_size = rssm_size if rssm_size is not None else RSSM_SIZES.get(size) or RSSM_SIZES[f"size{size}"]
-        self.stoch = stoch
-        self.unimix = unimix
-        self.blocks = blocks
-        self.obs_layers = obs_layers
-        self.img_layers = img_layers
-        self.dyn_layers = dyn_layers
-        self.decoder_layers = decoder_layers
-        self.reward_bins = reward_bins
-        self.kl_free = kl_free
-        self.contdisc = contdisc
-        self.discount_horizon = discount_horizon
-
-        self.batch_length = batch_length
-        self.train_ratio = train_ratio
-        self.imag_horizon = imag_horizon
-        self.lam = lam
-        self.act_entropy = act_entropy
-
-        self.dyn_scale = dyn_scale
-        self.rep_scale = rep_scale
-        self.recon_scale = recon_scale
-        self.rew_scale = rew_scale
-        self.con_scale = con_scale
-        self.policy_scale = policy_scale
-        self.value_scale = value_scale
-        self.repval_scale = repval_scale
-
-        self.lr = lr
-        self.warmup = warmup
-        self.slow_target_fraction = slow_target_fraction
 
         self.compute_dtype = compute_dtype or ("bfloat16" if self.device.type == "cuda" else "float32")
         self._autocast_kwargs = dict(
@@ -626,34 +587,6 @@ class DreamerV3(ModelBasedAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "size": self.size,
-            "stoch": self.stoch,
-            "unimix": self.unimix,
-            "blocks": self.blocks,
-            "obs_layers": self.obs_layers,
-            "img_layers": self.img_layers,
-            "dyn_layers": self.dyn_layers,
-            "decoder_layers": self.decoder_layers,
-            "reward_bins": self.reward_bins,
-            "kl_free": self.kl_free,
-            "contdisc": self.contdisc,
-            "discount_horizon": self.discount_horizon,
-            "batch_length": self.batch_length,
-            "train_ratio": self.train_ratio,
-            "imag_horizon": self.imag_horizon,
-            "lam": self.lam,
-            "act_entropy": self.act_entropy,
-            "dyn_scale": self.dyn_scale,
-            "rep_scale": self.rep_scale,
-            "recon_scale": self.recon_scale,
-            "rew_scale": self.rew_scale,
-            "con_scale": self.con_scale,
-            "policy_scale": self.policy_scale,
-            "value_scale": self.value_scale,
-            "repval_scale": self.repval_scale,
-            "lr": self.lr,
-            "warmup": self.warmup,
-            "slow_target_fraction": self.slow_target_fraction,
             "compute_dtype": self.compute_dtype,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,

@@ -9,6 +9,9 @@ non-replay-buffer shape.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.hilp import HILPParams
+
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,23 +74,11 @@ def build_hilp(
 
         algorithm_cls = HILP
     kwargs = {
+        **params_kwargs(args, HILPParams),
         "env": env_spec,
         "dataset_path": args.dataset_path,
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
-        "skill_dim": args.skill_dim,
-        "value_hidden_dims": args.value_hidden_dims,
-        "actor_hidden_dims": args.actor_hidden_dims,
-        "discount": args.discount,
-        "tau": args.tau,
-        "expectile": args.expectile,
-        "skill_expectile": args.skill_expectile,
-        "skill_temperature": args.skill_temperature,
-        "skill_discount": args.skill_discount,
-        "p_currgoal": args.p_currgoal,
-        "p_trajgoal": args.p_trajgoal,
-        "p_randomgoal": args.p_randomgoal,
-        "lr": args.lr,
         "batch_size": args.batch_size,
         "num_traj": args.offline_num_traj,
         "seed": args.seed,

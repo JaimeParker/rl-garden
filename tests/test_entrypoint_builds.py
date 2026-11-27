@@ -138,6 +138,8 @@ OVERRIDES: dict[tuple[str, str], dict[str, str | bool]] = {
         "teacher_obs_keys": "state",
         "student_obs_keys": "state_priv",
         "net_arch": "16 16",
+        # Must match the PPO teacher trained by ``ppo_teacher_checkpoint``.
+        "teacher_net_arch": "16 16",
     },
     ("online", "ncrl"): {
         "env_id": IMAGE_ONLY_ENV_ID,

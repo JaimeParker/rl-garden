@@ -70,7 +70,7 @@ decisions.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 
@@ -82,10 +82,10 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.utils import polyak_update
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.fql import FloQParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.factory import build_observation_encoder
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.critic_vector_field import integrate_returns
 from rl_garden.observations import ObsGroups, resolve_obs_groups
 from rl_garden.policies.floq_policy import EncoderSharing, FloQPolicy
@@ -96,71 +96,25 @@ class FloQCore(FQLCore):
 
     def _init_floq_params(
         self,
-        *,
-        r_min: float = -1.0,
-        r_max: float = 0.0,
-        flow_num_ensembles: int = 2,
-        noise_samples: int = 8,
-        noise_coverage: float = 0.1,
-        critic_flow_steps: int = 8,
-        train_at_zero_only: bool = False,
-        embed_time: bool = True,
-        time_embed_dim: int = 64,
-        use_prob_embed: bool = True,
-        num_bins: int = 51,
-        sigma: float = 16.0,
-        reward_offset: float = 0.01,
-        critic_flow_net_arch: Optional[Sequence[int]] = None,
+        params: FloQParams,
     ) -> None:
-        if flow_num_ensembles < 1:
-            raise ValueError(f"flow_num_ensembles must be >= 1, got {flow_num_ensembles}.")
-        if noise_samples < 1:
-            raise ValueError(f"noise_samples must be >= 1, got {noise_samples}.")
-        if critic_flow_steps < 1:
-            raise ValueError(f"critic_flow_steps must be >= 1, got {critic_flow_steps}.")
-        if num_bins < 2:
-            raise ValueError(f"num_bins must be >= 2, got {num_bins}.")
+        if params.flow_num_ensembles < 1:
+            raise ValueError(f"flow_num_ensembles must be >= 1, got {params.flow_num_ensembles}.")
+        if params.noise_samples < 1:
+            raise ValueError(f"noise_samples must be >= 1, got {params.noise_samples}.")
+        if params.critic_flow_steps < 1:
+            raise ValueError(f"critic_flow_steps must be >= 1, got {params.critic_flow_steps}.")
+        if params.num_bins < 2:
+            raise ValueError(f"num_bins must be >= 2, got {params.num_bins}.")
 
-        self.r_min = r_min
-        self.r_max = r_max
-        self.flow_num_ensembles = flow_num_ensembles
-        self.noise_samples = noise_samples
-        self.noise_coverage = noise_coverage
-        self.critic_flow_steps = critic_flow_steps
-        self.train_at_zero_only = train_at_zero_only
-        self.embed_time = embed_time
-        self.time_embed_dim = time_embed_dim
-        self.use_prob_embed = use_prob_embed
-        self.num_bins = num_bins
-        self.sigma = sigma
-        self.reward_offset = reward_offset
         self.critic_flow_net_arch = list(
-            critic_flow_net_arch if critic_flow_net_arch is not None else self.net_arch
+            params.critic_flow_net_arch if params.critic_flow_net_arch is not None else self.net_arch
         )
 
-        self.q_min = (r_min - reward_offset) / (1.0 - self.gamma)
-        self.q_max = (r_max + reward_offset) / (1.0 - self.gamma)
-        self.noise_min = noise_coverage * (r_min / (1.0 - self.gamma))
-        self.noise_max = noise_coverage * (r_max / (1.0 - self.gamma))
-
-    def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
-            **super()._checkpoint_metadata(),
-            "r_min": self.r_min,
-            "r_max": self.r_max,
-            "flow_num_ensembles": self.flow_num_ensembles,
-            "noise_samples": self.noise_samples,
-            "noise_coverage": self.noise_coverage,
-            "critic_flow_steps": self.critic_flow_steps,
-            "train_at_zero_only": self.train_at_zero_only,
-            "embed_time": self.embed_time,
-            "time_embed_dim": self.time_embed_dim,
-            "use_prob_embed": self.use_prob_embed,
-            "num_bins": self.num_bins,
-            "sigma": self.sigma,
-            "reward_offset": self.reward_offset,
-            "critic_flow_net_arch": self.critic_flow_net_arch,
-        }
+        self.q_min = (params.r_min - params.reward_offset) / (1.0 - self.gamma)
+        self.q_max = (params.r_max + params.reward_offset) / (1.0 - self.gamma)
+        self.noise_min = params.noise_coverage * (params.r_min / (1.0 - self.gamma))
+        self.noise_max = params.noise_coverage * (params.r_max / (1.0 - self.gamma))
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
@@ -357,63 +311,28 @@ class FloQ(FloQCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("FloQ",)
 
+    params_class = FloQParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
+        params: Optional[FloQParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
         batch_size: int = 256,
         gamma: float = 0.99,
-        offline_sampling: str = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
+        offline_sampling: str = 'with_replace',
         actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        r_min: float = -1.0,
-        r_max: float = 0.0,
-        flow_num_ensembles: int = 2,
-        noise_samples: int = 8,
-        noise_coverage: float = 0.1,
-        critic_flow_steps: int = 8,
-        train_at_zero_only: bool = False,
-        embed_time: bool = True,
-        time_embed_dim: int = 64,
-        use_prob_embed: bool = True,
-        num_bins: int = 51,
-        sigma: float = 16.0,
-        reward_offset: float = 0.01,
-        critic_flow_net_arch: Optional[Sequence[int]] = None,
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 0,
         num_eval_steps: int = 50,
         eval_env: Optional[Any] = None,
@@ -421,7 +340,9 @@ class FloQ(FloQCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -443,51 +364,20 @@ class FloQ(FloQCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
+            alpha=params.alpha,
+            critic_dropout_rate=params.critic_dropout_rate,
             critic_encoder_config=critic_encoder_config,
+            critic_use_group_norm=params.critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=params.num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=False,
         )
         self._init_floq_params(
-            r_min=r_min,
-            r_max=r_max,
-            flow_num_ensembles=flow_num_ensembles,
-            noise_samples=noise_samples,
-            noise_coverage=noise_coverage,
-            critic_flow_steps=critic_flow_steps,
-            train_at_zero_only=train_at_zero_only,
-            embed_time=embed_time,
-            time_embed_dim=time_embed_dim,
-            use_prob_embed=use_prob_embed,
-            num_bins=num_bins,
-            sigma=sigma,
-            reward_offset=reward_offset,
-            critic_flow_net_arch=critic_flow_net_arch,
+            params,
         )
 
         self._setup_model()
@@ -502,70 +392,35 @@ class _FloQRolloutTrainingShell(Off2OnReplayMixin, FloQCore, OffPolicyAlgorithm)
        extension point, minus chunking (FloQ has no action-chunking).
     """
 
+    params_class = FloQParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
-        learning_starts: int = 4_000,
+        params: Optional[FloQParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
+        learning_starts: int = 4000,
         batch_size: int = 256,
         gamma: float = 0.99,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "truncated",
+        bootstrap_at_done: str = 'truncated',
         online_episodes_per_iteration: Optional[int] = None,
         stats_window_size: Optional[int] = None,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
         actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        r_min: float = -1.0,
-        r_max: float = 0.0,
-        flow_num_ensembles: int = 2,
-        noise_samples: int = 8,
-        noise_coverage: float = 0.1,
-        critic_flow_steps: int = 8,
-        train_at_zero_only: bool = False,
-        embed_time: bool = True,
-        time_embed_dim: int = 64,
-        use_prob_embed: bool = True,
-        num_bins: int = 51,
-        sigma: float = 16.0,
-        reward_offset: float = 0.01,
-        critic_flow_net_arch: Optional[Sequence[int]] = None,
-        offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        offline_sampling: Literal['with_replace', 'without_replace'] = 'with_replace',
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
         checkpoint_dir: Optional[str] = None,
@@ -573,7 +428,9 @@ class _FloQRolloutTrainingShell(Off2OnReplayMixin, FloQCore, OffPolicyAlgorithm)
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -582,7 +439,7 @@ class _FloQRolloutTrainingShell(Off2OnReplayMixin, FloQCore, OffPolicyAlgorithm)
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -602,51 +459,20 @@ class _FloQRolloutTrainingShell(Off2OnReplayMixin, FloQCore, OffPolicyAlgorithm)
             initial_training_phase=initial_training_phase,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
+            alpha=params.alpha,
+            critic_dropout_rate=params.critic_dropout_rate,
             critic_encoder_config=critic_encoder_config,
+            critic_use_group_norm=params.critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=params.num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=False,
         )
         self._init_floq_params(
-            r_min=r_min,
-            r_max=r_max,
-            flow_num_ensembles=flow_num_ensembles,
-            noise_samples=noise_samples,
-            noise_coverage=noise_coverage,
-            critic_flow_steps=critic_flow_steps,
-            train_at_zero_only=train_at_zero_only,
-            embed_time=embed_time,
-            time_embed_dim=time_embed_dim,
-            use_prob_embed=use_prob_embed,
-            num_bins=num_bins,
-            sigma=sigma,
-            reward_offset=reward_offset,
-            critic_flow_net_arch=critic_flow_net_arch,
+            params,
         )
         self._init_off2on_params(offline_sampling=offline_sampling)
         self._setup_model()
@@ -657,3 +483,5 @@ class Off2OnFloQ(_FloQRolloutTrainingShell):
     See module docstring."""
 
     _compatible_checkpoint_algorithms = ("Off2OnFloQ", "FloQ")
+
+    params_class = FloQParams

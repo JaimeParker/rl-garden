@@ -43,6 +43,8 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.pwm import PWMParams
 from rl_garden.algorithms.offline import OfflineEnvSpec
 from rl_garden.algorithms.offline_model_based import OfflineModelBasedAlgorithm
 from rl_garden.buffers.mmap_multitask_episode_buffer import MmapMultitaskEpisodeBuffer
@@ -293,44 +295,24 @@ class PWMCore:
     def _init_pwm_params(
         self,
         *,
-        horizon: int,
+        params: PWMParams,
         gamma: float,
-        lam: float,
-        actor_lr: float,
-        critic_lr: float,
-        lr_final: float,
         lr_decay_steps: int,
-        actor_grad_norm: float,
-        critic_grad_norm: float,
-        critic_iterations: int,
-        critic_batches: int,
-        num_critics: int,
-        actor_units: tuple[int, ...],
-        critic_units: tuple[int, ...],
-        init_logstd: float,
-        min_logstd: float,
-        ret_rms: bool,
     ) -> None:
+        horizon = params.horizon
+        critic_iterations = params.critic_iterations
+        critic_batches = params.critic_batches
+        actor_units = params.actor_units
+        critic_units = params.critic_units
+        ret_rms = params.ret_rms
         if horizon < 1:
             raise ValueError(f"horizon must be >= 1, got {horizon}.")
         if critic_batches < 1 or critic_iterations < 1:
             raise ValueError("critic_batches and critic_iterations must be >= 1.")
-        self.horizon = horizon
         self.gamma = gamma
-        self.lam = lam
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.lr_final = lr_final
         self.lr_decay_steps = lr_decay_steps
-        self.actor_grad_norm = actor_grad_norm
-        self.critic_grad_norm = critic_grad_norm
-        self.critic_iterations = critic_iterations
-        self.critic_batches = critic_batches
-        self.num_critics = num_critics
         self.actor_units = tuple(actor_units)
         self.critic_units = tuple(critic_units)
-        self.init_logstd = init_logstd
-        self.min_logstd = min_logstd
         self.use_ret_rms = ret_rms
 
     @property
@@ -457,21 +439,9 @@ class PWMCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon": self.horizon,
-            "lam": self.lam,
-            "actor_lr": self.actor_lr,
-            "critic_lr": self.critic_lr,
-            "lr_final": self.lr_final,
             "lr_decay_steps": self.lr_decay_steps,
-            "actor_grad_norm": self.actor_grad_norm,
-            "critic_grad_norm": self.critic_grad_norm,
-            "critic_iterations": self.critic_iterations,
-            "critic_batches": self.critic_batches,
-            "num_critics": self.num_critics,
             "actor_units": list(self.actor_units),
             "critic_units": list(self.critic_units),
-            "init_logstd": self.init_logstd,
-            "min_logstd": self.min_logstd,
             "ret_rms": self.use_ret_rms,
         }
 
@@ -490,6 +460,8 @@ class PWM(PWMCore, OfflineModelBasedAlgorithm):
         "--eval_env_backend, through MultitaskPadWrapper)"
     )
 
+    params_class = PWMParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
@@ -500,23 +472,8 @@ class PWM(PWMCore, OfflineModelBasedAlgorithm):
         mmap_mode: MmapMode = "create",
         buffer_size: int = 1_000_000,
         batch_size: int = 512,
-        horizon: int = 16,
         gamma: float = 0.99,
-        lam: float = 0.95,
-        actor_lr: float = 5e-4,
-        critic_lr: float = 5e-4,
-        lr_final: float = 1e-5,
         lr_decay_steps: int = 10_000,
-        actor_grad_norm: float = 1.0,
-        critic_grad_norm: float = 100.0,
-        critic_iterations: int = 8,
-        critic_batches: int = 4,
-        num_critics: int = 3,
-        actor_units: tuple[int, ...] = (400, 200, 100),
-        critic_units: tuple[int, ...] = (400, 200),
-        init_logstd: float = -1.0,
-        min_logstd: float = -1.427,
-        ret_rms: bool = True,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -530,7 +487,10 @@ class PWM(PWMCore, OfflineModelBasedAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: PWMParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -551,28 +511,15 @@ class PWM(PWMCore, OfflineModelBasedAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.world_model_checkpoint = str(world_model_checkpoint)
         self.task_idx = int(task_idx)
         self.mmap_dir = mmap_dir
         self.mmap_mode = mmap_mode
         self._init_pwm_params(
-            horizon=horizon,
+            params=params,
             gamma=gamma,
-            lam=lam,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            lr_final=lr_final,
             lr_decay_steps=lr_decay_steps,
-            actor_grad_norm=actor_grad_norm,
-            critic_grad_norm=critic_grad_norm,
-            critic_iterations=critic_iterations,
-            critic_batches=critic_batches,
-            num_critics=num_critics,
-            actor_units=actor_units,
-            critic_units=critic_units,
-            init_logstd=init_logstd,
-            min_logstd=min_logstd,
-            ret_rms=ret_rms,
         )
         self._setup_model()
 

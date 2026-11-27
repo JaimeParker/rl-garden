@@ -16,6 +16,7 @@ def _tdmpc2_env_request(args, run_name):
 
 
 def build_tdmpc2(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.hyperparameters import params_kwargs
     from rl_garden.common.cli_args import resolve_obs_groups_config
     from rl_garden.algorithms.tdmpc2 import TDMPC2
     from rl_garden.training.inspection import construct_agent
@@ -32,6 +33,7 @@ def build_tdmpc2(args, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         TDMPC2,
+        **params_kwargs(args, TDMPC2.params_class),
         env=env,
         eval_env=eval_env,
         episode_length=args.episode_length,
@@ -39,39 +41,8 @@ def build_tdmpc2(args, env, eval_env, logger, checkpoint_dir):
         buffer_device=args.buffer_device,
         batch_size=args.batch_size,
         seed_steps=args.seed_steps,
-        use_planner=args.use_planner,
-        horizon=args.horizon,
-        num_samples=args.num_samples,
-        num_elites=args.num_elites,
-        num_pi_trajs=args.num_pi_trajs,
-        iterations=args.iterations,
-        min_std=args.min_std,
-        max_std=args.max_std,
-        temperature=args.temperature,
-        latent_dim=args.latent_dim,
-        mlp_dim=args.mlp_dim,
-        simnorm_dim=args.simnorm_dim,
-        num_q=args.num_q,
-        num_bins=args.num_bins,
-        vmin=args.vmin,
-        vmax=args.vmax,
-        dropout=args.dropout,
         episodic=args.episodic,
-        log_std_min=args.log_std_min,
-        log_std_max=args.log_std_max,
-        entropy_coef=args.entropy_coef,
-        lr=args.lr,
-        enc_lr_scale=args.enc_lr_scale,
-        grad_clip_norm=args.grad_clip_norm,
-        tau=args.tau,
-        rho=args.rho,
-        consistency_coef=args.consistency_coef,
-        reward_coef=args.reward_coef,
-        value_coef=args.value_coef,
         termination_coef=args.termination_coef,
-        discount_denom=args.discount_denom,
-        discount_min=args.discount_min,
-        discount_max=args.discount_max,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

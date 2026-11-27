@@ -9,8 +9,9 @@ jointly with the actor/critic inside ``train()`` every gradient step (see
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.training.offline.args import (
     OfflineBCQArgs,
     OfflineCommonArgs,
@@ -26,12 +27,14 @@ if TYPE_CHECKING:
 
 @dataclass
 class BCQArgs(
+    OfflineBCQArgs,
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineBCQArgs,
 ):
     """BCQ offline pretraining. Box or Dict (vision) observations."""
+
+    net_arch: Optional[tuple[int, ...]] = (400, 300)
 
 
 def _bcq_kwargs(
@@ -39,39 +42,17 @@ def _bcq_kwargs(
 ) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
 
+    from rl_garden.algorithms import BCQ
+
     kwargs = {
+        **params_kwargs(args, BCQ.params_class),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
         "offline_sampling": args.offline_sampling,
-        "tau": args.tau,
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "vae_lr": args.vae_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
-        "net_arch": list(args.net_arch),
-        "actor_use_layer_norm": args.actor_use_layer_norm,
-        "critic_use_layer_norm": args.critic_use_layer_norm,
-        "actor_use_group_norm": args.actor_use_group_norm,
-        "critic_use_group_norm": args.critic_use_group_norm,
-        "num_groups": args.num_groups,
-        "actor_dropout_rate": args.actor_dropout_rate,
-        "critic_dropout_rate": args.critic_dropout_rate,
-        "kernel_init": args.kernel_init,
-        "backbone_type": args.backbone_type,
-        "phi": args.phi,
-        "vae_hidden_dim": args.vae_hidden_dim,
-        "vae_latent_dim": args.vae_latent_dim,
-        "beta": args.beta,
-        "soft_q_lambda": args.soft_q_lambda,
+        "net_arch": list(args.net_arch) if args.net_arch is not None else None,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

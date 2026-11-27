@@ -22,6 +22,9 @@ def resolve_episode_timing(args) -> tuple[int, int]:
 
 
 def build_ncrl(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.dreamer import NCRLParams
+
     import dataclasses
 
     from rl_garden.algorithms.ncrl import NCRL
@@ -36,51 +39,23 @@ def build_ncrl(args, env, eval_env, logger, checkpoint_dir):
     encoder_config = dataclasses.replace(args.encoder, backbone="dreamer_conv")
     episode_frames, action_repeat = resolve_episode_timing(args)
 
+    learning_kwargs = params_kwargs(args, NCRLParams)
+    learning_kwargs["guidance_schedule"] = tuple(args.guidance_schedule)
+
     agent = construct_agent(
         NCRL,
+        **learning_kwargs,
         env=env,
         eval_env=eval_env,
         pretrained_world_model=pretrained_world_model,
         backbone=args.backbone,
         retrieval_db=args.retrieval_db,
         prior_dataset_dir=args.prior_dataset_dir,
-        online_ratio=args.online_ratio,
-        num_retrieve_episodes=args.num_retrieve_episodes,
-        max_retrieve_iterations=args.max_retrieve_iterations,
-        use_guidance=args.use_guidance,
-        bc_train_steps=args.bc_train_steps,
-        bc_batch_size=args.bc_batch_size,
-        bc_lr=args.bc_lr,
-        guidance_schedule=tuple(args.guidance_schedule),
         episode_frames=episode_frames,
         action_repeat=action_repeat,
-        warmup_frames=args.warmup_frames,
         learning_starts=args.learning_starts,
-        imag_horizon=args.imag_horizon,
-        discount=args.discount,
-        lam=args.lam,
-        actor_ent=args.actor_ent,
-        model_lr=args.model_lr,
-        reward_lr=args.reward_lr,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        adam_eps=args.adam_eps,
-        weight_decay=args.weight_decay,
-        grad_clip=args.grad_clip,
-        slow_target_fraction=args.slow_target_fraction,
-        ac_units=args.ac_units,
-        actor_layers=args.actor_layers,
-        critic_layers=args.critic_layers,
         padded_action_dim=args.padded_action_dim,
-        reward_bins=args.reward_bins,
-        kl_free=args.kl_free,
-        kl_free_mode=args.kl_free_mode,
-        dyn_scale=args.dyn_scale,
-        rep_scale=args.rep_scale,
-        recon_scale=args.recon_scale,
         batch_size=args.batch_size,
-        batch_length=args.batch_length,
-        train_ratio=args.train_ratio,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         compute_dtype=args.compute_dtype,

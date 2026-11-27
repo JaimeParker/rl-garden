@@ -9,6 +9,7 @@ from rl_garden.algorithms import DDPG
 from rl_garden.buffers.nstep_buffer import LazyNextNStepReplayBuffer
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.drqv2_conv import DrQv2Encoder
+from rl_garden.hyperparameters.ddpg import DDPGParams
 from rl_garden.networks.ddpg_critic import DrQv2Critic
 from rl_garden.observations import ObsGroups
 
@@ -663,6 +664,10 @@ def _drqv2_build_args(encoder: str):
         weight_decay=0.0,
         use_adamw=False,
         grad_clip_norm=None,
+        lr_schedule="constant",
+        lr_warmup_steps=0,
+        lr_decay_steps=0,
+        lr_min_ratio=0.0,
         seed=1,
         std_log=False,
         log_freq=100,
@@ -685,6 +690,8 @@ def test_build_drqv2_warns_when_encoder_overridden(
     captured_kwargs: dict = {}
 
     class _FakeDDPG:
+        params_class = DDPGParams
+
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
 
@@ -704,6 +711,8 @@ def test_build_drqv2_default_encoder_does_not_warn(
     from rl_garden.training.online.entrypoints.drqv2 import build_drqv2
 
     class _FakeDDPG:
+        params_class = DDPGParams
+
         def __init__(self, **kwargs):
             pass
 

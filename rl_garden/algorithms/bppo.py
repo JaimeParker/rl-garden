@@ -34,7 +34,7 @@ import copy
 import dataclasses
 import warnings
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -45,11 +45,11 @@ from rl_garden.algorithms.ppo import ppo_clip_policy_loss
 from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.bppo import BPPOParams
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import KernelInit
-from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.value import ScalarQNetwork, ValueNetwork
 from rl_garden.observations import ObservationContractError, ObsGroups
 from rl_garden.policies.bc_policy import BCPolicy
@@ -252,6 +252,8 @@ class BPPOCriticMixin:
 class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
     """Behavior Proximal Policy Optimization. Box observations only."""
 
+    params_class = BPPOParams
+
     _compatible_checkpoint_algorithms = ("BPPO",)
     # No class-level override: value_net/q_net now read through the
     # critic-role extractor too (BPPOCriticMixin._build_critic/_phase_a_step),
@@ -272,32 +274,6 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         buffer_device: str = "cuda",
         batch_size: int = 256,
         gamma: float = 0.99,
-        # -- Phase A: critic (V/Q) warmup --
-        critic_warmup_steps: int = 2_000_000,
-        value_lr: float = 1e-4,
-        q_lr: float = 1e-4,
-        tau: float = 0.005,
-        target_update_freq: int = 2,
-        value_hidden_dims: Sequence[int] = (512, 512, 512),
-        q_hidden_dims: Sequence[int] = (1024, 1024),
-        # -- Phase B: actor (PPO-clip) improvement --
-        actor_lr: float = 1e-4,
-        actor_hidden_dims: Sequence[int] = (1024, 1024),
-        clip_ratio: float = 0.25,
-        clip_decay: float = 0.96,
-        clip_decay_steps: int = 200,
-        entropy_weight: float = 0.0,
-        omega: float = 0.9,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        grad_clip_norm: Optional[float] = None,
-        use_layer_norm: bool = False,
-        use_group_norm: bool = False,
-        num_groups: int = 32,
-        dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -316,7 +292,10 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[BPPOParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -337,46 +316,28 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
         self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
-        if critic_warmup_steps < 0:
+        if params.critic_warmup_steps < 0:
             raise ValueError(
-                f"critic_warmup_steps must be non-negative, got {critic_warmup_steps}."
+                f"critic_warmup_steps must be non-negative, got {params.critic_warmup_steps}."
             )
-        if not (0.0 <= omega <= 1.0):
-            raise ValueError(f"omega must be in [0, 1], got {omega}.")
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if not (0.0 <= params.omega <= 1.0):
+            raise ValueError(f"omega must be in [0, 1], got {params.omega}.")
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.critic_warmup_steps = critic_warmup_steps
-        self.value_lr = value_lr
-        self.q_lr = q_lr
-        self.tau = tau
-        self.target_update_freq = target_update_freq
-        self.value_hidden_dims = tuple(value_hidden_dims)
-        self.q_hidden_dims = tuple(q_hidden_dims)
-        self.actor_lr = actor_lr
-        self.actor_hidden_dims = tuple(actor_hidden_dims)
-        self.clip_ratio_init = clip_ratio
-        self.clip_decay = clip_decay
-        self.clip_decay_steps = clip_decay_steps
-        self.entropy_weight = entropy_weight
-        self.omega = omega
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.grad_clip_norm = grad_clip_norm
-        self.use_layer_norm = use_layer_norm
-        self.use_group_norm = use_group_norm
-        self.num_groups = num_groups
-        self.dropout_rate = dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.std_parameterization = std_parameterization
+        self.value_hidden_dims = tuple(params.value_hidden_dims)
+        self.q_hidden_dims = tuple(params.q_hidden_dims)
+
+        self.actor_hidden_dims = tuple(params.actor_hidden_dims)
+        self.clip_ratio_init = params.clip_ratio
 
         # Dedicated phase-gate/decay state -- deliberately NOT reusing
         # self._global_step/self._global_update, which agent.load_state_dict()
@@ -385,7 +346,7 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
         # load_actor_from()'s docstring.
         self._phase_step = 0
         self._phase_b_step = 0
-        self._clip_ratio = clip_ratio
+        self._clip_ratio = params.clip_ratio
         self._best_eval_score = float("-inf")
 
         self._setup_model()
@@ -605,11 +566,5 @@ class BPPO(BPPOCriticMixin, OfflineRLAlgorithm):
             **super()._checkpoint_metadata(),
             **self._critic_checkpoint_metadata(),
             **self._observation_checkpoint_metadata(),
-            "actor_lr": self.actor_lr,
-            "actor_hidden_dims": self.actor_hidden_dims,
             "clip_ratio": self.clip_ratio_init,
-            "clip_decay": self.clip_decay,
-            "clip_decay_steps": self.clip_decay_steps,
-            "entropy_weight": self.entropy_weight,
-            "omega": self.omega,
         }

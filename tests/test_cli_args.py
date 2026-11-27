@@ -1068,7 +1068,7 @@ def test_static_preflight_infers_separate_for_asymmetric_obs_groups_via_algorith
         obs=ObservationConfig(extra_state=("object_pose",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
     )
-    command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "sac", "print_config", {}, (), {})
 
     registry._validate_config(command)  # must not raise
 
@@ -1092,7 +1092,7 @@ def test_static_preflight_rejects_explicit_contradicting_encoder_sharing():
         obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
         encoder_sharing="shared_critic_grad",
     )
-    command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "sac", "print_config", {}, (), {})
 
     with pytest.raises(ConfigError, match="requires two independent encoders"):
         registry._validate_config(command)
@@ -1108,7 +1108,7 @@ def test_static_preflight_infers_separate_from_critic_encoder_alone():
 
     registry.discover()
     args = SACArgs(critic_encoder=EncoderConfig(features_dim=17))
-    command = ParsedCommand(args, "sac", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "sac", "print_config", {}, (), {})
 
     registry._validate_config(command)  # must not raise
 
@@ -1134,7 +1134,7 @@ def test_static_preflight_rejects_asymmetric_obs_groups_for_recurrent_sac():
         obs=ObservationConfig(extra_state=("object_pose",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
     )
-    command = ParsedCommand(args, "recurrent_sac", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "recurrent_sac", "print_config", {}, (), {})
 
     with pytest.raises(ConfigError, match="only supports"):
         registry._validate_config(command)
@@ -1198,7 +1198,7 @@ def test_static_preflight_skips_algorithms_without_a_registered_class_factory(mo
         obs=ObservationConfig(extra_state=("object_pose",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "state_object_pose")),
     )
-    command = ParsedCommand(args, "without_class_factory", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "without_class_factory", "print_config", {}, (), {})
 
     registry._validate_config(command)  # must not raise
     assert command.args.encoder_sharing is None

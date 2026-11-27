@@ -65,9 +65,7 @@ python examples/train_online.py sac \
   --config configs/online/sac_state.yaml --dry-run
 ```
 
-Use `--explain-param FIELD` to inspect a value, source history, ownership, active
-condition, definition location, and mapped consumer. The three inspection actions
-are mutually exclusive.
+`--print-config` and `--dry-run` are mutually exclusive.
 
 Normal runs atomically save the same EffectiveConfig v2 schema to
 `{log_dir}/{run_name}/config.json`: first `status: preflight`, then
@@ -112,8 +110,7 @@ This is only a smoke fallback. Keep normal training CUDA-first. Set
 1. Confirm the intended registry phase and algorithm.
 2. Run `--print-config`; inspect selection, inputs, active backend, provenance,
    logging, checkpoint, and algorithm defaults.
-3. Run `--explain-param` for every high-risk override.
-4. Confirm dataset and checkpoint paths exist when applicable.
-5. Run `--dry-run` when the backend and hardware dependencies are available.
-6. Use the smallest relevant smoke before launching a long run.
-7. For checkpoint behavior, follow [the checkpoint runbook](checkpoint.md).
+3. Confirm dataset and checkpoint paths exist when applicable.
+4. Run `--dry-run` when the backend and hardware dependencies are available.
+5. Use the smallest relevant smoke before launching a long run.
+6. For checkpoint behavior, follow [the checkpoint runbook](checkpoint.md).

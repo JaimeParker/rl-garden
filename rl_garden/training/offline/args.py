@@ -1,11 +1,52 @@
 """Composable CLI arguments for offline algorithms."""
 from __future__ import annotations
 
+from rl_garden.hyperparameters.offline_sac import EDACParams
+
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from rl_garden.hyperparameters.dreamer import RSSMPretrainParams
+from rl_garden.hyperparameters.tdmpc2 import TDMPC2MultitaskParams
+from rl_garden.hyperparameters.pwm import PWMParams
 from rl_garden.common.cli_args import CheckpointArgs, LoggingArgs, ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.hyperparameters.fql import (
+    FQLReferenceParams, FloQParams, FINOParams, FACParams, ValueFlowsParams,
+)
+from rl_garden.hyperparameters.qam import QAMParams
+from rl_garden.hyperparameters.qgf import QGFParams
+from rl_garden.hyperparameters.bcq import BCQParams
+from rl_garden.hyperparameters.plas import PLASParams
+from rl_garden.hyperparameters.idql import IDQLParams
+from rl_garden.hyperparameters.awac import AWACParams
+from rl_garden.hyperparameters.iql import IQLParams
+from rl_garden.hyperparameters.td3_bc import TD3BCParams
+from rl_garden.hyperparameters.rebrac import ReBRACParams
+from rl_garden.hyperparameters.spot import SPOTParams
+from rl_garden.hyperparameters.bc import BCParams
+from rl_garden.hyperparameters.flow_bc import FlowBCParams
+from rl_garden.hyperparameters.mean_flow_bc import MeanFlowBCParams
+from rl_garden.hyperparameters.diffusion_bc import DiffusionBCParams
+from rl_garden.hyperparameters.consistency_distill_bc import ConsistencyDistillBCParams
+from rl_garden.hyperparameters.a2a_bc import A2ABCParams
+from rl_garden.hyperparameters.bppo import BPPOParams
+from rl_garden.hyperparameters.unio4 import UniO4Params
+from rl_garden.hyperparameters.unio4_ope import UniO4OPEParams
+from rl_garden.hyperparameters.hilp import HILPParams
+from rl_garden.hyperparameters.opal import OPALParams
+from rl_garden.hyperparameters.cql import CQLParams, CalQLParams, WSRLParams
+from rl_garden.hyperparameters import shared
+from rl_garden.hyperparameters.shared import (
+    OfflineCriticArgs as OfflineCriticArgs,
+    OfflineActorArgs as OfflineActorArgs,
+    OfflineReplayArgs as OfflineReplayArgs,
+    OfflineDiscountArgs as OfflineDiscountArgs,
+    OfflineOptimizationArgs as OfflineOptimizationArgs,
+)
+
+
+OfflineDeterministicActorCriticArgs = shared.OfflineDeterministicActorCriticArgs
 
 
 @dataclass
@@ -27,25 +68,6 @@ class OfflineDatasetArgs:
     action_low: float = -1.0
     action_high: float = 1.0
     spec_num_envs: int = 1
-
-
-@dataclass
-class OfflineReplayArgs:
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    batch_size: int = 256
-    offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
-
-
-@dataclass
-class OfflineOptimizationArgs:
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
 
 
 @dataclass
@@ -89,7 +111,7 @@ class OfflineCommonArgs(
 
 
 @dataclass
-class TDMPC2MultitaskTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
+class TDMPC2MultitaskTrainingArgs(TDMPC2MultitaskParams, OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     """TD-MPC2 multitask offline pretraining.
 
     Deliberately does NOT inherit ``EnvRunArgs``/``EnvBackendArgs``/
@@ -112,36 +134,10 @@ class TDMPC2MultitaskTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArg
     num_offline_steps: int = 10_000_000
     buffer_size: int = 1_000_000
     batch_size: int = 256
-    horizon: int = 3
-    task_dim: int = 96
-    latent_dim: int = 512
-    enc_dim: int = 256
-    num_enc_layers: int = 2
-    mlp_dim: int = 512
-    simnorm_dim: int = 8
-    num_q: int = 5
-    num_bins: int = 101
-    vmin: float = -10.0
-    vmax: float = 10.0
-    dropout: float = 0.01
-    log_std_min: float = -10.0
-    log_std_max: float = 2.0
-    entropy_coef: float = 1e-4
-    lr: float = 3e-4
-    enc_lr_scale: float = 0.3
-    grad_clip_norm: float = 20.0
-    tau: float = 0.01
-    rho: float = 0.5
-    consistency_coef: float = 20.0
-    reward_coef: float = 0.1
-    value_coef: float = 0.1
-    discount_denom: float = 5.0
-    discount_min: float = 0.95
-    discount_max: float = 0.995
 
 
 @dataclass
-class PWMTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
+class PWMTrainingArgs(PWMParams, OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     """PWM offline policy learning on a frozen multitask world model.
 
     Same base set as ``TDMPC2MultitaskTrainingArgs`` (no ``EnvRunArgs``/
@@ -159,23 +155,8 @@ class PWMTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     eval_env_backend: str = "dm_control"
     device: str = "auto"
     num_offline_steps: int = 10_000
-    horizon: int = 16
     batch_size: int = 512
     gamma: float = 0.99
-    lam: float = 0.95
-    actor_lr: float = 5e-4
-    critic_lr: float = 5e-4
-    lr_final: float = 1e-5
-    actor_grad_norm: float = 1.0
-    critic_grad_norm: float = 100.0
-    critic_iterations: int = 8
-    critic_batches: int = 4
-    num_critics: int = 3
-    actor_units: tuple[int, ...] = (400, 200, 100)
-    critic_units: tuple[int, ...] = (400, 200)
-    init_logstd: float = -1.0
-    min_logstd: float = -1.427
-    ret_rms: bool = True
     # Evaluate every this many gradient updates (0 disables).
     eval_freq: int = 200
 
@@ -183,7 +164,7 @@ class PWMTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
 
 
 @dataclass
-class RSSMPretrainTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
+class RSSMPretrainTrainingArgs(RSSMPretrainParams, OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     """Reward-free RSSM world-model pretraining (NCRL stage 1, see
     ``rl_garden.algorithms.rssm_pretrain``). Same base set as
     ``TDMPC2MultitaskTrainingArgs``: no live env and no ``offline_dataset``.
@@ -202,29 +183,12 @@ class RSSMPretrainTrainingArgs(OfflineRuntimeArgs, CheckpointArgs, LoggingArgs):
     buffer_device: str = "cuda"
     num_offline_steps: int = 200_000
     batch_size: int = 32
-    batch_length: int = 64
-    lr: float = 1e-4
-    adam_eps: float = 1e-5
-    weight_decay: float = 1e-6
-    grad_clip: float = 100.0
-    size: str = "ncrl_m"
-    deter: Optional[int] = None
-    hidden: Optional[int] = None
-    stoch: int = 32
-    classes: Optional[int] = None
-    blocks: int = 8
-    cnn_depth: Optional[int] = None
-    kl_free: float = 1.0
-    kl_free_mode: Literal["per_element", "mean"] = "mean"
-    dyn_scale: float = 1.0
-    rep_scale: float = 0.1
-    recon_scale: float = 1.0
     compute_dtype: Literal["float32", "bfloat16"] = "bfloat16"
     padded_action_dim: Optional[int] = None
 
 
 @dataclass
-class DiffusionBCTrainingArgs(ObservationArgs, CheckpointArgs, LoggingArgs):
+class DiffusionBCTrainingArgs(DiffusionBCParams, ObservationArgs, CheckpointArgs, LoggingArgs):
     """Diffusion BC pretraining (DPPO phase 1). Deliberately does NOT inherit
     ``OfflineCommonArgs``: ``run_offline`` assumes a ``agent.replay_buffer``
     populated via ``load_offline_dataset``, but ``DiffusionBC`` loads
@@ -236,45 +200,21 @@ class DiffusionBCTrainingArgs(ObservationArgs, CheckpointArgs, LoggingArgs):
     observation spaces, matching ``DiffusionBC``'s in-class
     ``isinstance(obs_space, spaces.Box/Dict)`` branch -- most ``encoder``/
     ``obs_groups`` fields are no-ops for Box-obs (state-only) datasets."""
-
     dataset_path: str = ""
     num_offline_steps: int = 200_000
     offline_num_traj: Optional[int] = None
-    horizon_steps: int = 4
-    cond_steps: int = 1
-    denoising_steps: int = 20
-    activation_fn: Literal["relu", "gelu", "mish"] = "relu"
-    residual_style: bool = True
-    time_dim: int = 16
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    denoised_clip_value: Optional[float] = 1.0
-    randn_clip_value: float = 10.0
-    final_action_clip_value: Optional[float] = None
-    min_sampling_denoising_std: float = 0.1
     net_backbone: Literal["mlp", "unet"] = "mlp"
     unet_down_dims: tuple[int, ...] = (256, 512, 1024)
     unet_kernel_size: int = 5
     unet_n_groups: int = 8
     unet_cond_predict_scale: bool = False
-    actor_lr: float = 1e-3
-    weight_decay: float = 1e-6
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
     batch_size: int = 128
-    ema_decay: float = 0.995
-    ema_update_every: int = 10
-    ema_start_step: int = 0
     seed: int = 1
     device: str = "auto"
 
 
 @dataclass
-class ConsistencyDistillBCTrainingArgs(CheckpointArgs, LoggingArgs):
+class ConsistencyDistillBCTrainingArgs(ConsistencyDistillBCParams, CheckpointArgs, LoggingArgs):
     """Fully offline LCM-style consistency distillation of a frozen
     ``DiffusionBC`` teacher into a one/few-step ``ConsistencyDistillBC``
     student. Same "no ``OfflineCommonArgs``, no replay buffer" reasoning as
@@ -290,42 +230,22 @@ class ConsistencyDistillBCTrainingArgs(CheckpointArgs, LoggingArgs):
     mismatch alone would also fail via a state-dict shape error, but fields
     like ``denoising_steps``/``activation_fn`` carry no parameters and would
     otherwise load silently wrong)."""
-
     dataset_path: str = ""
     bc_checkpoint: str = ""
     num_offline_steps: int = 100_000
     offline_num_traj: Optional[int] = None
-    horizon_steps: int = 4
-    cond_steps: int = 1
-    denoising_steps: int = 20
-    activation_fn: Literal["relu", "gelu", "mish"] = "relu"
-    residual_style: bool = True
-    time_dim: int = 16
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    denoised_clip_value: Optional[float] = 1.0
-    randn_clip_value: float = 10.0
-    final_action_clip_value: Optional[float] = None
-    min_sampling_denoising_std: float = 0.1
     net_backbone: Literal["mlp", "unet"] = "mlp"
     unet_down_dims: tuple[int, ...] = (256, 512, 1024)
     unet_kernel_size: int = 5
     unet_n_groups: int = 8
     unet_cond_predict_scale: bool = False
-    cm_lr: float = 1e-4
-    weight_decay: float = 1e-6
-    cm_ema_decay: float = 0.95
-    cm_grad_clip_norm: Optional[float] = 1.0
-    cm_sigma_data: float = 0.5
-    cm_timestep_scaling: float = 0.1
     batch_size: int = 128
     seed: int = 1
     device: str = "auto"
 
 
 @dataclass
-class HILPTrainingArgs(CheckpointArgs, LoggingArgs):
+class HILPTrainingArgs(HILPParams, CheckpointArgs, LoggingArgs):
     """HILP pretraining. Deliberately does NOT inherit ``OfflineCommonArgs``:
     ``run_offline`` assumes an ``agent.replay_buffer`` populated via
     ``load_offline_dataset``, but ``HILP`` loads a ``HindsightGoalDataset``
@@ -336,26 +256,14 @@ class HILPTrainingArgs(CheckpointArgs, LoggingArgs):
     dataset_path: str = ""
     num_offline_steps: int = 1_000_000
     offline_num_traj: Optional[int] = None
-    skill_dim: int = 32
-    value_hidden_dims: tuple[int, ...] = (512, 512, 512)
-    actor_hidden_dims: tuple[int, ...] = (512, 512, 512)
-    discount: float = 0.99
-    tau: float = 0.005
-    expectile: float = 0.95
-    skill_expectile: float = 0.9
-    skill_temperature: float = 10.0
-    skill_discount: float = 0.99
-    p_currgoal: float = 0.0
-    p_trajgoal: float = 0.625
-    p_randomgoal: float = 0.375
-    lr: float = 3e-4
+
     batch_size: int = 1024
     seed: int = 1
     device: str = "auto"
 
 
 @dataclass
-class OPALTrainingArgs(CheckpointArgs, LoggingArgs):
+class OPALTrainingArgs(OPALParams, CheckpointArgs, LoggingArgs):
     """OPAL VAE pretraining. Deliberately does NOT inherit ``OfflineCommonArgs``:
     ``run_offline`` assumes an ``agent.replay_buffer`` populated via
     ``load_offline_dataset``, but ``OPAL`` loads a ``WindowedTrajectoryDataset``
@@ -366,19 +274,14 @@ class OPALTrainingArgs(CheckpointArgs, LoggingArgs):
     dataset_path: str = ""
     num_offline_steps: int = 1_000_000
     offline_num_traj: Optional[int] = None
-    skill_dim: int = 8
-    chunk_size: int = 4
-    hidden_size: int = 256
-    vae_hidden_dims: tuple[int, ...] = (256, 256)
-    kl_coef: float = 0.1
-    lr: float = 3e-4
+
     batch_size: int = 256
     seed: int = 1
     device: str = "auto"
 
 
 @dataclass
-class A2ABCTrainingArgs(ObservationArgs, CheckpointArgs, LoggingArgs):
+class A2ABCTrainingArgs(A2ABCParams, ObservationArgs, CheckpointArgs, LoggingArgs):
     """A2A flow-matching BC pretraining. A standalone sibling of
     ``DiffusionBCTrainingArgs`` (not built on it) -- swaps
     diffusion-specific fields (``denoising_steps``, ``ema_*``,
@@ -386,36 +289,13 @@ class A2ABCTrainingArgs(ObservationArgs, CheckpointArgs, LoggingArgs):
     ``obs.state`` must stay True (``A2ABC._setup_model`` raises ``ValueError``
     otherwise) -- the state-history window is the flow's source, not
     optional."""
-
     dataset_path: str = ""
     num_offline_steps: int = 200_000
     offline_num_traj: Optional[int] = None
-    horizon_steps: int = 8
-    cond_steps: int = 8
-    latent_dim: int = 512
-    cnn_num_layers: int = 3
-    cnn_hidden_channels: int = 512
-    cnn_kernel_size: int = 5
     activation_fn: Literal["relu", "gelu", "mish"] = "relu"
-    decoder_net_arch: tuple[int, ...] = (512, 512, 512, 512)
-    flow_hidden_dims: tuple[int, ...] = (512, 512, 512, 512)
-    num_sampling_steps: int = 6
-    consistency_weight: float = 1.0
-    enc_recon_weight: float = 0.5
-    flow_recon_weight: float = 0.5
-    enc_contrastive_weight: float = 0.0
-    flow_contrastive_weight: float = 0.0
-    contrastive_temperature: float = 0.1
     kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    actor_lr: float = 1e-3
-    weight_decay: float = 1e-6
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
+            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
+        ] = None
     batch_size: int = 128
     seed: int = 1
     device: str = "auto"
@@ -427,45 +307,10 @@ class OfflineDeviceArgs:
 
 
 @dataclass
-class OfflineDiscountArgs:
-    gamma: float = 0.99
-    tau: float = 0.005
-    utd: float = 1.0
-
-
-@dataclass
-class OfflineActorArgs:
-    actor_use_layer_norm: bool = True
-    actor_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal[
-            "xavier_uniform",
-            "xavier_normal",
-            "orthogonal",
-            "kaiming_uniform",
-            "orthogonal_near_zero_output",
-        ]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    std_parameterization: Literal["exp", "uniform"] = "exp"
-
-
-@dataclass
 class OfflineSACNetworkArgs:
     hidden_dim: int = 256
     actor_hidden_layers: int = 2
     critic_hidden_layers: int = 4
-
-
-@dataclass
-class OfflineCriticArgs:
-    n_critics: int = 10
-    critic_subsample_size: int = 2
-    critic_use_layer_norm: bool = True
-    critic_use_group_norm: bool = False
-    critic_dropout_rate: Optional[float] = None
 
 
 @dataclass
@@ -482,231 +327,80 @@ class OfflineCompileArgs:
 
 
 @dataclass
-class OfflineCQLArgs:
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    alpha_lr: float = 1e-4
-    cql_alpha_lr: float = 3e-4
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-    use_cql_loss: bool = True
-    use_td_loss: bool = True
-    cql_n_actions: int = 10
-    cql_action_sample_method: Literal["uniform", "normal"] = "uniform"
-    cql_alpha: float = 5.0
-    cql_autotune_alpha: bool = False
-    cql_alpha_lagrange_init: float = 1.0
-    cql_target_action_gap: float = 1.0
-    cql_importance_sample: bool = True
-    cql_max_target_backup: bool = True
-    cql_temp: float = 1.0
-    cql_clip_diff_min: float = float("-inf")
-    cql_clip_diff_max: float = float("inf")
-    cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only"
-    cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune"
-    cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus"
-    backup_entropy: bool = False
-    policy_log_std_multiplier: Optional[float] = None
-    policy_log_std_offset: Optional[float] = None
+class OfflineCQLArgs(CQLParams):
+    """Learning settings for the OfflineCQLArgs entry family."""
+
+
 
 
 @dataclass
-class OfflineCalQLArgs:
-    use_calql: bool = True
-    calql_bound_random_actions: bool = False
-    sparse_reward_mc: bool = False
-    sparse_negative_reward: float = 0.0
-    success_threshold: float = 0.5
-    # SARSA/FQE reference-value network (Cal-QL's fix for continuing tasks,
-    # e.g. D4RL locomotion, where MC return-to-go is truncation-biased).
-    # Opt-in only -- default reproduces today's MC-return-based behavior
-    # exactly. See rl_garden/algorithms/calql.py:CalQLCore.
-    use_sarsa_reference: bool = False
-    sarsa_hidden_dims: tuple[int, ...] = (256, 256)
-    sarsa_lr: float = 3e-4
+class OfflineCalQLArgs(CalQLParams):
+    """Learning settings for the OfflineCalQLArgs entry family."""
+
+
 
 
 @dataclass
-class OfflineIQLArgs:
-    actor_lr: float = 3e-4
-    critic_value_lr: float = 3e-4
-    expectile: float = 0.7
-    temperature: float = 3.0
-    adv_clip_max: float = 100.0
-    actor_distribution: Literal["squashed", "unsquashed"] = "squashed"
-    actor_lr_schedule: Optional[Literal["constant", "linear_warmup", "warmup_cosine"]] = None
-    actor_lr_warmup_steps: Optional[int] = None
-    actor_lr_decay_steps: Optional[int] = None
-    actor_lr_min_ratio: Optional[float] = None
+class OfflineIQLArgs(IQLParams):
+    """IQL hyperparameters for offline and offline-to-online training."""
 
 
 @dataclass
-class OfflineIDQLArgs:
-    actor_lr: float = 3e-4
-    critic_value_lr: float = 3e-4
-    expectile: float = 0.7
-    tau: float = 0.005
-    actor_tau: float = 0.001
-    actor_objective: Literal["bc", "soft_adv", "hard_adv", "exp_adv"] = "bc"
-    policy_temperature: float = 3.0
-    diffusion_mlp_dims: tuple[int, ...] = (256, 256)
-    denoising_steps: int = 5
-    schedule: Literal["cosine", "vp", "linear"] = "vp"
-    n_action_samples: int = 64
+class OfflineIDQLArgs(IDQLParams):
+    """IDQL parameters for offline training."""
 
 
 @dataclass
-class OfflineBCArgs:
-    actor_lr: float = 3e-4
-    # Off (unsquashed Gaussian actor) sidesteps a tanh-Jacobian numerical
-    # blowup when expert actions sit at exactly the action bounds --
-    # relevant for near-binary action dims (e.g. a real-robot gripper).
-    tanh_squash: bool = True
+class OfflineBCArgs(BCParams):
+    """BC policy-update parameters."""
+
 
 
 @dataclass
-class OfflineFlowBCArgs:
+class OfflineFlowBCArgs(FlowBCParams):
     """FlowBC-specific network/training knobs. Deliberately not built on
     ``OfflineActorArgs`` -- that class's ``backbone_type``/``std_parameterization``/
     ``actor_use_group_norm``/``num_groups``/``actor_dropout_rate`` fields are
     Gaussian-actor-specific and have no ``ActorVectorField`` equivalent; reusing
     it would expose CLI flags that silently do nothing."""
 
-    actor_lr: float = 3e-4
-    net_arch: tuple[int, ...] = (512, 512, 512, 512)
-    flow_steps: int = 10
-    actor_use_layer_norm: bool = False
-    kernel_init: Optional[
-        Literal[
-            "xavier_uniform",
-            "xavier_normal",
-            "orthogonal",
-            "kaiming_uniform",
-            "orthogonal_near_zero_output",
-        ]
-    ] = None
-    activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
-
 
 @dataclass
-class OfflineMeanFlowBCArgs:
+class OfflineMeanFlowBCArgs(MeanFlowBCParams):
     """MeanFlowBC-specific network/training knobs. Same rationale as
     ``OfflineFlowBCArgs`` for not building on ``OfflineActorArgs``."""
 
-    actor_lr: float = 3e-4
-    net_arch: tuple[int, ...] = (512, 512, 512, 512)
-    num_sample_steps: int = 1
-    mode: Literal["meanflow", "i-meanflow"] = "i-meanflow"
-    time_dist_mu: float = 0.4
-    time_dist_sigma: float = 1.0
-    adaptive_l2_gamma: float = 0.0
-    adaptive_l2_c: float = 1e-2
-    actor_use_layer_norm: bool = False
-    kernel_init: Optional[
-        Literal[
-            "xavier_uniform",
-            "xavier_normal",
-            "orthogonal",
-            "kaiming_uniform",
-            "orthogonal_near_zero_output",
-        ]
-    ] = None
-    activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
-
 
 @dataclass
-class OfflineWSRLArgs:
+class OfflineWSRLArgs(WSRLParams):
+    """Learning settings for the OfflineWSRLArgs entry family."""
+
     training_freq: int = 64
 
 
-@dataclass
-class OfflineDeterministicActorCriticArgs:
-    """Network toggles shared by TD3-BC and AWAC (2 fixed critics, no ensemble
-    subsampling -- unlike ``OfflineActorArgs``/``OfflineCriticArgs``, which are
-    tuned for CQL/IQL's larger critic ensembles)."""
 
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = False
+@dataclass
+class OfflineTD3BCArgs(TD3BCParams):
+    """TD3BC hyperparameters for offline training."""
+
+
+@dataclass
+class OfflineReBRACArgs(ReBRACParams):
+    """ReBRAC hyperparameters for offline training."""
+
+
+@dataclass
+class OfflineAWACArgs(AWACParams):
+    """AWAC hyperparameters for offline training."""
+
+
+@dataclass
+class OfflineFQLArgs(FQLReferenceParams):
+    """FQL parameters for offline training."""
+
     actor_use_group_norm: bool = False
-    critic_use_group_norm: bool = False
-    num_groups: int = 32
+
     actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    n_critics: int = 2
-
-
-@dataclass
-class OfflineTD3BCArgs(OfflineDeterministicActorCriticArgs):
-    """TD3-BC hyperparameters. Defaults match CORL's ``TrainConfig``."""
-
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-    policy_noise: float = 0.2
-    noise_clip: float = 0.5
-    policy_freq: int = 2
-    alpha: float = 2.5
-
-
-@dataclass
-class OfflineReBRACArgs(OfflineDeterministicActorCriticArgs):
-    """ReBRAC hyperparameters. Defaults match CORL's ``rebrac.py::Config``."""
-
-    actor_lr: float = 1e-3
-    critic_lr: float = 1e-3
-    tau: float = 5e-3
-    # CORL's actor_n_hiddens/critic_n_hiddens=3 (hidden_dim=256 each) --
-    # TD3BC's own CLI args have no net_arch field at all (never wired
-    # through, letting ReBRAC.__init__'s own None -> [256,256] default
-    # apply); ReBRAC needs the 3-layer width explicitly.
-    net_arch: tuple[int, ...] = (256, 256, 256)
-
-    policy_noise: float = 0.2
-    noise_clip: float = 0.5
-    policy_freq: int = 2
-    actor_bc_coef: float = 1.0
-    critic_bc_coef: float = 1.0
-    normalize_q: bool = True
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = True
-
-
-@dataclass
-class OfflineAWACArgs(OfflineDeterministicActorCriticArgs):
-    """AWAC hyperparameters. Defaults match CORL's ``TrainConfig``."""
-
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-    awac_lambda: float = 1.0
-    exp_adv_max: float = 100.0
-
-
-@dataclass
-class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
-    """FQL hyperparameters. Defaults match FQL's ``get_config``."""
-
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-    net_arch: tuple[int, ...] = (512, 512, 512, 512)
-    critic_use_layer_norm: bool = True
-    alpha: float = 10.0
-    flow_steps: int = 10
-    q_agg: Literal["mean", "min"] = "mean"
-    normalize_q_loss: bool = False
-    # FQL's reference applies its default_init() (Xavier-uniform, zero bias)
-    # unconditionally to every nn.Dense -- overrides
-    # OfflineDeterministicActorCriticArgs's None default (TD3-BC/AWAC's
-    # PyTorch-native references have no such fixed-init convention).
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = "xavier_uniform"
-    # FQL's reference hardcodes nn.gelu unconditionally in every MLP --
-    # overrides OfflineDeterministicActorCriticArgs's implicit ReLU default
-    # (no field there today; every other algorithm in the codebase has none).
-    activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
     # encoder_sharing lives on ObservationArgs (OfflineCommonArgs already
     # mixes it in): "shared_critic_grad" (default, AGENTS.md's project
     # convention, matches SACPolicy) vs. "separate" (three independent
@@ -716,283 +410,102 @@ class OfflineFQLArgs(OfflineDeterministicActorCriticArgs):
 
 
 @dataclass
-class OfflineFloQArgs(OfflineFQLArgs):
-    """FloQ hyperparameters (Farebrother et al., arXiv 2509.06863). Extends
-    FQL's actor/BC-flow recipe with a flow-matching TD critic."""
+class OfflineFloQArgs(FloQParams):
+    """FloQ parameters for offline training."""
 
-    # OGBench singletask sparse-reward defaults; explicit CLI args rather
-    # than read from dataset statistics (see rl_garden/algorithms/floq.py).
-    r_min: float = -1.0
-    r_max: float = 0.0
+    actor_use_group_norm: bool = False
 
-    flow_num_ensembles: int = 2
-    noise_samples: int = 8
-    noise_coverage: float = 0.1
-    critic_flow_steps: int = 8
-    train_at_zero_only: bool = False
-    embed_time: bool = True
-    time_embed_dim: int = 64
-    use_prob_embed: bool = True
-    num_bins: int = 51
-    sigma: float = 16.0
-    reward_offset: float = 0.01
-    # Flow-critic velocity network width/depth. None falls back to net_arch
-    # (the shared 512x4 default) -- the reference floq's block_width/
-    # block_depth size only this network; actor and distilled critic stay
-    # at net_arch (512x4), matching the README's cube presets (block_depth=2).
-    critic_flow_net_arch: Optional[list[int]] = None
+    actor_dropout_rate: Optional[float] = None
 
 
 @dataclass
-class OfflineValueFlowsArgs(OfflineFQLArgs):
-    """Value Flows hyperparameters (Dong et al., arXiv 2510.07650). Extends
-    FQL's actor/BC-flow recipe with twin flow-matching critics over the
-    return distribution (no separate scalar critic)."""
+class OfflineValueFlowsArgs(ValueFlowsParams):
+    """ValueFlows parameters for offline training."""
 
-    # Dataset-derived in the reference; explicit CLI args here, same
-    # simplification as FloQ's r_min/r_max (see rl_garden/algorithms/value_flows.py).
-    min_reward: float = -1.0
-    max_reward: float = 0.0
+    actor_use_group_norm: bool = False
 
-    ret_agg: Literal["mean", "min"] = "mean"
-    confidence_weight_temp: float = 0.3
-    dcfm_lambda: float = 1.0
-    bcfm_lambda: float = 1.0
-    clip_flow_returns: bool = True
-    num_samples: int = 16
-    policy_extraction: Literal["rs", "rpg"] = "rs"
+    actor_dropout_rate: Optional[float] = None
+
+    critic_use_group_norm: bool = False
+
+    num_groups: int = 32
+
+    critic_dropout_rate: Optional[float] = None
 
 
 @dataclass
-class OfflineFINOArgs(OfflineFQLArgs):
-    """FINO hyperparameters (Shin et al., ICLR 2026). Extends FQL's
-    actor/BC-flow recipe with noise-injected BC-flow training and
-    rejection-sampled (argmax/Boltzmann) inference."""
+class OfflineFINOArgs(FINOParams):
+    """FINO parameters for offline training."""
 
-    noise_scale: float = 0.1
-    beta: float = 10.0
-    num_samples: Optional[int] = None
+    actor_use_group_norm: bool = False
+
+    actor_dropout_rate: Optional[float] = None
 
 
 @dataclass
-class OfflineFACArgs(OfflineFQLArgs):
-    """FAC (Flow Actor-Critic, ICLR 2026, arXiv 2602.18015) hyperparameters.
-    Extends FQL's twin flow-matching actor/critic with a conservative
-    critic penalty gated by a BC-flow log-density threshold, trained through
-    a BC-pretrain -> logp-cache -> actor-critic schedule (see
-    ``rl_garden/algorithms/fac.py``). FQL's ``alpha`` field is inherited but
-    unused by FAC -- the BC-distillation weight is ``fac_lambda`` instead.
-    """
+class OfflineFACArgs(FACParams):
+    """FAC parameters for offline training."""
 
-    q_agg: Literal["mean", "min"] = "min"
-    normalize_q_loss: bool = True
-    fac_alpha: float = 1.0
-    fac_lambda: float = 1.0
-    fac_threshold: Literal[
-        "batch_adaptive", "batch_wide_constant", "dataset_wide_constant"
-    ] = "batch_adaptive"
-    logp_method: Literal["exact", "hutch-rade", "hutch-gaus"] = "exact"
-    logp_hutch_probes: int = 8
-    weight_type: Literal["linear", "logarithmic", "convex", "concave"] = "linear"
-    bc_lr: float = 3e-4
-    bc_batch_size: Optional[int] = None
-    bc_pretrain_epochs: int = 250
-    bc_pretrain_steps: Optional[int] = None
+    actor_use_group_norm: bool = False
+
+    actor_dropout_rate: Optional[float] = None
+
+    alpha: float = 10.0
 
 
 @dataclass
-class OfflineQGFArgs(OfflineDeterministicActorCriticArgs):
-    """QGF (Q-Guided Flow) hyperparameters. Defaults match qgf's get_config().
-    Box or Dict (vision) observations."""
+class OfflineQGFArgs(QGFParams):
+    """QGF parameters for offline training."""
 
     horizon_length: int = 1
-    actor_lr: float = 3e-4
-    critic_value_lr: float = 3e-4
-    # QGF's reference applies use_layer_norm=1 to every network.
-    actor_use_layer_norm: bool = True
-    critic_use_layer_norm: bool = True
-    value_use_layer_norm: bool = True
-
-    expectile: float = 0.9
-    q_agg: Literal["mean", "min"] = "min"
-    denoise_steps: int = 10
-    # "grid" matches QGF's own policy_loss (qgf.py:69-74, discrete-grid t);
-    # "uniform" reproduces IFQL's own actor loss (ifql.py:72) instead.
-    t_sampling: Literal["grid", "uniform"] = "grid"
-
-    sampling_mode: Literal["guided", "grad_step", "best_of_n", "bptt", "robust_q"] = "guided"
-    guidance_weight: float = 1.0
-    denoised_action_approx: Literal["one_euler_step_approx", "noisy"] = (
-        "one_euler_step_approx"
-    )
-    qgrad_step_size: float = 0.1
-    qgrad_steps: int = 1
-    use_sign_gradient: bool = False
-    actor_num_samples: int = 32
-    # RobustQ (sampling_mode="robust_q") only -- both reconstructed from
-    # upstream-broken code, see qgf_policy.py's docstring.
-    robust_critic_lr: float = 3e-4
-    robust_critic_t_emb_size: int = 16
-    # QGF's reference applies default_init() (Xavier-uniform-like) unconditionally.
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = "xavier_uniform"
-    activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
+    actor_use_group_norm: bool = False
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    critic_dropout_rate: Optional[float] = None
 
 
 @dataclass
-class OfflineQAMArgs(OfflineDeterministicActorCriticArgs):
-    """QAM (Q-learning with Adjoint Matching) hyperparameters. Defaults
-    match qam's get_config(). Box or Dict (vision) observations.
-    `edit_scale`'s network construction is a best-effort reconstruction of
-    upstream-missing code (see rl_garden/policies/qam_policy.py's
-    docstring)."""
+class OfflineQAMArgs(QAMParams):
+    """QAM parameters for offline training."""
 
     horizon_length: int = 1
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-    grad_clip_norm: Optional[float] = 1.0
-    # QAM's reference has one value_layer_norm=True knob shared by both
-    # critic and value nets, and actor_layer_norm=False -- matches here via
-    # separate critic_use_layer_norm/value_use_layer_norm set to the same
-    # value.
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = True
-    value_use_layer_norm: bool = True
-
-    critic_loss_type: Literal["ddpg", "iql"] = "ddpg"
-    rho: float = 0.0
-    expectile: float = 0.9
-    flow_steps: int = 10
-    best_of_n: int = 1
-    inv_temp: float = 0.3
-    residual: bool = False
-    target_actor: bool = True
-    clip_adj: bool = True
-    use_target_grad: bool = True
-    fql_alpha: float = 0.0
-    edit_scale: float = 0.0
-    edit_target_entropy: Optional[float] = None
-    edit_target_entropy_multiplier: float = 0.5
-    edit_alpha_lr: float = 3e-4
-    # QAM's reference applies default_init() (Xavier-uniform-like) unconditionally.
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = "xavier_uniform"
-    activation_fn: Optional[Literal["relu", "gelu"]] = "gelu"
+    actor_use_group_norm: bool = False
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    actor_dropout_rate: Optional[float] = None
+    critic_dropout_rate: Optional[float] = None
 
 
 @dataclass
-class OfflineEDACArgs:
+class OfflineEDACArgs(EDACParams):
     """EDAC hyperparameters. Defaults match CORL's ``edac.py::TrainConfig``.
     Field names follow ``OfflineSAC``'s own convention (``policy_lr``/
     ``q_lr``/``alpha_lr``, not TD3-BC-family's ``actor_lr``/``critic_lr``),
     since ``EDAC`` subclasses ``OfflineSAC`` directly."""
 
-    tau: float = 5e-3
-    eta: float = 1.0
-    policy_lr: float = 3e-4
-    q_lr: float = 3e-4
     alpha_lr: Optional[float] = 3e-4
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-    ent_coef: str = "auto"
-    target_entropy: str = "auto"
     # CORL's Actor/VectorizedCritic both use 3 hidden layers of width 256.
-    net_arch: tuple[int, ...] = (256, 256, 256)
-
-    n_critics: int = 10
-    critic_subsample_size: Optional[int] = None
+    net_arch: Optional[tuple[int, ...] | dict[str, tuple[int, ...]]] = (256, 256, 256)
 
 
 @dataclass
-class OfflineBCQArgs:
-    """BCQ hyperparameters. Defaults match ``sfujim/BCQ``'s official reference
-    (``continuous_BCQ/BCQ.py``/``main.py``). No ``n_critics`` field: BCQ's
-    soft double-Q target formula is defined for exactly 2 critics, hardcoded
-    in ``BCQPolicy`` rather than exposed as a config knob."""
-
-    actor_lr: float = 1e-3
-    critic_lr: float = 1e-3
-    vae_lr: float = 1e-3
-    net_arch: tuple[int, ...] = (400, 300)
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = False
-    actor_use_group_norm: bool = False
-    critic_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    phi: float = 0.05
-    vae_hidden_dim: int = 750
-    vae_latent_dim: Optional[int] = None
-    beta: float = 0.5
-    soft_q_lambda: float = 0.75
+class OfflineBCQArgs(BCQParams):
+    """BCQ parameters for offline training."""
 
 
 @dataclass
-class OfflinePLASArgs:
-    """PLAS hyperparameters. Defaults match ``Wenxuan-Zhou/PLAS``'s official
-    reference (``algos.py``/``main.py``). No ``n_critics`` field, same
-    reasoning as ``OfflineBCQArgs``."""
-
-    actor_lr: float = 1e-4
-    critic_lr: float = 1e-3
-    net_arch: tuple[int, ...] = (400, 300)
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = False
-    actor_use_group_norm: bool = False
-    critic_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    max_latent_action: float = 2.0
-    use_perturbation: bool = False
-    phi: float = 0.05
-    vae_lr: float = 1e-4
-    vae_hidden_dim: int = 750
-    vae_latent_dim: Optional[int] = None
-    vae_iterations: int = 500_000
-    beta: float = 0.5
-    soft_q_lambda: float = 0.75
+class OfflinePLASArgs(PLASParams):
+    """PLAS parameters for offline training."""
 
 
 @dataclass
-class OfflineSPOTArgs(OfflineDeterministicActorCriticArgs):
-    """SPOT hyperparameters. Defaults match CORL's ``spot.py::TrainConfig``."""
-
-    actor_lr: float = 1e-4
-    critic_lr: float = 3e-4
-    policy_noise: float = 0.2
-    noise_clip: float = 0.5
-    policy_freq: int = 2
-    vae_lr: float = 1e-3
-    vae_hidden_dim: int = 750
-    vae_latent_dim: Optional[int] = None
-    vae_iterations: int = 100_000
-    beta: float = 0.5
-    lambd: float = 1.0
-    num_samples: int = 1
-    iwae: bool = False
-    lambd_cool: bool = False
-    lambd_end: float = 0.2
+class OfflineSPOTArgs(SPOTParams):
+    """SPOT hyperparameters for offline training."""
 
 
 @dataclass
-class OfflineBPPOArgs:
+class OfflineBPPOArgs(BPPOParams):
     """BPPO hyperparameters. Defaults match ``3rd_party/BPPO/main.py``.
 
     ``critic_warmup_steps`` (Phase A, V/Q via MC-return/SARSA) and the actor
@@ -1006,23 +519,10 @@ class OfflineBPPOArgs:
     """
 
     bc_checkpoint: Optional[str] = None
-    critic_warmup_steps: int = 2_000_000
-    value_lr: float = 1e-4
-    q_lr: float = 1e-4
-    target_update_freq: int = 2
-    value_hidden_dims: tuple[int, ...] = (512, 512, 512)
-    q_hidden_dims: tuple[int, ...] = (1024, 1024)
-    actor_lr: float = 1e-4
-    actor_hidden_dims: tuple[int, ...] = (1024, 1024)
-    clip_ratio: float = 0.25
-    clip_decay: float = 0.96
-    clip_decay_steps: int = 200
-    entropy_weight: float = 0.0
-    omega: float = 0.9
 
 
 @dataclass
-class OfflineUniO4Args:
+class OfflineUniO4Args(UniO4Params):
     """Uni-O4 hyperparameters. Defaults match ``3rd_party/Uni-O4/main.py``
     (a separate default config from BPPO's own script -- note
     ``actor_hidden_dims``/``omega`` differ from ``OfflineBPPOArgs``'s
@@ -1034,42 +534,12 @@ class OfflineUniO4Args:
     that one shared critic, identical in shape to ``OfflineBPPOArgs``'s.
     """
 
-    critic_warmup_steps: int = 2_000_000
-    value_lr: float = 1e-4
-    q_lr: float = 1e-4
-    target_update_freq: int = 2
-    value_hidden_dims: tuple[int, ...] = (512, 512, 512)
-    q_hidden_dims: tuple[int, ...] = (1024, 1024)
-    num_policies: int = 4
-    bc_ensemble_steps: int = 400_000
-    alpha_bc: float = 0.1
-    actor_lr: float = 1e-4
-    actor_hidden_dims: tuple[int, ...] = (256, 256, 256)
-    clip_ratio: float = 0.25
-    clip_decay: float = 0.96
-    clip_decay_steps: int = 200
-    entropy_weight: float = 0.0
-    omega: float = 0.7
-
 
 @dataclass
-class OfflineUniO4OPEArgs(OfflineUniO4Args):
+class OfflineUniO4OPEArgs(UniO4OPEParams):
     """UniO4OPE: Uni-O4 with dynamics-model OPE gating (Milestone A, see
     ``rl_garden/algorithms/unio4_ope.py``). Dynamics hyperparameters default
     to ``3rd_party/Uni-O4/transition_model/configs/gym/default.py``'s values
     (shared across halfcheetah/hopper/walker2d -- task configs there only
     ever override ``rollout_length``/``penalty_coef``, both dead for this
     call path, see ``unio4_ope.py``'s module docstring)."""
-
-    dynamics_hidden_dims: tuple[int, ...] = (200, 200, 200, 200)
-    dynamics_n_ensemble: int = 7
-    dynamics_n_elites: int = 5
-    dynamics_lr: float = 1e-3
-    dynamics_weight_decay: tuple[float, ...] = (2.5e-5, 5e-5, 7.5e-5, 7.5e-5, 1e-4)
-    dynamics_max_epochs_since_update: int = 5
-    dynamics_max_epochs: Optional[int] = None
-    dynamics_batch_size: int = 256
-    dynamics_holdout_ratio: float = 0.2
-    ope_rollout_length: int = 1000
-    ope_rollout_batch_size: int = 512
-    ope_gating_freq: int = 100

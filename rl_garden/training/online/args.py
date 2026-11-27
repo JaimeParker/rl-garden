@@ -1,6 +1,17 @@
 """CLI argument dataclasses for online training algorithms."""
 from __future__ import annotations
 
+from rl_garden.hyperparameters.flash_sac import FlashSACParams
+
+from rl_garden.hyperparameters.dreamer import DreamerV3Params, NCRLParams
+from rl_garden.hyperparameters.sac import SACParams, RecurrentSACParams, TransformerSACParams, SACFlowParams
+
+from rl_garden.hyperparameters.tdmpc2 import TDMPC2Params
+from rl_garden.hyperparameters.supermimic import SuperMimicParams
+from rl_garden.hyperparameters.ppo import PPOParams, RecurrentPPOParams, TransformerPPOParams, GAILParams
+from rl_garden.hyperparameters.chain_ppo import DPPOParams, FlowPPOParams, DiffusionCMDistillOnlineParams
+from rl_garden.hyperparameters.policy_distillation import PolicyDistillationParams
+
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -12,11 +23,12 @@ from rl_garden.common.cli_args import (
 )
 from rl_garden.common.env_args import EnvRunArgs
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.hyperparameters.dagger import DAggerParams
 from rl_garden.observations.config import ObservationConfig
 
 
 @dataclass
-class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
+class SACTrainingArgs(SACParams, EnvRunArgs, CheckpointArgs):
     # Opt-in heterogeneous critic MLP backbone (asymmetric/privileged critic).
     # Only consulted by the SAC-family entrypoints that support a distinct
     # critic encoder (sac/rlpd/rlpd_hybrid); unset keeps today's exact
@@ -31,25 +43,10 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     training_freq: int = 64
     utd: float = 0.5
     gamma: float = 0.8
-    nstep: int = 1
-    tau: float = 0.01
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
-    policy_lr: float = 3e-4
-    q_lr: float = 3e-4
-    critic_impl: Literal["vmap", "legacy"] = "vmap"
-    n_critics: int = 2
-    critic_subsample_size: Optional[int] = None
-    actor_use_layer_norm: bool = False
-    critic_use_layer_norm: bool = False
     hidden_dim: int = 256
     actor_hidden_layers: int = 3
     critic_hidden_layers: int = 3
-    actor_log_std_min: float = -5.0
-    actor_log_std_mode: Literal["clamp", "tanh"] = "clamp"
-    alpha_tuning: Literal["legacy_exp", "log_alpha", "lagrange_softplus"] = "legacy_exp"
-    ent_coef: float | str = "auto"
-    target_entropy: float | str = "auto"
-    alpha_lr: Optional[float] = None
     q_landscape_diagnostics: bool = False
     q_landscape_num_actions: int = 8
     q_landscape_batch_size: int = 64
@@ -58,13 +55,6 @@ class SACTrainingArgs(EnvRunArgs, CheckpointArgs):
     critic_only_freeze_encoder: bool = True
     critic_only_random_action_prob: float = 0.0
     load_actor_checkpoint: Optional[str] = None
-    # Entropy-off (TD3-shaped) options of SAC's update: Gaussian noise of
-    # this std, clipped to +-target_noise_clip, on the critic target's next
-    # action (absolute action units; 0 draws nothing), and the critic
-    # ensemble reduction in the actor loss.
-    target_policy_noise: float = 0.0
-    target_noise_clip: float = 0.5
-    actor_q_agg: Literal["min", "mean", "first"] = "min"
 
 
 @dataclass
@@ -77,15 +67,8 @@ class VisionSACTrainingArgs(SACTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class RecurrentSACTrainingArgs(SACTrainingArgs):
-    rnn_type: Literal["lstm", "gru"] = "lstm"
-    rnn_hidden_size: int = 256
-    rnn_num_layers: int = 1
-    burn_in_len: int = 40
-    learning_len: int = 40
-    forward_len: int = 5
-    prio_exponent: float = 0.9
-    importance_sampling_exponent: float = 0.6
+class RecurrentSACTrainingArgs(RecurrentSACParams, SACTrainingArgs):
+    pass
 
 
 @dataclass
@@ -96,20 +79,8 @@ class VisionRecurrentSACTrainingArgs(RecurrentSACTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class TransformerSACTrainingArgs(SACTrainingArgs):
-    embed_dim: int = 256
-    head_dim: int = 64
-    num_heads: int = 4
-    num_transformer_layers: int = 3
-    mlp_num: int = 2
-    memory_len: int = 16
-    dropout_rate: float = 0.0
-    gru_bias: float = 2.0
-    burn_in_len: int = 40
-    learning_len: int = 40
-    forward_len: int = 5
-    prio_exponent: float = 0.9
-    importance_sampling_exponent: float = 0.6
+class TransformerSACTrainingArgs(TransformerSACParams, SACTrainingArgs):
+    pass
 
 
 @dataclass
@@ -120,15 +91,12 @@ class VisionTransformerSACTrainingArgs(TransformerSACTrainingArgs, ObservationAr
 
 
 @dataclass
-class SACFlowTrainingArgs(SACTrainingArgs):
+class SACFlowTrainingArgs(SACFlowParams, SACTrainingArgs):
     """SACFlow -- flow-matching actor. State observations (use
     ``VisionSACFlowTrainingArgs`` for Dict/RGBD)."""
 
-    denoising_steps: int = 4
-    noise_std: float = 0.3
     flow_hidden_dim: int = 256
     flow_hidden_layers: int = 3
-    flow_use_layer_norm: bool = False
 
 
 @dataclass
@@ -144,7 +112,7 @@ class VisionSACFlowTrainingArgs(SACFlowTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
+class TDMPC2TrainingArgs(TDMPC2Params, EnvRunArgs, CheckpointArgs):
     """State-obs defaults, values matching
     ``3rd_party/tdmpc2/tdmpc2/config.yaml`` where an upstream default exists.
 
@@ -164,39 +132,8 @@ class TDMPC2TrainingArgs(EnvRunArgs, CheckpointArgs):
     buffer_device: str = "cuda"
     batch_size: int = 256
     seed_steps: Optional[int] = None
-    use_planner: bool = True
-    horizon: int = 3
-    num_samples: int = 512
-    num_elites: int = 64
-    num_pi_trajs: int = 24
-    iterations: int = 6
-    min_std: float = 0.05
-    max_std: float = 2.0
-    temperature: float = 0.5
-    latent_dim: int = 512
-    mlp_dim: int = 512
-    simnorm_dim: int = 8
-    num_q: int = 5
-    num_bins: int = 101
-    vmin: float = -10.0
-    vmax: float = 10.0
-    dropout: float = 0.01
     episodic: bool = False
-    log_std_min: float = -10.0
-    log_std_max: float = 2.0
-    entropy_coef: float = 1e-4
-    lr: float = 3e-4
-    enc_lr_scale: float = 0.3
-    grad_clip_norm: float = 20.0
-    tau: float = 0.01
-    rho: float = 0.5
-    consistency_coef: float = 20.0
-    reward_coef: float = 0.1
-    value_coef: float = 0.1
     termination_coef: float = 1.0
-    discount_denom: float = 5.0
-    discount_min: float = 0.95
-    discount_max: float = 0.995
 
 
 @dataclass
@@ -205,46 +142,15 @@ class VisionTDMPC2TrainingArgs(TDMPC2TrainingArgs, ObservationArgs):
 
 
 @dataclass
-class DreamerV3TrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
+class DreamerV3TrainingArgs(DreamerV3Params, EnvRunArgs, CheckpointArgs, ObservationArgs):
     """DreamerV3 hyperparameters -- values match the r2dreamer/official-JAX defaults (see ``rl_garden.algorithms.dreamer_v3``
     module docstring); ``size12M`` preset default."""
 
     total_timesteps: int = 1_000_000
-    size: Literal["12M", "25M", "50M", "100M", "200M", "400M", "ncrl_m"] = "12M"
-    stoch: int = 32
-    unimix: float = 0.01
-    blocks: int = 8
-    obs_layers: int = 1
-    img_layers: int = 2
-    dyn_layers: int = 1
-    decoder_layers: int = 3
-    reward_bins: int = 255
-    kl_free: float = 1.0
-    # contdisc: official JAX default is True (continue-head target
-    # multiplied by 1 - 1/horizon, imagination disc=1); r2dreamer has no
-    # such switch (target 1 - is_terminal, disc=1-1/horizon applied
-    # outside). This port's default (False) matches r2dreamer -- see
-    # RSSM's own docstring.
-    contdisc: bool = False
-
     horizon: float = 333.0
+    # None means use --horizon.
+    discount_horizon: Optional[float] = None
     batch_size: int = 16
-    batch_length: int = 64
-    train_ratio: float = 512.0
-    imag_horizon: int = 15
-    lam: float = 0.95
-    act_entropy: float = 3e-4
-    dyn_scale: float = 1.0
-    rep_scale: float = 0.1
-    recon_scale: float = 1.0
-    rew_scale: float = 1.0
-    con_scale: float = 1.0
-    policy_scale: float = 1.0
-    value_scale: float = 1.0
-    repval_scale: float = 0.3
-    lr: float = 4e-5
-    warmup: int = 1_000
-    slow_target_fraction: float = 0.02
     buffer_size: int = 1_000_000
     buffer_device: str = "cuda"
     learning_starts: int = 1_024
@@ -259,7 +165,7 @@ def _ncrl_default_observation() -> ObservationConfig:
 
 
 @dataclass
-class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
+class NCRLTrainingArgs(NCRLParams, EnvRunArgs, CheckpointArgs, ObservationArgs):
     """NCRL stage-2 online fine-tuning (``rl_garden.algorithms.ncrl``).
     Defaults follow the official ``finetune.yaml`` + ``scripts/finetune.sh``
     (survey section 8). The RSSM architecture comes from
@@ -279,43 +185,11 @@ class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     backbone: Literal["dreamer_v3", "ncrl"] = "ncrl"
     retrieval_db: Optional[str] = None
     prior_dataset_dir: Optional[str] = None
-    online_ratio: float = 0.75
-    num_retrieve_episodes: int = 500
-    max_retrieve_iterations: int = 10
-    use_guidance: bool = True
-    bc_train_steps: int = 150_000
-    bc_batch_size: int = 256
-    bc_lr: float = 1e-4
-    guidance_schedule: tuple[str, float, float, int] = ("linear", 1.0, 0.1, 100_000)
     episode_frames: Optional[int] = None
     action_repeat: Optional[int] = None
-    warmup_frames: int = 15_000
     learning_starts: Optional[int] = None
     batch_size: int = 16
-    batch_length: int = 64
-    train_ratio: float = 256.0
-    imag_horizon: int = 16
-    discount: float = 0.99
-    lam: float = 0.95
-    actor_ent: float = 1e-4
-    model_lr: float = 1e-4
-    reward_lr: float = 1e-4
-    actor_lr: float = 8e-5
-    critic_lr: float = 8e-5
-    adam_eps: float = 1e-5
-    weight_decay: float = 1e-6
-    grad_clip: float = 100.0
-    slow_target_fraction: float = 0.02
-    ac_units: int = 512
-    actor_layers: int = 3
-    critic_layers: int = 3
     padded_action_dim: Optional[int] = None
-    reward_bins: int = 255
-    kl_free: float = 1.0
-    kl_free_mode: Literal["per_element", "mean"] = "mean"
-    dyn_scale: float = 1.0
-    rep_scale: float = 0.1
-    recon_scale: float = 1.0
     # 250k policy steps = the official 500k-frame run. Each step stores a
     # uint8 64x64x3 frame (12 KiB) plus the float32 RSSM carry (ncrl_m:
     # (4096 + 32*48) * 4 B = 22 KiB), ~34 KiB/step -> ~8 GiB on buffer_device;
@@ -327,7 +201,7 @@ class NCRLTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
 
 
 @dataclass
-class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
+class SuperMimicTrainingArgs(SuperMimicParams, EnvRunArgs, CheckpointArgs, ObservationArgs):
     """Defaults follow the official implementation (github.com/HybridRobotics/supermimic);
     the paper's Table A.5 lists a cosine schedule the official code does not use,
     so the schedule is off by default. SuperMimic backpropagates through imagined
@@ -361,112 +235,31 @@ class SuperMimicTrainingArgs(EnvRunArgs, CheckpointArgs, ObservationArgs):
     """
 
     total_timesteps: int = 1_000_000
-    heads: Literal["learned", "analytic"] = "learned"
-    replay_ratio: Optional[float] = 16.0
     sim_steps_per_iteration: Optional[int] = None
     updates_per_iteration: Optional[int] = None
     buffer_size: Optional[int] = None
     buffer_device: str = "cuda"
     learning_starts: Optional[int] = None
-    wm_hidden_dims: tuple[int, ...] = (2048, 2048, 2048)
-    head_hidden_dims: tuple[int, ...] = (256, 256)
-    latent_dim: int = 32
-    goal_encoder_dims: tuple[int, ...] = (2048, 1024, 512, 256)
-    decoder_dims: tuple[int, ...] = (2048, 1024, 512, 256)
-    critic_dims: tuple[int, ...] = (256, 128)
-    horizon: int = 32
-    wm_window: int = 7
-    wm_batches: int = 10
-    wm_batch_size: int = 2048
-    imagination_batch: int = 4096
     gamma: float = 0.99
-    lam: float = 0.95
-    max_step_reward: Optional[float] = None
-    lr: float = 2e-4
-    lr_final_ratio: float = 1.0
-    lr_decay_updates: int = 250_000
-    actor_betas: tuple[float, float] = (0.9, 0.95)
-    wm_grad_norm: float = 1.0
-    actor_grad_norm: float = 1.0
-    actor_grad_value: float = 0.1
-    critic_grad_norm: float = 1.0
-    critic_epochs: int = 5
-    critic_minibatches: int = 4
-    action_noise_std: float = 0.1
-    obs_history_len: int = 1
-    warmup_updates: int = 0
     amp_dtype: Optional[Literal["bf16"]] = None
 
 
 @dataclass
-class PPOTrainingArgs(EnvRunArgs, CheckpointArgs, PolicyModuleArgs):
+class PPOTrainingArgs(PPOParams, EnvRunArgs, CheckpointArgs, PolicyModuleArgs):
     total_timesteps: int = 10_000_000
     num_steps: int = 50
     gamma: float = 0.8
     gae_lambda: float = 0.9
-    learning_rate: float = 3e-4
-    num_minibatches: int = 32
-    update_epochs: int = 4
-    norm_adv: bool = True
-    clip_coef: float = 0.2
-    clip_vloss: bool = False
-    ent_coef: float = 0.0
-    vf_coef: float = 0.5
-    max_grad_norm: float = 0.5
-    target_kl: Optional[float] = 0.1
-    anneal_lr: bool = False
     finite_horizon_gae: bool = False
     # Episode ends whose GAE target bootstraps from final_observation:
     # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
 
     detach_encoder_on_actor: Optional[bool] = None
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal[
-        "constant", "linear_warmup", "warmup_cosine", "adaptive_kl"
-    ] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    desired_kl: float = 0.01
-    adaptive_lr_min: float = 1e-5
-    adaptive_lr_max: float = 1e-2
-    actor_use_layer_norm: bool = False
-    value_use_layer_norm: bool = False
-    actor_use_group_norm: bool = False
-    value_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    value_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    # Opt-in heterogeneous critic MLP backbone (asymmetric/privileged
-    # critic); every PPO-family entrypoint reads this unconditionally
-    # (state or visual), unlike SAC-family's vision-gated equivalent.
-    critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None
-
-    log_std_init: float = -0.5
-    # Per-action-dimension initial log-std; overrides ``log_std_init`` and
-    # must have one entry per action dimension.
-    log_std_init_per_dim: Optional[tuple[float, ...]] = None
-    # Per-action-dimension initial bias of the actor's mean head.
-    action_mean_bias_init: Optional[tuple[float, ...]] = None
-    # Orthogonal init gain (zero bias) for the actor's mean head.
-    action_mean_head_gain: Optional[float] = None
-    # The env reports infos["decision"] on every step; returns, advantages
-    # and the policy loss are computed over decision steps.
+    # Decision-mask rollout mode and critic step selection.
     decision_level: bool = False
-    # Decision-level windows only: train the critic on every step (False:
-    # on decision steps only).
     per_step_critic: bool = True
-    # Policy trunk as a graph: a path to a YAML file, inline YAML text, or
-    # builtin:<mlp|recurrent|gru|lstm|gtrxl> (see rl_garden/networks/graph/spec.py;
-    # recurrent = the algorithm's own stage, gru/lstm/gtrxl must match it).
-    # Replaces --encoder-sharing/--obs-groups/--critic-encoder; --encoder.*
-    # is read only by a built-in graph.
+    # Policy graph source is observation/policy wiring.
     policy_graph: Optional[str] = None
 
 
@@ -476,7 +269,7 @@ class VisionPPOTrainingArgs(PPOTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class GAILTrainingArgs(PPOTrainingArgs):
+class GAILTrainingArgs(GAILParams, PPOTrainingArgs):
     """GAIL adds an adversarial discriminator + expert demonstrations on top
     of PPOTrainingArgs's own fields (including ``critic_backbone_type``)."""
 
@@ -484,16 +277,11 @@ class GAILTrainingArgs(PPOTrainingArgs):
     demo_dataset_backend: str = "d4rl_legacy"
     demo_buffer_size: int = 1_000_000
     demo_batch_size: int = 1024
-    n_disc_updates_per_round: int = 4
-    disc_net_arch: tuple[int, ...] = (32, 32)
-    disc_lr: float = 3e-4
 
 
 @dataclass
-class RecurrentPPOTrainingArgs(PPOTrainingArgs):
-    rnn_type: Literal["lstm", "gru"] = "lstm"
-    rnn_hidden_size: int = 256
-    rnn_num_layers: int = 1
+class RecurrentPPOTrainingArgs(RecurrentPPOParams, PPOTrainingArgs):
+    pass
 
 
 @dataclass
@@ -502,19 +290,12 @@ class VisionRecurrentPPOTrainingArgs(RecurrentPPOTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class TransformerPPOTrainingArgs(PPOTrainingArgs):
-    embed_dim: int = 256
-    head_dim: int = 64
-    num_heads: int = 4
-    num_transformer_layers: int = 3
-    mlp_num: int = 2
-    memory_len: int = 64
-    dropout_rate: float = 0.0
-    gru_bias: float = 2.0
+class TransformerPPOTrainingArgs(TransformerPPOParams, PPOTrainingArgs):
+    pass
 
 
 @dataclass
-class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
+class DPPOTrainingArgs(DPPOParams, EnvRunArgs, CheckpointArgs):
     """DPPO (Diffusion PPO) fine-tuning. Deliberately does NOT inherit
     ``PPOTrainingArgs``: DPPO's hyperparameters (denoising-chain schedule,
     dual actor/actor_ft learning rates, DPPO's own clip/discount schedule)
@@ -530,45 +311,6 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     num_steps: int = 50
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    horizon_steps: int = 4
-    act_steps: int = 4
-    denoising_steps: int = 20
-    ft_denoising_steps: int = 10
-    actor_activation_fn: Literal["relu", "gelu", "mish"] = "relu"
-    actor_residual_style: bool = True
-    critic_activation_fn: Literal["relu", "gelu", "mish"] = "mish"
-    critic_residual_style: bool = True
-    time_dim: int = 16
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    denoised_clip_value: Optional[float] = 1.0
-    randn_clip_value: float = 3.0
-    final_action_clip_value: Optional[float] = None
-    min_sampling_denoising_std: float = 0.1
-    min_logprob_denoising_std: float = 0.1
-    actor_lr: float = 1e-4
-    critic_lr: float = 1e-3
-    weight_decay: float = 0.0
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-    critic_warmup_updates: int = 0
-    update_epochs: int = 5
-    update_batch_size: int = 50_000
-    norm_adv: bool = True
-    gamma_denoising: float = 0.99
-    clip_ploss_coef: float = 0.01
-    clip_ploss_coef_base: float = 0.01
-    clip_ploss_coef_rate: float = 3.0
-    clip_vloss_coef: Optional[float] = None
-    clip_advantage_lower_quantile: float = 0.0
-    clip_advantage_upper_quantile: float = 1.0
-    vf_coef: float = 0.5
-    target_kl: Optional[float] = 1.0
-    reward_horizon: Optional[int] = None
     finite_horizon_gae: bool = False
     # Episode ends whose GAE target bootstraps from final_observation:
     # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
@@ -581,7 +323,7 @@ class DPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
-class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
+class FlowPPOTrainingArgs(FlowPPOParams, EnvRunArgs, CheckpointArgs):
     """FlowPPO: online PPO fine-tuning for flow-matching policies. Its own
     sibling dataclass, not a ``DPPOTrainingArgs``/``PPOTrainingArgs``
     subclass -- FlowPPO's hyperparameters (SDE schedule, flow-step count,
@@ -595,36 +337,6 @@ class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
     num_steps: int = 50
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    horizon_length: int = 1
-    flow_steps: int = 10
-    actor_activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
-    critic_activation_fn: Optional[Literal["relu", "gelu", "mish"]] = None
-    kernel_init: Optional[
-        Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-    ] = None
-    sde_type: Literal["sde", "cps"] = "cps"
-    noise_level: float = 0.7
-    clip_std_min: float = 0.0067
-    sigma_safe_max: float = 0.9
-    logprob_mode: Literal["gaussian", "pseudo"] = "gaussian"
-    actor_lr: float = 3e-4
-    critic_lr: float = 1e-3
-    weight_decay: float = 0.0
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-    critic_warmup_updates: int = 0
-    update_epochs: int = 5
-    update_batch_size: int = 50_000
-    norm_adv: bool = True
-    clip_coef: float = 0.2
-    clip_vloss_coef: Optional[float] = None
-    clip_advantage_lower_quantile: float = 0.0
-    clip_advantage_upper_quantile: float = 1.0
-    vf_coef: float = 0.5
-    target_kl: Optional[float] = 1.0
     finite_horizon_gae: bool = False
     # Episode ends whose GAE target bootstraps from final_observation:
     # "truncated" (truncations only; terminations bootstrap 0), "always", "never".
@@ -637,7 +349,7 @@ class FlowPPOTrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
-class DiffusionCMDistillOnlineTrainingArgs(DPPOTrainingArgs):
+class DiffusionCMDistillOnlineTrainingArgs(DiffusionCMDistillOnlineParams, DPPOTrainingArgs):
     """DiffusionCMDistillOnline: DPPO's online PPO fine-tuning fused with a
     per-iteration LCM one-step distillation step
     (``rl_garden/algorithms/diffusion_cm_distill.py``). A genuine superset of
@@ -645,12 +357,6 @@ class DiffusionCMDistillOnlineTrainingArgs(DPPOTrainingArgs):
     optimizer's own), unlike ``DPPOTrainingArgs``'s own deliberate
     non-inheritance from ``PPOTrainingArgs``."""
 
-    cm_mlp_dims: Optional[tuple[int, ...]] = None
-    cm_lr: float = 1e-4
-    cm_ema_decay: float = 0.95
-    cm_grad_clip_norm: Optional[float] = 1.0
-    cm_sigma_data: float = 0.5
-    cm_timestep_scaling: float = 0.1
 
 
 @dataclass
@@ -660,7 +366,7 @@ class VisionTransformerPPOTrainingArgs(TransformerPPOTrainingArgs, ObservationAr
 
 
 @dataclass
-class FlashSACTrainingArgs(EnvRunArgs, CheckpointArgs):
+class FlashSACTrainingArgs(FlashSACParams, EnvRunArgs, CheckpointArgs):
     env_id: str = "PickCube-v1"
     num_envs: int = 512
     num_eval_envs: int = 8
@@ -671,31 +377,10 @@ class FlashSACTrainingArgs(EnvRunArgs, CheckpointArgs):
     learning_starts: int = 4_000
     batch_size: int = 2048
     gamma: float = 0.99
-    tau: float = 0.005
     training_freq: int = 512
     utd: float = 1.0
-    n_step: int = 3
     total_timesteps: int = 10_000_000
-    actor_hidden_dim: int = 128
-    actor_num_blocks: int = 2
-    critic_hidden_dim: int = 256
-    critic_num_blocks: int = 2
-    num_bins: int = 101
-    min_v: float = -5.0
-    max_v: float = 5.0
     asymmetric_obs_dim: int = 0
-    actor_lr: float = 1e-4
-    critic_lr: float = 1e-4
-    alpha_lr: float = 1e-4
-    actor_update_period: int = 1
-    grad_clip_norm: Optional[float] = None
-    temp_initial_value: float = 0.01
-    target_entropy: str = "auto"
-    actor_noise_zeta_mu: float = 2.0
-    actor_noise_zeta_max: int = 16
-    normalize_reward: bool = False
-    normalized_g_max: float = 10.0
-    bc_alpha: float = 0.0
     use_compile: bool = False
     compile_mode: str = "default"
     use_amp: bool = False
@@ -704,7 +389,7 @@ class FlashSACTrainingArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
-class DAggerTrainingArgs(EnvRunArgs, CheckpointArgs):
+class DAggerTrainingArgs(DAggerParams, EnvRunArgs, CheckpointArgs):
     """DAgger (Ross et al. 2011). A live scripted expert is task-specific (see
     ``expert`` below), so a minimal CLI-selectable set of mock experts is
     what's wired here; a real expert is expected to be supplied by
@@ -719,14 +404,10 @@ class DAggerTrainingArgs(EnvRunArgs, CheckpointArgs):
     rollout_steps_per_round: int = 1_000
     gradient_steps_per_round: int = 100
     batch_size: int = 256
-    actor_lr: float = 3e-4
-    weight_decay: float = 0.0
-    tanh_squash: bool = True
-    net_arch: tuple[int, ...] = (256, 256)
 
 
 @dataclass
-class PolicyDistillationTrainingArgs(EnvRunArgs, CheckpointArgs):
+class PolicyDistillationTrainingArgs(PolicyDistillationParams, EnvRunArgs, CheckpointArgs):
     """Teacher-student on-policy distillation
     (``rl_garden/algorithms/policy_distillation.py``). Dict observations
     only -- the env must expose both a privileged obs group (for the
@@ -745,14 +426,6 @@ class PolicyDistillationTrainingArgs(EnvRunArgs, CheckpointArgs):
     student_obs_keys: list[str] = field(default_factory=list)
     teacher_net_arch: tuple[int, ...] = (256, 256, 256)
     num_steps: int = 50
-    num_learning_epochs: int = 5
-    num_minibatches: int = 4
-    loss_type: Literal["mse", "huber"] = "mse"
-    actor_lr: float = 3e-4
-    weight_decay: float = 0.0
-    max_grad_norm: Optional[float] = None
-    net_arch: tuple[int, ...] = (256, 256)
-    tanh_squash: bool = True
 
 
 def sac_initial_training_phase_from_args(

@@ -52,6 +52,8 @@ def build_rssm_pretrain(
     ``env_spec`` from ``args``. ``extra_kwargs`` replace or extend its
     constructor kwargs (the run passes its ``checkpoint_dir``). ``eval_env``
     is unused: the agent trains on its dataset alone."""
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.dreamer import RSSMPretrainParams
     from rl_garden.training.inspection import construct_agent
 
     del eval_env
@@ -60,28 +62,11 @@ def build_rssm_pretrain(
 
         algorithm_cls = RSSMPretrain
     kwargs = {
+        **params_kwargs(args, RSSMPretrainParams),
         "env": env_spec,
         "dataset_dir": args.dataset_dir,
         "dataset_backend": args.dataset_backend,
-        "backbone": args.backbone,
-        "size": args.size,
-        "deter": args.deter,
-        "hidden": args.hidden,
-        "classes": args.classes,
-        "cnn_depth": args.cnn_depth,
-        "stoch": args.stoch,
-        "blocks": args.blocks,
-        "kl_free": args.kl_free,
-        "kl_free_mode": args.kl_free_mode,
-        "dyn_scale": args.dyn_scale,
-        "rep_scale": args.rep_scale,
-        "recon_scale": args.recon_scale,
         "batch_size": args.batch_size,
-        "batch_length": args.batch_length,
-        "lr": args.lr,
-        "adam_eps": args.adam_eps,
-        "weight_decay": args.weight_decay,
-        "grad_clip": args.grad_clip,
         "compute_dtype": args.compute_dtype,
         "buffer_device": args.buffer_device,
         "seed": args.seed,

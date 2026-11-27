@@ -9,6 +9,8 @@ docstring.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+
 
 def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
@@ -30,40 +32,13 @@ def build_flow_ppo(args, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         FlowPPO,
+        **params_kwargs(args, FlowPPO.params_class),
         env=env,
         eval_env=eval_env,
         **image_kwargs,
         num_steps=args.num_steps,
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,
-        horizon_length=args.horizon_length,
-        flow_steps=args.flow_steps,
-        actor_activation_fn=args.actor_activation_fn,
-        critic_activation_fn=args.critic_activation_fn,
-        kernel_init=args.kernel_init,
-        sde_type=args.sde_type,
-        noise_level=args.noise_level,
-        clip_std_min=args.clip_std_min,
-        sigma_safe_max=args.sigma_safe_max,
-        logprob_mode=args.logprob_mode,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        critic_warmup_updates=args.critic_warmup_updates,
-        update_epochs=args.update_epochs,
-        update_batch_size=args.update_batch_size,
-        norm_adv=args.norm_adv,
-        clip_coef=args.clip_coef,
-        clip_vloss_coef=args.clip_vloss_coef,
-        clip_advantage_lower_quantile=args.clip_advantage_lower_quantile,
-        clip_advantage_upper_quantile=args.clip_advantage_upper_quantile,
-        vf_coef=args.vf_coef,
-        target_kl=args.target_kl,
         finite_horizon_gae=args.finite_horizon_gae,
         bootstrap_at_done=args.bootstrap_at_done,
         seed=args.seed,

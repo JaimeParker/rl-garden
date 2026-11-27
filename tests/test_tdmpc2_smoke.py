@@ -131,7 +131,7 @@ def test_tdmpc2_asymmetric_obs_groups_rejected_at_preflight():
         obs=ObservationConfig(rgb=("base_camera",)),
         obs_groups=ObsGroups(actor=("state",), critic=("state", "rgb_base_camera")),
     )
-    command = ParsedCommand(args, "tdmpc2", "print_config", None, {}, (), {})
+    command = ParsedCommand(args, "tdmpc2", "print_config", {}, (), {})
 
     with pytest.raises(ConfigError, match="only supports"):
         registry._validate_config(command)

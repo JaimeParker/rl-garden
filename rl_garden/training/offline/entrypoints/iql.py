@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.training.offline.args import (
-    OfflineActorArgs,
+    OfflineIQLArgs,
     OfflineCommonArgs,
-    OfflineCriticArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineIQLArgs,
-    OfflineValueArgs,
 )
 from rl_garden.training.offline.registry import registry
 
@@ -21,62 +19,34 @@ if TYPE_CHECKING:
 
 @dataclass
 class IQLArgs(
+    OfflineIQLArgs,
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineActorArgs,
-    OfflineCriticArgs,
-    OfflineValueArgs,
-    OfflineIQLArgs,
 ):
     """Implicit Q-learning offline pretraining."""
+
+    n_critics: int = 10
+    critic_subsample_size: Optional[int] = 2
+    actor_use_layer_norm: bool = True
+    critic_use_layer_norm: bool = True
 
 
 def _iql_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.algorithms import IQL
+
     kwargs = {
+        **params_kwargs(args, IQL.params_class),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
-        "tau": args.tau,
         "offline_sampling": args.offline_sampling,
         "utd": args.utd,
-        "actor_lr": args.actor_lr,
-        "critic_value_lr": args.critic_value_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "actor_lr_schedule": args.actor_lr_schedule,
-        "actor_lr_warmup_steps": args.actor_lr_warmup_steps,
-        "actor_lr_decay_steps": args.actor_lr_decay_steps,
-        "actor_lr_min_ratio": args.actor_lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
-        "expectile": args.expectile,
-        "temperature": args.temperature,
-        "adv_clip_max": args.adv_clip_max,
-        "actor_distribution": args.actor_distribution,
-        "n_critics": args.n_critics,
-        "critic_subsample_size": args.critic_subsample_size,
-        "actor_use_layer_norm": args.actor_use_layer_norm,
-        "critic_use_layer_norm": args.critic_use_layer_norm,
-        "value_use_layer_norm": args.value_use_layer_norm,
-        "actor_use_group_norm": args.actor_use_group_norm,
-        "critic_use_group_norm": args.critic_use_group_norm,
-        "value_use_group_norm": args.value_use_group_norm,
-        "num_groups": args.num_groups,
-        "actor_dropout_rate": args.actor_dropout_rate,
-        "critic_dropout_rate": args.critic_dropout_rate,
-        "value_dropout_rate": args.value_dropout_rate,
-        "kernel_init": args.kernel_init,
-        "backbone_type": args.backbone_type,
-        "std_parameterization": args.std_parameterization,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

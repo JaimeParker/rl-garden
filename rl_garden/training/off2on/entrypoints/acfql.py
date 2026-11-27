@@ -12,7 +12,8 @@ CNN-based Dict/RGBD observations (``ChunkedReplayBuffer``, via
 ``args.obs`` unconditionally to build the ``EnvRequest`` (unlike
 ``run_online``, it has no per-algorithm ``make_env_request`` callback).
 
-``ACFQLArgs`` extends ``Off2OnCommonArgs`` for the orchestration fields
+``ACFQLArgs`` composes ``ACFQLParams`` with ``FQLTrainingArgs`` for the learning
+and orchestration fields
 ``run_off2on`` reads directly (``num_offline_steps``, ``online_replay_mode``,
 ``offline_data_ratio``, ``dataset_backend``, etc.) and the FQL-recipe
 defaults it overrides (``n_critics=2``, ``actor_use_layer_norm=False``,
@@ -26,6 +27,9 @@ FQL constructor options and remain unused.
 """
 
 from __future__ import annotations
+
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.fql import ACFQLParams
 
 
 def build_acfql(args, env, eval_env, logger, checkpoint_dir):
@@ -42,14 +46,16 @@ def build_acfql(args, env, eval_env, logger, checkpoint_dir):
     if args.encoder_sharing is not None:
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
+    learning_kwargs = params_kwargs(args, ACFQL.params_class)
+    learning_kwargs["net_arch"] = list(args.net_arch) if args.net_arch is not None else [args.hidden_dim] * args.hidden_layers
+
     agent = construct_agent(
         ACFQL,
+        **learning_kwargs,
         env=env,
         eval_env=eval_env,
         **image_kwargs,
         horizon_length=args.horizon_length,
-        actor_type=args.actor_type,
-        actor_num_samples=args.actor_num_samples,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
@@ -57,32 +63,8 @@ def build_acfql(args, env, eval_env, logger, checkpoint_dir):
         gamma=args.gamma,
         training_freq=args.training_freq,
         utd=args.utd,
-        tau=args.tau,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        alpha=args.alpha,
-        flow_steps=args.flow_steps,
-        q_agg=args.q_agg,
-        normalize_q_loss=args.normalize_q_loss,
-        net_arch=[args.hidden_dim] * args.hidden_layers,
-        n_critics=args.n_critics,
-        actor_use_layer_norm=args.actor_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,
-        critic_use_group_norm=args.critic_use_group_norm,
-        num_groups=args.num_groups,
         initial_training_phase=initial_training_phase_from_args(args),
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        activation_fn=args.activation_fn,
         offline_sampling=args.offline_sampling,
         seed=args.seed,
         logger=logger,
@@ -111,48 +93,27 @@ def run_acfql(args: "ACFQLArgs") -> None:
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass  # noqa: E402
-from typing import Literal, Optional  # noqa: E402
+from typing import Literal
 
 from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.policies.acfql_policy import ActorType  # noqa: E402
-from rl_garden.training.off2on.args import Off2OnCommonArgs  # noqa: E402
+from rl_garden.training.off2on.args import FQLTrainingArgs  # noqa: E402
 from rl_garden.training.off2on.registry import registry  # noqa: E402
 
 
 @dataclass
-class ACFQLArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
+class ACFQLArgs(ACFQLParams, FQLTrainingArgs, ObservationArgs, EnvBackendArgs):
     """ACFQL -- Q-chunking's action-chunked, offline-to-online FQL (Li, Zhou,
     Levine 2025, ``3rd_party/qc/agents/acfql.py``). State-only observations
     by default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD
     observations.
     """
 
-    # One buffer holds the dataset and the online transitions (main.py:205,284).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
-
-    # Pause updates while the loaded policy collects online steps; 0 means no pause.
     warmup_steps: int = 0
-
     horizon_length: int = 5
-    actor_type: ActorType = "distill-ddpg"
-    actor_num_samples: int = 32
-    alpha: float = 100.0
-    flow_steps: int = 10
-    q_agg: Literal["mean", "min"] = "mean"
-    normalize_q_loss: bool = False
     hidden_dim: int = 512
     hidden_layers: int = 4
-    activation_fn: Optional[Activation] = "gelu"
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-
-    n_critics: int = 2
-    actor_use_layer_norm: bool = False
-    kernel_init: Optional[KernelInit] = "xavier_uniform"
-
-
 
 
 def _acfql_algorithm_cls() -> type:

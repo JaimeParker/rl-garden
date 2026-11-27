@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.td3 import TD3Params
+
 import warnings
 from typing import Literal
 
@@ -33,6 +36,7 @@ def build_td3(args, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         TD3,
+        **params_kwargs(args, TD3.params_class),
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -44,24 +48,9 @@ def build_td3(args, env, eval_env, logger, checkpoint_dir):
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        tau=args.tau,
         bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        feature_dim=args.feature_dim,
-        hidden_dim=args.hidden_dim,
-        nstep=args.nstep,
-        stddev_schedule=args.stddev_schedule,
-        stddev_clip=args.stddev_clip,
-        num_expl_steps=args.num_expl_steps,
-        policy_freq=args.policy_freq,
-        target_noise_std=args.target_noise_std,
-        target_noise_clip=args.target_noise_clip,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        grad_clip_norm=args.grad_clip_norm,
         image_augmentation_seed=args.seed + 1_000_003,
         seed=args.seed,
         logger=logger,
@@ -110,7 +99,7 @@ from rl_garden.training.online.registry import registry
 
 
 @dataclass
-class TD3Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
+class TD3Args(TD3Params, EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     """TD3 with multi-env backend support. Requires image observations
     (``DDPG``'s "at least one image observation key" check) -- pass
     ``--obs.rgb <camera>`` (optionally ``--obs.depth <camera>``).
@@ -136,27 +125,12 @@ class TD3Args(EnvRunArgs, CheckpointArgs, ObservationArgs, EnvBackendArgs):
     # --- DDPG ---
 
     gamma: float = 0.99
-    tau: float = 0.01
     bootstrap_at_done: Literal["always", "never", "truncated"] = "truncated"
     training_freq: int = 32
     utd: float = 0.5
-    policy_lr: float = 1e-4
-    q_lr: float = 1e-4
-    feature_dim: int = 50
-    hidden_dim: int = 1024
-    nstep: int = 3
-    stddev_schedule: str = "linear(1.0,0.1,500000)"
-    stddev_clip: float = 0.3
-    num_expl_steps: int = 2000
-    grad_clip_norm: float | None = None
-    weight_decay: float = 0.0
-    use_adamw: bool = False
 
     # --- TD3 ---
 
-    policy_freq: int = 2
-    target_noise_std: float = 0.2
-    target_noise_clip: float = 0.5
 
     # --- Checkpoint (overrides CheckpointArgs' default) ---
 

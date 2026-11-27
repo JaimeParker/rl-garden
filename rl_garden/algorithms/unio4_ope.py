@@ -31,12 +31,14 @@ present. This needed no changes to the shared offline runner.
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import numpy as np
 import torch
 
 from rl_garden.algorithms.unio4 import UniO4
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.unio4_ope import UniO4OPEParams
 from rl_garden.common.optim import make_optimizer
 from rl_garden.models.dynamics import EnsembleDynamicsModel, get_termination_fn, rollout_q_mean, train_ensemble
 
@@ -58,6 +60,8 @@ class _RawStatePolicyAdapter:
 
 
 class UniO4OPE(UniO4):
+    params_class = UniO4OPEParams
+
     _compatible_checkpoint_algorithms = ("UniO4OPE",)
 
     def __init__(
@@ -65,45 +69,30 @@ class UniO4OPE(UniO4):
         env: Any,
         *,
         task: str,
-        dynamics_hidden_dims: Sequence[int] = (200, 200, 200, 200),
-        dynamics_n_ensemble: int = 7,
-        dynamics_n_elites: int = 5,
-        dynamics_lr: float = 1e-3,
-        dynamics_weight_decay: Sequence[float] = (2.5e-5, 5e-5, 7.5e-5, 7.5e-5, 1e-4),
-        dynamics_max_epochs_since_update: int = 5,
-        dynamics_max_epochs: Optional[int] = None,
-        dynamics_batch_size: int = 256,
-        dynamics_holdout_ratio: float = 0.2,
-        ope_rollout_length: int = 1000,
-        ope_rollout_batch_size: int = 512,
-        ope_gating_freq: int = 100,
+        params: Optional[UniO4OPEParams] = None,
         **unio4_kwargs: Any,
     ) -> None:
         """``task``: env-family string (e.g. ``"halfcheetah-medium-v2"``)
         used only to pick a ``termination_fn`` -- ``OfflineEnvSpec`` carries
         no env id, so this can't be inferred from ``env``."""
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: unio4_kwargs.pop(name) for name in tuple(unio4_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
         self._termination_fn = get_termination_fn(task)
 
-        self.dynamics_hidden_dims = list(dynamics_hidden_dims)
-        self.dynamics_n_ensemble = dynamics_n_ensemble
-        self.dynamics_n_elites = dynamics_n_elites
-        self.dynamics_lr = dynamics_lr
-        self.dynamics_weight_decay = list(dynamics_weight_decay)
-        self.dynamics_max_epochs_since_update = dynamics_max_epochs_since_update
-        self.dynamics_max_epochs = dynamics_max_epochs
-        self.dynamics_batch_size = dynamics_batch_size
-        self.dynamics_holdout_ratio = dynamics_holdout_ratio
-        self.ope_rollout_length = ope_rollout_length
-        self.ope_rollout_batch_size = ope_rollout_batch_size
-        self.ope_gating_freq = ope_gating_freq
-
-        super().__init__(env, **unio4_kwargs)
+        super().__init__(env, params=params, **unio4_kwargs)
 
         self._dynamics_trained = False
         self._last_ope_check = 0
         self._best_ope_score = [float("-inf")] * self.num_policies
         self.dynamics_input_mean: Optional[torch.Tensor] = None
         self.dynamics_input_std: Optional[torch.Tensor] = None
+
+    def _bind_params(self, params: UniO4OPEParams) -> None:
+        super()._bind_params(params)
+        self.dynamics_hidden_dims = list(params.dynamics_hidden_dims)
+        self.dynamics_weight_decay = list(params.dynamics_weight_decay)
 
     def _setup_model(self) -> None:
         super()._setup_model()
@@ -218,12 +207,7 @@ class UniO4OPE(UniO4):
         return {
             **super()._checkpoint_metadata(),
             "dynamics_hidden_dims": self.dynamics_hidden_dims,
-            "dynamics_n_ensemble": self.dynamics_n_ensemble,
-            "dynamics_n_elites": self.dynamics_n_elites,
             "dynamics_weight_decay": self.dynamics_weight_decay,
-            "ope_rollout_length": self.ope_rollout_length,
-            "ope_rollout_batch_size": self.ope_rollout_batch_size,
-            "ope_gating_freq": self.ope_gating_freq,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

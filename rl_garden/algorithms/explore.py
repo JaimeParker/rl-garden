@@ -19,14 +19,16 @@ of scope here).
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import ExPLOReParams
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.common.optim import make_optimizer
-from rl_garden.networks import Activation, KernelInit, RewardMaskRelabeler, RNDBonus
+from rl_garden.networks import RewardMaskRelabeler, RNDBonus
 from rl_garden.observations import ObservationSchema, normalize_observation_space
 
 OfflineRelabelType = Literal["gt", "pred", "min"]
@@ -37,26 +39,33 @@ class ExPLORe(RLPD):
 
     _compatible_checkpoint_algorithms = ("ExPLORe",)
 
+    params_class = ExPLOReParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        offline_relabel_type: OfflineRelabelType = "pred",
-        use_rnd_offline: bool = False,
-        use_rnd_online: bool = False,
-        rnd_coeff: float = 1.0,
-        relabeler_hidden_dims: Sequence[int] = (256, 256),
-        relabeler_lr: float = 3e-4,
-        relabeler_activation_fn: Optional[Activation] = None,
-        relabeler_kernel_init: Optional[KernelInit] = None,
-        rnd_hidden_dims: Sequence[int] = (256, 256),
-        rnd_feature_dim: int = 256,
-        rnd_lr: float = 3e-4,
-        rnd_activation_fn: Optional[Activation] = None,
-        rnd_kernel_init: Optional[KernelInit] = None,
+        params: ExPLOReParams | None = None,
         **rlpd_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: rlpd_kwargs.pop(name) for name in tuple(rlpd_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        offline_relabel_type = params.offline_relabel_type
+        use_rnd_offline = params.use_rnd_offline
+        use_rnd_online = params.use_rnd_online
+        rnd_coeff = params.rnd_coeff
+        relabeler_hidden_dims = params.relabeler_hidden_dims
+        relabeler_lr = params.relabeler_lr
+        relabeler_activation_fn = params.relabeler_activation_fn
+        relabeler_kernel_init = params.relabeler_kernel_init
+        rnd_hidden_dims = params.rnd_hidden_dims
+        rnd_feature_dim = params.rnd_feature_dim
+        rnd_lr = params.rnd_lr
+        rnd_activation_fn = params.rnd_activation_fn
+        rnd_kernel_init = params.rnd_kernel_init
         schema = ObservationSchema.from_space(
             normalize_observation_space(env.single_observation_space)
         )
@@ -82,7 +91,7 @@ class ExPLORe(RLPD):
         self._relabeler: Optional[RewardMaskRelabeler] = None
         self._rnd: Optional[RNDBonus] = None
         self._offline_min_reward: Optional[torch.Tensor] = None
-        super().__init__(env, eval_env, **rlpd_kwargs)
+        super().__init__(env, eval_env, params=params, **rlpd_kwargs)
         if self.nstep > 1 and (self._relabeler is not None or self._rnd is not None):
             raise ValueError(
                 "ExPLORe's reward model and RND bonus label one transition "
@@ -234,13 +243,9 @@ class ExPLORe(RLPD):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "offline_relabel_type": self.offline_relabel_type,
-            "use_rnd_offline": self.use_rnd_offline,
-            "use_rnd_online": self.use_rnd_online,
-            "rnd_coeff": self.rnd_coeff,
-            "relabeler_hidden_dims": self.relabeler_hidden_dims,
-            "relabeler_lr": self.relabeler_lr,
-            "rnd_hidden_dims": self.rnd_hidden_dims,
-            "rnd_feature_dim": self.rnd_feature_dim,
-            "rnd_lr": self.rnd_lr,
         }
+
+    def _bind_params(self, params: ExPLOReParams) -> None:
+        super()._bind_params(params)
+        self.relabeler_hidden_dims = tuple(params.relabeler_hidden_dims)
+        self.rnd_hidden_dims = tuple(params.rnd_hidden_dims)

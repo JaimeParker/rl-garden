@@ -103,7 +103,7 @@ Targets: Polyak every flow net -> its target with ``tau``, matching
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -116,10 +116,10 @@ from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.common.utils import polyak_update
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.fql import ValueFlowsParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.factory import build_observation_encoder
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
 from rl_garden.networks.value_flow_field import integrate_returns, integrate_returns_with_jvp
 from rl_garden.observations import ObsGroups, resolve_obs_groups
@@ -133,57 +133,24 @@ class ValueFlowsCore(FQLCore):
 
     def _init_value_flows_params(
         self,
-        *,
-        min_reward: float = -1.0,
-        max_reward: float = 0.0,
-        ret_agg: Literal["mean", "min"] = "mean",
-        confidence_weight_temp: float = 0.3,
-        dcfm_lambda: float = 1.0,
-        bcfm_lambda: float = 1.0,
-        clip_flow_returns: bool = True,
-        num_samples: int = 16,
-        policy_extraction: Literal["rs", "rpg"] = "rs",
+        params: ValueFlowsParams,
     ) -> None:
-        if ret_agg not in ("mean", "min"):
-            raise ValueError(f"ret_agg must be 'mean' or 'min', got {ret_agg!r}.")
-        if confidence_weight_temp <= 0:
+        if params.ret_agg not in ("mean", "min"):
+            raise ValueError(f"ret_agg must be 'mean' or 'min', got {params.ret_agg!r}.")
+        if params.confidence_weight_temp <= 0:
             raise ValueError(
-                f"confidence_weight_temp must be positive, got {confidence_weight_temp}."
+                f"confidence_weight_temp must be positive, got {params.confidence_weight_temp}."
             )
-        if policy_extraction not in ("rs", "rpg"):
+        if params.policy_extraction not in ("rs", "rpg"):
             raise ValueError(
-                f"policy_extraction must be 'rs' or 'rpg', got {policy_extraction!r}."
+                f"policy_extraction must be 'rs' or 'rpg', got {params.policy_extraction!r}."
             )
-
-        self.min_reward = min_reward
-        self.max_reward = max_reward
-        self.ret_agg = ret_agg
-        self.confidence_weight_temp = confidence_weight_temp
-        self.dcfm_lambda = dcfm_lambda
-        self.bcfm_lambda = bcfm_lambda
-        self.clip_flow_returns = clip_flow_returns
-        self.num_samples = num_samples
-        self.policy_extraction = policy_extraction
 
         self.return_clip_range: Optional[tuple[float, float]] = (
-            (min_reward / (1.0 - self.gamma), max_reward / (1.0 - self.gamma))
-            if clip_flow_returns
+            (params.min_reward / (1.0 - self.gamma), params.max_reward / (1.0 - self.gamma))
+            if params.clip_flow_returns
             else None
         )
-
-    def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
-            **super()._checkpoint_metadata(),
-            "min_reward": self.min_reward,
-            "max_reward": self.max_reward,
-            "ret_agg": self.ret_agg,
-            "confidence_weight_temp": self.confidence_weight_temp,
-            "dcfm_lambda": self.dcfm_lambda,
-            "bcfm_lambda": self.bcfm_lambda,
-            "clip_flow_returns": self.clip_flow_returns,
-            "num_samples": self.num_samples,
-            "policy_extraction": self.policy_extraction,
-        }
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
@@ -453,58 +420,31 @@ class ValueFlows(ValueFlowsCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("ValueFlows",)
 
+    params_class = ValueFlowsParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
+        params: Optional[ValueFlowsParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
         batch_size: int = 256,
         gamma: float = 0.99,
-        offline_sampling: str = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
+        offline_sampling: str = 'with_replace',
         actor_use_group_norm: bool = False,
         critic_use_group_norm: bool = False,
         num_groups: int = 32,
         critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        min_reward: float = -1.0,
-        max_reward: float = 0.0,
-        ret_agg: Literal["mean", "min"] = "mean",
-        confidence_weight_temp: float = 0.3,
-        dcfm_lambda: float = 1.0,
-        bcfm_lambda: float = 1.0,
-        clip_flow_returns: bool = True,
-        num_samples: int = 16,
-        policy_extraction: Literal["rs", "rpg"] = "rs",
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 0,
         num_eval_steps: int = 50,
         eval_env: Optional[Any] = None,
@@ -512,7 +452,9 @@ class ValueFlows(ValueFlowsCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -534,46 +476,20 @@ class ValueFlows(ValueFlowsCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
+            alpha=params.alpha,
             critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
+            critic_use_group_norm=critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=False,
         )
         self._init_value_flows_params(
-            min_reward=min_reward,
-            max_reward=max_reward,
-            ret_agg=ret_agg,
-            confidence_weight_temp=confidence_weight_temp,
-            dcfm_lambda=dcfm_lambda,
-            bcfm_lambda=bcfm_lambda,
-            clip_flow_returns=clip_flow_returns,
-            num_samples=num_samples,
-            policy_extraction=policy_extraction,
+            params,
         )
 
         self._setup_model()
@@ -589,65 +505,38 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
        precedent for this internal extension point.
     """
 
+    params_class = ValueFlowsParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
-        learning_starts: int = 4_000,
+        params: Optional[ValueFlowsParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
+        learning_starts: int = 4000,
         batch_size: int = 256,
         gamma: float = 0.99,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "truncated",
+        bootstrap_at_done: str = 'truncated',
         online_episodes_per_iteration: Optional[int] = None,
         stats_window_size: Optional[int] = None,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
         actor_use_group_norm: bool = False,
         critic_use_group_norm: bool = False,
         num_groups: int = 32,
         critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        min_reward: float = -1.0,
-        max_reward: float = 0.0,
-        ret_agg: Literal["mean", "min"] = "mean",
-        confidence_weight_temp: float = 0.3,
-        dcfm_lambda: float = 1.0,
-        bcfm_lambda: float = 1.0,
-        clip_flow_returns: bool = True,
-        num_samples: int = 16,
-        policy_extraction: Literal["rs", "rpg"] = "rs",
-        offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        offline_sampling: Literal['with_replace', 'without_replace'] = 'with_replace',
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
         checkpoint_dir: Optional[str] = None,
@@ -655,7 +544,9 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -664,7 +555,7 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -684,46 +575,20 @@ class _ValueFlowsRolloutTrainingShell(Off2OnReplayMixin, ValueFlowsCore, OffPoli
             initial_training_phase=initial_training_phase,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
+            alpha=params.alpha,
             critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
+            critic_use_group_norm=critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=False,
         )
         self._init_value_flows_params(
-            min_reward=min_reward,
-            max_reward=max_reward,
-            ret_agg=ret_agg,
-            confidence_weight_temp=confidence_weight_temp,
-            dcfm_lambda=dcfm_lambda,
-            bcfm_lambda=bcfm_lambda,
-            clip_flow_returns=clip_flow_returns,
-            num_samples=num_samples,
-            policy_extraction=policy_extraction,
+            params,
         )
         self._init_off2on_params(offline_sampling=offline_sampling)
         self._setup_model()
@@ -754,3 +619,5 @@ class Off2OnValueFlows(_ValueFlowsRolloutTrainingShell):
     chunking). See module docstring."""
 
     _compatible_checkpoint_algorithms = ("Off2OnValueFlows", "ValueFlows")
+
+    params_class = ValueFlowsParams

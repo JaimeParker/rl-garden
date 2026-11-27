@@ -37,7 +37,7 @@ are skipped, not treated as a forced mismatch.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -48,13 +48,15 @@ from rl_garden.algorithms.diffusion_cm_distill import (
     _scalings_for_boundary_conditions,
 )
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.consistency_distill_bc import ConsistencyDistillBCParams
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.common.optim import make_optimizer
 from rl_garden.common.utils import polyak_update
-from rl_garden.networks import Activation, DiffusionMLP, KernelInit
+from rl_garden.networks import DiffusionMLP
 from rl_garden.observations import (
     ObservationContractError,
     ObservationSchema,
@@ -85,6 +87,8 @@ def _checkpoint_observation_has_images(observation_space_metadata: dict[str, Any
 
 
 class ConsistencyDistillBC(OfflineRLAlgorithm):
+    params_class = ConsistencyDistillBCParams
+
     _compatible_checkpoint_algorithms = ("ConsistencyDistillBC",)
     # There is no critic encoder, so "separate" does not exist.
     encoder_sharing_choices = ("shared_critic_grad", "shared")
@@ -99,26 +103,8 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
         dataset_path: str,
         bc_checkpoint: str,
         *,
-        horizon_steps: int = 4,
-        cond_steps: int = 1,
-        denoising_steps: int = 20,
-        mlp_dims: Optional[Sequence[int]] = None,
-        activation_fn: Optional[Activation] = "relu",
-        residual_style: bool = True,
-        time_dim: int = 16,
-        kernel_init: Optional[KernelInit] = None,
-        denoised_clip_value: Optional[float] = 1.0,
-        randn_clip_value: float = 10.0,
-        final_action_clip_value: Optional[float] = None,
-        min_sampling_denoising_std: float = 0.1,
         net_cls: type[nn.Module] = DiffusionMLP,
         net_kwargs: Optional[dict[str, Any]] = None,
-        cm_lr: float = 1e-4,
-        weight_decay: float = 1e-6,
-        cm_ema_decay: float = 0.95,
-        cm_grad_clip_norm: Optional[float] = 1.0,
-        cm_sigma_data: float = 0.5,
-        cm_timestep_scaling: float = 0.1,
         batch_size: int = 128,
         num_traj: Optional[int] = None,
         seed: int = 1,
@@ -129,7 +115,10 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: Optional[ConsistencyDistillBCParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=1,
@@ -156,33 +145,17 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
                 "teacher; vision is out of scope."
             )
         self._obs_dim = normalized_obs_space["state"].shape[0]
-        if cm_grad_clip_norm is not None and cm_grad_clip_norm <= 0:
+        if params.cm_grad_clip_norm is not None and params.cm_grad_clip_norm <= 0:
             raise ValueError(
-                f"cm_grad_clip_norm must be positive or None, got {cm_grad_clip_norm}."
+                f"cm_grad_clip_norm must be positive or None, got {params.cm_grad_clip_norm}."
             )
 
         self.dataset_path = dataset_path
         self.bc_checkpoint = bc_checkpoint
-        self.horizon_steps = horizon_steps
-        self.cond_steps = cond_steps
-        self.denoising_steps = denoising_steps
-        self.mlp_dims = list(mlp_dims) if mlp_dims is not None else [512, 512, 512]
-        self.activation_fn = activation_fn
-        self.residual_style = residual_style
-        self.time_dim = time_dim
-        self.kernel_init = kernel_init
-        self.denoised_clip_value = denoised_clip_value
-        self.randn_clip_value = randn_clip_value
-        self.final_action_clip_value = final_action_clip_value
-        self.min_sampling_denoising_std = min_sampling_denoising_std
+        self._bind_params(params)
+        self.mlp_dims = list(params.mlp_dims) if params.mlp_dims is not None else [512, 512, 512]
         self.net_cls = net_cls
         self.net_kwargs = dict(net_kwargs) if net_kwargs is not None else None
-        self.cm_lr = cm_lr
-        self.weight_decay = weight_decay
-        self.cm_ema_decay = cm_ema_decay
-        self.cm_grad_clip_norm = cm_grad_clip_norm
-        self.cm_sigma_data = cm_sigma_data
-        self.cm_timestep_scaling = cm_timestep_scaling
         self.num_traj = num_traj
 
         self._setup_model()
@@ -196,20 +169,10 @@ class ConsistencyDistillBC(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "bc_checkpoint": self.bc_checkpoint,
-            "horizon_steps": self.horizon_steps,
-            "cond_steps": self.cond_steps,
-            "denoising_steps": self.denoising_steps,
             "mlp_dims": self.mlp_dims,
-            "activation_fn": self.activation_fn,
-            "residual_style": self.residual_style,
+            "bc_checkpoint": self.bc_checkpoint,
             "net_cls": self.net_cls.__name__,
             "net_kwargs": self.net_kwargs,
-            "cm_lr": self.cm_lr,
-            "cm_ema_decay": self.cm_ema_decay,
-            "cm_grad_clip_norm": self.cm_grad_clip_norm,
-            "cm_sigma_data": self.cm_sigma_data,
-            "cm_timestep_scaling": self.cm_timestep_scaling,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

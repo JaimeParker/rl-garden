@@ -68,11 +68,13 @@ scratch, same as plain ``PPO``.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.chain_ppo import FlowPPOParams
 from rl_garden.algorithms.chain_ppo_core import (
     ChainMinibatch,
     ChainPolicyTerms,
@@ -82,7 +84,6 @@ from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.common.logger import Logger
 from rl_garden.common.types import Obs
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.flow_ppo_policy import FlowPPOPolicy
 
@@ -93,6 +94,8 @@ class FlowPPO(ChainPPOCore):
     (``_chain_policy_terms``): each step's log-prob is the mean of its
     per-dimension terms (``logprob_mode``), the advantage is the env step's
     for every flow step, the clip coefficient a constant ``clip_coef``."""
+
+    params_class = FlowPPOParams
 
     _compatible_checkpoint_algorithms = ("FlowPPO",)
     advantage_normalization = "rollout"
@@ -109,39 +112,10 @@ class FlowPPO(ChainPPOCore):
         self,
         env: Any,
         eval_env: Optional[Any] = None,
+        *,
         num_steps: int = 50,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
-        horizon_length: int = 1,
-        flow_steps: int = 10,
-        actor_mlp_dims: Optional[Sequence[int]] = None,
-        actor_activation_fn: Optional[Activation] = None,
-        critic_mlp_dims: Optional[Sequence[int]] = None,
-        critic_activation_fn: Optional[Activation] = None,
-        kernel_init: Optional[KernelInit] = None,
-        sde_type: Literal["sde", "cps"] = "cps",
-        noise_level: float = 0.7,
-        clip_std_min: float = 0.0067,
-        sigma_safe_max: float = 0.9,
-        logprob_mode: Literal["gaussian", "pseudo"] = "gaussian",
-        actor_lr: float = 3e-4,
-        critic_lr: float = 1e-3,
-        weight_decay: float = 0.0,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        critic_warmup_updates: int = 0,
-        update_epochs: int = 5,
-        update_batch_size: int = 50_000,
-        norm_adv: bool = True,
-        clip_coef: float = 0.2,
-        clip_vloss_coef: Optional[float] = None,
-        clip_advantage_lower_quantile: float = 0.0,
-        clip_advantage_upper_quantile: float = 1.0,
-        vf_coef: float = 0.5,
-        target_kl: Optional[float] = 1.0,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -158,39 +132,23 @@ class FlowPPO(ChainPPOCore):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: FlowPPOParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        horizon_length = params.horizon_length
+        flow_steps = params.flow_steps
         if horizon_length < 1:
             raise ValueError(f"horizon_length must be >= 1, got {horizon_length}.")
         if flow_steps <= 0:
             raise ValueError(f"flow_steps must be positive, got {flow_steps}.")
         super().__init__(
             env,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
             encoder_sharing=encoder_sharing,
-            actor_mlp_dims=actor_mlp_dims if actor_mlp_dims is not None else [256, 256, 256],
-            actor_activation_fn=actor_activation_fn,
-            critic_mlp_dims=critic_mlp_dims if critic_mlp_dims is not None else [256, 256, 256],
-            critic_activation_fn=critic_activation_fn,
-            kernel_init=kernel_init,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            critic_warmup_updates=critic_warmup_updates,
-            update_epochs=update_epochs,
-            update_batch_size=update_batch_size,
-            norm_adv=norm_adv,
-            clip_vloss_coef=clip_vloss_coef,
-            clip_advantage_lower_quantile=clip_advantage_lower_quantile,
-            clip_advantage_upper_quantile=clip_advantage_upper_quantile,
-            vf_coef=vf_coef,
-            target_kl=target_kl,
             eval_env=eval_env,
             num_steps=num_steps,
             gamma=gamma,
@@ -208,14 +166,6 @@ class FlowPPO(ChainPPOCore):
             checkpoint_freq=checkpoint_freq,
             save_final_checkpoint=save_final_checkpoint,
         )
-        self.horizon_length = horizon_length
-        self.flow_steps = flow_steps
-        self.sde_type = sde_type
-        self.noise_level = noise_level
-        self.clip_std_min = clip_std_min
-        self.sigma_safe_max = sigma_safe_max
-        self.logprob_mode = logprob_mode
-        self.clip_coef = clip_coef
 
         expected_action_shape = (self.horizon_length,) + env.single_action_space.shape[1:]
         if env.single_action_space.shape != expected_action_shape:
@@ -230,13 +180,6 @@ class FlowPPO(ChainPPOCore):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_length": self.horizon_length,
-            "flow_steps": self.flow_steps,
-            "sde_type": self.sde_type,
-            "noise_level": self.noise_level,
-            "clip_std_min": self.clip_std_min,
-            "sigma_safe_max": self.sigma_safe_max,
-            "logprob_mode": self.logprob_mode,
         }
 
     def _setup_model(self) -> None:

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.ppo import RecurrentPPOParams
 from rl_garden.algorithms.sequence_ppo import SequencePPO
-from rl_garden.networks.recurrent import RecurrentLatentEncoder, RNNType
+from rl_garden.networks.recurrent import RecurrentLatentEncoder
 
 
 class RecurrentPPO(SequencePPO):
@@ -18,24 +20,22 @@ class RecurrentPPO(SequencePPO):
     logic lives in ``SequencePPO``; this class only adds RNN-specific
     construction (``TransformerPPO`` is the GTrXL-based sibling)."""
 
+    params_class = RecurrentPPOParams
+
     _compatible_checkpoint_algorithms = ("RecurrentPPO",)
 
     def __init__(
         self,
         env: Any,
         *,
-        rnn_type: RNNType = "lstm",
-        rnn_hidden_size: int = 256,
-        rnn_num_layers: int = 1,
+        params: RecurrentPPOParams | None = None,
         **ppo_kwargs: Any,
     ) -> None:
-        # Must be set before super().__init__(), which ends by calling
-        # self._setup_model() -- our _build_sequence_encoder() override below
-        # reads these attributes.
-        self.rnn_type: RNNType = rnn_type
-        self.rnn_hidden_size = rnn_hidden_size
-        self.rnn_num_layers = rnn_num_layers
-        super().__init__(env, **ppo_kwargs)
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: ppo_kwargs.pop(name) for name in tuple(ppo_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        super().__init__(env, params=params, **ppo_kwargs)
 
     def _build_sequence_encoder(self, actor_extractor) -> RecurrentLatentEncoder:
         return RecurrentLatentEncoder(
@@ -56,7 +56,4 @@ class RecurrentPPO(SequencePPO):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "rnn_type": self.rnn_type,
-            "rnn_hidden_size": self.rnn_hidden_size,
-            "rnn_num_layers": self.rnn_num_layers,
         }

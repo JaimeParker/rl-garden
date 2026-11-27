@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.training.offline.args import (
     OfflineCommonArgs,
     OfflineDeviceArgs,
@@ -20,66 +21,37 @@ if TYPE_CHECKING:
 
 @dataclass
 class FACArgs(
+    OfflineFACArgs,
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineFACArgs,
 ):
     """FAC (Flow Actor-Critic) offline pretraining. Box or Dict (vision)
     observations."""
 
-    # FAC's paper default (arXiv 2602.18015, agents/fac.py:517) -- overrides
-    # OfflineDiscountArgs's 0.99 default.
+    normalize_q_loss: bool = True
+    net_arch: Optional[tuple[int, ...]] = (512, 512, 512, 512)
+    q_agg: Literal['mean', 'min'] = 'min'
     gamma: float = 0.995
 
 
 def _fac_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
+    from rl_garden.algorithms import FAC
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
 
     kwargs = {
+        **params_kwargs(args, FAC.params_class),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
         "offline_sampling": args.offline_sampling,
-        "tau": args.tau,
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
         "alpha": args.alpha,
-        "flow_steps": args.flow_steps,
-        "q_agg": args.q_agg,
-        "normalize_q_loss": args.normalize_q_loss,
-        "net_arch": list(args.net_arch),
-        "n_critics": args.n_critics,
-        "actor_use_layer_norm": args.actor_use_layer_norm,
-        "critic_use_layer_norm": args.critic_use_layer_norm,
+        "net_arch": list(args.net_arch) if args.net_arch is not None else None,
         "actor_use_group_norm": args.actor_use_group_norm,
-        "critic_use_group_norm": args.critic_use_group_norm,
-        "num_groups": args.num_groups,
-        "critic_dropout_rate": args.critic_dropout_rate,
-        "kernel_init": args.kernel_init,
-        "backbone_type": args.backbone_type,
-        "activation_fn": args.activation_fn,
-        "fac_alpha": args.fac_alpha,
-        "fac_lambda": args.fac_lambda,
-        "fac_threshold": args.fac_threshold,
-        "logp_method": args.logp_method,
-        "logp_hutch_probes": args.logp_hutch_probes,
-        "weight_type": args.weight_type,
-        "bc_lr": args.bc_lr,
-        "bc_batch_size": args.bc_batch_size,
-        "bc_pretrain_epochs": args.bc_pretrain_epochs,
-        "bc_pretrain_steps": args.bc_pretrain_steps,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

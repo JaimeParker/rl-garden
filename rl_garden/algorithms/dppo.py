@@ -35,11 +35,13 @@ this algorithm does not know or care that the env is chunked; it only knows
 from __future__ import annotations
 
 import math
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 from gymnasium import spaces
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.chain_ppo import DPPOParams
 from rl_garden.algorithms.chain_ppo_core import (
     ChainMinibatch,
     ChainPolicyTerms,
@@ -50,7 +52,6 @@ from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
 from rl_garden.common.types import Obs
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.dppo_policy import DPPOPolicy
 
@@ -69,6 +70,8 @@ class DPPO(ChainPPOCore):
     The reference's ``entropy_loss = -eta.mean()`` term is omitted (a
     constant for DDPM, see the module docstring)."""
 
+    params_class = DPPOParams
+
     _compatible_checkpoint_algorithms = ("DPPO",)
     # diffusion_ppo.py::PPODiffusion.loss normalizes and clamps the
     # minibatch's advantages, before the denoising discount.
@@ -79,48 +82,10 @@ class DPPO(ChainPPOCore):
         env: Any,
         bc_checkpoint: Optional[str] = None,
         eval_env: Optional[Any] = None,
+        *,
         num_steps: int = 50,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
-        horizon_steps: int = 4,
-        act_steps: int = 4,
-        denoising_steps: int = 20,
-        ft_denoising_steps: int = 10,
-        actor_mlp_dims: Optional[Sequence[int]] = None,
-        actor_activation_fn: Optional[Activation] = "relu",
-        actor_residual_style: bool = True,
-        critic_mlp_dims: Optional[Sequence[int]] = None,
-        critic_activation_fn: Optional[Activation] = "mish",
-        critic_residual_style: bool = True,
-        time_dim: int = 16,
-        kernel_init: Optional[KernelInit] = None,
-        denoised_clip_value: Optional[float] = 1.0,
-        randn_clip_value: float = 3.0,
-        final_action_clip_value: Optional[float] = None,
-        min_sampling_denoising_std: float = 0.1,
-        min_logprob_denoising_std: float = 0.1,
-        actor_lr: float = 1e-4,
-        critic_lr: float = 1e-3,
-        weight_decay: float = 0.0,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        critic_warmup_updates: int = 0,
-        update_epochs: int = 5,
-        update_batch_size: int = 50_000,
-        norm_adv: bool = True,
-        gamma_denoising: float = 0.99,
-        clip_ploss_coef: float = 0.01,
-        clip_ploss_coef_base: float = 0.01,
-        clip_ploss_coef_rate: float = 3.0,
-        clip_vloss_coef: Optional[float] = None,
-        clip_advantage_lower_quantile: float = 0.0,
-        clip_advantage_upper_quantile: float = 1.0,
-        vf_coef: float = 0.5,
-        target_kl: Optional[float] = 1.0,
-        reward_horizon: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -138,7 +103,15 @@ class DPPO(ChainPPOCore):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: DPPOParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        horizon_steps = params.horizon_steps
+        act_steps = params.act_steps
+        denoising_steps = params.denoising_steps
+        ft_denoising_steps = params.ft_denoising_steps
+        reward_horizon = params.reward_horizon
         if not (1 <= act_steps <= horizon_steps):
             raise ValueError(f"act_steps must be in [1, horizon_steps], got {act_steps}.")
         if not (1 <= ft_denoising_steps <= denoising_steps):
@@ -148,32 +121,11 @@ class DPPO(ChainPPOCore):
         self._image_augmentation_seed = image_augmentation_seed
         super().__init__(
             env,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
             encoder_sharing=encoder_sharing,
-            actor_mlp_dims=actor_mlp_dims if actor_mlp_dims is not None else [512, 512, 512],
-            actor_activation_fn=actor_activation_fn,
-            critic_mlp_dims=critic_mlp_dims if critic_mlp_dims is not None else [256, 256, 256],
-            critic_activation_fn=critic_activation_fn,
-            kernel_init=kernel_init,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            critic_warmup_updates=critic_warmup_updates,
-            update_epochs=update_epochs,
-            update_batch_size=update_batch_size,
-            norm_adv=norm_adv,
-            clip_vloss_coef=clip_vloss_coef,
-            clip_advantage_lower_quantile=clip_advantage_lower_quantile,
-            clip_advantage_upper_quantile=clip_advantage_upper_quantile,
-            vf_coef=vf_coef,
-            target_kl=target_kl,
             eval_env=eval_env,
             num_steps=num_steps,
             gamma=gamma,
@@ -191,22 +143,8 @@ class DPPO(ChainPPOCore):
             checkpoint_freq=checkpoint_freq,
             save_final_checkpoint=save_final_checkpoint,
         )
-        self.horizon_steps = horizon_steps
-        self.act_steps = act_steps
-        self.denoising_steps = denoising_steps
-        self.ft_denoising_steps = ft_denoising_steps
-        self.actor_residual_style = actor_residual_style
-        self.critic_residual_style = critic_residual_style
-        self.time_dim = time_dim
-        self.denoised_clip_value = denoised_clip_value
-        self.randn_clip_value = randn_clip_value
-        self.final_action_clip_value = final_action_clip_value
-        self.min_sampling_denoising_std = min_sampling_denoising_std
-        self.min_logprob_denoising_std = min_logprob_denoising_std
-        self.gamma_denoising = gamma_denoising
-        self.clip_ploss_coef = clip_ploss_coef
-        self.clip_ploss_coef_base = clip_ploss_coef_base
-        self.clip_ploss_coef_rate = clip_ploss_coef_rate
+        if params.actor_mlp_dims is None:
+            self.actor_mlp_dims = [512, 512, 512]
         self.reward_horizon = reward_horizon if reward_horizon is not None else act_steps
 
         expected_action_shape = (self.act_steps,) + env.single_action_space.shape[1:]
@@ -242,10 +180,6 @@ class DPPO(ChainPPOCore):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_steps": self.horizon_steps,
-            "act_steps": self.act_steps,
-            "denoising_steps": self.denoising_steps,
-            "ft_denoising_steps": self.ft_denoising_steps,
             "image_augmentation_seed": self._image_augmentation_seed,
         }
 

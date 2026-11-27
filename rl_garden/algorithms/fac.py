@@ -113,7 +113,7 @@ Deviations from the reference:
 from __future__ import annotations
 
 import math
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -125,12 +125,12 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.fql import FACParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.encoders.factory import build_observation_encoder
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.networks.actor_vector_field import flow_onestep_distill_loss
-from rl_garden.networks.flow_logprob import LogpMethod, flow_log_prob
+from rl_garden.networks.flow_logprob import flow_log_prob
 from rl_garden.observations import ObsGroups, resolve_obs_groups
 from rl_garden.policies.fql_policy import EncoderSharing, FQLPolicy
 
@@ -165,66 +165,45 @@ class FACCore(FQLCore):
 
     def _init_fac_params(
         self,
-        *,
-        fac_alpha: float = 1.0,
-        fac_lambda: float = 1.0,
-        fac_threshold: FacThreshold = "batch_adaptive",
-        logp_method: LogpMethod = "exact",
-        logp_hutch_probes: int = 8,
-        weight_type: WeightType = "linear",
-        bc_lr: float = 3e-4,
-        bc_batch_size: Optional[int] = None,
-        bc_pretrain_epochs: int = 250,
-        bc_pretrain_steps: Optional[int] = None,
+        params: FACParams,
     ) -> None:
-        if fac_threshold not in ("batch_adaptive", "batch_wide_constant", "dataset_wide_constant"):
+        if params.fac_threshold not in ("batch_adaptive", "batch_wide_constant", "dataset_wide_constant"):
             raise ValueError(
                 "fac_threshold must be 'batch_adaptive', 'batch_wide_constant', or "
-                f"'dataset_wide_constant', got {fac_threshold!r}."
+                f"'dataset_wide_constant', got {params.fac_threshold!r}."
             )
-        if logp_method not in ("exact", "hutch-rade", "hutch-gaus"):
+        if params.logp_method not in ("exact", "hutch-rade", "hutch-gaus"):
             raise ValueError(
-                f"logp_method must be 'exact', 'hutch-rade', or 'hutch-gaus', got {logp_method!r}."
+                f"logp_method must be 'exact', 'hutch-rade', or 'hutch-gaus', got {params.logp_method!r}."
             )
-        if weight_type not in ("linear", "logarithmic", "convex", "concave"):
+        if params.weight_type not in ("linear", "logarithmic", "convex", "concave"):
             raise ValueError(
                 "weight_type must be 'linear', 'logarithmic', 'convex', or 'concave', got "
-                f"{weight_type!r}."
+                f"{params.weight_type!r}."
             )
-        if fac_alpha < 0:
-            raise ValueError(f"fac_alpha must be >= 0, got {fac_alpha}.")
-        if fac_lambda < 0:
-            raise ValueError(f"fac_lambda must be >= 0, got {fac_lambda}.")
-        if logp_hutch_probes < 1:
-            raise ValueError(f"logp_hutch_probes must be >= 1, got {logp_hutch_probes}.")
-        if bc_lr <= 0:
-            raise ValueError(f"bc_lr must be positive, got {bc_lr}.")
-        if bc_batch_size is not None and bc_batch_size <= 0:
-            raise ValueError(f"bc_batch_size must be positive or None, got {bc_batch_size}.")
-        if bc_pretrain_epochs <= 0:
-            raise ValueError(f"bc_pretrain_epochs must be positive, got {bc_pretrain_epochs}.")
-        if bc_pretrain_steps is not None and bc_pretrain_steps < 0:
-            raise ValueError(f"bc_pretrain_steps must be >= 0 or None, got {bc_pretrain_steps}.")
+        if params.fac_alpha < 0:
+            raise ValueError(f"fac_alpha must be >= 0, got {params.fac_alpha}.")
+        if params.fac_lambda < 0:
+            raise ValueError(f"fac_lambda must be >= 0, got {params.fac_lambda}.")
+        if params.logp_hutch_probes < 1:
+            raise ValueError(f"logp_hutch_probes must be >= 1, got {params.logp_hutch_probes}.")
+        if params.bc_lr <= 0:
+            raise ValueError(f"bc_lr must be positive, got {params.bc_lr}.")
+        if params.bc_batch_size is not None and params.bc_batch_size <= 0:
+            raise ValueError(f"bc_batch_size must be positive or None, got {params.bc_batch_size}.")
+        if params.bc_pretrain_epochs <= 0:
+            raise ValueError(f"bc_pretrain_epochs must be positive, got {params.bc_pretrain_epochs}.")
+        if params.bc_pretrain_steps is not None and params.bc_pretrain_steps < 0:
+            raise ValueError(f"bc_pretrain_steps must be >= 0 or None, got {params.bc_pretrain_steps}.")
         # Per-sample threshold modes gather cached logp by (batch_inds,
         # env_inds), so they need real sample indices -- only "with_replace"
         # sampling produces those (see module docstring's Deviations list).
-        if self.offline_sampling != "with_replace" and fac_threshold != "dataset_wide_constant":
+        if self.offline_sampling != "with_replace" and params.fac_threshold != "dataset_wide_constant":
             raise ValueError(
-                f"fac_threshold={fac_threshold!r} requires per-sample cached logp, which needs "
+                f"fac_threshold={params.fac_threshold!r} requires per-sample cached logp, which needs "
                 "offline_sampling='with_replace' (index-based batch fetch); use "
                 "fac_threshold='dataset_wide_constant' under offline_sampling='without_replace'."
             )
-
-        self.fac_alpha = fac_alpha
-        self.fac_lambda = fac_lambda
-        self.fac_threshold = fac_threshold
-        self.logp_method = logp_method
-        self.logp_hutch_probes = logp_hutch_probes
-        self.weight_type = weight_type
-        self.bc_lr = bc_lr
-        self.bc_batch_size = bc_batch_size
-        self.bc_pretrain_epochs = bc_pretrain_epochs
-        self.bc_pretrain_steps = bc_pretrain_steps
 
         self._phase_step = 0
         self._logp_table: Optional[torch.Tensor] = None
@@ -750,15 +729,6 @@ class FACCore(FQLCore):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "fac_alpha": self.fac_alpha,
-            "fac_lambda": self.fac_lambda,
-            "fac_threshold": self.fac_threshold,
-            "logp_method": self.logp_method,
-            "logp_hutch_probes": self.logp_hutch_probes,
-            "weight_type": self.weight_type,
-            "bc_lr": self.bc_lr,
-            "bc_batch_size": self.bc_batch_size,
-            "bc_pretrain_epochs": self.bc_pretrain_epochs,
             "bc_pretrain_steps": self._bc_pretrain_steps_resolved,
         }
 
@@ -808,59 +778,29 @@ class FAC(FACCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("FAC",)
 
+    params_class = FACParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
+        params: Optional[FACParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
         batch_size: int = 256,
         gamma: float = 0.99,
-        offline_sampling: str = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,  # unused by FAC; kept only for FQLCore-signature compatibility
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
+        offline_sampling: str = 'with_replace',
+        alpha: float = 10.0,
         actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        fac_alpha: float = 1.0,
-        fac_lambda: float = 1.0,
-        fac_threshold: FacThreshold = "batch_adaptive",
-        logp_method: LogpMethod = "exact",
-        logp_hutch_probes: int = 8,
-        weight_type: WeightType = "linear",
-        bc_lr: float = 3e-4,
-        bc_batch_size: Optional[int] = None,
-        bc_pretrain_epochs: int = 250,
-        bc_pretrain_steps: Optional[int] = None,
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 0,
         num_eval_steps: int = 50,
         eval_env: Optional[Any] = None,
@@ -868,7 +808,9 @@ class FAC(FACCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -890,47 +832,20 @@ class FAC(FACCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
+            alpha=alpha,
+            critic_dropout_rate=params.critic_dropout_rate,
             critic_encoder_config=critic_encoder_config,
+            critic_use_group_norm=params.critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=params.num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=False,
         )
         self._init_fac_params(
-            fac_alpha=fac_alpha,
-            fac_lambda=fac_lambda,
-            fac_threshold=fac_threshold,
-            logp_method=logp_method,
-            logp_hutch_probes=logp_hutch_probes,
-            weight_type=weight_type,
-            bc_lr=bc_lr,
-            bc_batch_size=bc_batch_size,
-            bc_pretrain_epochs=bc_pretrain_epochs,
-            bc_pretrain_steps=bc_pretrain_steps,
+            params,
         )
 
         self._setup_model()
@@ -945,66 +860,36 @@ class _FACRolloutTrainingShell(Off2OnReplayMixin, FACCore, OffPolicyAlgorithm):
        extension point.
     """
 
+    params_class = FACParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
-        learning_starts: int = 4_000,
+        params: Optional[FACParams] = None,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
+        learning_starts: int = 4000,
         batch_size: int = 256,
         gamma: float = 0.99,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "truncated",
+        bootstrap_at_done: str = 'truncated',
         online_episodes_per_iteration: Optional[int] = None,
         stats_window_size: Optional[int] = None,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        alpha: float = 10.0,  # unused by FAC; kept only for FQLCore-signature compatibility
-        flow_steps: int = 10,
-        q_agg: Literal["mean", "min"] = "mean",
-        normalize_q_loss: bool = False,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
+        alpha: float = 10.0,
         actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_sharing: Optional[EncoderSharing] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
-        fac_alpha: float = 1.0,
-        fac_lambda: float = 1.0,
-        fac_threshold: FacThreshold = "batch_adaptive",
-        logp_method: LogpMethod = "exact",
-        logp_hutch_probes: int = 8,
-        weight_type: WeightType = "linear",
-        bc_lr: float = 3e-4,
-        bc_batch_size: Optional[int] = None,
-        bc_pretrain_epochs: int = 250,
-        bc_pretrain_steps: Optional[int] = None,
-        offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
+        offline_sampling: Literal['with_replace', 'without_replace'] = 'with_replace',
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
         checkpoint_dir: Optional[str] = None,
@@ -1012,7 +897,9 @@ class _FACRolloutTrainingShell(Off2OnReplayMixin, FACCore, OffPolicyAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -1021,7 +908,7 @@ class _FACRolloutTrainingShell(Off2OnReplayMixin, FACCore, OffPolicyAlgorithm):
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -1041,35 +928,17 @@ class _FACRolloutTrainingShell(Off2OnReplayMixin, FACCore, OffPolicyAlgorithm):
             initial_training_phase=initial_training_phase,
         )
         self._init_fql_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            alpha=alpha,
-            flow_steps=flow_steps,
-            q_agg=q_agg,
-            normalize_q_loss=normalize_q_loss,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
+            params,
             actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
-            encoder_sharing=encoder_sharing,
-            encoder_config=encoder_config,
-            obs_groups=obs_groups,
+            alpha=alpha,
+            critic_dropout_rate=params.critic_dropout_rate,
             critic_encoder_config=critic_encoder_config,
+            critic_use_group_norm=params.critic_use_group_norm,
+            encoder_config=encoder_config,
+            encoder_sharing=encoder_sharing,
+            num_groups=params.num_groups,
+            obs_groups=obs_groups,
+            reference_compatible=False,
         )
         # offline_sampling must be set (via _init_off2on_params) BEFORE
         # _init_fac_params runs -- unlike FINO's shell, FACCore's own
@@ -1079,16 +948,7 @@ class _FACRolloutTrainingShell(Off2OnReplayMixin, FACCore, OffPolicyAlgorithm):
         # never sets that attribute itself.
         self._init_off2on_params(offline_sampling=offline_sampling)
         self._init_fac_params(
-            fac_alpha=fac_alpha,
-            fac_lambda=fac_lambda,
-            fac_threshold=fac_threshold,
-            logp_method=logp_method,
-            logp_hutch_probes=logp_hutch_probes,
-            weight_type=weight_type,
-            bc_lr=bc_lr,
-            bc_batch_size=bc_batch_size,
-            bc_pretrain_epochs=bc_pretrain_epochs,
-            bc_pretrain_steps=bc_pretrain_steps,
+            params,
         )
         self._setup_model()
 
@@ -1117,3 +977,5 @@ class Off2OnFAC(_FACRolloutTrainingShell):
     recomputed ``logp_beta``). See module docstring."""
 
     _compatible_checkpoint_algorithms = ("Off2OnFAC", "FAC")
+
+    params_class = FACParams

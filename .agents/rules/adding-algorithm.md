@@ -134,7 +134,7 @@ them; extend only through these hooks:
 | Hook | Default | Override for |
 |---|---|---|
 | `_optimizer_names()` | `("q_optimizer", "actor_optimizer", "alpha_optimizer", "cql_alpha_optimizer")` (`OnPolicyAlgorithm` → `("policy_optimizer",)`) | naming your optimizer attributes |
-| `_checkpoint_metadata()` | `{"seed", "device"}` | hyperparameters to validate a resume; always `{**super()._checkpoint_metadata(), ...}` |
+| `_checkpoint_metadata()` | `{"seed", "device"}`, plus the live value of every field of `params_class` when the class sets one | hyperparameters to validate a resume; always `{**super()._checkpoint_metadata(), ...}`, adding only derived or extra values |
 | `_extra_checkpoint_state()` / `_load_extra_checkpoint_state()` | `{}` / no-op | LR scheduler state, EMA weights, etc. |
 | `_training_state_dict()` / `_load_training_state_dict()` | `{}` / no-op | loop-level counters |
 | `_checkpoint_includes_replay_buffer()` | `False` | `True` if a real replay buffer should persist |
@@ -505,6 +505,16 @@ reusing another algorithm's `Args` dataclass fails at import time, so give
 
 ### `MyAlgoTrainingArgs` in `args.py`
 
+New algorithms define their hyperparameters once, in a Params dataclass under
+`rl_garden/hyperparameters/` (see "Hyperparameter dataclasses" in
+`docs/guides/extending.md`): the Args class inherits it, the constructor takes
+`params=` plus keyword overrides, the builder passes
+`params_kwargs(args, cls.params_class)`, and the family gets a row in
+`tests/test_hyperparameter_contract.py`. Algorithms not yet moved to that
+pattern still declare hyperparameters in the phase `args.py` and in their
+constructor signature, as described below; do not copy that style into a new
+algorithm.
+
 Hyperparameters belong in `rl_garden/training/online/args.py`, not inline in
 the run file (unless the algorithm is a one-off). Any algorithm that accepts
 observations mixes in `ObservationArgs` (`rl_garden/common/cli_args.py`,
@@ -667,8 +677,10 @@ def run_my_algo(args: "MyAlgoOff2OnArgs") -> None:
 `run_off2on(args, *, build_agent, algorithm)` calls `build_agent(args, env,
 eval_env, logger, checkpoint_dir)`; `algorithm` is passed through for
 config/logging and is **not** cross-checked against the registry name.
-`Off2OnCommonArgs` (`off2on/args.py`, composes `EnvRunArgs, CheckpointArgs`)
-holds orchestration fields generic across off2on families; compose it with an
+`Off2OnCommonArgs` (`off2on/args.py`) composes `Off2OnRunArgs` (the run
+settings; `EnvRunArgs, CheckpointArgs`), `Off2OnLoopArgs` and the shared
+optimization, critic and actor mixins of `rl_garden.hyperparameters.shared`,
+which give the off2on family its defaults; compose it with an
 algorithm-specific hyperparameter mixin (reusing the offline one where it
 exists, e.g. `IQLOff2OnTrainingArgs(Off2OnCommonArgs, OfflineIQLArgs,
 OfflineValueArgs)`) and a `Vision...` layer, then `EnvBackendArgs` — see

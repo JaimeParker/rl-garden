@@ -19,6 +19,8 @@ from typing import Any
 
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import SequenceSACParams
 from rl_garden.algorithms.sac import SAC
 from rl_garden.common.obs_utils import index_obs
 from rl_garden.networks.sequence_encoder import SequenceLatentEncoder, SequenceState
@@ -38,18 +40,25 @@ class SequenceSAC(SAC):
     #: A ``RecurrentSACPolicy`` subclass: it also receives ``recurrent_encoder``.
     policy_class = RecurrentSACPolicy
 
+    params_class = SequenceSACParams
+
     def __init__(
         self,
         env: Any,
         *,
-        burn_in_len: int = 40,
-        learning_len: int = 40,
-        forward_len: int = 5,
-        prio_exponent: float = 0.9,
-        importance_sampling_exponent: float = 0.6,
+        params: SequenceSACParams | None = None,
         **sac_kwargs: Any,
     ) -> None:
-        if sac_kwargs.get("nstep", 1) != 1:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: sac_kwargs.pop(name) for name in tuple(sac_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        burn_in_len = params.burn_in_len
+        learning_len = params.learning_len
+        forward_len = params.forward_len
+        prio_exponent = params.prio_exponent
+        importance_sampling_exponent = params.importance_sampling_exponent
+        if params.nstep != 1:
             raise ValueError(
                 f"{type(self).__name__} uses forward_len for n-step bootstrapping "
                 "(integrated with burn-in), not the flat nstep kwarg."
@@ -74,7 +83,7 @@ class SequenceSAC(SAC):
         self.forward_len = forward_len
         self.prio_exponent = prio_exponent
         self.importance_sampling_exponent = importance_sampling_exponent
-        super().__init__(env, **sac_kwargs)
+        super().__init__(env, params=params, **sac_kwargs)
 
     # --- subclass hooks ---
 
@@ -356,11 +365,6 @@ class SequenceSAC(SAC):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "burn_in_len": self.burn_in_len,
-            "learning_len": self.learning_len,
-            "forward_len": self.forward_len,
-            "prio_exponent": self.prio_exponent,
-            "importance_sampling_exponent": self.importance_sampling_exponent,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

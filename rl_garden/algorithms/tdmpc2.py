@@ -62,6 +62,8 @@ from typing import Any, Optional
 import numpy as np
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.tdmpc2 import TDMPC2CoreParams, TDMPC2Params
 from rl_garden.algorithms.model_based import ModelBasedAlgorithm
 from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.common.logger import Logger
@@ -96,53 +98,13 @@ class TDMPC2Core:
     def _init_tdmpc2_params(
         self,
         *,
-        horizon: int,
-        latent_dim: int,
-        mlp_dim: int,
-        simnorm_dim: int,
-        num_q: int,
-        num_bins: int,
-        vmin: float,
-        vmax: float,
-        dropout: float,
-        log_std_min: float,
-        log_std_max: float,
-        entropy_coef: float,
-        lr: float,
-        enc_lr_scale: float,
-        grad_clip_norm: float,
-        rho: float,
-        consistency_coef: float,
-        reward_coef: float,
-        value_coef: float,
-        discount_denom: float,
-        discount_min: float,
-        discount_max: float,
+        params: TDMPC2CoreParams,
     ) -> None:
-        self.horizon = horizon
-        self.latent_dim = latent_dim
-        self.mlp_dim = mlp_dim
-        self.simnorm_dim = simnorm_dim
-        self.num_q = num_q
-        self.num_bins = num_bins
-        self.vmin = vmin
-        self.vmax = vmax
-        self.dropout = dropout
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-        self.entropy_coef = entropy_coef
-        self.lr = lr
-        self.enc_lr_scale = enc_lr_scale
-        self.grad_clip_norm = grad_clip_norm
-        self.rho = rho
-        self.consistency_coef = consistency_coef
-        self.reward_coef = reward_coef
-        self.value_coef = value_coef
-        self.discount_denom = discount_denom
-        self.discount_min = discount_min
-        self.discount_max = discount_max
         # Two-hot bin width for the value loss's soft-CE targets (same bins
         # as the world model's reward head and the policy's Q-heads).
+        num_bins = params.num_bins
+        vmin = params.vmin
+        vmax = params.vmax
         self.value_bin_size = (vmax - vmin) / (num_bins - 1) if num_bins > 1 else 0.0
 
     def _build_tdmpc2_optimizers(self) -> None:
@@ -221,28 +183,6 @@ class TDMPC2Core:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon": self.horizon,
-            "latent_dim": self.latent_dim,
-            "mlp_dim": self.mlp_dim,
-            "num_q": self.num_q,
-            "num_bins": self.num_bins,
-            "vmin": self.vmin,
-            "vmax": self.vmax,
-            "discount_denom": self.discount_denom,
-            "discount_min": self.discount_min,
-            "discount_max": self.discount_max,
-            "lr": self.lr,
-            "enc_lr_scale": self.enc_lr_scale,
-            "grad_clip_norm": self.grad_clip_norm,
-            "rho": self.rho,
-            "consistency_coef": self.consistency_coef,
-            "reward_coef": self.reward_coef,
-            "value_coef": self.value_coef,
-            "dropout": self.dropout,
-            "log_std_min": self.log_std_min,
-            "log_std_max": self.log_std_max,
-            "entropy_coef": self.entropy_coef,
-            "simnorm_dim": self.simnorm_dim,
         }
 
 
@@ -257,6 +197,8 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
     encoder_sharing = "shared"
     encoder_sharing_choices = ("shared",)
 
+    params_class = TDMPC2Params
+
     def __init__(
         self,
         env: Any,
@@ -268,41 +210,10 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
         batch_size: int = 256,
         seed_steps: Optional[int] = None,
         # planning
-        use_planner: bool = True,
-        horizon: int = 3,
-        num_samples: int = 512,
-        num_elites: int = 64,
-        num_pi_trajs: int = 24,
-        iterations: int = 6,
-        min_std: float = 0.05,
-        max_std: float = 2.0,
-        temperature: float = 0.5,
         # architecture
-        latent_dim: int = 512,
-        mlp_dim: int = 512,
-        simnorm_dim: int = 8,
-        num_q: int = 5,
-        num_bins: int = 101,
-        vmin: float = -10.0,
-        vmax: float = 10.0,
-        dropout: float = 0.01,
         episodic: bool = False,
-        log_std_min: float = -10.0,
-        log_std_max: float = 2.0,
-        entropy_coef: float = 1e-4,
-        # optimization
-        lr: float = 3e-4,
-        enc_lr_scale: float = 0.3,
-        grad_clip_norm: float = 20.0,
-        tau: float = 0.01,
-        rho: float = 0.5,
-        consistency_coef: float = 20.0,
-        reward_coef: float = 0.1,
-        value_coef: float = 0.1,
         termination_coef: float = 1.0,
-        discount_denom: float = 5.0,
-        discount_min: float = 0.95,
-        discount_max: float = 0.995,
+        # optimization
         # Dict-obs (pixel) encoder config -- ignored for Box observations.
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
@@ -318,9 +229,16 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: TDMPC2Params | None = None,
+        **overrides: Any,
     ) -> None:
         # Computed before super().__init__() -- both feed OffPolicyAlgorithm
         # constructor kwargs (gamma, learning_starts) below.
+        params = resolve_params(self.params_class, params, overrides)
+        tau = params.tau
+        discount_denom = params.discount_denom
+        discount_min = params.discount_min
+        discount_max = params.discount_max
         discount = _compute_discount(episode_length, discount_denom, discount_min, discount_max)
         learning_starts = (
             seed_steps if seed_steps is not None else max(1_000, 5 * episode_length)
@@ -352,6 +270,7 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
 
         if self.env.num_envs != 1:
             raise ValueError(
@@ -377,40 +296,11 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
         self.seed_steps = seed_steps
         self.discount = discount
 
-        self.use_planner = use_planner
-        self.num_samples = num_samples
-        self.num_elites = num_elites
-        self.num_pi_trajs = num_pi_trajs
-        self.iterations = iterations
-        self.min_std = min_std
-        self.max_std = max_std
-        self.temperature = temperature
         self.episodic = episodic
         self.termination_coef = termination_coef
 
         self._init_tdmpc2_params(
-            horizon=horizon,
-            latent_dim=latent_dim,
-            mlp_dim=mlp_dim,
-            simnorm_dim=simnorm_dim,
-            num_q=num_q,
-            num_bins=num_bins,
-            vmin=vmin,
-            vmax=vmax,
-            dropout=dropout,
-            log_std_min=log_std_min,
-            log_std_max=log_std_max,
-            entropy_coef=entropy_coef,
-            lr=lr,
-            enc_lr_scale=enc_lr_scale,
-            grad_clip_norm=grad_clip_norm,
-            rho=rho,
-            consistency_coef=consistency_coef,
-            reward_coef=reward_coef,
-            value_coef=value_coef,
-            discount_denom=discount_denom,
-            discount_min=discount_min,
-            discount_max=discount_max,
+            params=params,
         )
 
         self.encoder_config = encoder_config
@@ -648,13 +538,8 @@ class TDMPC2(TDMPC2Core, ModelBasedAlgorithm):
         return {
             **super()._checkpoint_metadata(),
             "episode_length": self.episode_length,
-            "num_samples": self.num_samples,
-            "num_elites": self.num_elites,
-            "num_pi_trajs": self.num_pi_trajs,
-            "iterations": self.iterations,
             "episodic": self.episodic,
             "termination_coef": self.termination_coef,
-            "use_planner": self.use_planner,
             "seed_steps": self.seed_steps,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,

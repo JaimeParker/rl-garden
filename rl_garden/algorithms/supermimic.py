@@ -80,11 +80,13 @@ from __future__ import annotations
 import contextlib
 import math
 from collections import defaultdict
-from typing import Any, Iterator, Literal, Optional
+from typing import Any, Iterator, Optional
 
 import torch
 import torch.nn as nn
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.supermimic import SuperMimicParams
 from rl_garden.algorithms.model_based import ModelBasedAlgorithm
 from rl_garden.buffers.state_sequence_replay_buffer import (
     HistorySample,
@@ -262,29 +264,24 @@ class SuperMimicCore:
     def _init_supermimic_params(
         self,
         *,
-        horizon: int = 32,
-        wm_window: int = 7,
-        wm_batches: int = 10,
-        wm_batch_size: int = 2048,
-        imagination_batch: int = 4096,
+        params: SuperMimicParams,
         gamma: float = 0.99,
-        lam: float = 0.95,
-        max_step_reward: Optional[float] = None,
-        lr: float = 2e-4,
-        lr_final_ratio: float = 1.0,
-        lr_decay_updates: int = 250_000,
-        actor_betas: tuple[float, float] = (0.9, 0.95),
-        wm_grad_norm: float = 1.0,
-        actor_grad_norm: float = 1.0,
-        actor_grad_value: float = 0.1,
-        critic_grad_norm: float = 1.0,
-        critic_epochs: int = 5,
-        critic_minibatches: int = 4,
-        action_noise_std: float = 0.1,
-        obs_history_len: int = 1,
-        warmup_updates: int = 0,
         amp_dtype: Optional[str] = None,
     ) -> None:
+        horizon = params.horizon
+        wm_window = params.wm_window
+        wm_batches = params.wm_batches
+        wm_batch_size = params.wm_batch_size
+        imagination_batch = params.imagination_batch
+        max_step_reward = params.max_step_reward
+        lr_final_ratio = params.lr_final_ratio
+        lr_decay_updates = params.lr_decay_updates
+        actor_betas = params.actor_betas
+        critic_epochs = params.critic_epochs
+        critic_minibatches = params.critic_minibatches
+        action_noise_std = params.action_noise_std
+        obs_history_len = params.obs_history_len
+        warmup_updates = params.warmup_updates
         positive = {
             "horizon": horizon,
             "wm_window": wm_window,
@@ -310,28 +307,9 @@ class SuperMimicCore:
         if max_step_reward is not None:
             if not math.isfinite(max_step_reward) or not 0.0 <= gamma < 1.0:
                 raise ValueError("max_step_reward requires a finite reward bound and gamma in [0, 1).")
-        self.horizon = horizon
-        self.wm_window = wm_window
-        self.wm_batches = wm_batches
-        self.wm_batch_size = wm_batch_size
-        self.imagination_batch = imagination_batch
         self.gamma = gamma
-        self.lam = lam
-        self.max_step_reward = max_step_reward
         self._v_max = None if max_step_reward is None else max_step_reward / (1.0 - gamma)
-        self.lr = lr
-        self.lr_final_ratio = lr_final_ratio
-        self.lr_decay_updates = lr_decay_updates
         self.actor_betas = tuple(actor_betas)
-        self.wm_grad_norm = wm_grad_norm
-        self.actor_grad_norm = actor_grad_norm
-        self.actor_grad_value = actor_grad_value
-        self.critic_grad_norm = critic_grad_norm
-        self.critic_epochs = critic_epochs
-        self.critic_minibatches = critic_minibatches
-        self.action_noise_std = action_noise_std
-        self.obs_history_len = obs_history_len
-        self.warmup_updates = warmup_updates
         self.amp_dtype = amp_dtype
 
     # ------------------------------------------------------------------
@@ -541,27 +519,8 @@ class SuperMimicCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon": self.horizon,
-            "wm_window": self.wm_window,
-            "wm_batches": self.wm_batches,
-            "wm_batch_size": self.wm_batch_size,
-            "imagination_batch": self.imagination_batch,
             "gamma": self.gamma,
-            "lam": self.lam,
-            "max_step_reward": self.max_step_reward,
-            "lr": self.lr,
-            "lr_final_ratio": self.lr_final_ratio,
-            "lr_decay_updates": self.lr_decay_updates,
             "actor_betas": list(self.actor_betas),
-            "wm_grad_norm": self.wm_grad_norm,
-            "actor_grad_norm": self.actor_grad_norm,
-            "actor_grad_value": self.actor_grad_value,
-            "critic_grad_norm": self.critic_grad_norm,
-            "critic_epochs": self.critic_epochs,
-            "critic_minibatches": self.critic_minibatches,
-            "action_noise_std": self.action_noise_std,
-            "obs_history_len": self.obs_history_len,
-            "warmup_updates": self.warmup_updates,
             "amp_dtype": self.amp_dtype,
         }
 
@@ -574,48 +533,22 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
     #: argument overrides it per instance (e.g. ``NominalErrorStateSpaceWorldModel``).
     world_model_cls: type[StateSpaceWorldModel] = StateSpaceWorldModel
 
+    params_class = SuperMimicParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        heads: Literal["learned", "analytic"] = "learned",
         codec: Optional[StateCodec] = None,
         goal_source: Optional[GoalSource] = None,
         world_model_cls: Optional[type[StateSpaceWorldModel]] = None,
-        replay_ratio: Optional[float] = 16.0,
         sim_steps_per_iteration: Optional[int] = None,
         updates_per_iteration: Optional[int] = None,
         buffer_size: Optional[int] = None,
         buffer_device: str = "cuda",
         learning_starts: Optional[int] = None,
-        wm_hidden_dims: tuple[int, ...] = (2048, 2048, 2048),
-        head_hidden_dims: tuple[int, ...] = (256, 256),
-        latent_dim: int = 32,
-        goal_encoder_dims: tuple[int, ...] = (2048, 1024, 512, 256),
-        decoder_dims: tuple[int, ...] = (2048, 1024, 512, 256),
-        critic_dims: tuple[int, ...] = (256, 128),
-        horizon: int = 32,
-        wm_window: int = 7,
-        wm_batches: int = 10,
-        wm_batch_size: int = 2048,
-        imagination_batch: int = 4096,
         gamma: float = 0.99,
-        lam: float = 0.95,
-        max_step_reward: Optional[float] = None,
-        lr: float = 2e-4,
-        lr_final_ratio: float = 1.0,
-        lr_decay_updates: int = 250_000,
-        actor_betas: tuple[float, float] = (0.9, 0.95),
-        wm_grad_norm: float = 1.0,
-        actor_grad_norm: float = 1.0,
-        actor_grad_value: float = 0.1,
-        critic_grad_norm: float = 1.0,
-        critic_epochs: int = 5,
-        critic_minibatches: int = 4,
-        action_noise_std: float = 0.1,
-        obs_history_len: int = 1,
-        warmup_updates: int = 0,
         amp_dtype: Optional[str] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -628,7 +561,21 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: SuperMimicParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        heads = params.heads
+        replay_ratio = params.replay_ratio
+        wm_hidden_dims = params.wm_hidden_dims
+        head_hidden_dims = params.head_hidden_dims
+        goal_encoder_dims = params.goal_encoder_dims
+        decoder_dims = params.decoder_dims
+        critic_dims = params.critic_dims
+        wm_window = params.wm_window
+        wm_batches = params.wm_batches
+        wm_batch_size = params.wm_batch_size
+        warmup_updates = params.warmup_updates
         if heads not in ("learned", "analytic"):
             raise ValueError(f"heads must be 'learned' or 'analytic', got {heads!r}.")
         num_envs = env.num_envs
@@ -682,45 +629,24 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
                 update_encoder=False,
             ),
         )
+        self._bind_params(params)
         self.grad_steps_per_iteration = 1 if replay_ratio is not None else updates_per_iteration
-        self.replay_ratio = replay_ratio
         self.updates_per_env_step = update_rate
         self._update_credit = 0.0
         self.sim_steps_per_iteration = sim_steps_per_iteration
         self.updates_per_iteration = updates_per_iteration
-        self.heads = heads
         self.codec = codec
         if world_model_cls is not None:
             self.world_model_cls = world_model_cls
         self.goal_source = goal_source if goal_source is not None else getattr(env.unwrapped, "goal_source", None)
         self.wm_hidden_dims = tuple(wm_hidden_dims)
         self.head_hidden_dims = tuple(head_hidden_dims)
-        self.latent_dim = latent_dim
         self.goal_encoder_dims = tuple(goal_encoder_dims)
         self.decoder_dims = tuple(decoder_dims)
         self.critic_dims = tuple(critic_dims)
         self._init_supermimic_params(
-            horizon=horizon,
-            wm_window=wm_window,
-            wm_batches=wm_batches,
-            wm_batch_size=wm_batch_size,
-            imagination_batch=imagination_batch,
+            params=params,
             gamma=gamma,
-            lam=lam,
-            max_step_reward=max_step_reward,
-            lr=lr,
-            lr_final_ratio=lr_final_ratio,
-            lr_decay_updates=lr_decay_updates,
-            actor_betas=actor_betas,
-            wm_grad_norm=wm_grad_norm,
-            actor_grad_norm=actor_grad_norm,
-            actor_grad_value=actor_grad_value,
-            critic_grad_norm=critic_grad_norm,
-            critic_epochs=critic_epochs,
-            critic_minibatches=critic_minibatches,
-            action_noise_std=action_noise_std,
-            obs_history_len=obs_history_len,
-            warmup_updates=warmup_updates,
             amp_dtype=amp_dtype,
         )
         self._obs_hist: Optional[torch.Tensor] = None
@@ -851,9 +777,7 @@ class SuperMimic(SuperMimicCore, ModelBasedAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "heads": self.heads,
             "world_model_cls": f"{self.world_model_cls.__module__}.{self.world_model_cls.__qualname__}",
-            "replay_ratio": self.replay_ratio,
             "updates_per_env_step": self.updates_per_env_step,
             "sim_steps_per_iteration": self.sim_steps_per_iteration,
             "updates_per_iteration": self.updates_per_iteration,

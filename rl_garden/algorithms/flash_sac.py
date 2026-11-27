@@ -13,7 +13,6 @@ Reference: arxiv.org/abs/2409.08689
 """
 from __future__ import annotations
 
-import math
 import warnings
 from typing import Any, Optional
 
@@ -29,6 +28,8 @@ from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.reward_normalizer import RewardNormalizer
 from rl_garden.common.training_phase import InitialTrainingPhase
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.flash_sac import FlashSACParams
 from rl_garden.observations import (
     ObservationContractError,
     ObservationSchema,
@@ -145,52 +146,25 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
         # architecture unchanged.
         return super()._obs_to_policy_device(obs)["state"]
 
+    params_class = FlashSACParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
-        # replay / training
+        *,
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
         learning_starts: int = 4_000,
         batch_size: int = 1024,
         gamma: float = 0.99,
-        tau: float = 0.005,
         training_freq: int = 512,
         utd: float = 1.0,
-        n_step: int = 3,
         bootstrap_at_done: str = "truncated",
-        # architecture
-        actor_hidden_dim: int = 128,
-        actor_num_blocks: int = 2,
-        critic_hidden_dim: int = 256,
-        critic_num_blocks: int = 2,
-        num_bins: int = 101,
-        min_v: float = -5.0,
-        max_v: float = 5.0,
         asymmetric_obs_dim: int = 0,
-        # optimizers
-        actor_lr: float = 1e-4,
-        critic_lr: float = 1e-4,
-        alpha_lr: float = 1e-4,
-        actor_update_period: int = 1,
-        grad_clip_norm: Optional[float] = None,
-        # entropy / temperature
-        temp_initial_value: float = 0.01,
-        target_entropy: float | str = "auto",
-        # exploration (Zeta noise)
-        actor_noise_zeta_mu: float = 2.0,
-        actor_noise_zeta_max: int = 16,
-        # reward normalization
-        normalize_reward: bool = False,
-        normalized_g_max: float = 10.0,
-        # BC regularization
-        bc_alpha: float = 0.0,
-        # performance
         use_compile: bool = False,
         compile_mode: str = "default",
         use_amp: bool = False,
-        # standard OffPolicyAlgorithm params
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -203,7 +177,12 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        params: FlashSACParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        tau = params.tau
+        target_entropy = params.target_entropy
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -229,6 +208,7 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
         )
+        self._bind_params(params)
 
         # FlashSAC has no encoder mixin / CombinedExtractor path -- FlashSACPolicy
         # indexes observation_space.shape[0] directly and the rollout/train loop
@@ -246,27 +226,8 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
                 f"keys {schema.keys}"
             )
 
-        self.n_step = n_step
-        self.actor_hidden_dim = actor_hidden_dim
-        self.actor_num_blocks = actor_num_blocks
-        self.critic_hidden_dim = critic_hidden_dim
-        self.critic_num_blocks = critic_num_blocks
-        self.num_bins = num_bins
-        self.min_v = min_v
-        self.max_v = max_v
         self.asymmetric_obs_dim = asymmetric_obs_dim
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.alpha_lr = alpha_lr
-        self.actor_update_period = actor_update_period
-        self.grad_clip_norm = grad_clip_norm
-        self.temp_initial_value = temp_initial_value
         self.target_entropy_arg = target_entropy
-        self.actor_noise_zeta_mu = actor_noise_zeta_mu
-        self.actor_noise_zeta_max = actor_noise_zeta_max
-        self.normalize_reward = normalize_reward
-        self.normalized_g_max = normalized_g_max
-        self.bc_alpha = bc_alpha
         self.use_compile = use_compile
         self.compile_mode = compile_mode
         self.use_amp = use_amp
@@ -638,21 +599,8 @@ class FlashSAC(SACCore, OffPolicyAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "n_step": self.n_step,
-            "actor_hidden_dim": self.actor_hidden_dim,
-            "actor_num_blocks": self.actor_num_blocks,
-            "critic_hidden_dim": self.critic_hidden_dim,
-            "critic_num_blocks": self.critic_num_blocks,
-            "num_bins": self.num_bins,
-            "min_v": self.min_v,
-            "max_v": self.max_v,
             "asymmetric_obs_dim": self.asymmetric_obs_dim,
-            "actor_lr": self.actor_lr,
-            "critic_lr": self.critic_lr,
-            "alpha_lr": self.alpha_lr,
-            "temp_initial_value": self.temp_initial_value,
             "target_entropy": self.target_entropy,
-            "normalize_reward": self.normalize_reward,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

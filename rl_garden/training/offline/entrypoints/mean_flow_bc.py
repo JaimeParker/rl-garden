@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from rl_garden.training.offline.args import (
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineMeanFlowBCArgs,
 )
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.mean_flow_bc import MeanFlowBCParams
 from rl_garden.training.offline.registry import registry
 
 if TYPE_CHECKING:
@@ -16,12 +18,10 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class MeanFlowBCArgs(
-    OfflineCommonArgs,
-    OfflineDeviceArgs,
-    OfflineMeanFlowBCArgs,
-):
+class MeanFlowBCArgs(OfflineMeanFlowBCArgs, OfflineCommonArgs, OfflineDeviceArgs):
     """MeanFlow behavior cloning offline pretraining."""
+
+    net_arch: Optional[tuple[int, ...]] = (512, 512, 512, 512)
 
 
 def _mean_flow_bc_kwargs(
@@ -29,29 +29,12 @@ def _mean_flow_bc_kwargs(
 ) -> dict:
     from rl_garden.common.cli_args import resolve_obs_groups_config
     kwargs = {
+        **params_kwargs(args, MeanFlowBCParams),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "offline_sampling": args.offline_sampling,
-        "actor_lr": args.actor_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
-        "net_arch": args.net_arch,
-        "num_sample_steps": args.num_sample_steps,
-        "mode": args.mode,
-        "time_dist_mu": args.time_dist_mu,
-        "time_dist_sigma": args.time_dist_sigma,
-        "adaptive_l2_gamma": args.adaptive_l2_gamma,
-        "adaptive_l2_c": args.adaptive_l2_c,
-        "actor_use_layer_norm": args.actor_use_layer_norm,
-        "kernel_init": args.kernel_init,
-        "activation_fn": args.activation_fn,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

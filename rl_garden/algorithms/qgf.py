@@ -72,7 +72,7 @@ evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -81,17 +81,13 @@ from rl_garden.algorithms.chunked_rollout import ActionChunkingMixin
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.qgf import QGFParams
 from rl_garden.observations import ObsGroups
-from rl_garden.policies.qgf_policy import (
-    DenoisedActionApprox,
-    QGFPolicy,
-    SamplingMode,
-)
+from rl_garden.policies.qgf_policy import QGFPolicy
 
 
 class QGFCore:
@@ -100,88 +96,29 @@ class QGFCore:
     def _init_qgf_params(
         self,
         *,
+        params: QGFParams,
         horizon_length: int = 1,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_value_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        expectile: float = 0.9,
-        q_agg: Literal["mean", "min"] = "min",
-        n_critics: int = 2,
-        denoise_steps: int = 10,
-        t_sampling: Literal["grid", "uniform"] = "grid",
-        sampling_mode: SamplingMode = "guided",
-        guidance_weight: float = 1.0,
-        denoised_action_approx: DenoisedActionApprox = "one_euler_step_approx",
-        qgrad_step_size: float = 0.1,
-        qgrad_steps: int = 1,
-        use_sign_gradient: bool = False,
-        actor_num_samples: int = 32,
-        robust_critic_lr: float = 3e-4,
-        robust_critic_t_emb_size: int = 16,
-        net_arch: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = True,
-        critic_use_layer_norm: bool = True,
-        value_use_layer_norm: bool = True,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
     ) -> None:
         self._init_action_chunking(horizon_length)
-        if not (0.0 < tau <= 1.0):
-            raise ValueError(f"tau must be in (0, 1], got {tau}.")
-        if not (0.0 < expectile < 1.0):
-            raise ValueError(f"expectile must be in (0, 1), got {expectile}.")
-        if q_agg not in ("mean", "min"):
-            raise ValueError(f"q_agg must be 'mean' or 'min', got {q_agg!r}.")
-        if denoise_steps < 1:
-            raise ValueError(f"denoise_steps must be >= 1, got {denoise_steps}.")
-        if t_sampling not in ("grid", "uniform"):
-            raise ValueError(f"t_sampling must be 'grid' or 'uniform', got {t_sampling!r}.")
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if not (0.0 < params.tau <= 1.0):
+            raise ValueError(f"tau must be in (0, 1], got {params.tau}.")
+        if not (0.0 < params.expectile < 1.0):
+            raise ValueError(f"expectile must be in (0, 1), got {params.expectile}.")
+        if params.q_agg not in ("mean", "min"):
+            raise ValueError(f"q_agg must be 'mean' or 'min', got {params.q_agg!r}.")
+        if params.denoise_steps < 1:
+            raise ValueError(f"denoise_steps must be >= 1, got {params.denoise_steps}.")
+        if params.t_sampling not in ("grid", "uniform"):
+            raise ValueError(f"t_sampling must be 'grid' or 'uniform', got {params.t_sampling!r}.")
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.tau = tau
-        self.actor_lr = actor_lr
-        self.critic_value_lr = critic_value_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
-        self.expectile = expectile
-        self.q_agg = q_agg
-        self.n_critics = n_critics
-        self.denoise_steps = denoise_steps
-        self.t_sampling = t_sampling
-        self.sampling_mode = sampling_mode
-        self.guidance_weight = guidance_weight
-        self.denoised_action_approx = denoised_action_approx
-        self.qgrad_step_size = qgrad_step_size
-        self.qgrad_steps = qgrad_steps
-        self.use_sign_gradient = use_sign_gradient
-        self.actor_num_samples = actor_num_samples
-        self.robust_critic_lr = robust_critic_lr
-        self.robust_critic_t_emb_size = robust_critic_t_emb_size
+        self._bind_params(params)
         self.net_arch: list[int] = (
-            list(net_arch) if net_arch is not None else [512, 512, 512, 512]
+            list(params.net_arch) if params.net_arch is not None else [512, 512, 512, 512]
         )
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.value_use_layer_norm = value_use_layer_norm
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.activation_fn = activation_fn
 
     def _optimizer_names(self) -> tuple[str, ...]:
         names = ("critic_value_optimizer", "actor_optimizer")
@@ -192,32 +129,7 @@ class QGFCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
-            "actor_lr": self.actor_lr,
-            "critic_value_lr": self.critic_value_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
-            "expectile": self.expectile,
-            "q_agg": self.q_agg,
-            "n_critics": self.n_critics,
-            "denoise_steps": self.denoise_steps,
-            "t_sampling": self.t_sampling,
-            "sampling_mode": self.sampling_mode,
-            "guidance_weight": self.guidance_weight,
-            "denoised_action_approx": self.denoised_action_approx,
-            "qgrad_step_size": self.qgrad_step_size,
-            "qgrad_steps": self.qgrad_steps,
-            "use_sign_gradient": self.use_sign_gradient,
-            "actor_num_samples": self.actor_num_samples,
-            "robust_critic_lr": self.robust_critic_lr,
-            "robust_critic_t_emb_size": self.robust_critic_t_emb_size,
             "net_arch": self.net_arch,
-            "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -470,6 +382,8 @@ class QGF(ActionChunkingMixin, QGFCore, OfflineRLAlgorithm):
     """Offline QGF: BC flow-matching actor + IQL critic/value, guided
     denoising at inference. See module docstring."""
 
+    params_class = QGFParams
+
     _compatible_checkpoint_algorithms = ("QGF",)
     # The single shared encoder is trained by the combined
     # critic+value+bc-actor loss in one backward() (see _compute_losses),
@@ -487,37 +401,6 @@ class QGF(ActionChunkingMixin, QGFCore, OfflineRLAlgorithm):
         gamma: float = 0.99,
         offline_sampling: str = "with_replace",
         horizon_length: int = 1,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_value_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        expectile: float = 0.9,
-        q_agg: Literal["mean", "min"] = "min",
-        n_critics: int = 2,
-        denoise_steps: int = 10,
-        t_sampling: Literal["grid", "uniform"] = "grid",
-        sampling_mode: SamplingMode = "guided",
-        guidance_weight: float = 1.0,
-        denoised_action_approx: DenoisedActionApprox = "one_euler_step_approx",
-        qgrad_step_size: float = 0.1,
-        qgrad_steps: int = 1,
-        use_sign_gradient: bool = False,
-        actor_num_samples: int = 32,
-        robust_critic_lr: float = 3e-4,
-        robust_critic_t_emb_size: int = 16,
-        net_arch: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = True,
-        critic_use_layer_norm: bool = True,
-        value_use_layer_norm: bool = True,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -535,7 +418,10 @@ class QGF(ActionChunkingMixin, QGFCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[QGFParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -557,38 +443,8 @@ class QGF(ActionChunkingMixin, QGFCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_qgf_params(
+            params=params,
             horizon_length=horizon_length,
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_value_lr=critic_value_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            expectile=expectile,
-            q_agg=q_agg,
-            n_critics=n_critics,
-            denoise_steps=denoise_steps,
-            t_sampling=t_sampling,
-            sampling_mode=sampling_mode,
-            guidance_weight=guidance_weight,
-            denoised_action_approx=denoised_action_approx,
-            qgrad_step_size=qgrad_step_size,
-            qgrad_steps=qgrad_steps,
-            use_sign_gradient=use_sign_gradient,
-            actor_num_samples=actor_num_samples,
-            robust_critic_lr=robust_critic_lr,
-            robust_critic_t_emb_size=robust_critic_t_emb_size,
-            net_arch=net_arch,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            value_use_layer_norm=value_use_layer_norm,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups

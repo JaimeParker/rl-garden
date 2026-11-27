@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from rl_garden.hyperparameters import params_kwargs
+
+from rl_garden.hyperparameters.sac import RLPDParams
+
+from typing import Any
 
 
 def build_rlpd(
@@ -27,7 +31,7 @@ def build_rlpd(
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
-    net_arch = {
+    net_arch = args.net_arch if args.net_arch is not None else {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
@@ -44,56 +48,27 @@ def build_rlpd(
     if algorithm_cls is None:
         algorithm_cls = RLPD
     agent_kwargs: dict[str, Any] = dict(
+        **{
+            **params_kwargs(args, RLPDParams),
+            "net_arch": net_arch,
+        },
         env=env,
         eval_env=eval_env,
         mmap_dir=args.mmap_dir,
         mmap_mode=args.mmap_mode,
-        n_critics=args.n_critics,
-        critic_subsample_size=args.critic_subsample_size,
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        actor_dropout_rate=args.actor_dropout_rate,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        use_pnorm=args.use_pnorm,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        nstep=args.nstep,
-        tau=args.tau,
         bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        exclude_bias_from_decay=args.exclude_bias_from_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        alpha_tuning=args.alpha_tuning,
-        ent_coef=args.ent_coef,
-        target_entropy=args.target_entropy,
-        alpha_lr=args.alpha_lr,
         q_landscape_diagnostics=args.q_landscape_diagnostics,
         q_landscape_num_actions=args.q_landscape_num_actions,
         q_landscape_batch_size=args.q_landscape_batch_size,
         q_mc_diagnostics=args.q_mc_diagnostics,
         initial_training_phase=sac_initial_training_phase_from_args(args),
-        critic_impl=args.critic_impl,
-        std_parameterization=args.std_parameterization,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        actor_log_std_min=args.actor_log_std_min,
-        actor_log_std_mode=args.actor_log_std_mode,
-        target_policy_noise=args.target_policy_noise,
-        target_noise_clip=args.target_noise_clip,
-        actor_q_agg=args.actor_q_agg,
-        net_arch=net_arch,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -170,13 +145,12 @@ from dataclasses import dataclass
 
 from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
-from rl_garden.networks import BackboneType, KernelInit
 from rl_garden.training.online.args import VisionSACTrainingArgs
 from rl_garden.training.online.registry import registry
 
 
 @dataclass
-class RLPDArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
+class RLPDArgs(RLPDParams, VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """RLPD -- high UTD + REDQ-style critic ensemble subsampling + LayerNorm
     + offline/online prior-data mixing from step 0, on top of SAC.
 
@@ -184,26 +158,9 @@ class RLPDArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     registered backend, e.g. ``d4rl_legacy``.
     """
 
-    n_critics: int = 10
-    critic_subsample_size: int | None = 2
-    critic_use_layer_norm: bool = True
     utd: float = 4.0
 
-    actor_dropout_rate: float | None = None
-    critic_dropout_rate: float | None = None
-    kernel_init: KernelInit | None = None
-    backbone_type: BackboneType = "mlp"
-    use_pnorm: bool = False
-    std_parameterization: Literal["exp", "uniform"] = "exp"
 
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    exclude_bias_from_decay: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: float | None = None
 
     # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
     # Literal: a new backend registers itself, no CLI arg change needed here.

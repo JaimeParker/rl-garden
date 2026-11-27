@@ -7,23 +7,31 @@ or in another package) builds its agent from them.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters.sac import SACParams
+
+from rl_garden.hyperparameters import params_kwargs
+
 from collections.abc import Callable
 from typing import Any
 
 
 def sac_common_kwargs(
-    args, env, eval_env, logger, checkpoint_dir, image_kwargs
+    args, env, eval_env, logger, checkpoint_dir, image_kwargs, *, params_class=SACParams
 ) -> dict:
     """Kwargs shared by every SAC-family algorithm built from ``SACTrainingArgs``
     (plain SAC and RecurrentSAC alike) -- everything except the recurrent-only
     ``rnn_*``/``burn_in_len``/etc. fields."""
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
-    net_arch = {
+    net_arch = args.net_arch if args.net_arch is not None else {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
     return dict(
+        **{
+            **params_kwargs(args, params_class),
+            "net_arch": net_arch,
+        },
         env=env,
         eval_env=eval_env,
         buffer_size=args.buffer_size,
@@ -31,33 +39,14 @@ def sac_common_kwargs(
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        nstep=args.nstep,
-        tau=args.tau,
         bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        alpha_tuning=args.alpha_tuning,
-        ent_coef=args.ent_coef,
-        target_entropy=args.target_entropy,
-        alpha_lr=args.alpha_lr,
         q_landscape_diagnostics=args.q_landscape_diagnostics,
         q_landscape_num_actions=args.q_landscape_num_actions,
         q_landscape_batch_size=args.q_landscape_batch_size,
         q_mc_diagnostics=args.q_mc_diagnostics,
         initial_training_phase=sac_initial_training_phase_from_args(args),
-        critic_impl=args.critic_impl,
-        n_critics=args.n_critics,
-        critic_subsample_size=args.critic_subsample_size,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        actor_log_std_min=args.actor_log_std_min,
-        actor_log_std_mode=args.actor_log_std_mode,
-        target_policy_noise=args.target_policy_noise,
-        target_noise_clip=args.target_noise_clip,
-        actor_q_agg=args.actor_q_agg,
-        net_arch=net_arch,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -131,14 +120,16 @@ def build_sac(
             )
         mmap_dir = os.path.join(mmap_dir, f"rank{ddp_rank()}")
 
-    agent = construct_agent(
-        algorithm_cls,
-        mmap_dir=mmap_dir,
-        mmap_mode=args.mmap_mode,
-        **sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+    agent_kwargs = {
+        "mmap_dir": mmap_dir,
+        "mmap_mode": args.mmap_mode,
+        **sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs, params_class=SACParams),
         **policy_module_kwargs(args),
-        **extra_kwargs,
-    )
+    }
+    # A given keyword replaces the one built from ``args``: every hyperparameter
+    # is built from ``args`` now, so an extra one would otherwise be passed twice.
+    agent_kwargs.update(extra_kwargs)
+    agent = construct_agent(algorithm_cls, **agent_kwargs)
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     if args.load_actor_checkpoint is not None:

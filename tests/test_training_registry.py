@@ -509,33 +509,10 @@ def test_off2on_dry_run_validates_dataset_before_creating_resources(monkeypatch)
         )
 
 
-def test_explain_param_prints_only_value_and_source(capsys):
-    from rl_garden.training.online import registry
-
-    registry.run_cli(["sac", "--gamma", "0.93", "--explain-param", "gamma"])
-
-    payload = json.loads(capsys.readouterr().out)
-    assert set(payload) == {"path", "value", "type", "source"}
-    assert payload["path"] == "gamma"
-    assert payload["value"] == 0.93
-    assert payload["type"] == "float"
-    assert payload["source"]["kind"] == "CLI"
 
 
-def test_explain_param_reports_default_source(capsys):
-    from rl_garden.training.online import registry
-
-    registry.run_cli(["sac", "--explain-param", "gamma"])
-
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["source"] == {"kind": "default", "detail": None}
 
 
-def test_explain_param_rejects_inactive_field():
-    from rl_garden.training.online import registry
-
-    with pytest.raises(SystemExit, match="encoder.backbone.*inactive"):
-        registry.run_cli(["sac", "--explain-param", "encoder.backbone"])
 
 
 def test_dry_run_materializes_env_and_agent_without_learning(monkeypatch, capsys):
@@ -719,7 +696,6 @@ def test_help_lists_config_inspection_controls(capsys):
     assert "--config PATH" in output
     assert "--print-config" in output
     assert "--dry-run" in output
-    assert "--explain-param PATH" in output
 
 
 # --- extension contract: entry points, declared builders, builder reuse --------------
@@ -851,7 +827,7 @@ def test_builders_take_a_subclass_and_forward_extra_kwargs(
     )
 
     class Subclass:
-        pass
+        params_class = registry.entries()[algorithm].algorithm_cls().params_class
 
     args = registry.entries()[algorithm].args_cls()
     builder(args, "env", "eval_env", "logger", "checkpoints")
@@ -908,6 +884,40 @@ def test_rlpd_builders_construct_the_given_subclass_with_extra_kwargs_overriding
     assert agent.batch_size == 7
 
 
+@pytest.mark.parametrize(
+    "algorithm,module_name,builder_name",
+    [row for row in _REUSABLE_BUILDERS
+     if row[0] in ("sac", "rlpd", "rlpd_hybrid", "recurrent_sac", "transformer_sac")],
+)
+def test_sac_builders_let_an_extra_keyword_replace_the_one_built_from_args(
+    monkeypatch, algorithm, module_name, builder_name
+):
+    import importlib
+
+    from rl_garden.training import inspection
+    from rl_garden.training.online import registry
+
+    registry.discover()
+    module = importlib.import_module(f"rl_garden.training.online.entrypoints.{module_name}")
+    constructed = []
+    monkeypatch.setattr(
+        inspection,
+        "construct_agent",
+        lambda cls, **kwargs: constructed.append(kwargs) or _StubAgent(),
+    )
+    args = registry.entries()[algorithm].args_cls()
+    assert args.grad_clip_norm is None
+
+    getattr(module, builder_name)(args, "env", "eval_env", "logger", "checkpoints")
+    getattr(module, builder_name)(
+        args, "env", "eval_env", "logger", "checkpoints", grad_clip_norm=1.0
+    )
+
+    default_kwargs, kwargs = constructed
+    assert default_kwargs["grad_clip_norm"] is None
+    assert kwargs == {**default_kwargs, "grad_clip_norm": 1.0}
+
+
 def test_build_rlpd_hybrid_extra_kwargs_reach_the_constructor_beyond_args():
     from test_optimizer_ownership import TinyVecEnv
 
@@ -916,7 +926,7 @@ def test_build_rlpd_hybrid_extra_kwargs_reach_the_constructor_beyond_args():
 
     registry.discover()
     args = registry.entries()["rlpd_hybrid"].args_cls()
-    assert not hasattr(args, "use_grasp_penalty")
+    assert args.use_grasp_penalty is False
 
     agent = build_rlpd_hybrid(
         args,

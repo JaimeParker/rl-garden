@@ -76,6 +76,8 @@ from rl_garden.buffers.rehearsal_sequence_buffer import RehearsalSequenceBuffer,
 from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.dreamer import DreamerV3Params, NCRLParams
 from rl_garden.networks.dreamer_nets import MLPHead
 from rl_garden.networks.ncrl_nets import NCRLHead
 from rl_garden.networks.returns import lambda_return
@@ -415,6 +417,9 @@ def _clip_decay_step(
 
 
 class NCRL(DreamerV3):
+    params_class = NCRLParams
+    dreamer_inputs_class = DreamerV3Params
+
     _compatible_checkpoint_algorithms = ("NCRL",)
 
     def __init__(
@@ -426,45 +431,11 @@ class NCRL(DreamerV3):
         backbone: Literal["dreamer_v3", "ncrl"] = "dreamer_v3",
         retrieval_db: Optional[str] = None,
         prior_dataset_dir: Optional[str] = None,
-        online_ratio: float = 0.75,
-        num_retrieve_episodes: int = 500,
-        max_retrieve_iterations: int = 10,
-        use_guidance: bool = True,
-        bc_train_steps: int = 150_000,
-        bc_batch_size: int = 256,
-        bc_lr: float = 1e-4,
-        guidance_schedule: tuple[str, float, float, int] = ("linear", 1.0, 0.1, 100_000),
         episode_frames: int = 1000,
         action_repeat: int = 2,
-        warmup_frames: int = 15_000,
         learning_starts: Optional[int] = None,
-        imag_horizon: int = 16,
-        discount: float = 0.99,
-        lam: float = 0.95,
-        actor_ent: float = 1e-4,
-        model_lr: float = 1e-4,
-        reward_lr: float = 1e-4,
-        actor_lr: float = 8e-5,
-        critic_lr: float = 8e-5,
-        adam_eps: float = 1e-5,
-        weight_decay: float = 1e-6,
-        grad_clip: float = 100.0,
-        slow_target_fraction: float = 0.02,
-        ac_units: int = 512,
-        actor_layers: int = 3,
-        critic_layers: int = 3,
-        reward_layers: int = 2,
-        reward_units: int = 512,
         padded_action_dim: Optional[int] = None,
-        reward_bins: int = 255,
-        kl_free: float = 1.0,
-        kl_free_mode: Literal["per_element", "mean"] = "mean",
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        recon_scale: float = 1.0,
         batch_size: int = 16,
-        batch_length: int = 64,
-        train_ratio: float = 256.0,
         buffer_size: int = 250_000,
         buffer_device: str = "cuda",
         compute_dtype: Optional[Literal["float32", "bfloat16"]] = None,
@@ -482,7 +453,28 @@ class NCRL(DreamerV3):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[NCRLParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        kl_free = params.kl_free
+        dyn_scale = params.dyn_scale
+        rep_scale = params.rep_scale
+        recon_scale = params.recon_scale
+        batch_length = params.batch_length
+        reward_bins = params.reward_bins
+        train_ratio = params.train_ratio
+        imag_horizon = params.imag_horizon
+        lam = params.lam
+        slow_target_fraction = params.slow_target_fraction
+        online_ratio = params.online_ratio
+        use_guidance = params.use_guidance
+        guidance_schedule = params.guidance_schedule
+        warmup_frames = params.warmup_frames
+        discount = params.discount
+        actor_ent = params.actor_ent
+        self._bind_params(params)
+
         if not pretrained_world_model:
             raise ValueError("NCRL needs pretrained_world_model (an RSSMPretrain checkpoint); train from scratch with DreamerV3.")
         if save_replay_buffer:
@@ -523,34 +515,12 @@ class NCRL(DreamerV3):
         self.backbone = backbone
         self.retrieval_db = retrieval_db
         self.prior_dataset_dir = prior_dataset_dir
-        self.online_ratio = online_ratio
-        self.num_retrieve_episodes = num_retrieve_episodes
-        self.max_retrieve_iterations = max_retrieve_iterations
-        self.use_guidance = use_guidance
         self.guidance_enabled = use_guidance and online_ratio < 1.0
-        self.bc_train_steps = bc_train_steps
-        self.bc_batch_size = bc_batch_size
-        self.bc_lr = bc_lr
         self.guidance_schedule = (str(kind), float(start_prob), float(end_prob), int(decay_steps))
         self.episode_frames = episode_frames
         self.action_repeat = action_repeat
         self.episode_steps = episode_frames // action_repeat
-        self.warmup_frames = warmup_frames
         self.warmup_steps = max(warmup_frames // action_repeat, 5 * self.episode_steps)
-        self.discount = discount
-        self.model_lr = model_lr
-        self.reward_lr = reward_lr
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.adam_eps = adam_eps
-        self.weight_decay = weight_decay
-        self.grad_clip = grad_clip
-        self.ac_units = ac_units
-        self.actor_layers = actor_layers
-        self.critic_layers = critic_layers
-        self.reward_layers = reward_layers
-        self.reward_units = reward_units
-        self.kl_free_mode = kl_free_mode
         self.padded_action_dim = int(hyper["padded_action_dim"])
         self._pretrained_checkpoint = checkpoint
         if learning_starts is None:
@@ -1024,44 +994,12 @@ class NCRL(DreamerV3):
             "decoder_layers": self.decoder_layers,
             "padded_action_dim": self.padded_action_dim,
             "env_action_dim": self._env_action_dim,
-            "reward_bins": self.reward_bins,
-            "kl_free": self.kl_free,
-            "kl_free_mode": self.kl_free_mode,
-            "online_ratio": self.online_ratio,
-            "num_retrieve_episodes": self.num_retrieve_episodes,
-            "max_retrieve_iterations": self.max_retrieve_iterations,
-            "use_guidance": self.use_guidance,
             "guidance_enabled": self.guidance_enabled,
-            "bc_train_steps": self.bc_train_steps,
-            "bc_batch_size": self.bc_batch_size,
-            "bc_lr": self.bc_lr,
             "guidance_schedule": list(self.guidance_schedule),
             "episode_frames": self.episode_frames,
             "action_repeat": self.action_repeat,
-            "warmup_frames": self.warmup_frames,
             "warmup_steps": self.warmup_steps,
-            "batch_length": self.batch_length,
-            "train_ratio": self.train_ratio,
-            "imag_horizon": self.imag_horizon,
-            "discount": self.discount,
-            "lam": self.lam,
             "actor_ent": self.act_entropy,
-            "dyn_scale": self.dyn_scale,
-            "rep_scale": self.rep_scale,
-            "recon_scale": self.recon_scale,
-            "model_lr": self.model_lr,
-            "reward_lr": self.reward_lr,
-            "actor_lr": self.actor_lr,
-            "critic_lr": self.critic_lr,
-            "adam_eps": self.adam_eps,
-            "weight_decay": self.weight_decay,
-            "grad_clip": self.grad_clip,
-            "slow_target_fraction": self.slow_target_fraction,
-            "ac_units": self.ac_units,
-            "actor_layers": self.actor_layers,
-            "critic_layers": self.critic_layers,
-            "reward_layers": self.reward_layers,
-            "reward_units": self.reward_units,
             "compute_dtype": self.compute_dtype,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,

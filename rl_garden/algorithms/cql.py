@@ -17,9 +17,11 @@ from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.alpha_tuning import softplus_inverse
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.cql import CQLParams
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.contracts import SACActorCapabilities, policy_module_checkpoint_metadata
 from rl_garden.policies.sac_policy import SACActorFactory, SACPolicy, TemperatureLagrange
@@ -79,92 +81,30 @@ class CQLCore(SACCore):
     def _init_cql_params(
         self,
         *,
-        tau: float,
         utd: float,
-        policy_lr: float = 1e-4,
-        q_lr: float = 3e-4,
-        alpha_lr: float = 1e-4,
-        cql_alpha_lr: float = 3e-4,
-        policy_frequency: int = 1,
-        target_network_frequency: int = 1,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
         use_compile: bool = False,
-        compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default",
-        # Entropy
-        ent_coef: float | str = "auto",
-        target_entropy: float | str = "auto",
-        backup_entropy: bool = False,
-        # Network architecture
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
+        compile_mode: Literal['default', 'reduce-overhead', 'max-autotune'] = 'default',
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = True,
-        critic_use_layer_norm: bool = True,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[str] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
-        policy_log_std_multiplier: Optional[float] = None,
-        policy_log_std_offset: Optional[float] = None,
-        # Q-ensemble (REDQ)
-        n_critics: int = 10,
-        critic_subsample_size: Optional[int] = 2,
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
-        # CQL parameters
-        use_cql_loss: bool = True,
-        cql_n_actions: int = 10,
-        cql_alpha: float = 5.0,
-        cql_autotune_alpha: bool = False,
-        cql_alpha_lagrange_init: float = 1.0,
-        cql_target_action_gap: float = 1.0,
-        cql_importance_sample: bool = True,
-        cql_max_target_backup: bool = True,
-        cql_temp: float = 1.0,
-        cql_clip_diff_min: float = -np.inf,
-        cql_clip_diff_max: float = np.inf,
-        cql_action_sample_method: str = "uniform",
-        cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only",
-        cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune",
-        cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus",
-        # Phase control
-        use_td_loss: bool = True,
-        # General
         policy_kwargs: Optional[dict[str, Any]] = None,
         actor_factory: Optional[SACActorFactory] = None,
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
+        params: CQLParams,
     ) -> None:
+        ent_coef = params.ent_coef
+        grad_clip_norm = params.grad_clip_norm
+        net_arch = params.net_arch
+        target_entropy = params.target_entropy
+        self._bind_params(params)
         del seed, device, logger, std_log, log_freq
         self.actor_factory = actor_factory
-        self.tau = tau
         self.utd = utd
-        self.policy_lr = policy_lr
-        self.q_lr = q_lr
-        self.alpha_lr = alpha_lr
-        self.cql_alpha_lr = cql_alpha_lr
-        self.policy_frequency = policy_frequency
-        self.target_network_frequency = target_network_frequency
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
             raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
         self.use_compile = use_compile
@@ -175,107 +115,30 @@ class CQLCore(SACCore):
 
         self.ent_coef_init = ent_coef
         self.target_entropy_arg = target_entropy
-        self.backup_entropy = backup_entropy
 
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
         )
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.actor_use_group_norm = actor_use_group_norm
-        self.critic_use_group_norm = critic_use_group_norm
-        self.num_groups = num_groups
-        self.actor_dropout_rate = actor_dropout_rate
-        self.critic_dropout_rate = critic_dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.std_parameterization = std_parameterization
-        self.policy_log_std_multiplier = policy_log_std_multiplier
-        self.policy_log_std_offset = policy_log_std_offset
-        self.n_critics = n_critics
-        self.critic_subsample_size = critic_subsample_size
         self.actor_feature_dim = actor_feature_dim
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
 
-        self.use_td_loss = use_td_loss
-        self.use_cql_loss = use_cql_loss
         self.use_calql = False
-        self.cql_n_actions = cql_n_actions
-        self.cql_alpha = cql_alpha
-        self.cql_autotune_alpha = cql_autotune_alpha
-        self.cql_alpha_lagrange_init = cql_alpha_lagrange_init
-        self.cql_target_action_gap = cql_target_action_gap
-        self.cql_importance_sample = cql_importance_sample
-        self.cql_max_target_backup = cql_max_target_backup
-        self.cql_temp = cql_temp
-        self.cql_clip_diff_min = cql_clip_diff_min
-        self.cql_clip_diff_max = cql_clip_diff_max
-        self.cql_action_sample_method = cql_action_sample_method
-        self.cql_penalty_scale = cql_penalty_scale
-        self.cql_diff_clip_mode = cql_diff_clip_mode
-        self.cql_alpha_param = cql_alpha_param
 
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         metadata = {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
             "utd": self.utd,
-            "policy_lr": self.policy_lr,
-            "q_lr": self.q_lr,
-            "alpha_lr": self.alpha_lr,
-            "cql_alpha_lr": self.cql_alpha_lr,
-            "policy_frequency": self.policy_frequency,
-            "target_network_frequency": self.target_network_frequency,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "use_compile": self.use_compile,
             "compile_mode": self.compile_mode,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
-            "backup_entropy": self.backup_entropy,
-            "net_arch": self.net_arch,
-            "actor_use_layer_norm": self.actor_use_layer_norm,
-            "critic_use_layer_norm": self.critic_use_layer_norm,
-            "actor_use_group_norm": self.actor_use_group_norm,
-            "critic_use_group_norm": self.critic_use_group_norm,
-            "num_groups": self.num_groups,
-            "actor_dropout_rate": self.actor_dropout_rate,
-            "critic_dropout_rate": self.critic_dropout_rate,
-            "kernel_init": self.kernel_init,
-            "backbone_type": self.backbone_type,
-            "std_parameterization": self.std_parameterization,
-            "policy_log_std_multiplier": self.policy_log_std_multiplier,
-            "policy_log_std_offset": self.policy_log_std_offset,
-            "n_critics": self.n_critics,
-            "critic_subsample_size": self.critic_subsample_size,
             "actor_feature_dim": self.actor_feature_dim,
             "critic_spatial_emb_dim": self.critic_spatial_emb_dim,
-            "use_td_loss": self.use_td_loss,
-            "use_cql_loss": self.use_cql_loss,
-            "cql_n_actions": self.cql_n_actions,
-            "cql_alpha": self.cql_alpha,
-            "cql_autotune_alpha": self.cql_autotune_alpha,
-            "cql_alpha_lagrange_init": self.cql_alpha_lagrange_init,
-            "cql_target_action_gap": self.cql_target_action_gap,
-            "cql_importance_sample": self.cql_importance_sample,
-            "cql_max_target_backup": self.cql_max_target_backup,
-            "cql_temp": self.cql_temp,
-            "cql_clip_diff_min": self.cql_clip_diff_min,
-            "cql_clip_diff_max": self.cql_clip_diff_max,
-            "cql_action_sample_method": self.cql_action_sample_method,
-            "cql_penalty_scale": self.cql_penalty_scale,
-            "cql_diff_clip_mode": self.cql_diff_clip_mode,
-            "cql_alpha_param": self.cql_alpha_param,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -797,88 +660,35 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
        shape and arguments of this shell may change without notice.
     """
 
+    params_class = CQLParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
-        # Buffer and training
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
-        learning_starts: int = 4_000,
+        *,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
+        learning_starts: int = 4000,
         batch_size: int = 256,
         gamma: float = 0.99,
-        tau: float = 0.005,
         training_freq: int = 64,
         utd: float = 1.0,
-        bootstrap_at_done: str = "truncated",
+        bootstrap_at_done: str = 'truncated',
         online_episodes_per_iteration: Optional[int] = None,
         stats_window_size: Optional[int] = None,
-        # Optimizers
-        policy_lr: float = 1e-4,
-        q_lr: float = 3e-4,
-        alpha_lr: float = 1e-4,
-        cql_alpha_lr: float = 3e-4,
-        policy_frequency: int = 1,
-        target_network_frequency: int = 1,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
         use_compile: bool = False,
-        compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default",
-        # Entropy
-        ent_coef: float | str = "auto",
-        target_entropy: float | str = "auto",
-        backup_entropy: bool = False,
-        # Network architecture
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
+        compile_mode: Literal['default', 'reduce-overhead', 'max-autotune'] = 'default',
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = True,
-        critic_use_layer_norm: bool = True,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[str] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
-        policy_log_std_multiplier: Optional[float] = None,
-        policy_log_std_offset: Optional[float] = None,
-        # Q-ensemble (REDQ)
-        n_critics: int = 10,
-        critic_subsample_size: Optional[int] = 2,
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
-        # CQL parameters
-        use_cql_loss: bool = True,
-        cql_n_actions: int = 10,
-        cql_alpha: float = 5.0,
-        cql_autotune_alpha: bool = False,
-        cql_alpha_lagrange_init: float = 1.0,
-        cql_target_action_gap: float = 1.0,
-        cql_importance_sample: bool = True,
-        cql_max_target_backup: bool = True,
-        cql_temp: float = 1.0,
-        cql_clip_diff_min: float = -np.inf,
-        cql_clip_diff_max: float = np.inf,
-        cql_action_sample_method: str = "uniform",
-        cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only",
-        cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune",
-        cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus",
-        # Phase control
-        use_td_loss: bool = True,
-        # General
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 25,
         num_eval_steps: int = 50,
         checkpoint_dir: Optional[str] = None,
@@ -887,7 +697,10 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
         actor_factory: Optional[SACActorFactory] = None,
+        params: CQLParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -896,7 +709,7 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -916,61 +729,14 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
             initial_training_phase=initial_training_phase,
         )
         self._init_cql_params(
-            tau=tau,
+            params=params,
             utd=utd,
-            policy_lr=policy_lr,
-            q_lr=q_lr,
-            alpha_lr=alpha_lr,
-            cql_alpha_lr=cql_alpha_lr,
-            policy_frequency=policy_frequency,
-            target_network_frequency=target_network_frequency,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
             use_compile=use_compile,
             compile_mode=compile_mode,
-            ent_coef=ent_coef,
-            target_entropy=target_entropy,
-            backup_entropy=backup_entropy,
-            net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
-            policy_log_std_multiplier=policy_log_std_multiplier,
-            policy_log_std_offset=policy_log_std_offset,
-            n_critics=n_critics,
-            critic_subsample_size=critic_subsample_size,
             actor_feature_dim=actor_feature_dim,
             critic_spatial_emb_dim=critic_spatial_emb_dim,
-            use_cql_loss=use_cql_loss,
-            cql_n_actions=cql_n_actions,
-            cql_alpha=cql_alpha,
-            cql_autotune_alpha=cql_autotune_alpha,
-            cql_alpha_lagrange_init=cql_alpha_lagrange_init,
-            cql_target_action_gap=cql_target_action_gap,
-            cql_importance_sample=cql_importance_sample,
-            cql_max_target_backup=cql_max_target_backup,
-            cql_temp=cql_temp,
-            cql_clip_diff_min=cql_clip_diff_min,
-            cql_clip_diff_max=cql_clip_diff_max,
-            cql_action_sample_method=cql_action_sample_method,
-            cql_penalty_scale=cql_penalty_scale,
-            cql_diff_clip_mode=cql_diff_clip_mode,
-            cql_alpha_param=cql_alpha_param,
-            use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
             actor_factory=actor_factory,
             seed=seed,
@@ -985,81 +751,36 @@ class _CQLRolloutTrainingShell(CQLCore, OffPolicyAlgorithm):
 class CQL(CQLCore, OfflineRLAlgorithm):
     """Pure offline CQL over a static replay buffer."""
 
+    params_class = CQLParams
+
     _compatible_checkpoint_algorithms = ("CQL",)
 
     def __init__(
         self,
         env: OfflineEnvSpec,
-        buffer_size: int = 1_000_000,
-        buffer_device: str = "cuda",
+        *,
+        buffer_size: int = 1000000,
+        buffer_device: str = 'cuda',
         batch_size: int = 256,
         gamma: float = 0.99,
-        tau: float = 0.005,
-        offline_sampling: str = "with_replace",
+        offline_sampling: str = 'with_replace',
         utd: float = 1.0,
-        policy_lr: float = 1e-4,
-        q_lr: float = 3e-4,
-        alpha_lr: float = 1e-4,
-        cql_alpha_lr: float = 3e-4,
-        policy_frequency: int = 1,
-        target_network_frequency: int = 1,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
         use_compile: bool = False,
-        compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default",
-        ent_coef: float | str = "auto",
-        target_entropy: float | str = "auto",
-        backup_entropy: bool = False,
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
+        compile_mode: Literal['default', 'reduce-overhead', 'max-autotune'] = 'default',
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = True,
-        critic_use_layer_norm: bool = True,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[str] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
-        policy_log_std_multiplier: Optional[float] = None,
-        policy_log_std_offset: Optional[float] = None,
-        n_critics: int = 10,
-        critic_subsample_size: Optional[int] = 2,
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
-        use_cql_loss: bool = True,
-        cql_n_actions: int = 10,
-        cql_alpha: float = 5.0,
-        cql_autotune_alpha: bool = False,
-        cql_alpha_lagrange_init: float = 1.0,
-        cql_target_action_gap: float = 1.0,
-        cql_importance_sample: bool = True,
-        cql_max_target_backup: bool = True,
-        cql_temp: float = 1.0,
-        cql_clip_diff_min: float = -np.inf,
-        cql_clip_diff_max: float = np.inf,
-        cql_action_sample_method: str = "uniform",
-        cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only",
-        cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune",
-        cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus",
-        use_td_loss: bool = True,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
-        device: str | torch.device = "auto",
+        device: str | torch.device = 'auto',
         logger: Optional[Logger] = None,
         std_log: bool = True,
-        log_freq: int = 1_000,
+        log_freq: int = 1000,
         eval_freq: int = 0,
         num_eval_steps: int = 50,
         eval_env: Optional[Any] = None,
@@ -1068,7 +789,10 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         actor_factory: Optional[SACActorFactory] = None,
+        params: CQLParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -1094,61 +818,14 @@ class CQL(CQLCore, OfflineRLAlgorithm):
         self.critic_encoder_config = critic_encoder_config
         self.encoder_sharing = encoder_sharing
         self._init_cql_params(
-            tau=tau,
+            params=params,
             utd=utd,
-            policy_lr=policy_lr,
-            q_lr=q_lr,
-            alpha_lr=alpha_lr,
-            cql_alpha_lr=cql_alpha_lr,
-            policy_frequency=policy_frequency,
-            target_network_frequency=target_network_frequency,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
             use_compile=use_compile,
             compile_mode=compile_mode,
-            ent_coef=ent_coef,
-            target_entropy=target_entropy,
-            backup_entropy=backup_entropy,
-            net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
-            policy_log_std_multiplier=policy_log_std_multiplier,
-            policy_log_std_offset=policy_log_std_offset,
-            n_critics=n_critics,
-            critic_subsample_size=critic_subsample_size,
             actor_feature_dim=actor_feature_dim,
             critic_spatial_emb_dim=critic_spatial_emb_dim,
-            use_cql_loss=use_cql_loss,
-            cql_n_actions=cql_n_actions,
-            cql_alpha=cql_alpha,
-            cql_autotune_alpha=cql_autotune_alpha,
-            cql_alpha_lagrange_init=cql_alpha_lagrange_init,
-            cql_target_action_gap=cql_target_action_gap,
-            cql_importance_sample=cql_importance_sample,
-            cql_max_target_backup=cql_max_target_backup,
-            cql_temp=cql_temp,
-            cql_clip_diff_min=cql_clip_diff_min,
-            cql_clip_diff_max=cql_clip_diff_max,
-            cql_action_sample_method=cql_action_sample_method,
-            cql_penalty_scale=cql_penalty_scale,
-            cql_diff_clip_mode=cql_diff_clip_mode,
-            cql_alpha_param=cql_alpha_param,
-            use_td_loss=use_td_loss,
             policy_kwargs=policy_kwargs,
             actor_factory=actor_factory,
             seed=seed,

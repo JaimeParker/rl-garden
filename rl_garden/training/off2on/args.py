@@ -15,12 +15,21 @@ import warnings
 from rl_garden.common.cli_args import CheckpointArgs, ObservationArgs
 from rl_garden.common.env_args import EnvRunArgs
 from rl_garden.common.training_phase import InitialTrainingPhase
-from rl_garden.training.offline.args import OfflineIQLArgs, OfflineValueArgs
+from rl_garden.training.offline.args import OfflineIQLArgs
+from rl_garden.hyperparameters.awac import AWACParams
+from rl_garden.hyperparameters.cql import WSRLParams
+from rl_garden.hyperparameters.spot import Off2OnSPOTParams
+from rl_garden.hyperparameters.shared import (
+    Off2OnLoopArgs as Off2OnLoopArgs,
+    OfflineActorArgs,
+    OfflineCriticArgs,
+    OfflineOptimizationArgs,
+)
 
 
 @dataclass
-class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
-    """Orchestration + training fields generic across off2on algorithms."""
+class Off2OnRunArgs(EnvRunArgs, CheckpointArgs):
+    """Run settings of an offline-to-online run."""
 
     # Vector-env steps per evaluation (whole chunks with action chunking).
     # Replaces LoggingArgs's fixed int=50 default with the same "unset"
@@ -48,43 +57,7 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
     action_high: float = 1.0
     online_replay_mode: Literal["empty", "append", "mixed"] = "empty"
     offline_data_ratio: float | str = 0.0
-    buffer_size: int = 1_000_000
-    buffer_device: str = "cuda"
-    batch_size: int = 256
-    learning_starts: int = 4_000
-    training_freq: int = 64
-    utd: float = 4.0
-    gamma: float = 0.99
-    tau: float = 0.005
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: Optional[float] = None
-    n_critics: int = 10
-    critic_subsample_size: int = 2
-    actor_use_layer_norm: bool = True
-    critic_use_layer_norm: bool = True
-    actor_use_group_norm: bool = False
-    critic_use_group_norm: bool = False
-    num_groups: int = 32
-    actor_dropout_rate: Optional[float] = None
-    critic_dropout_rate: Optional[float] = None
-    kernel_init: Optional[
-        Literal[
-            "xavier_uniform",
-            "xavier_normal",
-            "orthogonal",
-            "kaiming_uniform",
-            "orthogonal_near_zero_output",
-        ]
-    ] = None
-    backbone_type: Literal["mlp", "mlp_resnet"] = "mlp"
-    std_parameterization: Literal["exp", "uniform"] = "exp"
     warmup_steps: int = 5000
-    offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
     success_key: Optional[str] = None
     reward_scale: float = 1.0
     reward_bias: float = 0.0
@@ -95,52 +68,57 @@ class Off2OnCommonArgs(EnvRunArgs, CheckpointArgs):
 
 
 @dataclass
-class CQLOff2OnArgs:
-    """CQL/Cal-QL-only hyperparameters (not shared with IQL off2on)."""
-
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    alpha_lr: float = 1e-4
-    cql_alpha_lr: float = 3e-4
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-    use_compile: bool = False
-    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
-    use_cql_loss: bool = True
-    cql_n_actions: int = 10
-    cql_action_sample_method: Literal["uniform", "normal"] = "uniform"
-    cql_alpha: float = 5.0
-    cql_autotune_alpha: bool = False
-    cql_alpha_lagrange_init: float = 1.0
-    cql_target_action_gap: float = 1.0
-    cql_importance_sample: bool = True
-    cql_max_target_backup: bool = True
-    cql_temp: float = 1.0
-    cql_clip_diff_min: float = float("-inf")
-    cql_clip_diff_max: float = float("inf")
-    cql_penalty_scale: Literal["lagrange_only", "lagrange_times_alpha"] = "lagrange_only"
-    cql_diff_clip_mode: Literal["skip_when_autotune", "always"] = "skip_when_autotune"
-    cql_alpha_param: Literal["softplus", "exp_clip"] = "softplus"
-    backup_entropy: bool = False
-    use_calql: bool = True
-    calql_bound_random_actions: bool = False
-    online_cql_alpha: float = 0.0
-    online_use_cql_loss: bool = False
-    sparse_reward_mc: bool = False
-    sparse_negative_reward: float = 0.0
-    success_threshold: float = 0.5
-    # SARSA/FQE reference-value network (Cal-QL's fix for continuing tasks,
-    # e.g. D4RL locomotion, where MC return-to-go is truncation-biased).
-    # Opt-in only -- default reproduces today's MC-return-based behavior
-    # exactly. See rl_garden/algorithms/calql.py:CalQLCore.
-    use_sarsa_reference: bool = False
-    sarsa_hidden_dims: tuple[int, ...] = (256, 256)
-    sarsa_lr: float = 3e-4
+class Off2OnCommonArgs(
+    Off2OnRunArgs,
+    Off2OnLoopArgs,
+    OfflineOptimizationArgs,
+    OfflineCriticArgs,
+    OfflineActorArgs,
+):
+    """Arguments shared by every offline-to-online entry."""
 
 
 @dataclass
-class WSRLTrainingArgs(Off2OnCommonArgs, CQLOff2OnArgs):
-    """CQL/Cal-QL off2on args: ``Off2OnCommonArgs`` + ``CQLOff2OnArgs``."""
+class FQLTrainingArgs(Off2OnRunArgs, Off2OnLoopArgs):
+    """FQL-family orchestration and compatibility flags."""
+
+    actor_use_group_norm: bool = False
+    actor_dropout_rate: Optional[float] = None
+    critic_subsample_size: int = 2
+    std_parameterization: Literal["exp", "uniform"] = "exp"
+
+
+@dataclass
+class ValueFlowsTrainingArgs(FQLTrainingArgs):
+    """Compatibility options for ValueFlows' replaced scalar critic."""
+
+    critic_use_group_norm: bool = False
+    num_groups: int = 32
+    critic_dropout_rate: Optional[float] = None
+
+
+@dataclass
+class CQLOff2OnArgs(WSRLParams):
+    """CQL/Cal-QL rollout learning and compilation settings."""
+
+    use_compile: bool = False
+    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
+
+
+
+@dataclass
+class WSRLTrainingArgs(Off2OnRunArgs, CQLOff2OnArgs):
+    """CQL/Cal-QL rollout orchestration settings."""
+
+    buffer_size: int = 1_000_000
+    buffer_device: str = "cuda"
+    batch_size: int = 256
+    offline_sampling: Literal["with_replace", "without_replace"] = "with_replace"
+    gamma: float = 0.99
+    utd: float = 4.0
+    learning_starts: int = 4_000
+    training_freq: int = 64
+
 
 
 @dataclass
@@ -151,7 +129,7 @@ class VisionWSRLTrainingArgs(WSRLTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class IQLOff2OnTrainingArgs(Off2OnCommonArgs, OfflineIQLArgs, OfflineValueArgs):
+class IQLOff2OnTrainingArgs(Off2OnCommonArgs, OfflineIQLArgs):
     """IQL off2on args: ``Off2OnCommonArgs`` + IQL-specific hyperparameters
     (reused from ``rl_garden.training.offline.args``)."""
 
@@ -164,17 +142,12 @@ class VisionIQLOff2OnTrainingArgs(IQLOff2OnTrainingArgs, ObservationArgs):
 
 
 @dataclass
-class AWACOff2OnHyperparamArgs:
-    """AWAC-only off2on hyperparameters (not shared with IQL/CQL off2on)."""
-
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-    awac_lambda: float = 1.0
-    exp_adv_max: float = 100.0
+class AWACOff2OnHyperparamArgs(AWACParams):
+    """AWAC hyperparameters for offline-to-online training."""
 
 
 @dataclass
-class AWACOff2OnTrainingArgs(Off2OnCommonArgs, AWACOff2OnHyperparamArgs):
+class AWACOff2OnTrainingArgs(AWACOff2OnHyperparamArgs, Off2OnCommonArgs):
     """AWAC off2on args: ``Off2OnCommonArgs`` + AWAC-specific hyperparameters.
 
     AWAC is Box-observation only: no ``ObservationArgs`` mixed in, so it has
@@ -183,30 +156,12 @@ class AWACOff2OnTrainingArgs(Off2OnCommonArgs, AWACOff2OnHyperparamArgs):
 
 
 @dataclass
-class SPOTOff2OnHyperparamArgs:
-    """SPOT-only off2on hyperparameters (not shared with IQL/CQL/AWAC off2on)."""
-
-    actor_lr: float = 1e-4
-    critic_lr: float = 3e-4
-    policy_noise: float = 0.2
-    noise_clip: float = 0.5
-    policy_freq: int = 2
-    vae_lr: float = 1e-3
-    vae_hidden_dim: int = 750
-    vae_latent_dim: Optional[int] = None
-    vae_iterations: int = 100_000
-    beta: float = 0.5
-    lambd: float = 1.0
-    num_samples: int = 1
-    iwae: bool = False
-    lambd_cool: bool = False
-    lambd_end: float = 0.2
-    expl_noise: float = 0.1
-    online_discount: float = 0.995
+class SPOTOff2OnHyperparamArgs(Off2OnSPOTParams):
+    """SPOT hyperparameters for offline-to-online training."""
 
 
 @dataclass
-class SPOTOff2OnTrainingArgs(Off2OnCommonArgs, SPOTOff2OnHyperparamArgs):
+class SPOTOff2OnTrainingArgs(SPOTOff2OnHyperparamArgs, Off2OnCommonArgs):
     """SPOT off2on args: ``Off2OnCommonArgs`` + SPOT-specific hyperparameters.
 
     This class alone has no ``--obs``/``--encoder`` CLI surface;

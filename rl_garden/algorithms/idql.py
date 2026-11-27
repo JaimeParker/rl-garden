@@ -46,7 +46,7 @@ expectile-weighted stochastic resample.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -57,6 +57,8 @@ from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.idql import IDQLParams
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.idql_policy import IDQLPolicy
 
@@ -64,6 +66,8 @@ ActorObjective = Literal["bc", "soft_adv", "hard_adv", "exp_adv"]
 
 
 class IDQL(OfflineRLAlgorithm):
+    params_class = IDQLParams
+
     _compatible_checkpoint_algorithms = ("IDQL",)
     # Class-level default (read by algorithm_registry's static preflight,
     # see rl_garden/algorithms/observation_encoders.py), overridable via the
@@ -80,31 +84,7 @@ class IDQL(OfflineRLAlgorithm):
         self,
         env: OfflineEnvSpec,
         *,
-        expectile: float = 0.7,
         gamma: float = 0.99,
-        tau: float = 0.005,
-        actor_tau: float = 0.001,
-        actor_objective: ActorObjective = "bc",
-        policy_temperature: float = 3.0,
-        critic_hidden_dims: Sequence[int] = (256, 256),
-        value_hidden_dims: Sequence[int] = (256, 256),
-        n_critics: int = 2,
-        critic_subsample_size: Optional[int] = None,
-        critic_use_layer_norm: bool = False,
-        value_use_layer_norm: bool = False,
-        diffusion_mlp_dims: Sequence[int] = (256, 256),
-        denoising_steps: int = 5,
-        schedule: Literal["cosine", "vp", "linear"] = "vp",
-        n_action_samples: int = 64,
-        critic_value_lr: float = 3e-4,
-        actor_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
         batch_size: int = 256,
@@ -126,7 +106,10 @@ class IDQL(OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[IDQLParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -147,30 +130,10 @@ class IDQL(OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
-        self.expectile = expectile
-        self.tau = tau
-        self.actor_tau = actor_tau
-        self.actor_objective = actor_objective
-        self.policy_temperature = policy_temperature
-        self.critic_hidden_dims = tuple(critic_hidden_dims)
-        self.value_hidden_dims = tuple(value_hidden_dims)
-        self.n_critics = n_critics
-        self.critic_subsample_size = critic_subsample_size
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.value_use_layer_norm = value_use_layer_norm
-        self.diffusion_mlp_dims = tuple(diffusion_mlp_dims)
-        self.denoising_steps = denoising_steps
-        self.schedule = schedule
-        self.n_action_samples = n_action_samples
-        self.critic_value_lr = critic_value_lr
-        self.actor_lr = actor_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
+        self._bind_params(params)
+        self.critic_hidden_dims = tuple(params.critic_hidden_dims)
+        self.value_hidden_dims = tuple(params.value_hidden_dims)
+        self.diffusion_mlp_dims = tuple(params.diffusion_mlp_dims)
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
@@ -370,19 +333,9 @@ class IDQL(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "expectile": self.expectile,
-            "tau": self.tau,
-            "actor_tau": self.actor_tau,
-            "actor_objective": self.actor_objective,
-            "policy_temperature": self.policy_temperature,
             "critic_hidden_dims": self.critic_hidden_dims,
             "value_hidden_dims": self.value_hidden_dims,
-            "n_critics": self.n_critics,
-            "critic_subsample_size": self.critic_subsample_size,
             "diffusion_mlp_dims": self.diffusion_mlp_dims,
-            "denoising_steps": self.denoising_steps,
-            "schedule": self.schedule,
-            "n_action_samples": self.n_action_samples,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (

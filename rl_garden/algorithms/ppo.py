@@ -5,20 +5,13 @@ from __future__ import annotations
 import dataclasses
 import math
 import warnings
-from typing import (
-    Any,
-    Callable,
-    ClassVar,
-    Iterator,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-)
+from typing import Any, Callable, ClassVar, Iterator, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.ppo import PPOParams
 from rl_garden.algorithms.decision_mask import (
     DecisionMaskReader,
     warn_if_decision_keys_ignored,
@@ -41,7 +34,7 @@ from rl_garden.buffers.rollout_buffer import (
 from rl_garden.common.ddp import allreduce_grads, allreduce_mean
 from rl_garden.common.effective_config import ConfigError
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.actor_critic import gaussian_kl_divergence
 from rl_garden.networks.graph.builtin import (
@@ -198,6 +191,8 @@ class PPO(OnPolicyAlgorithm):
     see ``PPOPolicy``'s ``_build_actor``, ``rollout_extra_specs`` and
     ``evaluation_outputs``. ``docs/guides/extending.md`` lists them."""
 
+    params_class = PPOParams
+
     _compatible_checkpoint_algorithms = ("PPO",)
     #: Extension point: the policy ``_build_policy`` builds when no
     #: ``policy_graph`` is given, called with keywords ``observation_space``,
@@ -229,55 +224,17 @@ class PPO(OnPolicyAlgorithm):
         self,
         env: Any,
         eval_env: Optional[Any] = None,
+        *,
         num_steps: int = 50,
         gamma: float = 0.8,
         gae_lambda: float = 0.9,
-        learning_rate: float = 3e-4,
-        num_minibatches: int = 32,
-        update_epochs: int = 4,
-        norm_adv: bool = True,
-        clip_coef: float = 0.2,
-        clip_vloss: bool = False,
-        ent_coef: float = 0.0,
-        vf_coef: float = 0.5,
-        max_grad_norm: float = 0.5,
-        target_kl: Optional[float] = 0.1,
-        anneal_lr: bool = False,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal[
-            "constant", "linear_warmup", "warmup_cosine", "adaptive_kl"
-        ] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        desired_kl: float = 0.01,
-        adaptive_lr_min: float = 1e-5,
-        adaptive_lr_max: float = 1e-2,
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         value_hidden_dims: Optional[Sequence[int]] = None,
-        log_std_init: float = -0.5,
-        log_std_init_per_dim: Optional[Sequence[float]] = None,
-        action_mean_bias_init: Optional[Sequence[float]] = None,
-        action_mean_head_gain: Optional[float] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
-        actor_use_layer_norm: bool = False,
-        value_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        value_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        value_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[
-            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-        ] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -294,6 +251,8 @@ class PPO(OnPolicyAlgorithm):
         per_step_critic: bool = True,
         policy_graph: Optional[str] = None,
         actor_factory: Optional[PPOActorFactory] = None,
+        params: PPOParams | None = None,
+        **overrides: Any,
     ) -> None:
         """``decision_level=True`` reads the env's per-step decision keys:
         returns, advantages and the policy loss are computed over decision
@@ -330,6 +289,18 @@ class PPO(OnPolicyAlgorithm):
         with an entropy, ``lr_schedule="adaptive_kl"`` a Gaussian actor and
         ``decision_level`` an actor with per-dimension log-probs;
         ``actor_factory`` cannot be combined with ``policy_graph``."""
+        params = resolve_params(self.params_class, params, overrides)
+        num_minibatches = params.num_minibatches
+        update_epochs = params.update_epochs
+        norm_adv = params.norm_adv
+        clip_coef = params.clip_coef
+        max_grad_norm = params.max_grad_norm
+        anneal_lr = params.anneal_lr
+        lr_schedule = params.lr_schedule
+        net_arch = params.net_arch
+        log_std_init_per_dim = params.log_std_init_per_dim
+        action_mean_bias_init = params.action_mean_bias_init
+        self._bind_params(params)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -378,8 +349,6 @@ class PPO(OnPolicyAlgorithm):
         self.decision_level = decision_level
         self.per_step_critic = per_step_critic
         self._decision_keys_warned = False
-        self.learning_rate = learning_rate
-        self.num_minibatches = num_minibatches
         self.minibatch_size = max(1, self.batch_size // num_minibatches)
         if self.batch_size % self.minibatch_size != 0:
             warnings.warn(
@@ -388,43 +357,13 @@ class PPO(OnPolicyAlgorithm):
                 UserWarning,
                 stacklevel=2,
             )
-        self.update_epochs = update_epochs
-        self.norm_adv = norm_adv
-        self.clip_coef = clip_coef
-        self.clip_vloss = clip_vloss
-        self.ent_coef = ent_coef
-        self.vf_coef = vf_coef
-        self.max_grad_norm = max_grad_norm
-        self.target_kl = target_kl
-        self.anneal_lr = anneal_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType | Literal["adaptive_kl"] = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.desired_kl = desired_kl
-        self.adaptive_lr_min = adaptive_lr_min
-        self.adaptive_lr_max = adaptive_lr_max
         self.net_arch = self._resolve_net_arch(
             net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             value_hidden_dims=value_hidden_dims,
         )
-        self.log_std_init = log_std_init
         self.log_std_init_per_dim = _as_float_list_or_none(log_std_init_per_dim)
         self.action_mean_bias_init = _as_float_list_or_none(action_mean_bias_init)
-        self.action_mean_head_gain = action_mean_head_gain
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.value_use_layer_norm = value_use_layer_norm
-        self.actor_use_group_norm = actor_use_group_norm
-        self.value_use_group_norm = value_use_group_norm
-        self.num_groups = num_groups
-        self.actor_dropout_rate = actor_dropout_rate
-        self.value_dropout_rate = value_dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.critic_backbone_type = critic_backbone_type
 
         self.encoder_sharing = encoder_sharing
         self.encoder_config = encoder_config
@@ -591,34 +530,12 @@ class PPO(OnPolicyAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "learning_rate": self.learning_rate,
-            "num_minibatches": self.num_minibatches,
-            "update_epochs": self.update_epochs,
-            "norm_adv": self.norm_adv,
-            "clip_coef": self.clip_coef,
-            "clip_vloss": self.clip_vloss,
-            "ent_coef": self.ent_coef,
-            "vf_coef": self.vf_coef,
-            "max_grad_norm": self.max_grad_norm,
-            "target_kl": self.target_kl,
-            "anneal_lr": self.anneal_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "desired_kl": self.desired_kl,
-            "adaptive_lr_min": self.adaptive_lr_min,
-            "adaptive_lr_max": self.adaptive_lr_max,
             "net_arch": self.net_arch,
-            "log_std_init": self.log_std_init,
             "log_std_init_per_dim": self.log_std_init_per_dim,
             "action_mean_bias_init": self.action_mean_bias_init,
-            "action_mean_head_gain": self.action_mean_head_gain,
+            **encoder_checkpoint_metadata(self),
             "decision_level": self.decision_level,
             "per_step_critic": self.per_step_critic,
-            **encoder_checkpoint_metadata(self),
             "policy_graph": self.policy_graph_yaml,
             **policy_module_checkpoint_metadata(self.actor_factory, self.policy_kwargs),
         }

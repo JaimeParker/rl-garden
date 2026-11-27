@@ -319,12 +319,6 @@ IGNORED_TODAY = {'forward': {('offline', 'bppo'): {'encoder_sharing': 'accepted 
                                                            'passed by the builder'}},
  'read': {('online', 'recurrent_sac'): {'critic_backbone_type': 'accepted by the constructor, not '
                                                                 'passed by the builder'},
-          ('online', 'sac_flow'): {'actor_log_std_min': 'accepted by the constructor, not passed '
-                                                        'by the builder',
-                                   'actor_log_std_mode': 'accepted by the constructor, not passed '
-                                                         'by the builder',
-                                   'actor_use_layer_norm': 'accepted by the constructor, not '
-                                                           'passed by the builder'},
           ('online', 'transformer_sac'): {'critic_backbone_type': 'accepted by the constructor, '
                                                                   'not passed by the builder'}}}
 
@@ -390,7 +384,14 @@ def _static_reads(module, function, seen=None):
 
 
 def constructor_parameters(cls):
-    parameters = {}
+    params_class = getattr(cls, "params_class", None)
+    parameters = {
+        field.name: inspect.Parameter(
+            field.name, inspect.Parameter.KEYWORD_ONLY,
+            default=field.default, annotation=field.type,
+        )
+        for field in (() if params_class is None else dataclasses.fields(params_class))
+    }
     for base in cls.__mro__:
         init = vars(base).get("__init__")
         if init is None or base is object:
@@ -400,7 +401,10 @@ def constructor_parameters(cls):
                            if name != "self" and parameter.kind not in
                            (parameter.VAR_KEYWORD, parameter.VAR_POSITIONAL)
                            and name not in parameters})
-        if not any(p.kind is p.VAR_KEYWORD for p in signature.parameters.values()):
+        # A Params owner consumes **overrides; it does not forward arbitrary keys.
+        if ("params_class" in vars(base) and "overrides" in signature.parameters) or not any(
+            p.kind is p.VAR_KEYWORD for p in signature.parameters.values()
+        ):
             break
     return parameters
 

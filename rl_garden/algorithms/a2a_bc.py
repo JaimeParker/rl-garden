@@ -14,18 +14,18 @@ Dict); A2A only ever uses the Dict path (vision conditioning is mandatory).
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 
-from rl_garden.algorithms.observation_encoders import ObservationEncoderMixin
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.a2a_bc import A2ABCParams
 from rl_garden.buffers.chunked_dataset import load_h5_dataset_as_chunks
 from rl_garden.common.logger import Logger
 from rl_garden.common.obs_utils import index_obs
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups, ObservationSchema, normalize_observation_space
 from rl_garden.policies.a2a_policy import A2APolicy
 
@@ -37,6 +37,8 @@ class A2ABC(OfflineRLAlgorithm):
     helpers come from ``ObservationEncoderMixin`` via ``BaseAlgorithm``
     (see ``rl_garden/algorithms/observation_encoders.py``); no direct inheritance
     needed here."""
+
+    params_class = A2ABCParams
 
     _compatible_checkpoint_algorithms = ("A2ABC",)
     checkpoint_eval_unsupported_reason = (
@@ -55,37 +57,9 @@ class A2ABC(OfflineRLAlgorithm):
         env: OfflineEnvSpec,
         dataset_path: str,
         *,
-        horizon_steps: int = 8,
-        cond_steps: int = 8,
-        latent_dim: int = 512,
-        cnn_num_layers: int = 3,
-        cnn_hidden_channels: int = 512,
-        cnn_kernel_size: int = 5,
-        cnn_activation_fn: Optional[Activation] = "relu",
-        decoder_net_arch: Optional[Sequence[int]] = None,
-        decoder_activation_fn: Optional[Activation] = None,
-        decoder_kernel_init: Optional[KernelInit] = None,
-        flow_hidden_dims: Optional[Sequence[int]] = None,
-        flow_use_layer_norm: bool = False,
-        flow_kernel_init: Optional[KernelInit] = None,
-        flow_activation_fn: Optional[Activation] = None,
-        num_sampling_steps: int = 6,
-        consistency_weight: float = 1.0,
-        enc_recon_weight: float = 0.5,
-        flow_recon_weight: float = 0.5,
-        enc_contrastive_weight: float = 0.0,
-        flow_contrastive_weight: float = 0.0,
-        contrastive_temperature: float = 0.1,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         image_augmentation_seed: Optional[int] = None,
-        actor_lr: float = 1e-3,
-        weight_decay: float = 1e-6,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
         batch_size: int = 128,
         num_traj: Optional[int] = None,
         seed: int = 1,
@@ -96,7 +70,10 @@ class A2ABC(OfflineRLAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: Optional[A2ABCParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=1,
@@ -116,9 +93,9 @@ class A2ABC(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
         self.encoder_config = encoder_config
@@ -126,38 +103,13 @@ class A2ABC(OfflineRLAlgorithm):
         self._image_augmentation_seed = image_augmentation_seed
 
         self.dataset_path = dataset_path
-        self.horizon_steps = horizon_steps
-        self.cond_steps = cond_steps
-        self.latent_dim = latent_dim
-        self.cnn_num_layers = cnn_num_layers
-        self.cnn_hidden_channels = cnn_hidden_channels
-        self.cnn_kernel_size = cnn_kernel_size
-        self.cnn_activation_fn = cnn_activation_fn
+        self._bind_params(params)
         self.decoder_net_arch: list[int] = (
-            list(decoder_net_arch) if decoder_net_arch is not None else [512, 512, 512, 512]
+            list(params.decoder_net_arch) if params.decoder_net_arch is not None else [512, 512, 512, 512]
         )
-        self.decoder_activation_fn = decoder_activation_fn
-        self.decoder_kernel_init = decoder_kernel_init
         self.flow_hidden_dims: list[int] = (
-            list(flow_hidden_dims) if flow_hidden_dims is not None else [512, 512, 512, 512]
+            list(params.flow_hidden_dims) if params.flow_hidden_dims is not None else [512, 512, 512, 512]
         )
-        self.flow_use_layer_norm = flow_use_layer_norm
-        self.flow_kernel_init = flow_kernel_init
-        self.flow_activation_fn = flow_activation_fn
-        self.num_sampling_steps = num_sampling_steps
-        self.consistency_weight = consistency_weight
-        self.enc_recon_weight = enc_recon_weight
-        self.flow_recon_weight = flow_recon_weight
-        self.enc_contrastive_weight = enc_contrastive_weight
-        self.flow_contrastive_weight = flow_contrastive_weight
-        self.contrastive_temperature = contrastive_temperature
-        self.actor_lr = actor_lr
-        self.weight_decay = weight_decay
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
         self.num_traj = num_traj
 
         self._setup_model()
@@ -171,21 +123,8 @@ class A2ABC(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_steps": self.horizon_steps,
-            "cond_steps": self.cond_steps,
-            "latent_dim": self.latent_dim,
-            "cnn_num_layers": self.cnn_num_layers,
-            "cnn_hidden_channels": self.cnn_hidden_channels,
-            "cnn_kernel_size": self.cnn_kernel_size,
-            "cnn_activation_fn": self.cnn_activation_fn,
             "decoder_net_arch": self.decoder_net_arch,
             "flow_hidden_dims": self.flow_hidden_dims,
-            "num_sampling_steps": self.num_sampling_steps,
-            "consistency_weight": self.consistency_weight,
-            "enc_recon_weight": self.enc_recon_weight,
-            "flow_recon_weight": self.flow_recon_weight,
-            "enc_contrastive_weight": self.enc_contrastive_weight,
-            "flow_contrastive_weight": self.flow_contrastive_weight,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

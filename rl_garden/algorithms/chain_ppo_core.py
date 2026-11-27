@@ -45,10 +45,12 @@ from __future__ import annotations
 import dataclasses
 from abc import abstractmethod
 from collections.abc import Iterable
-from typing import Any, ClassVar, Literal, Optional, Sequence
+from typing import Any, ClassVar, Literal, Optional
 
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.chain_ppo import ChainPPOCoreParams
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.algorithms.ppo_terms import (
@@ -62,10 +64,9 @@ from rl_garden.algorithms.ppo_terms import (
 from rl_garden.buffers.diffusion_chain_buffer import DiffusionChainBuffer
 from rl_garden.buffers.rollout_buffer import RolloutBuffer
 from rl_garden.common.obs_utils import flatten_leading_dims, index_obs
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.types import Obs
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
 from rl_garden.observations import ObsGroups
 
 
@@ -112,6 +113,8 @@ AdvantageNormalization = Literal["minibatch", "rollout"]
 class ChainPPOCore(OnPolicyAlgorithm):
     """See the module docstring."""
 
+    params_class = ChainPPOCoreParams
+
     #: Over which population advantages are normalized (``norm_adv``) and
     #: quantile-clamped: ``"minibatch"`` -- the minibatch's pairs, before
     #: ``_chain_policy_terms`` (the DPPO reference); ``"rollout"`` -- the
@@ -126,33 +129,20 @@ class ChainPPOCore(OnPolicyAlgorithm):
         obs_groups: Optional[ObsGroups],
         critic_encoder_config: Optional[EncoderConfig],
         encoder_sharing: Optional[EncoderSharing],
-        actor_mlp_dims: Sequence[int],
-        actor_activation_fn: Optional[Activation],
-        critic_mlp_dims: Sequence[int],
-        critic_activation_fn: Optional[Activation],
-        kernel_init: Optional[KernelInit],
-        actor_lr: float,
-        critic_lr: float,
-        weight_decay: float,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"],
-        lr_warmup_steps: int,
-        lr_decay_steps: int,
-        lr_min_ratio: float,
-        grad_clip_norm: Optional[float],
-        critic_warmup_updates: int,
-        update_epochs: int,
-        update_batch_size: int,
-        norm_adv: bool,
-        clip_vloss_coef: Optional[float],
-        clip_advantage_lower_quantile: float,
-        clip_advantage_upper_quantile: float,
-        vf_coef: float,
-        target_kl: Optional[float],
+        params: ChainPPOCoreParams | None = None,
         **on_policy_kwargs: Any,
     ) -> None:
         """``on_policy_kwargs`` go to ``OnPolicyAlgorithm``. Does not call
         ``_setup_model``: a subclass sets its own fields first, then calls
         it."""
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: on_policy_kwargs.pop(name) for name in tuple(on_policy_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        actor_mlp_dims = params.actor_mlp_dims
+        critic_mlp_dims = params.critic_mlp_dims
+        grad_clip_norm = params.grad_clip_norm
+        self._bind_params(params)
         # Read while the policy's extractors are resolved, so set before
         # BaseAlgorithm.__init__ runs.
         self.encoder_config = encoder_config
@@ -168,28 +158,8 @@ class ChainPPOCore(OnPolicyAlgorithm):
                 f"'rollout', got {self.advantage_normalization!r}."
             )
 
-        self.actor_mlp_dims = list(actor_mlp_dims)
-        self.actor_activation_fn = actor_activation_fn
-        self.critic_mlp_dims = list(critic_mlp_dims)
-        self.critic_activation_fn = critic_activation_fn
-        self.kernel_init = kernel_init
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.weight_decay = weight_decay
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
-        self.critic_warmup_updates = critic_warmup_updates
-        self.update_epochs = update_epochs
-        self.update_batch_size = update_batch_size
-        self.norm_adv = norm_adv
-        self.clip_vloss_coef = clip_vloss_coef
-        self.clip_advantage_lower_quantile = clip_advantage_lower_quantile
-        self.clip_advantage_upper_quantile = clip_advantage_upper_quantile
-        self.vf_coef = vf_coef
-        self.target_kl = target_kl
+        self.actor_mlp_dims = list(actor_mlp_dims) if actor_mlp_dims is not None else [256, 256, 256]
+        self.critic_mlp_dims = list(critic_mlp_dims) if critic_mlp_dims is not None else [256, 256, 256]
 
     # --- subclass contract ---
 

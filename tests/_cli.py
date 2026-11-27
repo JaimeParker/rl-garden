@@ -5,7 +5,7 @@ can call that registry directly instead of paying a fresh interpreter plus
 import of torch/gymnasium per case.
 
 Process-global state touched by ``registry.run_cli`` on the print-config /
-explain-param / error paths: ``registry.discover()`` imports the phase's
+error paths: ``registry.discover()`` imports the phase's
 algorithm modules (idempotent, cached in ``sys.modules``), and
 ``runtime_metadata`` records ``sys.argv[0]`` (not restored; only echoed into the
 printed config). ``--dry-run`` and real runs additionally enter

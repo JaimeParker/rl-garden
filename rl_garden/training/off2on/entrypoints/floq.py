@@ -6,7 +6,7 @@ needed here.
 
 State-only observations by default; pass ``--obs.rgb <camera>`` for
 CNN-based Dict/RGBD observations. Mirrors ``ACFQLArgs``: fields inlined
-against ``Off2OnCommonArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
+against ``FQLTrainingArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
 than adding a new class to ``off2on/_args.py`` -- ``Off2OnFloQ`` has no
 action chunking, so the chunking-only fields on ``ACFQLArgs``
 (``horizon_length``, ``actor_type``, ``actor_num_samples``) are dropped and
@@ -22,6 +22,9 @@ remain unused.
 """
 
 from __future__ import annotations
+
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.fql import FloQParams
 
 
 def build_floq(args, env, eval_env, logger, checkpoint_dir):
@@ -39,8 +42,12 @@ def build_floq(args, env, eval_env, logger, checkpoint_dir):
     if args.encoder_sharing is not None:
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
+    learning_kwargs = params_kwargs(args, Off2OnFloQ.params_class)
+    learning_kwargs["net_arch"] = list(args.net_arch) if args.net_arch is not None else [args.hidden_dim] * args.hidden_layers
+
     agent = construct_agent(
         Off2OnFloQ,
+        **learning_kwargs,
         env=env,
         eval_env=eval_env,
         **image_kwargs,
@@ -51,46 +58,8 @@ def build_floq(args, env, eval_env, logger, checkpoint_dir):
         gamma=args.gamma,
         training_freq=args.training_freq,
         utd=args.utd,
-        tau=args.tau,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        alpha=args.alpha,
-        flow_steps=args.flow_steps,
-        q_agg=args.q_agg,
-        normalize_q_loss=args.normalize_q_loss,
-        net_arch=[args.hidden_dim] * args.hidden_layers,
-        n_critics=args.n_critics,
-        actor_use_layer_norm=args.actor_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,
-        critic_use_group_norm=args.critic_use_group_norm,
-        num_groups=args.num_groups,
         initial_training_phase=initial_training_phase_from_args(args),
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        activation_fn=args.activation_fn,
-        r_min=args.r_min,
-        r_max=args.r_max,
-        flow_num_ensembles=args.flow_num_ensembles,
-        noise_samples=args.noise_samples,
-        noise_coverage=args.noise_coverage,
-        critic_flow_steps=args.critic_flow_steps,
-        train_at_zero_only=args.train_at_zero_only,
-        embed_time=args.embed_time,
-        time_embed_dim=args.time_embed_dim,
-        use_prob_embed=args.use_prob_embed,
-        num_bins=args.num_bins,
-        sigma=args.sigma,
-        reward_offset=args.reward_offset,
-        critic_flow_net_arch=args.critic_flow_net_arch,
         offline_sampling=args.offline_sampling,
         seed=args.seed,
         logger=logger,
@@ -119,70 +88,25 @@ def run_floq(args: "FloQOff2OnArgs") -> None:
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass  # noqa: E402
-from typing import Literal, Optional  # noqa: E402
+from typing import Literal
 
 from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.training.off2on.args import Off2OnCommonArgs  # noqa: E402
+from rl_garden.training.off2on.args import FQLTrainingArgs  # noqa: E402
 from rl_garden.training.off2on.registry import registry  # noqa: E402
 
 
 @dataclass
-class FloQOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
+class FloQOff2OnArgs(FloQParams, FQLTrainingArgs, ObservationArgs, EnvBackendArgs):
     """FloQ -- offline-to-online flow-matching-critic FQL (Farebrother et
     al. 2025, ``3rd_party/floq/agents/floq.py``). State-only observations by
     default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations.
     """
 
-    # One buffer holds the dataset and the online transitions (main.py:54,93-96,193).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
-
-    # Pause updates while the loaded policy collects online steps; 0 means no pause.
     warmup_steps: int = 0
-
-    # 10.0, not ACFQL's 100.0: floq's own reference config
-    # (3rd_party/floq/agents/floq.py get_config, alpha=10.0) inherits FQL's
-    # actor-side BC coefficient unchanged (ACFQL's 100.0 is Q-chunking's own
-    # action-chunked recipe, not floq's).
-    alpha: float = 10.0
-
-    flow_steps: int = 10
-    q_agg: Literal["mean", "min"] = "mean"
-    normalize_q_loss: bool = False
     hidden_dim: int = 512
     hidden_layers: int = 4
-    activation_fn: Optional[Activation] = "gelu"
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-
-    n_critics: int = 2
-    actor_use_layer_norm: bool = False
-    kernel_init: Optional[KernelInit] = "xavier_uniform"
-
-    # See rl_garden/algorithms/floq.py's module docstring for the reference
-    # facts behind these defaults (OGBench singletask sparse-reward r_min/
-    # r_max, HL-Gauss critic bins, noise coverage, etc.).
-    r_min: float = -1.0
-    r_max: float = 0.0
-    flow_num_ensembles: int = 2
-    noise_samples: int = 8
-    noise_coverage: float = 0.1
-    critic_flow_steps: int = 8
-    train_at_zero_only: bool = False
-    embed_time: bool = True
-    time_embed_dim: int = 64
-    use_prob_embed: bool = True
-    num_bins: int = 51
-    sigma: float = 16.0
-    reward_offset: float = 0.01
-    # Flow-critic velocity network width/depth. None falls back to net_arch
-    # (hidden_dim x hidden_layers) -- the reference floq's block_width/
-    # block_depth size only this network; actor and distilled critic stay
-    # at net_arch, matching the README's cube presets (block_depth=2).
-    critic_flow_net_arch: Optional[list[int]] = None
-
-
 
 
 def _off2_on_flo_q_algorithm_cls() -> type:

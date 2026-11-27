@@ -86,27 +86,6 @@ A small override is easier to review than a copied preset.
 When an experiment settles, put its stable settings in a named YAML file.
 Keep the selected algorithm on the command line.
 
-Ask why a value won
-^^^^^^^^^^^^^^^^^^^
-
-Explain the same field instead of printing the entire configuration:
-
-.. code-block:: bash
-
-   rl-garden-train-online sac \
-     --config configs/online/sac_state.yaml --gamma 0.95 \
-     --explain-param gamma
-
-The response names the field, value, type and source.
-For this invocation, the value is 0.95 and the source kind is CLI.
-The explanation is about this resolved invocation.
-It is not a static list of every consumer of the parameter.
-
-Inspection actions are mutually exclusive.
-Do not combine the explanation action with the print action.
-For the complete inspection contract, see
-:ref:`configuration-inspect-before-training`.
-
 Recognize a strict-mapping error
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

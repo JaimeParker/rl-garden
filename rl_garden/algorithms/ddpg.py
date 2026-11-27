@@ -21,9 +21,11 @@ from rl_garden.buffers.nstep_buffer import (
     NStepReplayBuffer,
 )
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.schedules import schedule
 from rl_garden.common.utils import polyak_update
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.ddpg import DDPGParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
 from rl_garden.observations.schema import ObservationContractError
@@ -60,46 +62,28 @@ class DDPG(OffPolicyAlgorithm):
         Number of initial steps with uniform random actions (DrQ-v2 default: 2000).
     """
 
+    params_class = DDPGParams
+
     _compatible_checkpoint_algorithms = ("DDPG",)
 
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
-        # --- OffPolicyAlgorithm ---
+        *,
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
         learning_starts: int = 4_000,
         batch_size: int = 256,
         gamma: float = 0.99,
-        tau: float = 0.01,
         training_freq: int = 32,
         utd: float = 0.5,
         bootstrap_at_done: str = "truncated",
-        # --- DDPG-specific ---
-        policy_lr: float = 1e-4,
-        q_lr: float = 1e-4,
-        feature_dim: int = 50,
-        hidden_dim: int = 1024,
-        nstep: int = 3,
-        stddev_schedule: str = "linear(1.0,0.1,500000)",
-        stddev_clip: float = 0.3,
-        num_expl_steps: int = 2000,
-        # --- Optimizer ---
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: ScheduleType = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        # --- Vision ---
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
-        # --- Misc ---
         policy_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 1,
         device: str | torch.device = "auto",
@@ -116,7 +100,10 @@ class DDPG(OffPolicyAlgorithm):
         mmap_mode: Literal["create", "open"] = "create",
         replay_lazy_next_obs: bool = False,
         replay_pin_sampled_batch: bool = False,
+        params: Optional[DDPGParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         if mmap_dir is not None and save_replay_buffer:
             raise ValueError(
                 "mmap replay buffers cannot be embedded in replay checkpoints; "
@@ -141,7 +128,7 @@ class DDPG(OffPolicyAlgorithm):
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -157,28 +144,15 @@ class DDPG(OffPolicyAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
 
         self.mmap_dir = mmap_dir
         self.mmap_mode = mmap_mode
         self.replay_lazy_next_obs = replay_lazy_next_obs
         self.replay_pin_sampled_batch = replay_pin_sampled_batch
-        self.policy_lr = policy_lr
-        self.q_lr = q_lr
-        self.feature_dim = feature_dim
-        self.hidden_dim = hidden_dim
-        self.nstep = nstep
-        self.stddev_schedule = stddev_schedule
-        self.stddev_clip = stddev_clip
-        self.num_expl_steps = num_expl_steps
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
+
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
-            raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
+            raise ValueError(f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}.")
 
         # DrQ-v2's validated default: DrQv2Encoder + random-shift augmentation.
         # A caller-supplied encoder_config overrides every field wholesale.
@@ -498,21 +472,6 @@ class DDPG(OffPolicyAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "policy_lr": self.policy_lr,
-            "q_lr": self.q_lr,
-            "feature_dim": self.feature_dim,
-            "hidden_dim": self.hidden_dim,
-            "nstep": self.nstep,
-            "stddev_schedule": self.stddev_schedule,
-            "stddev_clip": self.stddev_clip,
-            "num_expl_steps": self.num_expl_steps,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "replay_lazy_next_obs": self.replay_lazy_next_obs,
             "replay_pin_sampled_batch": self.replay_pin_sampled_batch,
             "encoder_sharing": self.encoder_sharing,

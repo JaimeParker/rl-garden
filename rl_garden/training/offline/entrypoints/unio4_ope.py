@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+
+from rl_garden.hyperparameters import params_kwargs
+from typing import TYPE_CHECKING, Any, Optional
 
 from rl_garden.training.offline.args import (
     OfflineActorArgs,
@@ -19,11 +21,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class UniO4OPEArgs(
+    OfflineUniO4OPEArgs,
     OfflineCommonArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
     OfflineActorArgs,
-    OfflineUniO4OPEArgs,
 ):
     """UniO4OPE: Uni-O4 with dynamics-model OPE gating -- a faithful-
     reproduction variant of ``unio4`` (``rl_garden/algorithms/unio4_ope.py``).
@@ -33,56 +35,38 @@ class UniO4OPEArgs(
     observations only, same three-phase budget as ``unio4``.
     """
 
+    # None uses the older --actor-use-layer-norm flag.
+    use_layer_norm: Optional[bool] = None
+
+    # None uses the older --actor-use-group-norm flag.
+    use_group_norm: Optional[bool] = None
+
+    # None uses the older --actor-dropout-rate flag.
+    dropout_rate: Optional[float] = None
+
 
 def _unio4_ope_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
+    from rl_garden.algorithms import UniO4OPE
+
     return {
+        **params_kwargs(args, UniO4OPE.params_class),
         "env": env_spec,
         "task": args.env_id,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
-        "critic_warmup_steps": args.critic_warmup_steps,
-        "value_lr": args.value_lr,
-        "q_lr": args.q_lr,
-        "tau": args.tau,
-        "target_update_freq": args.target_update_freq,
-        "value_hidden_dims": args.value_hidden_dims,
-        "q_hidden_dims": args.q_hidden_dims,
-        "num_policies": args.num_policies,
-        "bc_ensemble_steps": args.bc_ensemble_steps,
-        "alpha_bc": args.alpha_bc,
-        "actor_lr": args.actor_lr,
-        "actor_hidden_dims": args.actor_hidden_dims,
-        "clip_ratio": args.clip_ratio,
-        "clip_decay": args.clip_decay,
-        "clip_decay_steps": args.clip_decay_steps,
-        "entropy_weight": args.entropy_weight,
-        "omega": args.omega,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "grad_clip_norm": args.grad_clip_norm,
-        "use_layer_norm": args.actor_use_layer_norm,
-        "use_group_norm": args.actor_use_group_norm,
-        "num_groups": args.num_groups,
-        "dropout_rate": args.actor_dropout_rate,
-        "kernel_init": args.kernel_init,
-        "backbone_type": args.backbone_type,
-        "std_parameterization": args.std_parameterization,
-        "dynamics_hidden_dims": args.dynamics_hidden_dims,
-        "dynamics_n_ensemble": args.dynamics_n_ensemble,
-        "dynamics_n_elites": args.dynamics_n_elites,
-        "dynamics_lr": args.dynamics_lr,
-        "dynamics_weight_decay": args.dynamics_weight_decay,
-        "dynamics_max_epochs_since_update": args.dynamics_max_epochs_since_update,
-        "dynamics_max_epochs": args.dynamics_max_epochs,
-        "dynamics_batch_size": args.dynamics_batch_size,
-        "dynamics_holdout_ratio": args.dynamics_holdout_ratio,
-        "ope_rollout_length": args.ope_rollout_length,
-        "ope_rollout_batch_size": args.ope_rollout_batch_size,
-        "ope_gating_freq": args.ope_gating_freq,
+        "use_layer_norm": (
+            args.actor_use_layer_norm if args.use_layer_norm is None else args.use_layer_norm
+        ),
+        "use_group_norm": (
+            args.actor_use_group_norm if args.use_group_norm is None else args.use_group_norm
+        ),
+        "dropout_rate": (
+            args.actor_dropout_rate if args.dropout_rate is None else args.dropout_rate
+        ),
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

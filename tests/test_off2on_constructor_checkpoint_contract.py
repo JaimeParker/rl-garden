@@ -1,5 +1,6 @@
 """Constructor inheritance and shared checkpoint scheduling contracts."""
 from collections import Counter
+import dataclasses
 import importlib
 import inspect
 
@@ -12,13 +13,29 @@ from rl_garden.algorithms.off2on_iql import Off2OnIQL
 from rl_garden.algorithms.off2on_spot import Off2OnSPOT
 from rl_garden.algorithms.spot import _SPOTRolloutTrainingShell
 
+from rl_garden.algorithms.floq import Off2OnFloQ, _FloQRolloutTrainingShell
+from rl_garden.algorithms.fino import Off2OnFINO, _FINORolloutTrainingShell
+from rl_garden.algorithms.fac import Off2OnFAC, _FACRolloutTrainingShell
+from rl_garden.algorithms.value_flows import Off2OnValueFlows, _ValueFlowsRolloutTrainingShell
+
 
 @pytest.mark.parametrize('cls,parent,extra', [
     (Off2OnIQL, _IQLRolloutTrainingShell, {'num_eval_episodes'}),
     (Off2OnAWAC, _AWACRolloutTrainingShell, set()),
     (Off2OnSPOT, _SPOTRolloutTrainingShell, set()),
+    (Off2OnFloQ, _FloQRolloutTrainingShell, set()),
+    (Off2OnFINO, _FINORolloutTrainingShell, set()),
+    (Off2OnFAC, _FACRolloutTrainingShell, set()),
+    (Off2OnValueFlows, _ValueFlowsRolloutTrainingShell, set()),
 ])
 def test_off2on_constructor_contains_every_shell_parameter(cls, parent, extra):
+    if getattr(parent, "params_class", None) is not None:
+        assert cls.params_class is parent.params_class
+        # Learning keywords are resolved by Params; operational keywords remain explicit.
+        fields = {field.name for field in dataclasses.fields(cls.params_class)}
+        assert not (fields & inspect.signature(cls).parameters.keys())
+        assert "params" in inspect.signature(cls).parameters
+        assert inspect.signature(cls).parameters["overrides"].kind is inspect.Parameter.VAR_KEYWORD
     actual = inspect.signature(cls).parameters
     expected = inspect.signature(parent).parameters
     assert set(actual) == set(expected) | extra

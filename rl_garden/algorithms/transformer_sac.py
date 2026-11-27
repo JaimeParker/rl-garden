@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import TransformerSACParams
 from rl_garden.algorithms.sequence_sac import SequenceSAC
 from rl_garden.buffers.transformer_replay_buffer import TransformerReplayBuffer
 from rl_garden.networks.gtrxl import GTrXLLatentEncoder, GTrXLState
@@ -24,20 +26,27 @@ class TransformerSAC(SequenceSAC):
 
     _compatible_checkpoint_algorithms = ("TransformerSAC",)
 
+    params_class = TransformerSACParams
+
     def __init__(
         self,
         env: Any,
         *,
-        embed_dim: int = 256,
-        head_dim: int = 64,
-        num_heads: int = 4,
-        num_transformer_layers: int = 3,
-        mlp_num: int = 2,
-        memory_len: int = 16,
-        dropout_rate: float = 0.0,
-        gru_bias: float = 2.0,
+        params: TransformerSACParams | None = None,
         **sequence_sac_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: sequence_sac_kwargs.pop(name) for name in tuple(sequence_sac_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        embed_dim = params.embed_dim
+        head_dim = params.head_dim
+        num_heads = params.num_heads
+        num_transformer_layers = params.num_transformer_layers
+        mlp_num = params.mlp_num
+        memory_len = params.memory_len
+        dropout_rate = params.dropout_rate
+        gru_bias = params.gru_bias
         # Must be set before super().__init__(), which ends by calling
         # self._setup_model() -- our _build_sequence_encoder/_build_replay_buffer
         # overrides below read these attributes.
@@ -49,7 +58,7 @@ class TransformerSAC(SequenceSAC):
         self.memory_len = memory_len
         self.dropout_rate = dropout_rate
         self.gru_bias = gru_bias
-        super().__init__(env, **sequence_sac_kwargs)
+        super().__init__(env, params=params, **sequence_sac_kwargs)
 
     def _build_sequence_encoder(self, actor_extractor) -> GTrXLLatentEncoder:
         if self.burn_in_len < self.memory_len:
@@ -115,12 +124,4 @@ class TransformerSAC(SequenceSAC):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "embed_dim": self.embed_dim,
-            "head_dim": self.head_dim,
-            "num_heads": self.num_heads,
-            "num_transformer_layers": self.num_transformer_layers,
-            "mlp_num": self.mlp_num,
-            "memory_len": self.memory_len,
-            "dropout_rate": self.dropout_rate,
-            "gru_bias": self.gru_bias,
         }

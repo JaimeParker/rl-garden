@@ -31,15 +31,13 @@ def build_gail(
     agent = construct_agent(
         algorithm_cls,
         **ppo_common_kwargs(
-            args, env, eval_env, logger, checkpoint_dir, ppo_observation_kwargs(args)
+            args, env, eval_env, logger, checkpoint_dir, ppo_observation_kwargs(args),
+            params_class=algorithm_cls.params_class,
         ),
         demo_env_id=args.demo_env_id,
         demo_dataset_backend=args.demo_dataset_backend,
         demo_buffer_size=args.demo_buffer_size,
         demo_batch_size=args.demo_batch_size,
-        n_disc_updates_per_round=args.n_disc_updates_per_round,
-        disc_net_arch=args.disc_net_arch,
-        disc_lr=args.disc_lr,
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:

@@ -45,6 +45,8 @@ def build_tdmpc2_multitask(
     ``args.dataset_dir``. ``extra_kwargs`` replace or extend its constructor
     kwargs (the run passes its ``mmap_dir`` and ``checkpoint_dir``).
     ``eval_env`` is unused: the agent trains on its dataset alone."""
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.tdmpc2 import TDMPC2MultitaskParams
     from rl_garden.buffers.tdmpc2_multitask_dataset import infer_multitask_dataset_specs
     from rl_garden.training.inspection import construct_agent
 
@@ -57,6 +59,7 @@ def build_tdmpc2_multitask(
         args.dataset_dir
     )
     kwargs = {
+        **params_kwargs(args, TDMPC2MultitaskParams),
         "env": env_spec,
         "tasks": tasks,
         "obs_dims": obs_dims,
@@ -66,32 +69,6 @@ def build_tdmpc2_multitask(
         "mmap_mode": "create",
         "buffer_size": args.buffer_size,
         "batch_size": args.batch_size,
-        "horizon": args.horizon,
-        "task_dim": args.task_dim,
-        "latent_dim": args.latent_dim,
-        "enc_dim": args.enc_dim,
-        "num_enc_layers": args.num_enc_layers,
-        "mlp_dim": args.mlp_dim,
-        "simnorm_dim": args.simnorm_dim,
-        "num_q": args.num_q,
-        "num_bins": args.num_bins,
-        "vmin": args.vmin,
-        "vmax": args.vmax,
-        "dropout": args.dropout,
-        "log_std_min": args.log_std_min,
-        "log_std_max": args.log_std_max,
-        "entropy_coef": args.entropy_coef,
-        "lr": args.lr,
-        "enc_lr_scale": args.enc_lr_scale,
-        "grad_clip_norm": args.grad_clip_norm,
-        "tau": args.tau,
-        "rho": args.rho,
-        "consistency_coef": args.consistency_coef,
-        "reward_coef": args.reward_coef,
-        "value_coef": args.value_coef,
-        "discount_denom": args.discount_denom,
-        "discount_min": args.discount_min,
-        "discount_max": args.discount_max,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

@@ -7,6 +7,9 @@ or in another package) builds its agent from them.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.ppo import PPOParams
+
 from collections.abc import Callable
 from typing import Any
 
@@ -48,7 +51,7 @@ def ppo_observation_kwargs(args) -> dict:
 
 
 def ppo_common_kwargs(
-    args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict
+    args, env, eval_env, logger, checkpoint_dir, image_kwargs: dict, *, params_class=PPOParams
 ) -> dict:
     """Kwargs shared by ``PPO`` and ``RecurrentPPO`` construction -- everything
     except the rnn-specific params that only ``RecurrentPPO`` accepts.
@@ -58,47 +61,14 @@ def ppo_common_kwargs(
     from rl_garden.networks.graph.spec import optional_graph_source
 
     return dict(
+        **params_kwargs(args, params_class),
         env=env,
         eval_env=eval_env,
         num_steps=args.num_steps,
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,
-        learning_rate=args.learning_rate,
-        num_minibatches=args.num_minibatches,
-        update_epochs=args.update_epochs,
-        norm_adv=args.norm_adv,
-        clip_coef=args.clip_coef,
-        clip_vloss=args.clip_vloss,
-        ent_coef=args.ent_coef,
-        vf_coef=args.vf_coef,
-        max_grad_norm=args.max_grad_norm,
-        target_kl=args.target_kl,
-        anneal_lr=args.anneal_lr,
         finite_horizon_gae=args.finite_horizon_gae,
         bootstrap_at_done=args.bootstrap_at_done,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        desired_kl=args.desired_kl,
-        adaptive_lr_min=args.adaptive_lr_min,
-        adaptive_lr_max=args.adaptive_lr_max,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        value_use_layer_norm=args.value_use_layer_norm,
-        actor_use_group_norm=args.actor_use_group_norm,
-        value_use_group_norm=args.value_use_group_norm,
-        num_groups=args.num_groups,
-        actor_dropout_rate=args.actor_dropout_rate,
-        value_dropout_rate=args.value_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        critic_backbone_type=args.critic_backbone_type,
-        log_std_init=args.log_std_init,
-        log_std_init_per_dim=args.log_std_init_per_dim,
-        action_mean_bias_init=args.action_mean_bias_init,
-        action_mean_head_gain=args.action_mean_head_gain,
         decision_level=args.decision_level,
         per_step_critic=args.per_step_critic,
         policy_graph=optional_graph_source(args.policy_graph),
@@ -137,7 +107,7 @@ def build_ppo(
     image_kwargs = ppo_observation_kwargs(args)
     agent = construct_agent(
         algorithm_cls,
-        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
+        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs, params_class=algorithm_cls.params_class),
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:

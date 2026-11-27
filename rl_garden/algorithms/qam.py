@@ -61,7 +61,7 @@ evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -70,13 +70,13 @@ from rl_garden.algorithms.chunked_rollout import ActionChunkingMixin
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import Activation, KernelInit
-from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.qam import QAMParams
 from rl_garden.observations import ObsGroups
-from rl_garden.policies.qam_policy import CriticLossType, QAMPolicy
+from rl_garden.policies.qam_policy import QAMPolicy
 
 
 class QAMCore:
@@ -94,97 +94,34 @@ class QAMCore:
     def _init_qam_params(
         self,
         *,
+        params: QAMParams,
         horizon_length: int = 1,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = 1.0,
-        critic_loss_type: CriticLossType = "ddpg",
-        rho: float = 0.0,
-        expectile: float = 0.9,
-        n_critics: int = 2,
-        flow_steps: int = 10,
-        best_of_n: int = 1,
-        inv_temp: float = 0.3,
-        residual: bool = False,
-        target_actor: bool = True,
-        clip_adj: bool = True,
-        use_target_grad: bool = True,
-        fql_alpha: float = 0.0,
-        edit_scale: float = 0.0,
-        edit_target_entropy: Optional[float] = None,
-        edit_target_entropy_multiplier: float = 0.5,
-        edit_alpha_lr: float = 3e-4,
-        net_arch: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
-        value_use_layer_norm: bool = True,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
     ) -> None:
         self._init_action_chunking(horizon_length)
-        if not (0.0 < tau <= 1.0):
-            raise ValueError(f"tau must be in (0, 1], got {tau}.")
-        if not (0.0 < expectile < 1.0):
-            raise ValueError(f"expectile must be in (0, 1), got {expectile}.")
-        if critic_loss_type not in ("ddpg", "iql"):
+        if not (0.0 < params.tau <= 1.0):
+            raise ValueError(f"tau must be in (0, 1], got {params.tau}.")
+        if not (0.0 < params.expectile < 1.0):
+            raise ValueError(f"expectile must be in (0, 1), got {params.expectile}.")
+        if params.critic_loss_type not in ("ddpg", "iql"):
             raise ValueError(
-                f"critic_loss_type must be 'ddpg' or 'iql', got {critic_loss_type!r}."
+                f"critic_loss_type must be 'ddpg' or 'iql', got {params.critic_loss_type!r}."
             )
-        if flow_steps < 1:
-            raise ValueError(f"flow_steps must be >= 1, got {flow_steps}.")
-        if fql_alpha > 0.0 and edit_scale > 0.0:
+        if params.flow_steps < 1:
+            raise ValueError(f"flow_steps must be >= 1, got {params.flow_steps}.")
+        if params.fql_alpha > 0.0 and params.edit_scale > 0.0:
             raise ValueError(
                 "Only one of fql_alpha and edit_scale can be non-zero "
-                f"(got fql_alpha={fql_alpha}, edit_scale={edit_scale})."
+                f"(got fql_alpha={params.fql_alpha}, edit_scale={params.edit_scale})."
             )
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.tau = tau
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
-        self.critic_loss_type: CriticLossType = critic_loss_type
-        self.rho = rho
-        self.expectile = expectile
-        self.n_critics = n_critics
-        self.flow_steps = flow_steps
-        self.best_of_n = best_of_n
-        self.inv_temp = inv_temp
-        self.residual = residual
-        self.target_actor = target_actor
-        self.clip_adj = clip_adj
-        self.use_target_grad = use_target_grad
-        self.fql_alpha = fql_alpha
-        self.edit_scale = edit_scale
-        self.edit_target_entropy = edit_target_entropy
-        self.edit_target_entropy_multiplier = edit_target_entropy_multiplier
-        self.edit_alpha_lr = edit_alpha_lr
+        self._bind_params(params)
         self.net_arch: list[int] = (
-            list(net_arch) if net_arch is not None else [512, 512, 512, 512]
+            list(params.net_arch) if params.net_arch is not None else [512, 512, 512, 512]
         )
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.value_use_layer_norm = value_use_layer_norm
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.activation_fn = activation_fn
 
     def _optimizer_names(self) -> tuple[str, ...]:
         names = ("critic_optimizer", "actor_optimizer")
@@ -195,32 +132,7 @@ class QAMCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
-            "actor_lr": self.actor_lr,
-            "critic_lr": self.critic_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
-            "critic_loss_type": self.critic_loss_type,
-            "rho": self.rho,
-            "expectile": self.expectile,
-            "n_critics": self.n_critics,
-            "flow_steps": self.flow_steps,
-            "best_of_n": self.best_of_n,
-            "inv_temp": self.inv_temp,
-            "residual": self.residual,
-            "target_actor": self.target_actor,
-            "clip_adj": self.clip_adj,
-            "use_target_grad": self.use_target_grad,
-            "fql_alpha": self.fql_alpha,
-            "edit_scale": self.edit_scale,
-            "edit_target_entropy_multiplier": self.edit_target_entropy_multiplier,
             "net_arch": self.net_arch,
-            "activation_fn": self.activation_fn,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -531,6 +443,8 @@ class QAM(ActionChunkingMixin, QAMCore, OfflineRLAlgorithm):
     """Offline QAM: flow-matching actor fine-tuned via adjoint matching.
     See module docstring."""
 
+    params_class = QAMParams
+
     _compatible_checkpoint_algorithms = ("QAM",)
 
     def __init__(
@@ -543,39 +457,6 @@ class QAM(ActionChunkingMixin, QAMCore, OfflineRLAlgorithm):
         gamma: float = 0.99,
         offline_sampling: str = "with_replace",
         horizon_length: int = 1,
-        tau: float = 0.005,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = 1.0,
-        critic_loss_type: CriticLossType = "ddpg",
-        rho: float = 0.0,
-        expectile: float = 0.9,
-        n_critics: int = 2,
-        flow_steps: int = 10,
-        best_of_n: int = 1,
-        inv_temp: float = 0.3,
-        residual: bool = False,
-        target_actor: bool = True,
-        clip_adj: bool = True,
-        use_target_grad: bool = True,
-        fql_alpha: float = 0.0,
-        edit_scale: float = 0.0,
-        edit_target_entropy: Optional[float] = None,
-        edit_target_entropy_multiplier: float = 0.5,
-        edit_alpha_lr: float = 3e-4,
-        net_arch: Optional[Sequence[int]] = None,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
-        value_use_layer_norm: bool = True,
-        kernel_init: Optional[KernelInit] = "xavier_uniform",
-        backbone_type: BackboneType = "mlp",
-        activation_fn: Optional[Activation] = "gelu",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -593,7 +474,10 @@ class QAM(ActionChunkingMixin, QAMCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[QAMParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -615,40 +499,8 @@ class QAM(ActionChunkingMixin, QAMCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_qam_params(
+            params=params,
             horizon_length=horizon_length,
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            critic_loss_type=critic_loss_type,
-            rho=rho,
-            expectile=expectile,
-            n_critics=n_critics,
-            flow_steps=flow_steps,
-            best_of_n=best_of_n,
-            inv_temp=inv_temp,
-            residual=residual,
-            target_actor=target_actor,
-            clip_adj=clip_adj,
-            use_target_grad=use_target_grad,
-            fql_alpha=fql_alpha,
-            edit_scale=edit_scale,
-            edit_target_entropy=edit_target_entropy,
-            edit_target_entropy_multiplier=edit_target_entropy_multiplier,
-            edit_alpha_lr=edit_alpha_lr,
-            net_arch=net_arch,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            value_use_layer_norm=value_use_layer_norm,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            activation_fn=activation_fn,
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups

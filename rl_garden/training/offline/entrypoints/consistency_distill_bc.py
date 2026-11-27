@@ -30,6 +30,8 @@ from rl_garden.training.inspection import (
 )
 from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.training.offline.args import ConsistencyDistillBCTrainingArgs
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.consistency_distill_bc import ConsistencyDistillBCParams
 from rl_garden.training.offline.registry import registry
 
 
@@ -69,28 +71,12 @@ def build_consistency_distill_bc(
         algorithm_cls = ConsistencyDistillBC
     net_cls, net_kwargs = diffusion_net(args)
     kwargs = {
+        **params_kwargs(args, ConsistencyDistillBCParams),
         "env": env_spec,
         "dataset_path": args.dataset_path,
         "bc_checkpoint": args.bc_checkpoint,
-        "horizon_steps": args.horizon_steps,
-        "cond_steps": args.cond_steps,
-        "denoising_steps": args.denoising_steps,
-        "activation_fn": args.activation_fn,
-        "residual_style": args.residual_style,
-        "time_dim": args.time_dim,
-        "kernel_init": args.kernel_init,
-        "denoised_clip_value": args.denoised_clip_value,
-        "randn_clip_value": args.randn_clip_value,
-        "final_action_clip_value": args.final_action_clip_value,
-        "min_sampling_denoising_std": args.min_sampling_denoising_std,
         "net_cls": net_cls,
         "net_kwargs": net_kwargs,
-        "cm_lr": args.cm_lr,
-        "weight_decay": args.weight_decay,
-        "cm_ema_decay": args.cm_ema_decay,
-        "cm_grad_clip_norm": args.cm_grad_clip_norm,
-        "cm_sigma_data": args.cm_sigma_data,
-        "cm_timestep_scaling": args.cm_timestep_scaling,
         "batch_size": args.batch_size,
         "num_traj": args.offline_num_traj,
         "seed": args.seed,

@@ -32,10 +32,7 @@ def build_recurrent_ppo(
     image_kwargs = ppo_observation_kwargs(args)
     agent = construct_agent(
         algorithm_cls,
-        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
-        rnn_type=args.rnn_type,
-        rnn_hidden_size=args.rnn_hidden_size,
-        rnn_num_layers=args.rnn_num_layers,
+        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs, params_class=algorithm_cls.params_class),
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:

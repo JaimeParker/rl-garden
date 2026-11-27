@@ -130,14 +130,17 @@ def test_args_defaults_equal_constructor_defaults():
     from rl_garden.training.online.entrypoints.supermimic import SuperMimicArgs
 
     args = SuperMimicArgs()
+    parameter_defaults = {field.name: field.default for field in dataclasses.fields(SuperMimic.params_class)}
+    constructor_defaults = {name: parameter.default for name, parameter in inspect.signature(SuperMimic.__init__).parameters.items()}
+    constructor_defaults.update(parameter_defaults)
     shared = [
         name
-        for name in inspect.signature(SuperMimic.__init__).parameters
+        for name in constructor_defaults
         if name in {field.name for field in dataclasses.fields(args)}
     ]
     assert {"heads", "horizon", "wm_hidden_dims", "buffer_size", "amp_dtype"} <= set(shared)
     for name in shared:
-        constructor_default = inspect.signature(SuperMimic.__init__).parameters[name].default
+        constructor_default = constructor_defaults[name]
         if name in {"seed", "logger", "std_log", "log_freq", "eval_freq", "num_eval_steps",
                     "checkpoint_dir", "checkpoint_freq", "save_replay_buffer", "save_final_checkpoint"}:
             continue  # owned by the shared run/logging/checkpoint Args

@@ -110,16 +110,7 @@ def _read(path):
 
 
 def _run(phase, name, argv, monkeypatch, *, dry=False):
-    with evaluation._captured_agents(monkeypatch) as agents, monkeypatch.context() as builder_patch:
-        if phase == "online" and name in {"drqv2", "td3"}:
-            # Their builders omit scheduler CLI fields; exercise the constructor's supported schedule.
-            from rl_garden.training import inspection
-            construct = inspection.construct_agent
-
-            def with_schedule(cls, **kwargs):
-                return construct(cls, **kwargs, lr_schedule="linear_warmup", lr_warmup_steps=100)
-
-            builder_patch.setattr(inspection, "construct_agent", with_schedule)
+    with evaluation._captured_agents(monkeypatch) as agents:
         result = builds.run_entry(builds.PHASES[phase][0], [*argv, *(["--dry-run"] if dry else [])])
     assert result.returncode == 0, result.stderr[-4000:]
     assert agents

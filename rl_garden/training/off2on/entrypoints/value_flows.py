@@ -6,17 +6,9 @@ unmodified, matching ``floq.py``'s shape: only a ``build_value_flows``
 callback is needed here.
 
 State-only observations by default; pass ``--obs.rgb <camera>`` for
-CNN-based Dict/RGBD observations. Mirrors ``FloQOff2OnArgs``: fields inlined
-against ``Off2OnCommonArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
-than adding a new class to ``off2on/_args.py`` -- ``Off2OnValueFlows`` has no action
-chunking, so the FloQ-only flow-critic fields (``r_min``/``r_max``/
-``flow_num_ensembles``/``noise_samples``/``noise_coverage``/
-``critic_flow_steps``/``train_at_zero_only``/``embed_time``/
-``time_embed_dim``/``use_prob_embed``/``num_bins``/``sigma``/
-``reward_offset``) are dropped and Value Flows' own 9 fields
-(``min_reward``/``max_reward``/``ret_agg``/``confidence_weight_temp``/
-``dcfm_lambda``/``bcfm_lambda``/``clip_flow_returns``/``num_samples``/
-``policy_extraction``) are added instead.
+CNN-based Dict/RGBD observations. ``ValueFlowsParams`` supplies learning
+settings, while ``ValueFlowsTrainingArgs`` supplies orchestration and
+compatibility flags.
 
 Group-norm options reach the constructor; the flow actor does not consume
 ``actor_use_group_norm``. The replacement flow critic does not consume
@@ -28,6 +20,9 @@ remain unused.
 """
 
 from __future__ import annotations
+
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.fql import ValueFlowsParams
 
 
 def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
@@ -44,8 +39,12 @@ def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
     if args.encoder_sharing is not None:
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
+    learning_kwargs = params_kwargs(args, Off2OnValueFlows.params_class)
+    learning_kwargs["net_arch"] = list(args.net_arch) if args.net_arch is not None else [args.hidden_dim] * args.hidden_layers
+
     agent = construct_agent(
         Off2OnValueFlows,
+        **learning_kwargs,
         env=env,
         eval_env=eval_env,
         **image_kwargs,
@@ -56,41 +55,11 @@ def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
         gamma=args.gamma,
         training_freq=args.training_freq,
         utd=args.utd,
-        tau=args.tau,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        alpha=args.alpha,
-        flow_steps=args.flow_steps,
-        q_agg=args.q_agg,
-        normalize_q_loss=args.normalize_q_loss,
-        net_arch=[args.hidden_dim] * args.hidden_layers,
-        n_critics=args.n_critics,
-        actor_use_layer_norm=args.actor_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,
         critic_use_group_norm=args.critic_use_group_norm,
         num_groups=args.num_groups,
         initial_training_phase=initial_training_phase_from_args(args),
-        critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        activation_fn=args.activation_fn,
-        min_reward=args.min_reward,
-        max_reward=args.max_reward,
-        ret_agg=args.ret_agg,
-        confidence_weight_temp=args.confidence_weight_temp,
-        dcfm_lambda=args.dcfm_lambda,
-        bcfm_lambda=args.bcfm_lambda,
-        clip_flow_returns=args.clip_flow_returns,
-        num_samples=args.num_samples,
-        policy_extraction=args.policy_extraction,
         offline_sampling=args.offline_sampling,
         seed=args.seed,
         logger=logger,
@@ -119,59 +88,26 @@ def run_value_flows(args: "ValueFlowsOff2OnArgs") -> None:
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass  # noqa: E402
-from typing import Literal, Optional  # noqa: E402
+from typing import Literal
 
 from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.training.off2on.args import Off2OnCommonArgs  # noqa: E402
+from rl_garden.training.off2on.args import ValueFlowsTrainingArgs  # noqa: E402
 from rl_garden.training.off2on.registry import registry  # noqa: E402
 
 
 @dataclass
-class ValueFlowsOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
+class ValueFlowsOff2OnArgs(ValueFlowsParams, ValueFlowsTrainingArgs, ObservationArgs, EnvBackendArgs):
     """Value Flows -- offline-to-online distributional flow-matching-critic
     FQL (Dong et al. 2025, ``3rd_party/value-flows/agents/value_flows.py``).
     State-only observations by default; pass ``--obs.rgb <camera>`` for
     CNN-based Dict/RGBD observations.
     """
 
-    # One buffer holds the dataset and the online transitions (main.py:45,86-88,176).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
-
-    # Pause updates while the loaded policy collects online steps; 0 means no pause.
     warmup_steps: int = 0
-
-    # 10.0: the reference's own get_config alpha, matching FQL's actor-side
-    # BC coefficient unchanged.
-    alpha: float = 10.0
-
-    flow_steps: int = 10
-    q_agg: Literal["mean", "min"] = "mean"
-    normalize_q_loss: bool = False
     hidden_dim: int = 512
     hidden_layers: int = 4
-    activation_fn: Optional[Activation] = "gelu"
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-
-    n_critics: int = 2
-    actor_use_layer_norm: bool = False
-    kernel_init: Optional[KernelInit] = "xavier_uniform"
-
-    # See rl_garden/algorithms/value_flows.py's module docstring for the
-    # reference facts behind these defaults.
-    min_reward: float = -1.0
-    max_reward: float = 0.0
-    ret_agg: Literal["mean", "min"] = "mean"
-    confidence_weight_temp: float = 0.3
-    dcfm_lambda: float = 1.0
-    bcfm_lambda: float = 1.0
-    clip_flow_returns: bool = True
-    num_samples: int = 16
-    policy_extraction: Literal["rs", "rpg"] = "rs"
-
-
 
 
 def _off2_on_value_flows_algorithm_cls() -> type:

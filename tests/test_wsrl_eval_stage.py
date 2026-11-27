@@ -202,22 +202,31 @@ def test_a_stage_the_checkpoint_does_not_record_is_not_reported_as_offline(
 
 
 @pytest.mark.parametrize(
-    "net_arch,expressible",
-    [([12, 12], True), ({"pi": [12], "qf": [12, 12]}, True), ({"pi": [12, 8], "qf": [12]}, False)],
+    "net_arch",
+    [[12, 12], {"pi": [12], "qf": [12, 12]}, {"pi": [12, 8], "qf": [12]}],
 )
-def test_recorded_net_arch(net_arch, expressible, tmp_path, shared_inputs, monkeypatch):
+def test_recorded_net_arch(net_arch, tmp_path, shared_inputs, monkeypatch):
     directory = _train("off2on", "wsrl", shared_inputs, tmp_path)
     _, built = _evaluate(directory / "final.pt", "run_config", tmp_path / "template", monkeypatch)
     agent = WSRL(env=built.env, net_arch=net_arch, buffer_device="cpu", device="cpu")
     agent.run_config = {}
     path = agent.save(tmp_path / "run" / "checkpoints" / "final.pt")
     actions = _actions(agent)
-    if not expressible:
-        with pytest.raises(SystemExit, match="cannot express"):
-            _evaluate(path, "neither", tmp_path, monkeypatch, phase="off2on")
-        return
+    # The entry's --net-arch takes the recorded widths as they are, also widths
+    # that --hidden-dim and the layer counts cannot express.
     _, evaluated = _evaluate(path, "neither", tmp_path, monkeypatch, phase="off2on")
     assert torch.equal(_actions(evaluated), actions)
+
+
+def test_networks_other_than_the_recorded_ones_are_refused():
+    from types import SimpleNamespace
+
+    from rl_garden.training.evaluation import _reject_other_net_arch
+
+    recorded = {"use_cql_loss": True, "net_arch": {"pi": [12, 8], "qf": [12]}}
+    _reject_other_net_arch(SimpleNamespace(net_arch={"pi": (12, 8), "qf": (12,)}), recorded)
+    with pytest.raises(SystemExit, match="cannot express"):
+        _reject_other_net_arch(SimpleNamespace(net_arch=[12, 12]), recorded)
 
 
 def test_other_off2on_algorithms_report_the_bare_stage(

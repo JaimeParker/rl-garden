@@ -23,9 +23,11 @@ from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.iql import IQLParams
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.iql_policy import IQLPolicy
 
@@ -45,64 +47,33 @@ class IQLCore:
     def _init_iql_params(
         self,
         *,
-        tau: float = 0.005,
+        params: IQLParams,
         utd: float = 1.0,
-        actor_lr: float = 3e-4,
-        critic_value_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        actor_lr_schedule: Optional[ScheduleType] = None,
-        actor_lr_warmup_steps: Optional[int] = None,
-        actor_lr_decay_steps: Optional[int] = None,
-        actor_lr_min_ratio: Optional[float] = None,
-        grad_clip_norm: Optional[float] = None,
-        expectile: float = 0.7,
-        temperature: float = 3.0,
-        adv_clip_max: float = 100.0,
-        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
         value_hidden_dims: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        critic_subsample_size: Optional[int] = None,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        value_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        value_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        value_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[
-            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-        ] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
     ) -> None:
-        if not (0.0 < tau <= 1.0):
-            raise ValueError(f"tau must be in (0, 1], got {tau}.")
-        if not (0.0 < expectile < 1.0):
-            raise ValueError(f"expectile must be in (0, 1), got {expectile}.")
-        if temperature <= 0:
-            raise ValueError(f"temperature must be positive, got {temperature}.")
-        if adv_clip_max <= 0:
-            raise ValueError(f"adv_clip_max must be positive, got {adv_clip_max}.")
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if not (0.0 < params.tau <= 1.0):
+            raise ValueError(f"tau must be in (0, 1], got {params.tau}.")
+        if not (0.0 < params.expectile < 1.0):
+            raise ValueError(f"expectile must be in (0, 1), got {params.expectile}.")
+        if params.temperature <= 0:
+            raise ValueError(f"temperature must be positive, got {params.temperature}.")
+        if params.adv_clip_max <= 0:
+            raise ValueError(f"adv_clip_max must be positive, got {params.adv_clip_max}.")
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
         effective_actor_schedule = (
-            actor_lr_schedule if actor_lr_schedule is not None else lr_schedule
+            params.actor_lr_schedule
+            if params.actor_lr_schedule is not None
+            else params.lr_schedule
         )
         effective_actor_decay_steps = (
-            actor_lr_decay_steps if actor_lr_decay_steps is not None else lr_decay_steps
+            params.actor_lr_decay_steps
+            if params.actor_lr_decay_steps is not None
+            else params.lr_decay_steps
         )
         if effective_actor_schedule == "warmup_cosine" and effective_actor_decay_steps <= 0:
             raise ValueError(
@@ -111,46 +82,14 @@ class IQLCore:
                 f"actor schedule falls back to), got {effective_actor_decay_steps}."
             )
 
-        self.tau = tau
+        self._bind_params(params)
         self.utd = utd
-        self.actor_lr = actor_lr
-        self.critic_value_lr = critic_value_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.actor_lr_schedule = actor_lr_schedule
-        self.actor_lr_warmup_steps = actor_lr_warmup_steps
-        self.actor_lr_decay_steps = actor_lr_decay_steps
-        self.actor_lr_min_ratio = actor_lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
-        self.expectile = expectile
-        self.temperature = temperature
-        self.adv_clip_max = adv_clip_max
-        self.actor_distribution = actor_distribution
         self.net_arch = self._resolve_net_arch(
-            net_arch=net_arch,
+            net_arch=params.net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
             value_hidden_dims=value_hidden_dims,
         )
-        self.n_critics = n_critics
-        self.critic_subsample_size = critic_subsample_size
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.value_use_layer_norm = value_use_layer_norm
-        self.actor_use_group_norm = actor_use_group_norm
-        self.critic_use_group_norm = critic_use_group_norm
-        self.value_use_group_norm = value_use_group_norm
-        self.num_groups = num_groups
-        self.actor_dropout_rate = actor_dropout_rate
-        self.critic_dropout_rate = critic_dropout_rate
-        self.value_dropout_rate = value_dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.std_parameterization = std_parameterization
 
     def _optimizer_names(self) -> tuple[str, ...]:
         return ("critic_value_optimizer", "actor_optimizer")
@@ -158,41 +97,8 @@ class IQLCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "tau": self.tau,
             "utd": self.utd,
-            "actor_lr": self.actor_lr,
-            "critic_value_lr": self.critic_value_lr,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "actor_lr_schedule": self.actor_lr_schedule,
-            "actor_lr_warmup_steps": self.actor_lr_warmup_steps,
-            "actor_lr_decay_steps": self.actor_lr_decay_steps,
-            "actor_lr_min_ratio": self.actor_lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
-            "expectile": self.expectile,
-            "temperature": self.temperature,
-            "adv_clip_max": self.adv_clip_max,
-            "actor_distribution": self.actor_distribution,
             "net_arch": self.net_arch,
-            "n_critics": self.n_critics,
-            "critic_subsample_size": self.critic_subsample_size,
-            "actor_use_layer_norm": self.actor_use_layer_norm,
-            "critic_use_layer_norm": self.critic_use_layer_norm,
-            "value_use_layer_norm": self.value_use_layer_norm,
-            "actor_use_group_norm": self.actor_use_group_norm,
-            "critic_use_group_norm": self.critic_use_group_norm,
-            "value_use_group_norm": self.value_use_group_norm,
-            "num_groups": self.num_groups,
-            "actor_dropout_rate": self.actor_dropout_rate,
-            "critic_dropout_rate": self.critic_dropout_rate,
-            "value_dropout_rate": self.value_dropout_rate,
-            "kernel_init": self.kernel_init,
-            "backbone_type": self.backbone_type,
-            "std_parameterization": self.std_parameterization,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (
@@ -523,6 +429,8 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
        may change without notice.
     """
 
+    params_class = IQLParams
+
     def __init__(
         self,
         env: Any,
@@ -533,54 +441,18 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
         learning_starts: int = 4_000,
         batch_size: int = 256,
         gamma: float = 0.99,
-        tau: float = 0.005,
         training_freq: int = 64,
         utd: float = 1.0,
         bootstrap_at_done: str = "truncated",
         offline_sampling: Literal["with_replace", "without_replace"] = "with_replace",
-        actor_lr: float = 3e-4,
-        critic_value_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        actor_lr_schedule: Optional[ScheduleType] = None,
-        actor_lr_warmup_steps: Optional[int] = None,
-        actor_lr_decay_steps: Optional[int] = None,
-        actor_lr_min_ratio: Optional[float] = None,
-        grad_clip_norm: Optional[float] = None,
-        expectile: float = 0.7,
-        temperature: float = 3.0,
-        adv_clip_max: float = 100.0,
-        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
-        actor_hidden_dims: Optional[Sequence[int]] = None,
-        critic_hidden_dims: Optional[Sequence[int]] = None,
-        value_hidden_dims: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        critic_subsample_size: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
+        actor_hidden_dims: Optional[Sequence[int]] = None,
+        critic_hidden_dims: Optional[Sequence[int]] = None,
+        value_hidden_dims: Optional[Sequence[int]] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        value_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        value_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        value_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[
-            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-        ] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -593,7 +465,10 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        params: Optional[IQLParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -602,7 +477,7 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
             learning_starts=learning_starts,
             batch_size=batch_size,
             gamma=gamma,
-            tau=tau,
+            tau=params.tau,
             training_freq=training_freq,
             utd=utd,
             bootstrap_at_done=bootstrap_at_done,
@@ -624,44 +499,11 @@ class _IQLRolloutTrainingShell(Off2OnReplayMixin, IQLCore, OffPolicyAlgorithm):
         self.critic_encoder_config = critic_encoder_config
         self.encoder_sharing = encoder_sharing
         self._init_iql_params(
-            tau=tau,
+            params=params,
             utd=utd,
-            actor_lr=actor_lr,
-            critic_value_lr=critic_value_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            actor_lr_schedule=actor_lr_schedule,
-            actor_lr_warmup_steps=actor_lr_warmup_steps,
-            actor_lr_decay_steps=actor_lr_decay_steps,
-            actor_lr_min_ratio=actor_lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            expectile=expectile,
-            temperature=temperature,
-            adv_clip_max=adv_clip_max,
-            actor_distribution=actor_distribution,
-            net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
             value_hidden_dims=value_hidden_dims,
-            n_critics=n_critics,
-            critic_subsample_size=critic_subsample_size,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            value_use_layer_norm=value_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            value_use_group_norm=value_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            value_dropout_rate=value_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
         )
         self.policy_kwargs = self._normalize_policy_kwargs(policy_kwargs)
         self._setup_model()
@@ -673,6 +515,8 @@ class IQL(IQLCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("IQL",)
 
+    params_class = IQLParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
@@ -681,52 +525,16 @@ class IQL(IQLCore, OfflineRLAlgorithm):
         buffer_device: str = "cuda",
         batch_size: int = 256,
         gamma: float = 0.99,
-        tau: float = 0.005,
         offline_sampling: str = "with_replace",
         utd: float = 1.0,
-        actor_lr: float = 3e-4,
-        critic_value_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        actor_lr_schedule: Optional[ScheduleType] = None,
-        actor_lr_warmup_steps: Optional[int] = None,
-        actor_lr_decay_steps: Optional[int] = None,
-        actor_lr_min_ratio: Optional[float] = None,
-        grad_clip_norm: Optional[float] = None,
-        expectile: float = 0.7,
-        temperature: float = 3.0,
-        adv_clip_max: float = 100.0,
-        actor_distribution: Literal["squashed", "unsquashed"] = "squashed",
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
-        actor_hidden_dims: Optional[Sequence[int]] = None,
-        critic_hidden_dims: Optional[Sequence[int]] = None,
-        value_hidden_dims: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        critic_subsample_size: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
+        actor_hidden_dims: Optional[Sequence[int]] = None,
+        critic_hidden_dims: Optional[Sequence[int]] = None,
+        value_hidden_dims: Optional[Sequence[int]] = None,
         policy_kwargs: Optional[dict[str, Any]] = None,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        value_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        value_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        value_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[
-            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-        ] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -739,7 +547,10 @@ class IQL(IQLCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[IQLParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -761,44 +572,11 @@ class IQL(IQLCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_iql_params(
-            tau=tau,
+            params=params,
             utd=utd,
-            actor_lr=actor_lr,
-            critic_value_lr=critic_value_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            actor_lr_schedule=actor_lr_schedule,
-            actor_lr_warmup_steps=actor_lr_warmup_steps,
-            actor_lr_decay_steps=actor_lr_decay_steps,
-            actor_lr_min_ratio=actor_lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            expectile=expectile,
-            temperature=temperature,
-            adv_clip_max=adv_clip_max,
-            actor_distribution=actor_distribution,
-            net_arch=net_arch,
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
             value_hidden_dims=value_hidden_dims,
-            n_critics=n_critics,
-            critic_subsample_size=critic_subsample_size,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            value_use_layer_norm=value_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            value_use_group_norm=value_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            value_dropout_rate=value_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
-            std_parameterization=std_parameterization,
         )
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups

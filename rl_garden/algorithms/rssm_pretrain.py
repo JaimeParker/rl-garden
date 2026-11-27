@@ -61,6 +61,8 @@ from rl_garden.algorithms.offline_model_based import OfflineModelBasedAlgorithm
 from rl_garden.buffers.sequence_dataset import MmapSequenceDataset, infer_sequence_dataset_spec, load_sequence_dataset
 from rl_garden.buffers.sequence_replay_buffer import SequenceReplayBuffer
 from rl_garden.common.logger import Logger
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.dreamer import RSSMPretrainParams
 from rl_garden.observations import normalize_observation_space
 from rl_garden.observations.schema import ObservationSchema
 from rl_garden.policies.dreamer_policy import DreamerPolicy
@@ -104,6 +106,8 @@ def sequence_dataset_env_spec(dataset_dir: str | Path, padded_action_dim: Option
 
 
 class RSSMPretrain(OfflineModelBasedAlgorithm):
+    params_class = RSSMPretrainParams
+
     _compatible_checkpoint_algorithms = ("RSSMPretrain",)
     checkpoint_eval_unsupported_reason = (
         "it is a reward-free world-model pretraining stage; its actor and critic "
@@ -118,30 +122,7 @@ class RSSMPretrain(OfflineModelBasedAlgorithm):
         *,
         dataset_dir: str | Path,
         dataset_backend: Literal["mmap", "buffer"] = "mmap",
-        backbone: Literal["dreamer_v3", "ncrl"] = "dreamer_v3",
-        size: str = "ncrl_m",
-        deter: Optional[int] = None,
-        hidden: Optional[int] = None,
-        classes: Optional[int] = None,
-        cnn_depth: Optional[int] = None,
-        stoch: int = 32,
-        blocks: int = 8,
-        unimix: float = 0.01,
-        obs_layers: int = 1,
-        img_layers: int = 2,
-        dyn_layers: int = 1,
-        decoder_layers: int = 3,
-        kl_free: float = 1.0,
-        kl_free_mode: Literal["per_element", "mean"] = "mean",
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        recon_scale: float = 1.0,
         batch_size: int = 32,
-        batch_length: int = 64,
-        lr: float = 1e-4,
-        adam_eps: float = 1e-5,
-        weight_decay: float = 1e-6,
-        grad_clip: float = 100.0,
         compute_dtype: Literal["float32", "bfloat16"] = "bfloat16",
         buffer_device: str = "cuda",
         # Test-only escape hatch: replaces the resolved size row entirely.
@@ -154,7 +135,16 @@ class RSSMPretrain(OfflineModelBasedAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: Optional[RSSMPretrainParams] = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        size = params.size
+        deter = params.deter
+        hidden = params.hidden
+        classes = params.classes
+        cnn_depth = params.cnn_depth
+
         if dataset_backend not in ("mmap", "buffer"):
             raise ValueError(f"dataset_backend must be 'mmap' or 'buffer', got {dataset_backend!r}.")
         if not isinstance(env.single_action_space, spaces.Box):
@@ -176,30 +166,12 @@ class RSSMPretrain(OfflineModelBasedAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.dataset_dir = str(dataset_dir)
         self.dataset_backend = dataset_backend
-        self.backbone = backbone
-        self.size = size
         self.rssm_size = rssm_size or resolve_rssm_size(
             size, deter=deter, hidden=hidden, classes=classes, cnn_depth=cnn_depth
         )
-        self.stoch = stoch
-        self.blocks = blocks
-        self.unimix = unimix
-        self.obs_layers = obs_layers
-        self.img_layers = img_layers
-        self.dyn_layers = dyn_layers
-        self.decoder_layers = decoder_layers
-        self.kl_free = kl_free
-        self.kl_free_mode = kl_free_mode
-        self.dyn_scale = dyn_scale
-        self.rep_scale = rep_scale
-        self.recon_scale = recon_scale
-        self.batch_length = batch_length
-        self.lr = lr
-        self.adam_eps = adam_eps
-        self.weight_decay = weight_decay
-        self.grad_clip = grad_clip
         self.compute_dtype = compute_dtype
         self._autocast_kwargs = dict(
             device_type=self.device.type, dtype=torch.bfloat16, enabled=compute_dtype == "bfloat16"
@@ -324,29 +296,10 @@ class RSSMPretrain(OfflineModelBasedAlgorithm):
             **super()._checkpoint_metadata(),
             "dataset_dir": self.dataset_dir,
             "dataset_backend": self.dataset_backend,
-            "backbone": self.backbone,
-            "size": self.size,
             "rssm_size": dataclasses.asdict(self.rssm_size),
-            "stoch": self.stoch,
-            "blocks": self.blocks,
-            "unimix": self.unimix,
-            "obs_layers": self.obs_layers,
-            "img_layers": self.img_layers,
-            "dyn_layers": self.dyn_layers,
-            "decoder_layers": self.decoder_layers,
             "heads": list(self.world_model.heads),
             "padded_action_dim": self.padded_action_dim,
             "image_shape": image_shapes,
-            "kl_free": self.kl_free,
-            "kl_free_mode": self.kl_free_mode,
             "straight_through": self.straight_through,
-            "dyn_scale": self.dyn_scale,
-            "rep_scale": self.rep_scale,
-            "recon_scale": self.recon_scale,
-            "batch_length": self.batch_length,
-            "lr": self.lr,
-            "adam_eps": self.adam_eps,
-            "weight_decay": self.weight_decay,
-            "grad_clip": self.grad_clip,
             "compute_dtype": self.compute_dtype,
         }

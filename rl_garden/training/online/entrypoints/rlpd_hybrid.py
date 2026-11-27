@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from rl_garden.hyperparameters import params_kwargs
+
+from rl_garden.hyperparameters.sac import RLPDHybridParams
+
+from typing import Any
 
 
 def build_rlpd_hybrid(
@@ -34,7 +38,7 @@ def build_rlpd_hybrid(
             "its hybrid actor and discrete head are incompatible with BC actor loading; leave it unset."
         )
 
-    net_arch = {
+    net_arch = args.net_arch if args.net_arch is not None else {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
@@ -51,68 +55,37 @@ def build_rlpd_hybrid(
     if algorithm_cls is None:
         algorithm_cls = RLPDHybrid
     agent_kwargs: dict[str, Any] = dict(
+        **{
+            **params_kwargs(args, RLPDHybridParams),
+            "use_grasp_penalty": getattr(args, 'use_grasp_penalty', False),
+            "net_arch": net_arch,
+        },
         env=env,
         eval_env=eval_env,
         mmap_dir=args.mmap_dir,
         mmap_mode=args.mmap_mode,
-        discrete_hidden_dim=args.discrete_hidden_dim,
-        discrete_lr=args.discrete_lr,
         # HilSerlArgs-only field (real-robot gripper-flip reward shaping);
         # getattr so plain RLPDHybridArgs (sim training) callers are
         # unaffected without needing this field.
-        use_grasp_penalty=getattr(args, "use_grasp_penalty", False),
         # HilSerlArgs-only field (real-robot replay-buffer image dedup). The
         # buffer's image keys are derived by RLPDHybrid itself from
         # self.observation_encoders.schema.image_keys -- unused when
         # memory_efficient_buffer is off (the default).
         memory_efficient_buffer=getattr(args, "memory_efficient_buffer", False),
         memory_efficient_frame_stack=args.obs.frame_stack,
-        n_critics=args.n_critics,
-        critic_subsample_size=args.critic_subsample_size,
-        backup_entropy=args.backup_entropy,
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        actor_dropout_rate=args.actor_dropout_rate,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        use_pnorm=args.use_pnorm,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        nstep=args.nstep,
-        tau=args.tau,
         bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        exclude_bias_from_decay=args.exclude_bias_from_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        alpha_tuning=args.alpha_tuning,
-        ent_coef=args.ent_coef,
-        target_entropy=args.target_entropy,
-        alpha_lr=args.alpha_lr,
         q_landscape_diagnostics=args.q_landscape_diagnostics,
         q_landscape_num_actions=args.q_landscape_num_actions,
         q_landscape_batch_size=args.q_landscape_batch_size,
         q_mc_diagnostics=args.q_mc_diagnostics,
         initial_training_phase=sac_initial_training_phase_from_args(args),
-        critic_impl=args.critic_impl,
-        actor_use_layer_norm=args.actor_use_layer_norm,
-        actor_log_std_min=args.actor_log_std_min,
-        actor_log_std_mode=args.actor_log_std_mode,
-        target_policy_noise=args.target_policy_noise,
-        target_noise_clip=args.target_noise_clip,
-        actor_q_agg=args.actor_q_agg,
-        net_arch=net_arch,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,
@@ -176,13 +149,12 @@ from dataclasses import dataclass
 
 from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.common.env_args import EnvBackendArgs
-from rl_garden.networks import BackboneType, KernelInit
 from rl_garden.training.online.args import VisionSACTrainingArgs
 from rl_garden.training.online.registry import registry
 
 
 @dataclass
-class RLPDHybridArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
+class RLPDHybridArgs(RLPDHybridParams, VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     """RLPDHybrid -- RLPD with an independent discrete Double-DQN head for a
     hybrid continuous-arm + discrete-gripper action space (HIL-SERL's
     ``sac_hybrid_single``). The last action dim is treated as the discrete
@@ -190,26 +162,9 @@ class RLPDHybridArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     ``num_grippers``); the continuous actor/critic only see the remaining dims.
     """
 
-    n_critics: int = 10
-    critic_subsample_size: int | None = 2
-    critic_use_layer_norm: bool = True
-    backup_entropy: bool = True
     utd: float = 4.0
 
-    actor_dropout_rate: float | None = None
-    critic_dropout_rate: float | None = None
-    kernel_init: KernelInit | None = None
-    backbone_type: BackboneType = "mlp"
-    use_pnorm: bool = False
 
-    weight_decay: float = 0.0
-    use_adamw: bool = False
-    exclude_bias_from_decay: bool = False
-    lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant"
-    lr_warmup_steps: int = 0
-    lr_decay_steps: int = 0
-    lr_min_ratio: float = 0.0
-    grad_clip_norm: float | None = None
 
     # Registry-backed (rl_garden.buffers.dataset_backend_registry), not a
     # Literal: a new backend registers itself, no CLI arg change needed here.
@@ -223,8 +178,6 @@ class RLPDHybridArgs(VisionSACTrainingArgs, PolicyModuleArgs, EnvBackendArgs):
     reward_bias: float = 0.0
     success_key: str | None = None
 
-    discrete_hidden_dim: int = 256
-    discrete_lr: float = 3e-4
 
 
 

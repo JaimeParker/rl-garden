@@ -43,7 +43,7 @@ explicit since autograd tracks by default.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 
@@ -51,6 +51,8 @@ from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.hindsight_goal_dataset import HindsightGoalDataset, HindsightGoalSample
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_optimizer
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.hilp import HILPParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks import EnsembleQCritic, GoalConditionedPhiValue, UnsquashedGaussianActor, ValueNetwork
 from rl_garden.observations import ObservationContractError, ObsGroups
@@ -71,6 +73,8 @@ class HILP(OfflineRLAlgorithm):
     module docstring); image observations are rejected with a clear error.
     """
 
+    params_class = HILPParams
+
     _compatible_checkpoint_algorithms = ("HILP",)
     # There is no critic encoder, so "separate" does not exist.
     encoder_sharing_choices = ("shared_critic_grad", "shared")
@@ -84,19 +88,6 @@ class HILP(OfflineRLAlgorithm):
         env: OfflineEnvSpec,
         dataset_path: str,
         *,
-        skill_dim: int = 32,
-        value_hidden_dims: Sequence[int] = (512, 512, 512),
-        actor_hidden_dims: Sequence[int] = (512, 512, 512),
-        discount: float = 0.99,
-        tau: float = 0.005,
-        expectile: float = 0.95,
-        skill_expectile: float = 0.9,
-        skill_temperature: float = 10.0,
-        skill_discount: float = 0.99,
-        p_currgoal: float = 0.0,
-        p_trajgoal: float = 0.625,
-        p_randomgoal: float = 0.375,
-        lr: float = 3e-4,
         batch_size: int = 1024,
         num_traj: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
@@ -109,13 +100,16 @@ class HILP(OfflineRLAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: Optional[HILPParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=1,
             buffer_device="cpu",
             batch_size=batch_size,
-            gamma=discount,
+            gamma=params.discount,
             offline_sampling="with_replace",
             seed=seed,
             device=device,
@@ -129,30 +123,22 @@ class HILP(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.dataset_path = dataset_path
-        self.skill_dim = skill_dim
-        self.value_hidden_dims = tuple(value_hidden_dims)
-        self.actor_hidden_dims = tuple(actor_hidden_dims)
-        self.discount = discount
-        self.tau = tau
-        self.expectile = expectile
-        self.skill_expectile = skill_expectile
-        self.skill_temperature = skill_temperature
-        self.skill_discount = skill_discount
-        self.p_currgoal = p_currgoal
-        self.p_trajgoal = p_trajgoal
-        self.p_randomgoal = p_randomgoal
-        self.lr = lr
+
+        self.value_hidden_dims = tuple(params.value_hidden_dims)
+        self.actor_hidden_dims = tuple(params.actor_hidden_dims)
+
         self.num_traj = num_traj
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
 
         self._dataset = HindsightGoalDataset(
             dataset_path,
-            p_currgoal=p_currgoal,
-            p_trajgoal=p_trajgoal,
-            p_randomgoal=p_randomgoal,
-            discount=skill_discount,
+            p_currgoal=params.p_currgoal,
+            p_trajgoal=params.p_trajgoal,
+            p_randomgoal=params.p_randomgoal,
+            discount=params.skill_discount,
             device=self.device,
             num_traj=num_traj,
         )
@@ -361,18 +347,6 @@ class HILP(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "skill_dim": self.skill_dim,
-            "value_hidden_dims": self.value_hidden_dims,
-            "actor_hidden_dims": self.actor_hidden_dims,
-            "discount": self.discount,
-            "tau": self.tau,
-            "expectile": self.expectile,
-            "skill_expectile": self.skill_expectile,
-            "skill_temperature": self.skill_temperature,
-            "skill_discount": self.skill_discount,
-            "p_currgoal": self.p_currgoal,
-            "p_trajgoal": self.p_trajgoal,
-            "p_randomgoal": self.p_randomgoal,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

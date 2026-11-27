@@ -17,6 +17,8 @@ from typing import Any, Optional
 import torch
 import torch.nn.functional as F
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import RLPDHybridParams
 from rl_garden.algorithms.rlpd import RLPD
 from rl_garden.buffers.demo_intervention import DemoInterventionMixin
 from rl_garden.buffers.memory_efficient_buffer import MemoryEfficientReplayBuffer
@@ -39,20 +41,27 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
     _compatible_checkpoint_algorithms = ("RLPDHybrid",)
     policy_class = RLPDHybridPolicy
 
+    params_class = RLPDHybridParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        discrete_hidden_dim: int = 256,
-        discrete_lr: float = 3e-4,
-        discrete_tau: Optional[float] = None,
-        use_grasp_penalty: bool = False,
         memory_efficient_buffer: bool = False,
         memory_efficient_frame_stack: int = 1,
-        num_grippers: int = 1,
+        params: RLPDHybridParams | None = None,
         **rlpd_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: rlpd_kwargs.pop(name) for name in tuple(rlpd_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        discrete_hidden_dim = params.discrete_hidden_dim
+        discrete_lr = params.discrete_lr
+        discrete_tau = params.discrete_tau
+        use_grasp_penalty = params.use_grasp_penalty
+        num_grippers = params.num_grippers
         self.num_grippers = int(num_grippers)
         self.discrete_hidden_dim = discrete_hidden_dim
         self.discrete_lr = discrete_lr
@@ -60,7 +69,7 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
         self.use_grasp_penalty = use_grasp_penalty
         self.memory_efficient_buffer = memory_efficient_buffer
         self.memory_efficient_frame_stack = memory_efficient_frame_stack
-        super().__init__(env, eval_env, **rlpd_kwargs)
+        super().__init__(env, eval_env, params=params, **rlpd_kwargs)
         if self.use_grasp_penalty:
             self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "grasp_penalty")
 
@@ -211,7 +220,8 @@ class RLPDHybrid(DemoInterventionMixin, RLPD):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "discrete_hidden_dim": self.discrete_hidden_dim,
-            "discrete_lr": self.discrete_lr,
-            "num_grippers": self.num_grippers,
         }
+
+    def _bind_params(self, params: RLPDHybridParams) -> None:
+        super()._bind_params(params)
+        self.num_grippers = int(params.num_grippers)

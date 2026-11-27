@@ -44,12 +44,14 @@ expert side while the generator side has real data -- see
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.ppo import GAILParams
 from rl_garden.algorithms.ppo import PPO
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.common.optim import make_optimizer
@@ -65,8 +67,14 @@ class GAIL(PPO):
     ``demo_env_id=None`` builds an agent without demonstrations, which can act
     and load a checkpoint but not train."""
 
+    params_class = GAILParams
+
     _compatible_checkpoint_algorithms = ("GAIL",)
     _supports_decision_level = False
+
+    def _bind_params(self, params: GAILParams) -> None:
+        super()._bind_params(params)
+        self.disc_net_arch = tuple(params.disc_net_arch)
 
     def __init__(
         self,
@@ -77,25 +85,18 @@ class GAIL(PPO):
         demo_dataset_backend: str = "d4rl_legacy",
         demo_buffer_size: int = 1_000_000,
         demo_batch_size: int = 1024,
-        n_disc_updates_per_round: int = 4,
-        disc_net_arch: Sequence[int] = (32, 32),
-        disc_lr: float = 3e-4,
-        disc_use_adamw: bool = False,
+        params: GAILParams | None = None,
         **ppo_kwargs: Any,
     ) -> None:
-        # Assigned before super().__init__(): PPO.__init__ calls
-        # self._setup_model() as its own last line, which dynamically
-        # dispatches to GAIL._setup_model() below -- these attributes must
-        # already exist by then.
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: ppo_kwargs.pop(name) for name in tuple(ppo_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
         self.demo_env_id = demo_env_id
         self.demo_dataset_backend = demo_dataset_backend
         self.demo_buffer_size = demo_buffer_size
         self.demo_batch_size = demo_batch_size
-        self.n_disc_updates_per_round = n_disc_updates_per_round
-        self.disc_net_arch = tuple(disc_net_arch)
-        self.disc_lr = disc_lr
-        self.disc_use_adamw = disc_use_adamw
-        super().__init__(env, eval_env, **ppo_kwargs)
+        super().__init__(env, eval_env, params=params, **ppo_kwargs)
 
     def _setup_model(self) -> None:
         super()._setup_model()
@@ -267,7 +268,5 @@ class GAIL(PPO):
             "demo_env_id": self.demo_env_id,
             "demo_dataset_backend": self.demo_dataset_backend,
             "demo_batch_size": self.demo_batch_size,
-            "n_disc_updates_per_round": self.n_disc_updates_per_round,
             "disc_net_arch": list(self.disc_net_arch),
-            "disc_lr": self.disc_lr,
         }

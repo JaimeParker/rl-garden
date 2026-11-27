@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from rl_garden.common.cli_args import PolicyModuleArgs
 from rl_garden.training.offline.args import (
@@ -31,6 +31,8 @@ class EDACArgs(
     so no extra base is needed)."""
 
     gamma: float = 0.99
+    alpha_lr: Optional[float] = 3e-4
+    net_arch: Optional[tuple[int, ...] | dict[str, tuple[int, ...]]] = (256, 256, 256)
 
 
 def _edac_kwargs(
@@ -42,30 +44,19 @@ def _edac_kwargs(
         resolve_obs_groups_config,
     )
 
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.offline_sac import EDACParams
+
     kwargs = {
+        **params_kwargs(args, EDACParams),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
-        "tau": args.tau,
         "offline_sampling": args.offline_sampling,
-        "eta": args.eta,
-        "policy_lr": args.policy_lr,
-        "q_lr": args.q_lr,
-        "alpha_lr": args.alpha_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
-        "ent_coef": args.ent_coef,
-        "target_entropy": args.target_entropy,
-        "net_arch": list(args.net_arch),
-        "n_critics": args.n_critics,
-        "critic_subsample_size": args.critic_subsample_size,
+        "net_arch": (list(args.net_arch) if args.net_arch is not None
+                     and not isinstance(args.net_arch, dict) else args.net_arch),
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

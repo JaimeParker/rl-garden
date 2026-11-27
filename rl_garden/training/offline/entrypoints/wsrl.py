@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from rl_garden.hyperparameters.cql import WSRLParams
+
 from rl_garden.training.offline.args import OfflineWSRLArgs
 from rl_garden.training.offline.entrypoints.calql import CalQLArgs
 from rl_garden.training.offline.entrypoints.cql import _cql_kwargs
@@ -21,7 +23,7 @@ class WSRLOfflineArgs(CalQLArgs, OfflineWSRLArgs):
 def _wsrl_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
-    kwargs = _cql_kwargs(args, env_spec, logger, eval_env)
+    kwargs = _cql_kwargs(args, env_spec, logger, eval_env, params_class=WSRLParams)
     kwargs.update(
         learning_starts=0,
         training_freq=args.training_freq,
@@ -36,14 +38,6 @@ def build_wsrl(args, env_spec, logger, eval_env=None):
     return construct_agent(
         WSRL,
         **_wsrl_kwargs(args, env_spec, logger, eval_env),
-        use_calql=args.use_calql,
-        calql_bound_random_actions=args.calql_bound_random_actions,
-        sparse_reward_mc=args.sparse_reward_mc,
-        sparse_negative_reward=args.sparse_negative_reward,
-        success_threshold=args.success_threshold,
-        use_sarsa_reference=args.use_sarsa_reference,
-        sarsa_lr=args.sarsa_lr,
-        sarsa_hidden_dims=args.sarsa_hidden_dims,
     )
 
 

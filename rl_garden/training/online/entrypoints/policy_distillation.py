@@ -12,7 +12,9 @@ below, not a redesign.
 """
 from __future__ import annotations
 
-from typing import Any
+from rl_garden.hyperparameters import params_kwargs
+
+from typing import Any, Optional
 
 
 def _build_teacher_policy(args, env: Any):
@@ -73,8 +75,11 @@ def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
         )
 
     teacher_policy = None if evaluating else _build_teacher_policy(args, env)
+    parameter_kwargs = params_kwargs(args, PolicyDistillation.params_class)
+    parameter_kwargs.pop("net_arch")
     agent = construct_agent(
         PolicyDistillation,
+        **parameter_kwargs,
         env=env,
         eval_env=eval_env,
         teacher_policy=teacher_policy,
@@ -82,14 +87,7 @@ def build_policy_distillation(args, env, eval_env, logger, checkpoint_dir):
         student_obs_keys=args.student_obs_keys,
         encoder_config=args.encoder if args.obs.is_visual else None,
         num_steps=args.num_steps,
-        num_learning_epochs=args.num_learning_epochs,
-        num_minibatches=args.num_minibatches,
-        loss_type=args.loss_type,
-        actor_lr=args.actor_lr,
-        weight_decay=args.weight_decay,
-        max_grad_norm=args.max_grad_norm,
-        net_arch=list(args.net_arch),
-        tanh_squash=args.tanh_squash,
+        net_arch=list(args.net_arch) if args.net_arch is not None else None,
         seed=args.seed,
         device=args.device,
         std_log=args.std_log,
@@ -145,6 +143,8 @@ class PolicyDistillationArgs(PolicyDistillationTrainingArgs, ObservationArgs, En
     ``rl_garden/envs/isaaclab/env.py``'s TODO for exposing a privileged obs
     group), but any Dict-obs backend with the right keys works.
     """
+
+    net_arch: Optional[tuple[int, ...]] = (256, 256)
 
 
 def _policy_distillation_algorithm_cls() -> type:

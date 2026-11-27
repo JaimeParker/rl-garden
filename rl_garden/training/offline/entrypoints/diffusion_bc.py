@@ -27,7 +27,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from rl_garden.buffers.h5_dataset import infer_specs_from_h5
 from rl_garden.common import Logger, seed_everything
@@ -42,6 +42,8 @@ from rl_garden.training.inspection import (
     run_preflight,
 )
 from rl_garden.training.offline.args import DiffusionBCTrainingArgs
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.diffusion_bc import DiffusionBCParams
 from rl_garden.training.offline.registry import registry
 
 
@@ -61,6 +63,8 @@ class DiffusionBCArgs(DiffusionBCTrainingArgs):
     Box-trained checkpoint; see the guards in ``DPPO.__init__``/
     ``ConsistencyDistillBC._setup_model``). Most ``--encoder``/``--obs-groups``
     fields are no-ops for a Box-shaped dataset."""
+
+    ema_start_step: Optional[int] = 0
 
 
 def _diffusion_bc_kwargs(args: DiffusionBCArgs, obs_space: Any) -> dict:
@@ -133,33 +137,13 @@ def build_diffusion_bc(
         algorithm_cls = DiffusionBC
     net_cls, net_kwargs = diffusion_net(args)
     kwargs = {
+        **params_kwargs(args, DiffusionBCParams),
         "env": env_spec,
         "dataset_path": args.dataset_path,
-        "horizon_steps": args.horizon_steps,
-        "cond_steps": args.cond_steps,
-        "denoising_steps": args.denoising_steps,
-        "activation_fn": args.activation_fn,
-        "residual_style": args.residual_style,
-        "time_dim": args.time_dim,
-        "kernel_init": args.kernel_init,
-        "denoised_clip_value": args.denoised_clip_value,
-        "randn_clip_value": args.randn_clip_value,
-        "final_action_clip_value": args.final_action_clip_value,
-        "min_sampling_denoising_std": args.min_sampling_denoising_std,
         "net_cls": net_cls,
         "net_kwargs": net_kwargs,
         **_diffusion_bc_kwargs(args, env_spec.single_observation_space),
-        "actor_lr": args.actor_lr,
-        "weight_decay": args.weight_decay,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
         "batch_size": args.batch_size,
-        "ema_decay": args.ema_decay,
-        "ema_update_every": args.ema_update_every,
-        "ema_start_step": args.ema_start_step,
         "num_traj": args.offline_num_traj,
         "seed": args.seed,
         "device": args.device,

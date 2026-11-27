@@ -70,14 +70,17 @@ evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+import dataclasses
+
+from typing import Any, Optional
 
 import numpy as np
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import ACRLPDParams
 from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.rlpd import RLPD
-from rl_garden.algorithms.sac_core import ActorQAggregation
 from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.observations import (
@@ -95,10 +98,11 @@ class ACRLPDCore:
     def _init_acrlpd_params(
         self,
         *,
-        horizon_length: int,
-        q_agg: Literal["mean", "min"],
-        bc_alpha: float,
+        params: ACRLPDParams,
     ) -> None:
+        horizon_length = params.horizon_length
+        q_agg = params.q_agg
+        bc_alpha = params.bc_alpha
         self._init_action_chunking(horizon_length)
         if bc_alpha < 0:
             raise ValueError(f"bc_alpha must be >= 0, got {bc_alpha}")
@@ -227,24 +231,25 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
 
     _compatible_checkpoint_algorithms = ("ACRLPD",)
 
+    params_class = ACRLPDParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        horizon_length: int = 5,
-        target_entropy_multiplier: float = 0.5,
-        q_agg: Literal["mean", "min"] = "mean",
-        bc_alpha: float = 0.0,
-        n_critics: int = 10,
-        critic_subsample_size: Optional[int] = None,
-        critic_use_layer_norm: bool = True,
-        backup_entropy: bool = False,
-        target_entropy: float | str = "auto",
-        actor_q_agg: ActorQAggregation = "min",
         initial_training_phase: Optional[InitialTrainingPhase] = None,
+        params: ACRLPDParams | None = None,
         **rlpd_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: rlpd_kwargs.pop(name) for name in tuple(rlpd_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        horizon_length = params.horizon_length
+        target_entropy_multiplier = params.target_entropy_multiplier
+        target_entropy = params.target_entropy
+        actor_q_agg = params.actor_q_agg
         if actor_q_agg != "min":
             raise ValueError(
                 f"ACRLPD does not take actor_q_agg={actor_q_agg!r} (--actor-q-agg): its actor "
@@ -257,20 +262,18 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
                 "Q-chunking has no critic-only phase, only random actions before learning "
                 "starts (3rd_party/qc/main_online.py:179-188)."
             )
-        self._init_acrlpd_params(horizon_length=horizon_length, q_agg=q_agg, bc_alpha=bc_alpha)
+        self._init_acrlpd_params(params=params)
 
         if target_entropy == "auto":
             action_dim = int(np.prod(env.single_action_space.shape))
             target_entropy = -target_entropy_multiplier * horizon_length * action_dim
 
+        input_params = params
+        params = dataclasses.replace(params, target_entropy=target_entropy)
         super().__init__(
             env,
             eval_env,
-            n_critics=n_critics,
-            critic_subsample_size=critic_subsample_size,
-            critic_use_layer_norm=critic_use_layer_norm,
-            backup_entropy=backup_entropy,
-            target_entropy=target_entropy,
-            actor_q_agg=actor_q_agg,
+            params=params,
             **rlpd_kwargs,
         )
+        self.params = input_params

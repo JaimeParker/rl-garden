@@ -49,7 +49,7 @@ weights.
 from __future__ import annotations
 
 import warnings
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -64,10 +64,10 @@ from rl_garden.algorithms.offline import (
 from rl_garden.algorithms.ppo import ppo_clip_policy_loss
 from rl_garden.buffers.sarsa_buffer import SarsaMCReplayBuffer
 from rl_garden.common.logger import Logger
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.unio4 import UniO4Params
 from rl_garden.common.optim import make_optimizer
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import KernelInit
-from rl_garden.networks.actor_critic import BackboneType
 from rl_garden.observations import ObsGroups
 from rl_garden.policies.bc_policy import BCPolicy
 from rl_garden.policies.unio4_mixture_policy import UniO4MixturePolicy
@@ -75,6 +75,8 @@ from rl_garden.policies.unio4_mixture_policy import UniO4MixturePolicy
 
 class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
     """Uni-O4: BC-ensemble + shared-critic PPO-clip improvement. Box obs only."""
+
+    params_class = UniO4Params
 
     _compatible_checkpoint_algorithms = ("UniO4",)
     # No class-level override: like BPPO (rl_garden/algorithms/bppo.py),
@@ -97,36 +99,6 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         buffer_device: str = "cuda",
         batch_size: int = 256,
         gamma: float = 0.99,
-        # -- Phase CRITIC: shared V/Q warmup --
-        critic_warmup_steps: int = 2_000_000,
-        value_lr: float = 1e-4,
-        q_lr: float = 1e-4,
-        tau: float = 0.005,
-        target_update_freq: int = 2,
-        value_hidden_dims: Sequence[int] = (512, 512, 512),
-        q_hidden_dims: Sequence[int] = (1024, 1024),
-        # -- Phase BC_ENSEMBLE: joint BC training with diversity term --
-        num_policies: int = 4,
-        bc_ensemble_steps: int = 400_000,
-        alpha_bc: float = 0.1,
-        # -- Phase IMPROVE: per-member PPO-clip against the shared critic --
-        actor_lr: float = 1e-4,
-        actor_hidden_dims: Sequence[int] = (256, 256, 256),
-        clip_ratio: float = 0.25,
-        clip_decay: float = 0.96,
-        clip_decay_steps: int = 200,
-        entropy_weight: float = 0.0,
-        omega: float = 0.7,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        grad_clip_norm: Optional[float] = None,
-        use_layer_norm: bool = False,
-        use_group_norm: bool = False,
-        num_groups: int = 32,
-        dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -145,7 +117,10 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: Optional[UniO4Params] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -166,62 +141,41 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
         self.critic_encoder_config = critic_encoder_config
         self.encoder_sharing = encoder_sharing
         self._image_augmentation_seed = image_augmentation_seed
-        if critic_warmup_steps < 0:
+        if params.critic_warmup_steps < 0:
             raise ValueError(
-                f"critic_warmup_steps must be non-negative, got {critic_warmup_steps}."
+                f"critic_warmup_steps must be non-negative, got {params.critic_warmup_steps}."
             )
-        if bc_ensemble_steps < 0:
+        if params.bc_ensemble_steps < 0:
             raise ValueError(
-                f"bc_ensemble_steps must be non-negative, got {bc_ensemble_steps}."
+                f"bc_ensemble_steps must be non-negative, got {params.bc_ensemble_steps}."
             )
-        if num_policies < 1:
-            raise ValueError(f"num_policies must be >= 1, got {num_policies}.")
-        if not (0.0 <= omega <= 1.0):
-            raise ValueError(f"omega must be in [0, 1], got {omega}.")
-        if grad_clip_norm is not None and grad_clip_norm <= 0:
+        if params.num_policies < 1:
+            raise ValueError(f"num_policies must be >= 1, got {params.num_policies}.")
+        if not (0.0 <= params.omega <= 1.0):
+            raise ValueError(f"omega must be in [0, 1], got {params.omega}.")
+        if params.grad_clip_norm is not None and params.grad_clip_norm <= 0:
             raise ValueError(
-                f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
+                f"grad_clip_norm must be positive or None, got {params.grad_clip_norm}."
             )
 
-        self.critic_warmup_steps = critic_warmup_steps
-        self.value_lr = value_lr
-        self.q_lr = q_lr
-        self.tau = tau
-        self.target_update_freq = target_update_freq
-        self.value_hidden_dims = tuple(value_hidden_dims)
-        self.q_hidden_dims = tuple(q_hidden_dims)
-        self.num_policies = num_policies
-        self.bc_ensemble_steps = bc_ensemble_steps
-        self.alpha_bc = alpha_bc
-        self.actor_lr = actor_lr
-        self.actor_hidden_dims = tuple(actor_hidden_dims)
-        self.clip_ratio_init = clip_ratio
-        self.clip_decay = clip_decay
-        self.clip_decay_steps = clip_decay_steps
-        self.entropy_weight = entropy_weight
-        self.omega = omega
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.grad_clip_norm = grad_clip_norm
-        self.use_layer_norm = use_layer_norm
-        self.use_group_norm = use_group_norm
-        self.num_groups = num_groups
-        self.dropout_rate = dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.std_parameterization = std_parameterization
+        self.value_hidden_dims = tuple(params.value_hidden_dims)
+        self.q_hidden_dims = tuple(params.q_hidden_dims)
+
+        self.actor_hidden_dims = tuple(params.actor_hidden_dims)
+        self.clip_ratio_init = params.clip_ratio
 
         # Dedicated phase-gate/decay state, same reasoning as BPPO's (see
         # bppo.py) -- never reuses self._global_step/self._global_update.
         self._phase_step = 0
         self._phase_b_step = 0
-        self._clip_ratio = clip_ratio
-        self._best_eval_score = [float("-inf")] * num_policies
+        self._clip_ratio = params.clip_ratio
+        self._best_eval_score = [float("-inf")] * params.num_policies
 
         self._setup_model()
 
@@ -526,14 +480,5 @@ class UniO4(BPPOCriticMixin, OfflineRLAlgorithm):
             **super()._checkpoint_metadata(),
             **self._critic_checkpoint_metadata(),
             **self._observation_checkpoint_metadata(),
-            "num_policies": self.num_policies,
-            "bc_ensemble_steps": self.bc_ensemble_steps,
-            "alpha_bc": self.alpha_bc,
-            "actor_lr": self.actor_lr,
-            "actor_hidden_dims": self.actor_hidden_dims,
             "clip_ratio": self.clip_ratio_init,
-            "clip_decay": self.clip_decay,
-            "clip_decay_steps": self.clip_decay_steps,
-            "entropy_weight": self.entropy_weight,
-            "omega": self.omega,
         }

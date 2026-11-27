@@ -12,6 +12,8 @@ reuses ``DPPOPolicy._cond`` unmodified). Same action-chunking convention as
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+
 
 def _diffusion_cm_distill_observation_kwargs(args) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
@@ -40,6 +42,7 @@ def build_diffusion_cm_distill(args, env, eval_env, logger, checkpoint_dir):
 
     agent = construct_agent(
         DiffusionCMDistillOnline,
+        **params_kwargs(args, DiffusionCMDistillOnline.params_class),
         env=env,
         eval_env=eval_env,
         **image_kwargs,
@@ -47,51 +50,8 @@ def build_diffusion_cm_distill(args, env, eval_env, logger, checkpoint_dir):
         num_steps=args.num_steps,
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,
-        horizon_steps=args.horizon_steps,
-        act_steps=args.act_steps,
-        denoising_steps=args.denoising_steps,
-        ft_denoising_steps=args.ft_denoising_steps,
-        actor_activation_fn=args.actor_activation_fn,
-        actor_residual_style=args.actor_residual_style,
-        critic_activation_fn=args.critic_activation_fn,
-        critic_residual_style=args.critic_residual_style,
-        time_dim=args.time_dim,
-        kernel_init=args.kernel_init,
-        denoised_clip_value=args.denoised_clip_value,
-        randn_clip_value=args.randn_clip_value,
-        final_action_clip_value=args.final_action_clip_value,
-        min_sampling_denoising_std=args.min_sampling_denoising_std,
-        min_logprob_denoising_std=args.min_logprob_denoising_std,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        critic_warmup_updates=args.critic_warmup_updates,
-        update_epochs=args.update_epochs,
-        update_batch_size=args.update_batch_size,
-        norm_adv=args.norm_adv,
-        gamma_denoising=args.gamma_denoising,
-        clip_ploss_coef=args.clip_ploss_coef,
-        clip_ploss_coef_base=args.clip_ploss_coef_base,
-        clip_ploss_coef_rate=args.clip_ploss_coef_rate,
-        clip_vloss_coef=args.clip_vloss_coef,
-        clip_advantage_lower_quantile=args.clip_advantage_lower_quantile,
-        clip_advantage_upper_quantile=args.clip_advantage_upper_quantile,
-        vf_coef=args.vf_coef,
-        target_kl=args.target_kl,
-        reward_horizon=args.reward_horizon,
         finite_horizon_gae=args.finite_horizon_gae,
         bootstrap_at_done=args.bootstrap_at_done,
-        cm_mlp_dims=args.cm_mlp_dims,
-        cm_lr=args.cm_lr,
-        cm_ema_decay=args.cm_ema_decay,
-        cm_grad_clip_norm=args.cm_grad_clip_norm,
-        cm_sigma_data=args.cm_sigma_data,
-        cm_timestep_scaling=args.cm_timestep_scaling,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

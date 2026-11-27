@@ -51,10 +51,8 @@ Training control flags
      - Validate and print preflight JSON without constructing environments or agents.
    * - ``--dry-run``
      - Materialize the environment and agent, then exit without training.
-   * - ``--explain-param PATH``
-     - Print one field's value, type and final source using a dotted field path.
 
-The three inspection actions are mutually exclusive, including repeated
+The two inspection actions are mutually exclusive, including repeated
 actions. A preset can accompany any one of them.
 Dry-run may load simulator dependencies, dataset metadata and configured
 checkpoint state; it is not a simulator-free check.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters.sac import RecurrentSACParams
+
 from collections.abc import Callable
 from typing import Any
 
@@ -45,19 +47,12 @@ def build_recurrent_sac(
         "image_augmentation_seed": args.seed + 1_000_003,
     }
 
-    agent = construct_agent(
-        algorithm_cls,
-        **sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
-        rnn_type=args.rnn_type,
-        rnn_hidden_size=args.rnn_hidden_size,
-        rnn_num_layers=args.rnn_num_layers,
-        burn_in_len=args.burn_in_len,
-        learning_len=args.learning_len,
-        forward_len=args.forward_len,
-        prio_exponent=args.prio_exponent,
-        importance_sampling_exponent=args.importance_sampling_exponent,
-        **extra_kwargs,
+    agent_kwargs = sac_common_kwargs(
+        args, env, eval_env, logger, checkpoint_dir, image_kwargs, params_class=RecurrentSACParams
     )
+    # A given keyword replaces the one built from ``args`` (see ``build_sac``).
+    agent_kwargs.update(extra_kwargs)
+    agent = construct_agent(algorithm_cls, **agent_kwargs)
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     return agent

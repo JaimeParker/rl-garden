@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
+from rl_garden.common.cli_args import ObservationArgs, LoggingArgs, CheckpointArgs
+from rl_garden.common.env_args import EnvBackendArgs
+from rl_garden.hyperparameters import params_kwargs
 from rl_garden.training.offline.args import (
-    OfflineCommonArgs,
+    OfflineEvalArgs, OfflineRuntimeArgs, OfflineReplayArgs, OfflineDatasetArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
     OfflineQAMArgs,
@@ -19,24 +22,32 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class QAMRunArgs(
+    OfflineEvalArgs, OfflineRuntimeArgs, ObservationArgs, OfflineReplayArgs,
+    OfflineDatasetArgs, LoggingArgs, CheckpointArgs, EnvBackendArgs,
+):
+    """Offline orchestration without optimization defaults."""
+
+
+@dataclass
 class QAMArgs(
-    OfflineCommonArgs,
+    OfflineQAMArgs,
+    QAMRunArgs,
     OfflineDeviceArgs,
     OfflineDiscountArgs,
-    OfflineQAMArgs,
 ):
     """QAM (Q-learning with Adjoint Matching) offline pretraining. Box or
     Dict (vision) observations."""
-
-    # Reference QAM: clip_grad=True, clip_by_global_norm(max_norm=1.0).
-    grad_clip_norm: Optional[float] = 1.0
 
 
 def _qam_kwargs(
     args: Any, env_spec: OfflineEnvSpec, logger: Logger, eval_env: Any = None
 ) -> dict:
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
+    from rl_garden.algorithms import QAM
+
     kwargs = {
+        **params_kwargs(args, QAM.params_class),
         "env": env_spec,
         "buffer_size": args.buffer_size,
         "buffer_device": args.buffer_device,
@@ -44,38 +55,6 @@ def _qam_kwargs(
         "gamma": args.gamma,
         "offline_sampling": args.offline_sampling,
         "horizon_length": args.horizon_length,
-        "tau": args.tau,
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "weight_decay": args.weight_decay,
-        "use_adamw": args.use_adamw,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
-        "critic_loss_type": args.critic_loss_type,
-        "rho": args.rho,
-        "expectile": args.expectile,
-        "n_critics": args.n_critics,
-        "flow_steps": args.flow_steps,
-        "best_of_n": args.best_of_n,
-        "inv_temp": args.inv_temp,
-        "residual": args.residual,
-        "target_actor": args.target_actor,
-        "clip_adj": args.clip_adj,
-        "use_target_grad": args.use_target_grad,
-        "fql_alpha": args.fql_alpha,
-        "edit_scale": args.edit_scale,
-        "edit_target_entropy": args.edit_target_entropy,
-        "edit_target_entropy_multiplier": args.edit_target_entropy_multiplier,
-        "edit_alpha_lr": args.edit_alpha_lr,
-        "actor_use_layer_norm": args.actor_use_layer_norm,
-        "critic_use_layer_norm": args.critic_use_layer_norm,
-        "value_use_layer_norm": args.value_use_layer_norm,
-        "kernel_init": args.kernel_init,
-        "backbone_type": args.backbone_type,
-        "activation_fn": args.activation_fn,
         "seed": args.seed,
         "device": args.device,
         "logger": logger,

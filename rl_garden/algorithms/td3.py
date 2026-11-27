@@ -11,6 +11,9 @@ from typing import Any, Optional
 import torch
 
 from rl_garden.algorithms.ddpg import DDPG
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.td3 import TD3Params
+
 
 
 class TD3(DDPG):
@@ -26,6 +29,8 @@ class TD3(DDPG):
       loss), instead of DDPG's ``min(q1, q2)``.
     """
 
+    params_class = TD3Params
+
     _compatible_checkpoint_algorithms = ("TD3",)
 
     def __init__(
@@ -33,15 +38,18 @@ class TD3(DDPG):
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        policy_freq: int = 2,
-        target_noise_std: float = 0.2,
-        target_noise_clip: float = 0.5,
+        params: Optional[TD3Params] = None,
         **ddpg_kwargs: Any,
     ) -> None:
-        self.policy_freq = policy_freq
-        self.target_noise_std = target_noise_std
-        self.target_noise_clip = target_noise_clip
-        super().__init__(env, eval_env, **ddpg_kwargs)
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: ddpg_kwargs.pop(name) for name in tuple(ddpg_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        self.policy_freq = params.policy_freq
+        self.target_noise_std = params.target_noise_std
+        self.target_noise_clip = params.target_noise_clip
+
+        super().__init__(env, eval_env, params=params, **ddpg_kwargs)
 
     def _target_action_noise(self) -> tuple[float, float]:
         return self.target_noise_std, self.target_noise_clip
@@ -55,7 +63,4 @@ class TD3(DDPG):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "policy_freq": self.policy_freq,
-            "target_noise_std": self.target_noise_std,
-            "target_noise_clip": self.target_noise_clip,
         }

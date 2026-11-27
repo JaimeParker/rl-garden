@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import SACFlowParams
 from rl_garden.algorithms.sac import SAC
 from rl_garden.policies.sac_flow_policy import SACFlowPolicy
 
@@ -29,25 +31,32 @@ class SACFlow(SAC):
     _compatible_checkpoint_algorithms = ("SACFlow",)
     policy_class = SACFlowPolicy
 
+    params_class = SACFlowParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        denoising_steps: int = 4,
-        noise_std: float = 0.3,
-        flow_hidden_dims: Sequence[int] = (256, 256, 256),
-        flow_use_layer_norm: bool = False,
+        params: SACFlowParams | None = None,
         **sac_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: sac_kwargs.pop(name) for name in tuple(sac_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        denoising_steps = params.denoising_steps
+        noise_std = params.noise_std
+        flow_hidden_dims = params.flow_hidden_dims
+        flow_use_layer_norm = params.flow_use_layer_norm
         # Must be set before super().__init__(), which ends by calling
         # self._setup_model() -- our _policy_kwargs override below reads
         # these attributes.
         self.denoising_steps = denoising_steps
         self.noise_std = noise_std
-        self.flow_hidden_dims = list(flow_hidden_dims)
+        self.flow_hidden_dims = self._flow_hidden_dims(flow_hidden_dims)
         self.flow_use_layer_norm = flow_use_layer_norm
-        super().__init__(env, eval_env, **sac_kwargs)
+        super().__init__(env, eval_env, params=params, **sac_kwargs)
 
     def _policy_kwargs(self, observation_space) -> dict[str, Any]:
         # SACFlowPolicy accepts every SAC keyword; its flow actor ignores the
@@ -68,11 +77,10 @@ class SACFlow(SAC):
             "flow_use_layer_norm": self.flow_use_layer_norm,
         }
 
-    def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
-            **super()._checkpoint_metadata(),
-            "denoising_steps": self.denoising_steps,
-            "noise_std": self.noise_std,
-            "flow_hidden_dims": self.flow_hidden_dims,
-            "flow_use_layer_norm": self.flow_use_layer_norm,
-        }
+    def _bind_params(self, params: SACFlowParams) -> None:
+        super()._bind_params(params)
+        self.flow_hidden_dims = self._flow_hidden_dims(params.flow_hidden_dims)
+
+    @staticmethod
+    def _flow_hidden_dims(flow_hidden_dims: Optional[Sequence[int]]) -> list[int]:
+        return list(flow_hidden_dims) if flow_hidden_dims is not None else [256, 256, 256]

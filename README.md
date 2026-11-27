@@ -72,7 +72,7 @@ rl-garden-eval --checkpoint-path runs/sac-pendulum/checkpoints/final.pt \
   --device cpu --num-eval-envs 1 --num-eval-episodes 5
 ```
 
-Every training command accepts `--print-config`, `--dry-run` and `--explain-param`; see the [CLI reference](docs/reference/cli.rst).
+Every training command accepts `--print-config` and `--dry-run`; see the [CLI reference](docs/reference/cli.rst).
 
 ## Documentation
 

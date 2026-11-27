@@ -57,12 +57,14 @@ from __future__ import annotations
 import dataclasses
 import time
 from collections import defaultdict
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.policy_distillation import PolicyDistillationParams
 from rl_garden.algorithms.base_algorithm import BaseAlgorithm
 from rl_garden.algorithms.on_policy import OnPolicyAlgorithm
 from rl_garden.buffers.distillation_rollout_buffer import DistillationRolloutBuffer
@@ -134,6 +136,8 @@ class PolicyDistillation(OnPolicyAlgorithm):
     executing the student's own action.
     """
 
+    params_class = PolicyDistillationParams
+
     _compatible_checkpoint_algorithms = ("PolicyDistillation",)
     # There is no critic encoder, so "separate" does not exist.
     encoder_sharing_choices = ("shared_critic_grad", "shared")
@@ -147,25 +151,7 @@ class PolicyDistillation(OnPolicyAlgorithm):
         eval_env: Optional[Any] = None,
         *,
         num_steps: int = 50,
-        num_learning_epochs: int = 5,
-        num_minibatches: int = 4,
-        loss_type: Literal["mse", "huber"] = "mse",
-        actor_lr: float = 3e-4,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        max_grad_norm: Optional[float] = None,
-        net_arch: Optional[Sequence[int]] = None,
         encoder_config: Optional[EncoderConfig] = None,
-        actor_use_layer_norm: bool = False,
-        actor_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[
-            Literal["xavier_uniform", "xavier_normal", "orthogonal", "kaiming_uniform"]
-        ] = None,
-        backbone_type: Literal["mlp", "mlp_resnet"] = "mlp",
-        std_parameterization: Literal["exp", "uniform"] = "exp",
-        tanh_squash: bool = True,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -176,10 +162,14 @@ class PolicyDistillation(OnPolicyAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: PolicyDistillationParams | None = None,
+        **overrides: Any,
     ) -> None:
-        # gamma/gae_lambda are OnPolicyAlgorithm constructor requirements
-        # that distillation never reads (no reward-based objective, no GAE
-        # -- see module docstring). finite_horizon_gae likewise unused.
+        params = resolve_params(self.params_class, params, overrides)
+        loss_type = params.loss_type
+        net_arch = params.net_arch
+        self._bind_params(params)
+        # Distillation has no reward objective or GAE.
         super().__init__(
             env=env,
             eval_env=eval_env,
@@ -226,22 +216,8 @@ class PolicyDistillation(OnPolicyAlgorithm):
             for param in self.teacher_policy.parameters():
                 param.requires_grad_(False)
 
-        self.num_learning_epochs = num_learning_epochs
-        self.num_minibatches = num_minibatches
         self.loss_fn = F.mse_loss if loss_type == "mse" else F.smooth_l1_loss
-        self.actor_lr = actor_lr
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.max_grad_norm = max_grad_norm
         self.net_arch: list[int] = list(net_arch) if net_arch is not None else [256, 256]
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.actor_use_group_norm = actor_use_group_norm
-        self.num_groups = num_groups
-        self.actor_dropout_rate = actor_dropout_rate
-        self.kernel_init = kernel_init
-        self.backbone_type = backbone_type
-        self.std_parameterization = std_parameterization
-        self.tanh_squash = tanh_squash
 
         self.encoder_config = encoder_config
 
@@ -258,9 +234,6 @@ class PolicyDistillation(OnPolicyAlgorithm):
             "num_steps": self.num_steps,
             "teacher_obs_keys": self.teacher_obs_keys,
             "student_obs_keys": self.student_obs_keys,
-            "num_learning_epochs": self.num_learning_epochs,
-            "num_minibatches": self.num_minibatches,
-            "actor_lr": self.actor_lr,
             "net_arch": self.net_arch,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None

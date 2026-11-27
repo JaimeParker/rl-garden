@@ -54,13 +54,14 @@ established convention).
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
 from rl_garden.algorithms.offline import OfflineEnvSpec
 from rl_garden.algorithms.offline_sac import OfflineSAC
-from rl_garden.common.logger import Logger
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.offline_sac import EDACParams
 
 
 class EDAC(OfflineSAC):
@@ -69,21 +70,24 @@ class EDAC(OfflineSAC):
 
     _compatible_checkpoint_algorithms = ("EDAC",)
 
+    params_class = EDACParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
         *,
-        eta: float = 1.0,
-        n_critics: int = 10,
+        params: EDACParams | None = None,
         **kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: kwargs.pop(name) for name in tuple(kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        eta = params.eta
         if eta < 0:
             raise ValueError(f"eta must be >= 0, got {eta}.")
-        super().__init__(env=env, n_critics=n_critics, **kwargs)
+        super().__init__(env=env, params=params, **kwargs)
         self.eta = eta
-
-    def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {**super()._checkpoint_metadata(), "eta": self.eta}
 
     def _critic_diversity_loss(self, data) -> torch.Tensor:
         features = self.policy.extract_critic_features(data.obs)

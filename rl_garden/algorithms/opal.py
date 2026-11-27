@@ -18,13 +18,15 @@ produced by this class.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.windowed_trajectory_dataset import WindowedTrajectoryDataset
 from rl_garden.common.logger import Logger
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.opal import OPALParams
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.networks.opal_vae import OPALVAE
 from rl_garden.observations import ObservationContractError, ObsGroups
@@ -45,6 +47,8 @@ class OPAL(OfflineRLAlgorithm):
     note in ``opal_vae.py``).
     """
 
+    params_class = OPALParams
+
     _compatible_checkpoint_algorithms = ("OPAL",)
     # There is no critic encoder, so "separate" does not exist.
     encoder_sharing_choices = ("shared_critic_grad", "shared")
@@ -57,12 +61,6 @@ class OPAL(OfflineRLAlgorithm):
         env: OfflineEnvSpec,
         dataset_path: str,
         *,
-        skill_dim: int = 8,
-        chunk_size: int = 4,
-        hidden_size: int = 256,
-        vae_hidden_dims: Sequence[int] = (256, 256),
-        kl_coef: float = 0.1,
-        lr: float = 3e-4,
         batch_size: int = 256,
         num_traj: Optional[int] = None,
         encoder_config: Optional[EncoderConfig] = None,
@@ -75,7 +73,10 @@ class OPAL(OfflineRLAlgorithm):
         checkpoint_dir: Optional[str] = None,
         checkpoint_freq: int = 0,
         save_final_checkpoint: bool = True,
+        params: Optional[OPALParams] = None,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=1,
@@ -94,19 +95,17 @@ class OPAL(OfflineRLAlgorithm):
             save_replay_buffer=False,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.dataset_path = dataset_path
-        self.skill_dim = skill_dim
-        self.chunk_size = chunk_size
-        self.hidden_size = hidden_size
-        self.vae_hidden_dims = tuple(vae_hidden_dims)
-        self.kl_coef = kl_coef
-        self.lr = lr
+
+        self.vae_hidden_dims = tuple(params.vae_hidden_dims)
+
         self.num_traj = num_traj
         self.encoder_config = encoder_config
         self.obs_groups = obs_groups
 
         self._dataset = WindowedTrajectoryDataset(
-            dataset_path, chunk_size=chunk_size, device=self.device, num_traj=num_traj,
+            dataset_path, chunk_size=params.chunk_size, device=self.device, num_traj=num_traj,
         )
         self._setup_model()
 
@@ -154,11 +153,6 @@ class OPAL(OfflineRLAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "skill_dim": self.skill_dim,
-            "chunk_size": self.chunk_size,
-            "hidden_size": self.hidden_size,
-            "vae_hidden_dims": self.vae_hidden_dims,
-            "kl_coef": self.kl_coef,
             "encoder_config": (
                 dataclasses.asdict(self.encoder_config) if self.encoder_config is not None else None
             ),

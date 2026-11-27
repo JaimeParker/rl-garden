@@ -6,6 +6,10 @@ separate critic encoder)."""
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters.sac import SACFlowParams
+
+from rl_garden.hyperparameters import params_kwargs
+
 
 def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.common.cli_args import resolve_obs_groups_config
@@ -14,7 +18,7 @@ def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
-    net_arch = {
+    net_arch = args.net_arch if args.net_arch is not None else {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
     }
@@ -42,45 +46,37 @@ def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
             image_augmentation_seed=args.seed + 1_000_003,
         )
 
+    learning_kwargs = params_kwargs(args, SACFlowParams)
+    # These legacy flags do not reach the flow actor. Preserve the constructor
+    # attributes and checkpoint metadata recorded when this builder omits them.
+    learning_kwargs.pop("actor_use_layer_norm")
+    learning_kwargs.pop("actor_log_std_min")
+    learning_kwargs.pop("actor_log_std_mode")
     agent = construct_agent(
         SACFlow,
+        **{
+            **learning_kwargs,
+            "flow_hidden_dims": (list(args.flow_hidden_dims) if args.flow_hidden_dims is not None
+                                 else [args.flow_hidden_dim] * args.flow_hidden_layers),
+            "net_arch": net_arch,
+        },
         env=env,
         eval_env=eval_env,
-        denoising_steps=args.denoising_steps,
-        noise_std=args.noise_std,
-        flow_hidden_dims=[args.flow_hidden_dim] * args.flow_hidden_layers,
-        flow_use_layer_norm=args.flow_use_layer_norm,
         **image_kwargs,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,
         batch_size=args.batch_size,
         gamma=args.gamma,
-        nstep=args.nstep,
-        tau=args.tau,
         bootstrap_at_done=args.bootstrap_at_done,
         training_freq=args.training_freq,
         utd=args.utd,
-        policy_lr=args.policy_lr,
-        q_lr=args.q_lr,
-        alpha_tuning=args.alpha_tuning,
-        ent_coef=args.ent_coef,
-        target_entropy=args.target_entropy,
-        alpha_lr=args.alpha_lr,
         q_landscape_diagnostics=args.q_landscape_diagnostics,
         q_landscape_num_actions=args.q_landscape_num_actions,
         q_landscape_batch_size=args.q_landscape_batch_size,
         q_mc_diagnostics=args.q_mc_diagnostics,
         initial_training_phase=sac_initial_training_phase_from_args(args),
-        critic_impl=args.critic_impl,
-        n_critics=args.n_critics,
-        critic_subsample_size=args.critic_subsample_size,
-        critic_use_layer_norm=args.critic_use_layer_norm,
         critic_backbone_type=args.critic_backbone_type,
-        target_policy_noise=args.target_policy_noise,
-        target_noise_clip=args.target_noise_clip,
-        actor_q_agg=args.actor_q_agg,
-        net_arch=net_arch,
         seed=args.seed,
         logger=logger,
         std_log=args.std_log,

@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from gymnasium import spaces
 
@@ -29,6 +29,9 @@ from rl_garden.training.inspection import (
     run_preflight,
 )
 from rl_garden.training.offline.args import A2ABCTrainingArgs
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.a2a_bc import A2ABCParams
+from rl_garden.networks import Activation
 from rl_garden.training.offline.registry import registry
 
 
@@ -40,6 +43,13 @@ class A2ABCArgs(A2ABCTrainingArgs):
     required in the dataset -- ``A2ABC._setup_model`` raises ``ValueError``
     when either is missing: the state-history window is the flow's source,
     not optional."""
+
+    # None uses the older --activation-fn flag.
+    cnn_activation_fn: Optional[Activation] = None
+
+    decoder_net_arch: Optional[tuple[int, ...]] = (512, 512, 512, 512)
+
+    flow_hidden_dims: Optional[tuple[int, ...]] = (512, 512, 512, 512)
 
 
 def run_a2a_bc(args: A2ABCArgs) -> None:
@@ -73,34 +83,17 @@ def build_a2a_bc(
 
         algorithm_cls = A2ABC
     kwargs = {
+        **params_kwargs(args, A2ABCParams),
         "env": env_spec,
         "dataset_path": args.dataset_path,
-        "horizon_steps": args.horizon_steps,
-        "cond_steps": args.cond_steps,
-        "latent_dim": args.latent_dim,
-        "cnn_num_layers": args.cnn_num_layers,
-        "cnn_hidden_channels": args.cnn_hidden_channels,
-        "cnn_kernel_size": args.cnn_kernel_size,
-        "cnn_activation_fn": args.activation_fn,
-        "decoder_net_arch": args.decoder_net_arch,
-        "flow_hidden_dims": args.flow_hidden_dims,
-        "num_sampling_steps": args.num_sampling_steps,
-        "consistency_weight": args.consistency_weight,
-        "enc_recon_weight": args.enc_recon_weight,
-        "flow_recon_weight": args.flow_recon_weight,
-        "enc_contrastive_weight": args.enc_contrastive_weight,
-        "flow_contrastive_weight": args.flow_contrastive_weight,
-        "contrastive_temperature": args.contrastive_temperature,
+        "cnn_activation_fn": (
+            args.activation_fn
+            if args.cnn_activation_fn is None
+            else args.cnn_activation_fn
+        ),
         "encoder_config": args.encoder,
         "obs_groups": resolve_obs_groups_config(args),
         "image_augmentation_seed": args.seed + 1_000_003,
-        "actor_lr": args.actor_lr,
-        "weight_decay": args.weight_decay,
-        "lr_schedule": args.lr_schedule,
-        "lr_warmup_steps": args.lr_warmup_steps,
-        "lr_decay_steps": args.lr_decay_steps,
-        "lr_min_ratio": args.lr_min_ratio,
-        "grad_clip_norm": args.grad_clip_norm,
         "batch_size": args.batch_size,
         "num_traj": args.offline_num_traj,
         "seed": args.seed,

@@ -7,7 +7,7 @@ needed here.
 
 State-only observations by default; pass ``--obs.rgb <camera>`` for
 CNN-based Dict/RGBD observations. Mirrors ``FloQOff2OnArgs``: fields inlined
-against ``Off2OnCommonArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
+against ``FQLTrainingArgs``, ``ObservationArgs``, ``EnvBackendArgs`` rather
 than adding a new class to ``off2on/_args.py`` -- ``Off2OnFINO`` has no critic-flow
 machinery, so FloQ's flow-critic fields (``r_min``, ``r_max``,
 ``flow_num_ensembles``, etc.) are dropped and FINO's three new fields
@@ -24,6 +24,9 @@ remain unused.
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters import params_kwargs
+from rl_garden.hyperparameters.fql import FINOParams
+
 
 def build_fino(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFINO
@@ -39,8 +42,12 @@ def build_fino(args, env, eval_env, logger, checkpoint_dir):
     if args.encoder_sharing is not None:
         image_kwargs["encoder_sharing"] = args.encoder_sharing
 
+    learning_kwargs = params_kwargs(args, Off2OnFINO.params_class)
+    learning_kwargs["net_arch"] = list(args.net_arch) if args.net_arch is not None else [args.hidden_dim] * args.hidden_layers
+
     agent = construct_agent(
         Off2OnFINO,
+        **learning_kwargs,
         env=env,
         eval_env=eval_env,
         **image_kwargs,
@@ -51,35 +58,8 @@ def build_fino(args, env, eval_env, logger, checkpoint_dir):
         gamma=args.gamma,
         training_freq=args.training_freq,
         utd=args.utd,
-        tau=args.tau,
-        actor_lr=args.actor_lr,
-        critic_lr=args.critic_lr,
-        weight_decay=args.weight_decay,
-        use_adamw=args.use_adamw,
-        lr_schedule=args.lr_schedule,
-        lr_warmup_steps=args.lr_warmup_steps,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_min_ratio=args.lr_min_ratio,
-        grad_clip_norm=args.grad_clip_norm,
-        alpha=args.alpha,
-        flow_steps=args.flow_steps,
-        q_agg=args.q_agg,
-        normalize_q_loss=args.normalize_q_loss,
-        net_arch=[args.hidden_dim] * args.hidden_layers,
-        n_critics=args.n_critics,
-        actor_use_layer_norm=args.actor_use_layer_norm,
         actor_use_group_norm=args.actor_use_group_norm,
-        critic_use_group_norm=args.critic_use_group_norm,
-        num_groups=args.num_groups,
         initial_training_phase=initial_training_phase_from_args(args),
-        critic_use_layer_norm=args.critic_use_layer_norm,
-        critic_dropout_rate=args.critic_dropout_rate,
-        kernel_init=args.kernel_init,
-        backbone_type=args.backbone_type,
-        activation_fn=args.activation_fn,
-        noise_scale=args.noise_scale,
-        beta=args.beta,
-        num_samples=args.num_samples,
         offline_sampling=args.offline_sampling,
         seed=args.seed,
         logger=logger,
@@ -108,50 +88,26 @@ def run_fino(args: "FINOOff2OnArgs") -> None:
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass  # noqa: E402
-from typing import Literal, Optional  # noqa: E402
+from typing import Literal
 
 from rl_garden.common.cli_args import ObservationArgs  # noqa: E402
 from rl_garden.common.env_args import EnvBackendArgs  # noqa: E402
-from rl_garden.networks import Activation, KernelInit  # noqa: E402
-from rl_garden.training.off2on.args import Off2OnCommonArgs  # noqa: E402
+from rl_garden.training.off2on.args import FQLTrainingArgs  # noqa: E402
 from rl_garden.training.off2on.registry import registry  # noqa: E402
 
 
 @dataclass
-class FINOOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
+class FINOOff2OnArgs(FINOParams, FQLTrainingArgs, ObservationArgs, EnvBackendArgs):
     """FINO -- offline-to-online flow-matching actor with noise-injected
     BC-flow training and rejection-sampled inference (Shin et al., ICLR
     2026, ``3rd_party/FINO/agents/fino.py``). State-only observations by
     default; pass ``--obs.rgb <camera>`` for CNN-based Dict/RGBD observations.
     """
 
-    # One buffer holds the dataset and the online transitions (main.py:46,89-92,179).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
-
-    # Pause updates while the loaded policy collects online steps; 0 means no pause.
     warmup_steps: int = 0
-
-    alpha: float = 10.0
-    flow_steps: int = 10
-    q_agg: Literal["mean", "min"] = "mean"
-    normalize_q_loss: bool = False
     hidden_dim: int = 512
     hidden_layers: int = 4
-    activation_fn: Optional[Activation] = "gelu"
-    actor_lr: float = 3e-4
-    critic_lr: float = 3e-4
-
-    n_critics: int = 2
-    actor_use_layer_norm: bool = False
-    kernel_init: Optional[KernelInit] = "xavier_uniform"
-
-    # See rl_garden/algorithms/fino.py's module docstring for the reference
-    # facts behind these defaults.
-    noise_scale: float = 0.1
-    beta: float = 10.0
-    num_samples: Optional[int] = None
-
-
 
 
 def _off2_on_fino_algorithm_cls() -> type:

@@ -33,11 +33,13 @@ into the online rollout/eval loop.
 from __future__ import annotations
 
 import copy
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.chain_ppo import DiffusionCMDistillOnlineParams
 from rl_garden.algorithms.dppo import DPPO
 from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.obs_utils import flatten_leading_dims
@@ -84,28 +86,27 @@ def _gather_coef(buffer: torch.Tensor, t: torch.Tensor, x_ndim: int) -> torch.Te
 
 
 class DiffusionCMDistillOnline(DPPO):
+
+    params_class = DiffusionCMDistillOnlineParams
     _compatible_checkpoint_algorithms = ("DiffusionCMDistillOnline",)
+
+    def _bind_params(self, params: DiffusionCMDistillOnlineParams) -> None:
+        super()._bind_params(params)
+        self.cm_mlp_dims = list(params.cm_mlp_dims) if params.cm_mlp_dims is not None else None
 
     def __init__(
         self,
         env: Any,
         *,
         bc_checkpoint: Optional[str] = None,
-        cm_mlp_dims: Optional[Sequence[int]] = None,
-        cm_lr: float = 1e-4,
-        cm_ema_decay: float = 0.95,
-        cm_grad_clip_norm: Optional[float] = 1.0,
-        cm_sigma_data: float = 0.5,
-        cm_timestep_scaling: float = 0.1,
+        params: DiffusionCMDistillOnlineParams | None = None,
         **dppo_kwargs: Any,
     ) -> None:
-        self.cm_mlp_dims = list(cm_mlp_dims) if cm_mlp_dims is not None else None
-        self.cm_lr = cm_lr
-        self.cm_ema_decay = cm_ema_decay
-        self.cm_grad_clip_norm = cm_grad_clip_norm
-        self.cm_sigma_data = cm_sigma_data
-        self.cm_timestep_scaling = cm_timestep_scaling
-        super().__init__(env, bc_checkpoint=bc_checkpoint, **dppo_kwargs)
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: dppo_kwargs.pop(name) for name in tuple(dppo_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        super().__init__(env, bc_checkpoint=bc_checkpoint, params=params, **dppo_kwargs)
         if bc_checkpoint is not None:
             # DPPO.__init__ already loaded this checkpoint's weights into
             # self.policy.actor/actor_ft; RL-100's own teacher/distilled_model/
@@ -151,11 +152,6 @@ class DiffusionCMDistillOnline(DPPO):
         return {
             **super()._checkpoint_metadata(),
             "cm_mlp_dims": self.cm_mlp_dims,
-            "cm_lr": self.cm_lr,
-            "cm_ema_decay": self.cm_ema_decay,
-            "cm_grad_clip_norm": self.cm_grad_clip_norm,
-            "cm_sigma_data": self.cm_sigma_data,
-            "cm_timestep_scaling": self.cm_timestep_scaling,
         }
 
     def _extra_checkpoint_state(self) -> dict[str, Any]:

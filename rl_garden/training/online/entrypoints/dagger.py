@@ -14,6 +14,7 @@ from __future__ import annotations
 import torch
 
 from rl_garden.common.types import Obs
+from rl_garden.hyperparameters import params_kwargs
 
 
 def _batch_reference(obs: Obs) -> torch.Tensor:
@@ -91,9 +92,11 @@ def build_dagger(args, env, eval_env, logger, checkpoint_dir):
         "encoder_config": args.encoder if args.obs.is_visual else None,
         "obs_groups": resolve_obs_groups_config(args),
     }
+    policy_kwargs = params_kwargs(args, DAgger.params_class)
+    policy_kwargs["net_arch"] = list(args.net_arch) if args.net_arch is not None else None
     agent = construct_agent(
         DAgger,
-        env=env,
+        **policy_kwargs,        env=env,
         expert=expert,
         eval_env=eval_env,
         demo_buffer_size=args.demo_buffer_size,
@@ -102,10 +105,6 @@ def build_dagger(args, env, eval_env, logger, checkpoint_dir):
         gradient_steps_per_round=args.gradient_steps_per_round,
         buffer_device=args.buffer_device,
         batch_size=args.batch_size,
-        actor_lr=args.actor_lr,
-        weight_decay=args.weight_decay,
-        tanh_squash=args.tanh_squash,
-        net_arch=list(args.net_arch),
         seed=args.seed,
         device=args.device,
         logger=logger,
@@ -137,6 +136,7 @@ def run_dagger(args: "DAggerArgs") -> None:
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass
+from typing import Optional
 
 from rl_garden.common.cli_args import ObservationArgs
 from rl_garden.common.env_args import EnvBackendArgs
@@ -147,6 +147,8 @@ from rl_garden.training.online.registry import registry
 @dataclass
 class DAggerArgs(DAggerTrainingArgs, ObservationArgs, EnvBackendArgs):
     """DAgger with multi-env backend support."""
+
+    net_arch: Optional[tuple[int, ...]] = (256, 256)
 
 
 def _dagger_algorithm_cls() -> type:

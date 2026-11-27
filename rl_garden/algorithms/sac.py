@@ -18,15 +18,17 @@ import torch
 import torch.nn.functional as F
 from gymnasium import spaces
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import SACParams
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
-from rl_garden.algorithms.sac_core import ACTOR_Q_AGGREGATIONS, ActorQAggregation, SACCore
+from rl_garden.algorithms.sac_core import ACTOR_Q_AGGREGATIONS, SACCore
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.nstep_buffer import NStepReplayBuffer
-from rl_garden.common.alpha_tuning import AlphaTuner, AlphaTuning, parse_auto_alpha_init
+from rl_garden.common.alpha_tuning import AlphaTuner, parse_auto_alpha_init
 from rl_garden.common.checkpoint import load_checkpoint_file, validate_checkpoint_metadata
 from rl_garden.common.logger import Logger
-from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
+from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
 from rl_garden.encoders.config import EncoderConfig
 from rl_garden.observations import ObsGroups
@@ -66,50 +68,27 @@ class SAC(SACCore, OffPolicyAlgorithm):
     #: trained only once one of the two yields it.
     policy_class: ClassVar[type[SACPolicy]] = SACPolicy
 
+    params_class = SACParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
+        *,
         buffer_size: int = 1_000_000,
         buffer_device: str = "cuda",
         learning_starts: int = 4_000,
         batch_size: int = 1024,
         gamma: float = 0.8,
-        nstep: int = 1,
-        tau: float = 0.01,
         training_freq: int = 64,
         utd: float = 0.5,
         bootstrap_at_done: str = "truncated",
-        policy_lr: float = 3e-4,
-        q_lr: float = 3e-4,
-        alpha_lr: Optional[float] = None,
-        policy_frequency: int = 1,
-        target_network_frequency: int = 1,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        ent_coef: float | str = "auto",
-        target_entropy: float | str = "auto",
-        alpha_tuning: AlphaTuning = "legacy_exp",
         q_landscape_diagnostics: bool = False,
         q_landscape_num_actions: int = 8,
         q_landscape_batch_size: int = 64,
         q_mc_diagnostics: bool = False,
-        net_arch: Optional[Sequence[int] | dict[str, Sequence[int]]] = None,
         actor_hidden_dims: Optional[Sequence[int]] = None,
         critic_hidden_dims: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        critic_subsample_size: Optional[int] = None,
-        backup_entropy: bool = True,
-        critic_impl: Literal["vmap", "legacy"] = "vmap",
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = False,
-        actor_log_std_min: float = -5.0,
-        actor_log_std_mode: Literal["clamp", "tanh"] = "clamp",
         actor_feature_dim: Optional[int] = None,
         critic_spatial_emb_dim: int = 1024,
         critic_backbone_type: Optional[Literal["mlp", "mlp_resnet"]] = None,
@@ -133,11 +112,23 @@ class SAC(SACCore, OffPolicyAlgorithm):
         mmap_dir: Optional[str | Path] = None,
         mmap_mode: Literal["create", "open"] = "create",
         initial_training_phase: Optional[InitialTrainingPhase] = None,
-        target_policy_noise: float = 0.0,
-        target_noise_clip: float = 0.5,
-        actor_q_agg: ActorQAggregation = "min",
         actor_factory: Optional[SACActorFactory] = None,
+        params: SACParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
+        nstep = params.nstep
+        tau = params.tau
+        q_lr = params.q_lr
+        alpha_lr = params.alpha_lr
+        grad_clip_norm = params.grad_clip_norm
+        ent_coef = params.ent_coef
+        target_entropy = params.target_entropy
+        alpha_tuning = params.alpha_tuning
+        net_arch = params.net_arch
+        target_policy_noise = params.target_policy_noise
+        target_noise_clip = params.target_noise_clip
+        actor_q_agg = params.actor_q_agg
         if mmap_dir is not None and save_replay_buffer:
             raise ValueError(
                 "mmap replay buffers cannot be embedded in replay checkpoints; "
@@ -168,32 +159,20 @@ class SAC(SACCore, OffPolicyAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
             initial_training_phase=initial_training_phase,
         )
+        self._bind_params(params)
         self.mmap_dir = mmap_dir
         self.mmap_mode = mmap_mode
-        self.policy_lr = policy_lr
-        self.q_lr = q_lr
         if nstep < 1:
             raise ValueError(f"nstep must be >= 1, got {nstep}")
-        self.nstep = nstep
         if self.nstep > 1:
             self._extra_batch_slice_keys = (*self._extra_batch_slice_keys, "discounts")
         self.alpha_lr = alpha_lr if alpha_lr is not None else q_lr
-        self.policy_frequency = policy_frequency
-        self.target_network_frequency = target_network_frequency
-        self.weight_decay = weight_decay
-        self.use_adamw = use_adamw
-        self.lr_schedule: ScheduleType = lr_schedule
-        self.lr_warmup_steps = lr_warmup_steps
-        self.lr_decay_steps = lr_decay_steps
-        self.lr_min_ratio = lr_min_ratio
-        self.grad_clip_norm = grad_clip_norm
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
             raise ValueError(f"grad_clip_norm must be positive or None, got {grad_clip_norm}.")
         self.ent_coef_init = ent_coef
         self.target_entropy_arg = target_entropy
         if alpha_tuning not in ("legacy_exp", "log_alpha", "lagrange_softplus"):
             raise ValueError(f"Unknown alpha_tuning mode: {alpha_tuning!r}.")
-        self.alpha_tuning = alpha_tuning
         if target_policy_noise < 0:
             raise ValueError(f"target_policy_noise must be >= 0, got {target_policy_noise}.")
         if target_noise_clip < 0:
@@ -204,7 +183,6 @@ class SAC(SACCore, OffPolicyAlgorithm):
             )
         self.target_policy_noise = float(target_policy_noise)
         self.target_noise_clip = float(target_noise_clip)
-        self.actor_q_agg = actor_q_agg
         self.actor_factory = actor_factory
         self.q_landscape_diagnostics = q_landscape_diagnostics
         self.q_landscape_num_actions = q_landscape_num_actions
@@ -225,14 +203,6 @@ class SAC(SACCore, OffPolicyAlgorithm):
             actor_hidden_dims=actor_hidden_dims,
             critic_hidden_dims=critic_hidden_dims,
         )
-        self.n_critics = n_critics
-        self.critic_subsample_size = critic_subsample_size
-        self.backup_entropy = backup_entropy
-        self.critic_impl = critic_impl
-        self.actor_use_layer_norm = actor_use_layer_norm
-        self.critic_use_layer_norm = critic_use_layer_norm
-        self.actor_log_std_min = actor_log_std_min
-        self.actor_log_std_mode = actor_log_std_mode
         self.actor_feature_dim = actor_feature_dim
         self.critic_spatial_emb_dim = critic_spatial_emb_dim
         self.critic_backbone_type = critic_backbone_type
@@ -250,38 +220,14 @@ class SAC(SACCore, OffPolicyAlgorithm):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         meta = {
             **super()._checkpoint_metadata(),
-            "policy_lr": self.policy_lr,
-            "q_lr": self.q_lr,
-            "nstep": self.nstep,
             "alpha_lr": self.alpha_lr,
-            "policy_frequency": self.policy_frequency,
-            "target_network_frequency": self.target_network_frequency,
-            "weight_decay": self.weight_decay,
-            "use_adamw": self.use_adamw,
-            "lr_schedule": self.lr_schedule,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "lr_decay_steps": self.lr_decay_steps,
-            "lr_min_ratio": self.lr_min_ratio,
-            "grad_clip_norm": self.grad_clip_norm,
             "ent_coef": self.ent_coef_init,
             "target_entropy": self.target_entropy_arg,
             "target_entropy_value": self.target_entropy,
-            "alpha_tuning": self.alpha_tuning,
-            "target_policy_noise": self.target_policy_noise,
-            "target_noise_clip": self.target_noise_clip,
-            "actor_q_agg": self.actor_q_agg,
             "q_landscape_diagnostics": self.q_landscape_diagnostics,
             "q_landscape_num_actions": self.q_landscape_num_actions,
             "q_landscape_batch_size": self.q_landscape_batch_size,
             "net_arch": self.net_arch,
-            "n_critics": self.n_critics,
-            "critic_subsample_size": self.critic_subsample_size,
-            "backup_entropy": self.backup_entropy,
-            "critic_impl": self.critic_impl,
-            "actor_use_layer_norm": self.actor_use_layer_norm,
-            "critic_use_layer_norm": self.critic_use_layer_norm,
-            "actor_log_std_min": self.actor_log_std_min,
-            "actor_log_std_mode": self.actor_log_std_mode,
             "encoder_sharing": self.encoder_sharing,
             "encoder_sharing_origin": self.encoder_sharing_origin,
             "encoder_config": (

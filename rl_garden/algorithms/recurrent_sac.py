@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import RecurrentSACParams
 from rl_garden.algorithms.sequence_sac import SequenceSAC
 from rl_garden.buffers.recurrent_replay_buffer import RecurrentReplayBuffer
 from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState, RNNType
@@ -21,22 +23,29 @@ from rl_garden.networks.recurrent import RecurrentLatentEncoder, RecurrentState,
 class RecurrentSAC(SequenceSAC):
     _compatible_checkpoint_algorithms = ("RecurrentSAC",)
 
+    params_class = RecurrentSACParams
+
     def __init__(
         self,
         env: Any,
         *,
-        rnn_type: RNNType = "lstm",
-        rnn_hidden_size: int = 256,
-        rnn_num_layers: int = 1,
+        params: RecurrentSACParams | None = None,
         **sequence_sac_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: sequence_sac_kwargs.pop(name) for name in tuple(sequence_sac_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        rnn_type = params.rnn_type
+        rnn_hidden_size = params.rnn_hidden_size
+        rnn_num_layers = params.rnn_num_layers
         # Must be set before super().__init__(), which ends by calling
         # self._setup_model() -- our _build_sequence_encoder/_build_replay_buffer
         # overrides below read these attributes.
         self.rnn_type: RNNType = rnn_type
         self.rnn_hidden_size = rnn_hidden_size
         self.rnn_num_layers = rnn_num_layers
-        super().__init__(env, **sequence_sac_kwargs)
+        super().__init__(env, params=params, **sequence_sac_kwargs)
 
     def _build_sequence_encoder(self, actor_extractor) -> RecurrentLatentEncoder:
         return RecurrentLatentEncoder(
@@ -80,7 +89,4 @@ class RecurrentSAC(SequenceSAC):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "rnn_type": self.rnn_type,
-            "rnn_hidden_size": self.rnn_hidden_size,
-            "rnn_num_layers": self.rnn_num_layers,
         }

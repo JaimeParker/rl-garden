@@ -40,6 +40,7 @@ from typing import Any, Optional
 import torch
 
 from rl_garden.algorithms.bc import BC
+from rl_garden.hyperparameters.dagger import DAggerParams
 from rl_garden.buffers.replay_buffer import ReplayBuffer
 from rl_garden.buffers.demo_intervention import DemoInterventionMixin
 from rl_garden.common.eval_metrics import masked_episode_metrics
@@ -50,6 +51,8 @@ class DAgger(DemoInterventionMixin, BC):
     """DAgger: rollout the current policy under beta-mixed expert control,
     always aggregate the *expert's* action as the training label, and
     periodically retrain via BC on the growing aggregated dataset."""
+
+    params_class = DAggerParams
 
     _compatible_checkpoint_algorithms = ("DAgger",)
 
@@ -64,6 +67,7 @@ class DAgger(DemoInterventionMixin, BC):
         rollout_steps_per_round: int = 1_000,
         gradient_steps_per_round: int = 100,
         buffer_size: int = 1,
+        params: Optional[DAggerParams] = None,
         **bc_kwargs: Any,
     ) -> None:
         if rollout_steps_per_round <= 0:
@@ -85,7 +89,7 @@ class DAgger(DemoInterventionMixin, BC):
         # actually added to.
         self._init_prior_data_params()
         buffer_size = max(buffer_size, getattr(env, "num_envs", 1))
-        super().__init__(env=env, eval_env=eval_env, buffer_size=buffer_size, **bc_kwargs)
+        super().__init__(env=env, eval_env=eval_env, buffer_size=buffer_size, params=params, **bc_kwargs)
 
         self.expert = expert
         self.beta_rounds = beta_rounds

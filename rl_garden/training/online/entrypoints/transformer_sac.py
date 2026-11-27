@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rl_garden.hyperparameters.sac import TransformerSACParams
+
 from collections.abc import Callable
 from typing import Any
 
@@ -45,24 +47,12 @@ def build_transformer_sac(
         "image_augmentation_seed": args.seed + 1_000_003,
     }
 
-    agent = construct_agent(
-        algorithm_cls,
-        **sac_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
-        embed_dim=args.embed_dim,
-        head_dim=args.head_dim,
-        num_heads=args.num_heads,
-        num_transformer_layers=args.num_transformer_layers,
-        mlp_num=args.mlp_num,
-        memory_len=args.memory_len,
-        dropout_rate=args.dropout_rate,
-        gru_bias=args.gru_bias,
-        burn_in_len=args.burn_in_len,
-        learning_len=args.learning_len,
-        forward_len=args.forward_len,
-        prio_exponent=args.prio_exponent,
-        importance_sampling_exponent=args.importance_sampling_exponent,
-        **extra_kwargs,
+    agent_kwargs = sac_common_kwargs(
+        args, env, eval_env, logger, checkpoint_dir, image_kwargs, params_class=TransformerSACParams
     )
+    # A given keyword replaces the one built from ``args`` (see ``build_sac``).
+    agent_kwargs.update(extra_kwargs)
+    agent = construct_agent(algorithm_cls, **agent_kwargs)
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
     return agent

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-import json
 import pkgutil
 import sys
 import threading
@@ -41,7 +40,6 @@ from rl_garden.common.effective_config import (
     FieldSource,
     apply_strict_mapping,
     effective_config_json,
-    inactive_config_paths,
     json_value,
     load_preset,
     override_sources,
@@ -136,7 +134,6 @@ class ParsedCommand:
     args: object
     algorithm: str
     action: str
-    explain_param: str | None
     sources: dict[str, FieldSource]
     argv: tuple[str, ...]
     derived: dict[str, object]
@@ -212,11 +209,10 @@ class BaseAlgorithmRegistry:
     @staticmethod
     def _pop_control_args(
         cli_args: list[str],
-    ) -> tuple[list[str], str, str | None, str | None]:
+    ) -> tuple[list[str], str, str | None]:
         remaining: list[str] = []
         actions: list[str] = []
         preset_path: str | None = None
-        explain_param: str | None = None
 
         def select_preset(candidate: str) -> None:
             nonlocal preset_path
@@ -242,25 +238,13 @@ class BaseAlgorithmRegistry:
                 select_preset(token.split("=", 1)[1])
                 index += 1
                 continue
-            if token == "--explain-param":
-                if index + 1 >= len(cli_args):
-                    raise ConfigError("--explain-param requires a dotted field path.")
-                actions.append("explain_param")
-                explain_param = cli_args[index + 1]
-                index += 2
-                continue
-            if token.startswith("--explain-param="):
-                actions.append("explain_param")
-                explain_param = token.split("=", 1)[1]
-                index += 1
-                continue
             remaining.append(token)
             index += 1
         if len(actions) > 1:
             raise ConfigError(
-                "--print-config, --dry-run, and --explain-param are mutually exclusive."
+                "--print-config and --dry-run are mutually exclusive."
             )
-        return remaining, actions[0] if actions else "run", preset_path, explain_param
+        return remaining, actions[0] if actions else "run", preset_path
 
     @staticmethod
     def _algorithm_token(cli_args: Sequence[str]) -> str:
@@ -281,20 +265,10 @@ class BaseAlgorithmRegistry:
             paths.add(".".join(part.replace("-", "_") for part in option.split(".")))
         return paths
 
-    @staticmethod
-    def _value_at_path(args: object, path: str) -> object:
-        value = args
-        for part in path.split("."):
-            try:
-                value = getattr(value, part)
-            except AttributeError as exc:
-                raise ConfigError(f"Unknown configuration field {path!r}.") from exc
-        return value
-
     def parse_command(self, args: Sequence[str] | None = None) -> ParsedCommand:
         cli_args = list(sys.argv[1:] if args is None else args)
         original_argv = tuple(cli_args)
-        cli_args, action, preset_path, explain_param = self._pop_control_args(cli_args)
+        cli_args, action, preset_path = self._pop_control_args(cli_args)
         algorithm = self._algorithm_token(cli_args)
         defaults = self._defaults()
         if algorithm not in defaults:
@@ -324,7 +298,6 @@ class BaseAlgorithmRegistry:
             normalized,
             algorithm,
             action,
-            explain_param,
             sources,
             original_argv,
             runtime_derived,
@@ -649,9 +622,8 @@ class BaseAlgorithmRegistry:
                     "  --config PATH          Load a strict YAML preset.\n"
                     "  --print-config         Validate and print preflight config.\n"
                     "  --dry-run              Materialize env and agent without training.\n"
-                    "  --explain-param PATH   Explain one parameter's value and source.\n"
                 )
-                remaining, _, _, _ = self._pop_control_args(cli_args)
+                remaining, _, _ = self._pop_control_args(cli_args)
                 if not any(not token.startswith("-") for token in remaining):
                     self.parse_args(
                         [token for token in remaining if token in {"-h", "--help"}]
@@ -665,30 +637,6 @@ class BaseAlgorithmRegistry:
         self._validate_config(command)
         if command.action == "print_config":
             print(effective_config_json(self._preflight_config(command)))
-            return
-        if command.action == "explain_param":
-            assert command.explain_param is not None
-            self._preflight_config(command)
-            field_path = command.explain_param.replace("-", "_")
-            value = self._value_at_path(command.args, field_path)
-            inactive = inactive_config_paths(command.args)
-            if field_path in inactive:
-                raise ConfigError(
-                    f"Configuration field {field_path!r} is inactive: "
-                    f"{inactive[field_path]}."
-                )
-            source = command.sources.get(field_path)
-            payload = {
-                "path": field_path,
-                "value": json_value(value),
-                "type": type(value).__name__,
-                "source": (
-                    json_value(source)
-                    if source is not None
-                    else {"kind": "default", "detail": None}
-                ),
-            }
-            print(json.dumps(payload, indent=2, sort_keys=True))
             return
         if command.action == "dry_run":
             if not self.supports_dry_run:

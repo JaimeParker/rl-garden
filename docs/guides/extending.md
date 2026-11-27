@@ -166,11 +166,202 @@ bypassed it fails.
 
 ## 3. The algorithm subclass
 
+### Hyperparameter dataclasses
+
+`AWACCore`, `TD3BCCore`, `IQLCore`, `FQLCore`, `QAMCore`, `QGFCore`,
+`BCQCore`, `PLASCore`, `IDQL` and their concrete classes use a Params dataclass in
+`rl_garden.hyperparameters`, importable without `rl_garden.algorithms`, as
+the single definition of each hyperparameter's name, type, default and
+description. Params subclasses follow the core hierarchy, re-declaring only
+defaults they override; shared groups come from
+`rl_garden.hyperparameters.shared`. A shared parent contains only fields all
+its consumers use.
+
+The FQL family separates its shared `FQLParams` from scalar-critic options
+(`FQLCriticParams`), the distillation coefficient (`FQLDistillationParams`)
+and the published FQL recipe switch (`FQLReferenceParams`, used by `FQL`
+and `Off2OnFQL`). `FACParams` inherits the scalar-critic settings without
+FQL's unused `alpha`; `ValueFlowsParams` inherits the distillation settings without the
+scalar-critic options. Existing compatibility keywords stay
+plain constructor arguments. `horizon_length` remains an action-chunking
+mixin argument. The rollout Args compose orchestration separately so sibling
+actor/critic defaults cannot decide learning settings.
+
+`QAMParams`, `QGFParams`, `BCQParams`, `PLASParams` and `IDQLParams`
+are independent dataclasses. Only QGF, BCQ, PLAS and IDQL inherit the shared
+optimization mixin, whose defaults they use in full. QAM owns its optimization
+fields because its clipping default is `1.0`; its Args compose the offline run
+mixins without the shared optimization defaults. QAM and QGF keep
+`horizon_length` as a plain action-chunking argument. BCQ and PLAS preserve
+explicit architecture conversion in their builders; their leaf Args keep the
+CLI architecture default `(400, 300)` while Params default to `None`.
+IDQL's leaf Args retain its larger CLI critic ensemble. Existing unused CLI
+flags stay in Args and are not exposed as Params fields.
+
+`BCParams`, `FlowBCParams`, `MeanFlowBCParams` and `A2ABCParams` own their
+family settings. `DiffusionBCParams` and `ConsistencyDistillBCParams` inherit
+the common diffusion and network settings from `DiffusionPolicyParams`,
+keeping teacher optimization/EMA and student consistency settings separate.
+Only BC, FlowBC and MeanFlowBC use the shared optimization mixin in full.
+`DAggerParams` inherits `BCParams`: DAgger adds collection rounds and a demo
+buffer, with no additional policy-update settings. Its constructor delegates
+Params resolution and binding to BC while keeping those loop inputs and the
+injected expert as keywords. Dataset and teacher paths, network factories,
+network kwargs and observation wiring remain constructor keywords.
+DiffusionBC resolves `ema_start_step=None` from dataset size on the live
+attribute; the Params snapshot retains None. A2ABC keeps its legacy
+`activation_fn` CLI mapping when `cnn_activation_fn` is None; any non-None
+`cnn_activation_fn` takes precedence, including the constructor default `relu`.
+The CLI cannot select a None CNN activation because the older flag requires
+a named activation. Direct constructor calls still accept None.
+
+`BPPOParams` and `UniO4Params` share `BPPOCriticParams`, the settings
+consumed by their shared V/Q critic and optimizers. `UniO4OPEParams` extends
+`UniO4Params` with dynamics training and OPE gating. Hidden-dimension settings
+in these classes are active architecture parameters. The legacy actor CLI
+names (`actor_use_layer_norm`, `actor_use_group_norm`, `actor_dropout_rate`)
+remain supported: a canonical `use_layer_norm`, `use_group_norm` or
+`dropout_rate` value takes precedence whenever it is not None, including
+values equal to the Params default. None uses the legacy actor flag.
+The canonical normalization flags take `True`, `False` or `None` values;
+the legacy flags retain their switch syntax. No dropout is selected through
+`actor_dropout_rate=None` with `dropout_rate=None`.
+`UniO4OPE._bind_params` calls the base binding method and resolves the live
+dynamics widths and weight-decay sequences to lists before model setup;
+its Params snapshot keeps the input sequences.
+
+`HILPParams` and `OPALParams` are independent settings for their standalone
+dataset learners. Dataset paths and trajectory limits remain constructor
+keywords. OPAL metadata keeps the names and resolved values SUPE uses to
+rebuild its frozen VAE. `DDPGParams` uses the shared optimization settings;
+`TD3Params` extends it with policy delay and target smoothing. Online
+`drqv2` and `td3` expose the constructor's learning-rate schedule fields.
+Replay/mmap options and injected `policy_kwargs` remain constructor keywords.
+The DDPG rollout, replay and actor/target extension hooks retain their contracts.
+
+`PPOParams` owns the Gaussian PPO update and head settings. `SequencePPO`
+uses that same schema; `RecurrentPPOParams`, `TransformerPPOParams` and
+`GAILParams` extend it with their latent-stage or discriminator settings.
+`ChainPPOCoreParams` owns the shared chain actor/critic update settings;
+`DPPOParams` and `FlowPPOParams` add their respective sampling objectives,
+and `DiffusionCMDistillOnlineParams` extends DPPO with consistency updates.
+`PolicyDistillationParams` owns the independent teacher-student objective.
+The on-policy loop arguments (including decision-mask mode and critic step
+selection), teacher/checkpoint inputs, observation routing,
+policy graphs and deprecated architecture aliases remain constructor keywords.
+
+Forwarding children separate parameter overrides from parent operational
+keywords, resolve the child's schema and pass the resolved object to their
+parent. `GAIL._bind_params` and `DiffusionCMDistillOnline._bind_params` call
+the base binding method and preserve their tuple/list architecture attributes
+before model setup. Resolved architectures and reward horizons remain live
+attributes. Optimizer learning-rate schedules, discriminator state and
+consistency target updates retain their existing checkpoint hooks; they do
+not modify the Params snapshot.
+
+`ppo_common_kwargs` accepts the keyword-only `params_class` argument,
+defaulting to `PPOParams`. The PPO-family builders pass their selected
+algorithm's schema so subclass parameters reach the constructor through the
+same projection. Policy distillation retains its explicit architecture list
+conversion and its leaf Args default `(256, 256)`.
+
+`DreamerV3Params` and `NCRLParams` are siblings under `DreamerCoreParams`:
+NCRL takes its RSSM architecture from its pretrained checkpoint and exposes its
+own optimizers. `RSSMArchitectureParams` shares constructor-owned architecture
+settings between DreamerV3 and RSSMPretrain; `RSSMLossParams` shares their
+world-model loss and sequence settings with NCRL. The existing run-level
+arguments remain constructor keywords.
+
+`DreamerV3.dreamer_inputs_class` defaults to `None`, selecting the concrete
+`params_class` for resolution and binding. NCRL sets it to `DreamerV3Params`
+and binds its own snapshot before calling the parent. The parent then copies
+its resolved fields without replacing that snapshot. This preserves checkpoint
+architecture and the `actor_ent` → `act_entropy` and `discount` →
+`discount_horizon` translations before model setup. Subclasses extend their
+own Params schema through `params_class`.
+
+The model-based `TDMPC2Params` and `TDMPC2MultitaskParams` inherit
+`TDMPC2CoreParams`. `PWMParams` and `SuperMimicParams` own their policy
+learning settings. The concrete constructors resolve and bind the snapshot
+before calling their core parameter helpers with `params=...`; the helpers
+validate inputs and resolve derived attributes. Model-based host classes and
+step mixins retain their loop contracts. PWM reads world-model architecture
+from its checkpoint; those settings are not policy-learning Params fields.
+Mixed precision, replay layout, injected world-model objects and loop-owned
+arguments remain constructor keywords. Live optimizer schedules and return
+normalizers do not mutate the snapshot.
+
+The online SAC subtree uses `SACParams`, with subclasses for flow actors,
+sequence encoders, RLPD, hybrid grippers, ExPLORe and ACRLPD. `SACDDP`
+inherits SAC's schema; SUPE inherits ExPLORe's schema and keeps its OPAL
+checkpoint and injected VAE as inputs. `SACCore` remains independent of
+Params, including its offline and FlashSAC consumers. Inherited settings
+that a policy ignores remain accepted for compatibility.
+
+SAC binds before resolving `alpha_lr`, `net_arch` and entropy settings.
+Metadata keeps the input entropy target and the resolved live target under
+separate keys. Flow, ExPLORe and hybrid binding overrides preserve converted
+list/tuple/integer attributes. ACRLPD derives the entropy target passed to
+SAC while retaining the original input snapshot. Forwarding children resolve
+their own schema, so caller overrides take precedence over child defaults.
+`sac_common_kwargs` accepts a keyword-only `params_class`; each entry passes
+its own schema by name, independently of an injected algorithm class.
+
+`FlashSACParams` independently owns FlashSAC's distributional-critic and
+learning settings. `OfflineSACParams` owns the offline SAC settings and shares
+only the identical optimizer fields with `OfflineOptimizationArgs`.
+`EDACParams` extends it with `eta` and the ten-critic default. EDAC resolves
+its concrete schema and passes the object to OfflineSAC, preserving caller
+overrides. OfflineSAC keeps the input entropy target separate from its live
+resolved target; FlashSAC metadata records the resolved target. Compilation,
+AMP, asymmetric observation wiring and loop settings remain plain keywords.
+
+`CQLParams` owns the shared conservative loss settings; `CalQLParams` adds
+calibration and reference-value settings. `WSRLParams` adds the online objective
+switch, and `Off2OnCalQLParams` retains conservatism online by default.
+Constructors resolve their concrete schema; `CQLCore._init_cql_params` binds it
+once. `CalQLCore._init_calql_params` sets the fields needed before parent setup,
+and its `_bind_params` override preserves tuple-valued SARSA widths. CQL setup
+keeps `use_calql=False` until the calibrated constructor restores the requested
+value after parent setup. Stage switches and checkpoint restoration mutate live
+objective values, while the Params snapshot retains constructor inputs.
+`_cql_kwargs` accepts a keyword-only `params_class`; each offline builder names
+its schema. It keeps the forced automatic entropy settings and uses legacy
+width flags only when `net_arch` is `None`. Encoder wiring, compilation,
+replay sampling and stage/evaluation orchestration remain plain keywords.
+
+The constructor accepts `params=` and keyword overrides, calls
+`resolve_params(self.params_class, params, overrides)` before `super().__init__`
+so resolved values can reach parents, and keeps its validation. Loop-level,
+operational and observation arguments remain plain keywords. The core calls
+`self._bind_params(params)` before resolving derived values such as
+`net_arch`. `self.params` is a snapshot of constructor inputs; values that
+change afterwards remain live instance attributes, and metadata reads those
+live values. Metadata overrides after `super()._checkpoint_metadata()` still
+win, including the resolved architecture and encoder settings.
+
+The entry's Args inherits the Params class. A CLI default that differs from
+the class default is re-declared on the entry's leaf Args. A field's type
+belongs to Params and admits the values supported by the underlying code;
+leaves do not override a field solely to change its type. Deprecated constructor
+aliases remain plain keywords, without Args flags or metadata fields. The builder passes
+`params_kwargs(args, cls.params_class)` as constructor keyword arguments
+through `construct_agent`. Add a family row to
+`tests/test_hyperparameter_contract.py`; `tests/test_args_default_shadowing.py`
+and `tests/test_args_builder_drift.py` also guard defaults and builder wiring.
+
+| Seam | Signature | What the base does | Consumers |
+|---|---|---|---|
+| `BaseAlgorithm.params_class` | `Optional[type]` | `None` for algorithms with constructor keywords; opt in with the hyperparameter dataclass | `AWACCore`, `TD3BCCore`, `IQLCore`, `FQLCore`, `QAMCore`, `QGFCore`, `BCQCore`, `PLASCore`, `IDQL`, `BC`, `DAgger`, `FlowBC`, `MeanFlowBC`, `DiffusionBC`, `A2ABC`, `ConsistencyDistillBC`, `BPPO`, `UniO4`, `UniO4OPE`, `HILP`, `OPAL`, `DDPG`, `TD3`, `PPO`, `SequencePPO`, `RecurrentPPO`, `TransformerPPO`, `GAIL`, `ChainPPOCore`, `DPPO`, `FlowPPO`, `DiffusionCMDistillOnline`, `PolicyDistillation`, `TDMPC2`, `TDMPC2Multitask`, `PWM`, `SuperMimic`, `SAC`, `SACDDP`, `SACFlow`, `SequenceSAC`, `RecurrentSAC`, `TransformerSAC`, `RLPD`, `RLPDHybrid`, `ExPLORe`, `SUPE`, `ACRLPD`, `DreamerV3`, `NCRL`, `RSSMPretrain`, `CQLCore`, `CalQLCore`, `CQL`, `CalQL`, `WSRL`, `Off2OnCalQL` and concrete classes (declared on concrete classes) |
+| `BaseAlgorithm._bind_params` | `(params: Any) -> None` | stores the resolved object as `self.params` and copies each field of `self.params_class` onto the instance; call only with an opted-in Params class; no validation or derived values | `AWACCore`, `TD3BCCore`, `IQLCore`, `FQLCore`, `QAMCore`, `QGFCore`, `BCQCore`, `PLASCore`, `IDQL`, `BC`, `DAgger`, `FlowBC`, `MeanFlowBC`, `DiffusionBC`, `A2ABC`, `ConsistencyDistillBC`, `BPPO`, `UniO4`, `UniO4OPE`, `HILP`, `OPAL`, `DDPG`, `TD3`, `PPO`, `SequencePPO`, `RecurrentPPO`, `TransformerPPO`, `GAIL`, `ChainPPOCore`, `DPPO`, `FlowPPO`, `DiffusionCMDistillOnline`, `PolicyDistillation`, `TDMPC2`, `TDMPC2Multitask`, `PWM`, `SuperMimic`, `SAC`, `SACDDP`, `SACFlow`, `SequenceSAC`, `RecurrentSAC`, `TransformerSAC`, `RLPD`, `RLPDHybrid`, `ExPLORe`, `SUPE`, `ACRLPD`, `DreamerV3`, `NCRL`, `RSSMPretrain`, `FlashSAC`, `OfflineSAC`, `EDAC`, `CQLCore`, `CalQLCore`, `CQL`, `CalQL`, `WSRL`, `Off2OnCalQL` and concrete classes |
+| `BaseAlgorithm._checkpoint_metadata` | `() -> dict[str, Any]` | seed and device, plus each Params field's live instance value when `params_class` is set; unchanged seed/device mapping when it is `None` | `AWACCore`, `TD3BCCore`, `IQLCore`, `FQLCore`, `QAMCore`, `QGFCore`, `BCQCore`, `PLASCore`, `IDQL`, `BC`, `DAgger`, `FlowBC`, `MeanFlowBC`, `DiffusionBC`, `A2ABC`, `ConsistencyDistillBC`, `BPPO`, `UniO4`, `UniO4OPE`, `HILP`, `OPAL`, `DDPG`, `TD3`, `PPO`, `SequencePPO`, `RecurrentPPO`, `TransformerPPO`, `GAIL`, `ChainPPOCore`, `DPPO`, `FlowPPO`, `DiffusionCMDistillOnline`, `PolicyDistillation`, `TDMPC2`, `TDMPC2Multitask`, `PWM`, `SuperMimic`, `SAC`, `SACDDP`, `SACFlow`, `SequenceSAC`, `RecurrentSAC`, `TransformerSAC`, `RLPD`, `RLPDHybrid`, `ExPLORe`, `SUPE`, `ACRLPD`, `DreamerV3`, `NCRL`, `RSSMPretrain`, `FlashSAC`, `OfflineSAC`, `EDAC`, `CQLCore`, `CalQLCore`, `CQL`, `CalQL`, `WSRL`, `Off2OnCalQL` and concrete classes (extend with cooperative `super()`) |
+
 ### Constructor ordering
 
 `PPO.__init__` and `SAC.__init__` end by calling `self._setup_model()`, which
-builds the policy. Attributes your overrides read must be set **before**
-`super().__init__()`, as `RecurrentPPO` does with its `rnn_*` fields:
+builds the policy. Set additional attributes your overrides read **before**
+`super().__init__()`. Params fields, including `RecurrentPPO`'s `rnn_*` fields,
+are bound by PPO before model setup:
 
 ```python
 def __init__(self, env: Any, *, aux_weight: float = 0.1, aux_hidden: int = 16, **kwargs: Any):
@@ -184,8 +375,8 @@ def __init__(self, env: Any, *, aux_weight: float = 0.1, aux_hidden: int = 16, *
     super().__init__(env, **kwargs)
 ```
 
-The parent constructors take a fixed keyword list (no `**kwargs` catch-all):
-forward the rest through `**kwargs` as above. A subclass whose policy replaces
+Forward the remaining parent arguments through `**kwargs` as above. PPO
+and SAC resolve their declared Params fields and reject unknown keywords. A subclass whose policy replaces
 the actor rejects `--policy-graph` as above: a policy graph builds a
 `GraphPPOPolicy`, not `policy_class`.
 

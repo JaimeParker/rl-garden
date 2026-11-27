@@ -43,7 +43,7 @@ Formulas verified against ``rebrac.py`` directly:
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Optional
 
 import torch
 
@@ -54,8 +54,8 @@ from rl_garden.buffers.rebrac_replay_buffer import ReBRACReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.utils import polyak_update
 from rl_garden.encoders.config import EncoderConfig
-from rl_garden.networks import KernelInit
-from rl_garden.networks.actor_critic import BackboneType
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.rebrac import ReBRACParams
 from rl_garden.observations import ObsGroups
 
 
@@ -65,91 +65,28 @@ class ReBRACCore(TD3BCCore):
     def _init_rebrac_params(
         self,
         *,
-        tau: float = 0.005,
-        actor_lr: float = 1e-3,
-        critic_lr: float = 1e-3,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        policy_noise: float = 0.2,
-        noise_clip: float = 0.5,
-        policy_freq: int = 2,
-        actor_bc_coef: float = 1.0,
-        critic_bc_coef: float = 1.0,
-        normalize_q: bool = True,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
+        params: ReBRACParams,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
         encoder_sharing: Optional[EncoderSharing] = None,
         image_augmentation_seed: Optional[int] = None,
     ) -> None:
-        # TD3BCCore._init_td3bc_params owns tau/lrs/net_arch/n_critics/layer
-        # norms/etc.; its own `alpha` field is unused here (ReBRAC replaces
-        # it with actor_bc_coef/critic_bc_coef below) -- left at its default,
-        # never read by this class's train().
         self._init_td3bc_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            policy_noise=policy_noise,
-            noise_clip=noise_clip,
-            policy_freq=policy_freq,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,
             encoder_sharing=encoder_sharing,
             image_augmentation_seed=image_augmentation_seed,
         )
-        if actor_bc_coef < 0:
-            raise ValueError(f"actor_bc_coef must be >= 0, got {actor_bc_coef}.")
-        if critic_bc_coef < 0:
-            raise ValueError(f"critic_bc_coef must be >= 0, got {critic_bc_coef}.")
-        self.actor_bc_coef = actor_bc_coef
-        self.critic_bc_coef = critic_bc_coef
-        self.normalize_q = normalize_q
+        if params.actor_bc_coef < 0:
+            raise ValueError(f"actor_bc_coef must be >= 0, got {params.actor_bc_coef}.")
+        if params.critic_bc_coef < 0:
+            raise ValueError(f"critic_bc_coef must be >= 0, got {params.critic_bc_coef}.")
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        meta = super()._checkpoint_metadata()
-        meta.pop("alpha", None)
-        return {
-            **meta,
-            "actor_bc_coef": self.actor_bc_coef,
-            "critic_bc_coef": self.critic_bc_coef,
-            "normalize_q": self.normalize_q,
-        }
+        return super()._checkpoint_metadata()
 
     def _build_replay_buffer(self) -> ReBRACReplayBuffer:
         obs_space = self.env.single_observation_space
@@ -270,6 +207,8 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
 
     _compatible_checkpoint_algorithms = ("ReBRAC",)
 
+    params_class = ReBRACParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
@@ -279,33 +218,7 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
         batch_size: int = 1024,
         gamma: float = 0.99,
         offline_sampling: str = "with_replace",
-        tau: float = 0.005,
-        actor_lr: float = 1e-3,
-        critic_lr: float = 1e-3,
-        weight_decay: float = 0.0,
-        use_adamw: bool = False,
-        lr_schedule: Literal["constant", "linear_warmup", "warmup_cosine"] = "constant",
-        lr_warmup_steps: int = 0,
-        lr_decay_steps: int = 0,
-        lr_min_ratio: float = 0.0,
-        grad_clip_norm: Optional[float] = None,
-        policy_noise: float = 0.2,
-        noise_clip: float = 0.5,
-        policy_freq: int = 2,
-        actor_bc_coef: float = 1.0,
-        critic_bc_coef: float = 1.0,
-        normalize_q: bool = True,
-        net_arch: Optional[Sequence[int]] = None,
-        n_critics: int = 2,
-        actor_use_layer_norm: bool = False,
-        critic_use_layer_norm: bool = True,
-        actor_use_group_norm: bool = False,
-        critic_use_group_norm: bool = False,
-        num_groups: int = 32,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
+        params: Optional[ReBRACParams] = None,
         encoder_config: Optional[EncoderConfig] = None,
         obs_groups: Optional[ObsGroups] = None,
         critic_encoder_config: Optional[EncoderConfig] = None,
@@ -323,7 +236,9 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        **overrides,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         super().__init__(
             env=env,
             buffer_size=buffer_size,
@@ -345,33 +260,7 @@ class ReBRAC(ReBRACCore, OfflineRLAlgorithm):
             save_final_checkpoint=save_final_checkpoint,
         )
         self._init_rebrac_params(
-            tau=tau,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            weight_decay=weight_decay,
-            use_adamw=use_adamw,
-            lr_schedule=lr_schedule,
-            lr_warmup_steps=lr_warmup_steps,
-            lr_decay_steps=lr_decay_steps,
-            lr_min_ratio=lr_min_ratio,
-            grad_clip_norm=grad_clip_norm,
-            policy_noise=policy_noise,
-            noise_clip=noise_clip,
-            policy_freq=policy_freq,
-            actor_bc_coef=actor_bc_coef,
-            critic_bc_coef=critic_bc_coef,
-            normalize_q=normalize_q,
-            net_arch=net_arch,
-            n_critics=n_critics,
-            actor_use_layer_norm=actor_use_layer_norm,
-            critic_use_layer_norm=critic_use_layer_norm,
-            actor_use_group_norm=actor_use_group_norm,
-            critic_use_group_norm=critic_use_group_norm,
-            num_groups=num_groups,
-            actor_dropout_rate=actor_dropout_rate,
-            critic_dropout_rate=critic_dropout_rate,
-            kernel_init=kernel_init,
-            backbone_type=backbone_type,
+            params=params,
             encoder_config=encoder_config,
             obs_groups=obs_groups,
             critic_encoder_config=critic_encoder_config,

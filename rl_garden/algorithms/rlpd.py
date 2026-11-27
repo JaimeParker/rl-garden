@@ -11,11 +11,13 @@ RLPD-recommended defaults.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.sac import RLPDParams
 from rl_garden.algorithms.sac import SAC
 from rl_garden.buffers.prior_data_replay import PriorDataReplayMixin
-from rl_garden.networks import BackboneType, KernelInit
+from rl_garden.networks import BackboneType
 from rl_garden.policies.rlpd_policy import RLPDPolicy
 
 
@@ -32,24 +34,28 @@ class RLPD(PriorDataReplayMixin, SAC):
     _compatible_checkpoint_algorithms = ("RLPD",)
     policy_class = RLPDPolicy
 
+    params_class = RLPDParams
+
     def __init__(
         self,
         env: Any,
         eval_env: Optional[Any] = None,
         *,
-        n_critics: int = 10,
-        critic_subsample_size: Optional[int] = 2,
-        critic_use_layer_norm: bool = True,
-        actor_dropout_rate: Optional[float] = None,
-        critic_dropout_rate: Optional[float] = None,
-        kernel_init: Optional[KernelInit] = None,
-        backbone_type: BackboneType = "mlp",
         critic_backbone_type: Optional[BackboneType] = None,
-        use_pnorm: bool = False,
-        exclude_bias_from_decay: bool = False,
-        std_parameterization: Literal["exp", "uniform"] = "exp",
+        params: RLPDParams | None = None,
         **sac_kwargs: Any,
     ) -> None:
+        parameter_names = self.params_class.__dataclass_fields__
+        overrides = {name: sac_kwargs.pop(name) for name in tuple(sac_kwargs)
+                     if name in parameter_names}
+        params = resolve_params(self.params_class, params, overrides)
+        actor_dropout_rate = params.actor_dropout_rate
+        critic_dropout_rate = params.critic_dropout_rate
+        kernel_init = params.kernel_init
+        backbone_type = params.backbone_type
+        use_pnorm = params.use_pnorm
+        exclude_bias_from_decay = params.exclude_bias_from_decay
+        std_parameterization = params.std_parameterization
         self.actor_dropout_rate = actor_dropout_rate
         self.critic_dropout_rate = critic_dropout_rate
         self.kernel_init = kernel_init
@@ -65,10 +71,8 @@ class RLPD(PriorDataReplayMixin, SAC):
         super().__init__(
             env,
             eval_env,
-            n_critics=n_critics,
-            critic_subsample_size=critic_subsample_size,
-            critic_use_layer_norm=critic_use_layer_norm,
             critic_backbone_type=critic_backbone_type,
+            params=params,
             **sac_kwargs,
         )
 
@@ -95,11 +99,4 @@ class RLPD(PriorDataReplayMixin, SAC):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "actor_dropout_rate": self.actor_dropout_rate,
-            "critic_dropout_rate": self.critic_dropout_rate,
-            "kernel_init": self.kernel_init,
-            "backbone_type": self.backbone_type,
-            "use_pnorm": self.use_pnorm,
-            "exclude_bias_from_decay": self.exclude_bias_from_decay,
-            "std_parameterization": self.std_parameterization,
         }

@@ -32,15 +32,7 @@ def build_transformer_ppo(
     image_kwargs = ppo_observation_kwargs(args)
     agent = construct_agent(
         algorithm_cls,
-        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs),
-        embed_dim=args.embed_dim,
-        head_dim=args.head_dim,
-        num_heads=args.num_heads,
-        num_transformer_layers=args.num_transformer_layers,
-        mlp_num=args.mlp_num,
-        memory_len=args.memory_len,
-        dropout_rate=args.dropout_rate,
-        gru_bias=args.gru_bias,
+        **ppo_common_kwargs(args, env, eval_env, logger, checkpoint_dir, image_kwargs, params_class=algorithm_cls.params_class),
         **extra_kwargs,
     )
     if args.load_checkpoint is not None:

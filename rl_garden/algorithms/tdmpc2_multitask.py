@@ -30,6 +30,8 @@ from typing import Any, Optional, Sequence
 
 import torch
 
+from rl_garden.hyperparameters import resolve_params
+from rl_garden.hyperparameters.tdmpc2 import TDMPC2MultitaskParams
 from rl_garden.algorithms.offline import OfflineEnvSpec
 from rl_garden.algorithms.offline_model_based import OfflineModelBasedAlgorithm
 from rl_garden.algorithms.tdmpc2 import TDMPC2Core, _compute_discount
@@ -49,6 +51,8 @@ class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
         "raises NotImplementedError)"
     )
 
+    params_class = TDMPC2MultitaskParams
+
     def __init__(
         self,
         env: OfflineEnvSpec,
@@ -61,32 +65,6 @@ class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
         mmap_mode: MmapMode = "create",
         buffer_size: int = 1_000_000,
         batch_size: int = 256,
-        horizon: int = 3,
-        task_dim: int = 96,
-        latent_dim: int = 512,
-        enc_dim: int = 256,
-        num_enc_layers: int = 2,
-        mlp_dim: int = 512,
-        simnorm_dim: int = 8,
-        num_q: int = 5,
-        num_bins: int = 101,
-        vmin: float = -10.0,
-        vmax: float = 10.0,
-        dropout: float = 0.01,
-        log_std_min: float = -10.0,
-        log_std_max: float = 2.0,
-        entropy_coef: float = 1e-4,
-        lr: float = 3e-4,
-        enc_lr_scale: float = 0.3,
-        grad_clip_norm: float = 20.0,
-        tau: float = 0.01,
-        rho: float = 0.5,
-        consistency_coef: float = 20.0,
-        reward_coef: float = 0.1,
-        value_coef: float = 0.1,
-        discount_denom: float = 5.0,
-        discount_min: float = 0.95,
-        discount_max: float = 0.995,
         seed: int = 1,
         device: str | torch.device = "auto",
         logger: Optional[Logger] = None,
@@ -96,7 +74,10 @@ class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
         checkpoint_freq: int = 0,
         save_replay_buffer: bool = False,
         save_final_checkpoint: bool = True,
+        params: TDMPC2MultitaskParams | None = None,
+        **overrides: Any,
     ) -> None:
+        params = resolve_params(self.params_class, params, overrides)
         if not (len(tasks) == len(obs_dims) == len(action_dims) == len(episode_lengths)):
             raise ValueError(
                 "tasks/obs_dims/action_dims/episode_lengths must all have the "
@@ -120,39 +101,15 @@ class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
             save_replay_buffer=save_replay_buffer,
             save_final_checkpoint=save_final_checkpoint,
         )
+        self._bind_params(params)
         self.tasks = list(tasks)
         self.obs_dims = list(obs_dims)
         self.action_dims = list(action_dims)
         self.episode_lengths = list(episode_lengths)
         self.mmap_dir = mmap_dir
         self.mmap_mode = mmap_mode
-        self.task_dim = task_dim
-        self.enc_dim = enc_dim
-        self.num_enc_layers = num_enc_layers
-        self.tau = tau
         self._init_tdmpc2_params(
-            horizon=horizon,
-            latent_dim=latent_dim,
-            mlp_dim=mlp_dim,
-            simnorm_dim=simnorm_dim,
-            num_q=num_q,
-            num_bins=num_bins,
-            vmin=vmin,
-            vmax=vmax,
-            dropout=dropout,
-            log_std_min=log_std_min,
-            log_std_max=log_std_max,
-            entropy_coef=entropy_coef,
-            lr=lr,
-            enc_lr_scale=enc_lr_scale,
-            grad_clip_norm=grad_clip_norm,
-            rho=rho,
-            consistency_coef=consistency_coef,
-            reward_coef=reward_coef,
-            value_coef=value_coef,
-            discount_denom=discount_denom,
-            discount_min=discount_min,
-            discount_max=discount_max,
+            params=params,
         )
 
         self._setup_model()
@@ -287,8 +244,4 @@ class TDMPC2Multitask(TDMPC2Core, OfflineModelBasedAlgorithm):
             "obs_dims": self.obs_dims,
             "action_dims": self.action_dims,
             "episode_lengths": self.episode_lengths,
-            "task_dim": self.task_dim,
-            "tau": self.tau,
-            "enc_dim": self.enc_dim,
-            "num_enc_layers": self.num_enc_layers,
         }

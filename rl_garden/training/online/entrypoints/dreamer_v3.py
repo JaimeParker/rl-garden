@@ -4,6 +4,9 @@ from __future__ import annotations
 
 
 def build_dreamer_v3(args, env, eval_env, logger, checkpoint_dir):
+    from rl_garden.hyperparameters import params_kwargs
+    from rl_garden.hyperparameters.dreamer import DreamerV3Params
+
     import dataclasses
 
     from rl_garden.algorithms.dreamer_v3 import DreamerV3
@@ -21,39 +24,17 @@ def build_dreamer_v3(args, env, eval_env, logger, checkpoint_dir):
     if args.obs.is_visual and encoder_config.backbone != "dreamer_conv":
         encoder_config = dataclasses.replace(encoder_config, backbone="dreamer_conv")
 
+    learning_kwargs = params_kwargs(args, DreamerV3Params)
+    learning_kwargs["discount_horizon"] = (
+        args.horizon if args.discount_horizon is None else args.discount_horizon
+    )
+
     agent = construct_agent(
         DreamerV3,
+        **learning_kwargs,
         env=env,
         eval_env=eval_env,
-        size=args.size,
-        stoch=args.stoch,
-        unimix=args.unimix,
-        blocks=args.blocks,
-        obs_layers=args.obs_layers,
-        img_layers=args.img_layers,
-        dyn_layers=args.dyn_layers,
-        decoder_layers=args.decoder_layers,
-        reward_bins=args.reward_bins,
-        kl_free=args.kl_free,
-        contdisc=args.contdisc,
-        discount_horizon=args.horizon,
         batch_size=args.batch_size,
-        batch_length=args.batch_length,
-        train_ratio=args.train_ratio,
-        imag_horizon=args.imag_horizon,
-        lam=args.lam,
-        act_entropy=args.act_entropy,
-        dyn_scale=args.dyn_scale,
-        rep_scale=args.rep_scale,
-        recon_scale=args.recon_scale,
-        rew_scale=args.rew_scale,
-        con_scale=args.con_scale,
-        policy_scale=args.policy_scale,
-        value_scale=args.value_scale,
-        repval_scale=args.repval_scale,
-        lr=args.lr,
-        warmup=args.warmup,
-        slow_target_fraction=args.slow_target_fraction,
         buffer_size=args.buffer_size,
         buffer_device=args.buffer_device,
         learning_starts=args.learning_starts,

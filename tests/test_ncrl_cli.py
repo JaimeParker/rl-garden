@@ -59,7 +59,7 @@ def _validate(**fields):
     from rl_garden.training.online.entrypoints.ncrl import NCRLArgs
 
     registry.discover()
-    command = ParsedCommand(NCRLArgs(**fields), "ncrl", "print_config", None, {}, (), {})
+    command = ParsedCommand(NCRLArgs(**fields), "ncrl", "print_config", {}, (), {})
     registry._validate_config(command)
 
 
