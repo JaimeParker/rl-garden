@@ -21,7 +21,7 @@ import torch
 from gymnasium import spaces
 from gymnasium.vector.utils import batch_space
 
-from rl_garden.algorithms import DDPG, IQL, OPAL, FlashSAC, OfflineEnvSpec
+from rl_garden.algorithms import DDPG, OPAL, FlashSAC, OfflineEnvSpec
 from rl_garden.algorithms.sac_core import SACCore
 from rl_garden.algorithms.supe import load_opal_vae
 from rl_garden.algorithms.td3_bc import TD3BCCore
@@ -109,16 +109,13 @@ def _write_opal_dataset(path) -> None:
 
 @pytest.fixture(scope="module")
 def pretrained_checkpoints(tmp_path_factory) -> dict[str, str]:
-    """A JSRL guide checkpoint and a SUPE OPAL checkpoint, built once."""
+    """A SUPE OPAL checkpoint, built once."""
     root = tmp_path_factory.mktemp("ownership_checkpoints")
     offline_env = OfflineEnvSpec(
         spaces.Box(-1.0, 1.0, (STATE_DIM,), dtype=np.float32),
         spaces.Box(-1.0, 1.0, (ACTION_DIM,), dtype=np.float32),
         num_envs=1,
     )
-    guide = root / "iql.pt"
-    IQL(env=offline_env, device="cpu", net_arch=[8]).save(guide)
-
     dataset = root / "opal.h5"
     _write_opal_dataset(dataset)
     opal = root / "opal.pt"
@@ -132,7 +129,7 @@ def pretrained_checkpoints(tmp_path_factory) -> dict[str, str]:
         hidden_size=8,
         vae_hidden_dims=(8, 8),
     ).save(opal)
-    return {"jsrl_guide": str(guide), "supe_opal": str(opal)}
+    return {"supe_opal": str(opal)}
 
 
 def _skill_env(opal_checkpoint: str) -> SkillActionWrapper:
@@ -178,18 +175,6 @@ def _build_rlpd_hybrid(algorithm_cls, with_image, encoder_sharing, checkpoints):
     return algorithm_cls(env=env, **kwargs)
 
 
-def _build_jsrl(algorithm_cls, with_image, encoder_sharing, checkpoints):
-    del with_image
-    return algorithm_cls(
-        env=TinyVecEnv(),
-        guide_checkpoint=checkpoints["jsrl_guide"],
-        guide_algorithm="iql",
-        max_horizon=2,
-        encoder_sharing=encoder_sharing,
-        **COMMON_KWARGS,
-    )
-
-
 def _build_supe(algorithm_cls, with_image, encoder_sharing, checkpoints):
     del with_image
     return algorithm_cls(
@@ -209,7 +194,6 @@ BUILDERS: dict[str, tuple[Callable, dict[str, dict], bool]] = {
     "explore": (_sac_like(), {"": {}}, False),
     "acrlpd": (_sac_like(horizon_length=3), {"": {}}, False),
     "rlpd_hybrid": (_build_rlpd_hybrid, {"": {}}, True),
-    "jsrl": (_build_jsrl, {"": {}}, False),
     "supe": (_build_supe, {"": {}}, False),
     "recurrent_sac": (
         _sac_like(**SEQUENCE_KWARGS, rnn_hidden_size=8),

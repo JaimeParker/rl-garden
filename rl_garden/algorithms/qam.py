@@ -14,7 +14,7 @@ Built directly on `OfflineRLAlgorithm` (no rollout shell), following
 `FQL`'s exact offline-only shape -- QAM never touches an env during
 training, even the "ddpg" critic mode's `next_action` computation is a
 forward-only inference call through the policy, not real env interaction.
-Evaluation executes each chunk one action per env step (`ChunkedEvalMixin`).
+Evaluation executes each chunk one action per env step (`ActionChunkingMixin`).
 
 Formulas verified against `qam.py` (do not re-derive from memory):
 
@@ -54,21 +54,21 @@ Formulas verified against `qam.py` (do not re-derive from memory):
     loss formula is specified): entropy-regularized Q-maximization of a
     small residual policy, using `AlphaTuner`'s existing
     `"lagrange_softplus"` mode as-is (see `QAMPolicy`'s docstring).
+
+Action-space tiling, chunked replay construction, training-batch flattening,
+evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
-from rl_garden.algorithms.chunked_rollout import ChunkedEvalMixin
+from rl_garden.algorithms.chunked_rollout import ActionChunkingMixin
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
@@ -129,8 +129,7 @@ class QAMCore:
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
     ) -> None:
-        if horizon_length < 1:
-            raise ValueError(f"horizon_length must be >= 1, got {horizon_length}")
+        self._init_action_chunking(horizon_length)
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
         if not (0.0 < expectile < 1.0):
@@ -151,7 +150,6 @@ class QAMCore:
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
             )
 
-        self.horizon_length = horizon_length
         self.tau = tau
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
@@ -197,7 +195,6 @@ class QAMCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_length": self.horizon_length,
             "tau": self.tau,
             "actor_lr": self.actor_lr,
             "critic_lr": self.critic_lr,
@@ -254,26 +251,6 @@ class QAMCore:
         ):
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
-
-    def _policy_action_space(self) -> spaces.Box:
-        action_space = self.env.single_action_space
-        assert isinstance(action_space, spaces.Box), "QAM requires a flat Box action space."
-        low = np.tile(np.asarray(action_space.low, dtype=np.float32).reshape(-1), self.horizon_length)
-        high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
-        return spaces.Box(low=low, high=high, dtype=np.float32)
-
-    def _build_replay_buffer(self):
-        # obs_space is always Dict (boundary normalization is unconditional).
-        return ChunkedReplayBuffer(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            num_envs=self.num_envs,
-            buffer_size=self.buffer_size,
-            horizon_length=self.horizon_length,
-            gamma=self.gamma,
-            storage_device=self.buffer_device,
-            sample_device=self.device,
-        )
 
     def _setup_model(self) -> None:
         self.policy = QAMPolicy(
@@ -494,7 +471,7 @@ class QAMCore:
         for _ in range(gradient_steps):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
-            flat_actions = data.actions.reshape(data.actions.shape[0], -1)
+            flat_actions = data.actions
 
             # --- critic (+ value in iql mode) ---
             critic_features = self.policy.extract_critic_features(data.obs)
@@ -550,7 +527,7 @@ class QAMCore:
         return {key: metrics_sum[key] / counts[key] for key in metrics_sum}
 
 
-class QAM(ChunkedEvalMixin, QAMCore, OfflineRLAlgorithm):
+class QAM(ActionChunkingMixin, QAMCore, OfflineRLAlgorithm):
     """Offline QAM: flow-matching actor fine-tuned via adjoint matching.
     See module docstring."""
 

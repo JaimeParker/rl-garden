@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -53,6 +53,7 @@ from rl_garden.common.effective_config import json_value, persist_effective_conf
 from rl_garden.common.env_args import make_env_request
 from rl_garden.envs.backend_registry import make_training_envs, should_create_eval_env
 from rl_garden.training.inspection import (
+    checkpoint_to_restore,
     config_session,
     current_preflight,
     emit_materialized_config,
@@ -168,9 +169,7 @@ def _load_offline_stage_dataset(agent: Any, args: Off2OnCommonArgs, logger: Logg
     if args.offline_dataset is None:
         return
     if args.load_checkpoint is not None and agent.replay_buffer_restored:
-        if not agent.saves_offline_buffer:
-            agent._clear_replay_buffer()
-        elif len(agent.replay_buffer) > 0:
+        if len(agent.replay_buffer) > 0:
             _logger.warning(
                 "--offline-dataset is not loaded: the replay buffer restored from the checkpoint "
                 "holds %d transitions; resume without --load-replay-buffer to use the dataset "
@@ -186,7 +185,6 @@ def _holds_restored_offline_stage_data(agent: Any, args: Off2OnCommonArgs) -> bo
     return (
         args.load_checkpoint is not None
         and agent.replay_buffer_restored
-        and agent.saves_offline_buffer
         and len(agent.replay_buffer) > 0
     )
 
@@ -220,15 +218,6 @@ def _switch_to_online_mode(agent: Any, args: Off2OnCommonArgs, logger: Logger) -
             if hasattr(agent, "pretrain_vae"):
                 agent.pretrain_vae()
             _set_offline_probe(agent, logger, args.std_log)
-        elif (
-            args.load_checkpoint is not None
-            and not agent.saves_offline_buffer
-            and args.online_replay_mode == "mixed"
-        ):
-            raise SystemExit(
-                f"{args.load_checkpoint} continues with the 'mixed' replay mode, whose offline "
-                "buffer is always built from the dataset: pass --offline-dataset."
-            )
     agent.switch_to_online_mode(
         online_replay_mode=args.online_replay_mode,
         offline_data_ratio=args.offline_data_ratio,
@@ -247,12 +236,8 @@ def _is_explicit(args: Off2OnCommonArgs, name: str) -> bool:
 _VALUE_RANGE_FIELDS = ("min_reward", "max_reward", "r_min", "r_max")
 
 
-def _report_changed_value_range(args: Off2OnCommonArgs) -> None:
-    from rl_garden.common.checkpoint import load_checkpoint_file
-
-    recorded = load_checkpoint_file(args.load_checkpoint, map_location="cpu")["metadata"].get(
-        "hyperparameters", {}
-    )
+def _report_changed_value_range(args: Off2OnCommonArgs, checkpoint: Mapping[str, Any]) -> None:
+    recorded = checkpoint["metadata"].get("hyperparameters", {})
     changed = {
         name: recorded[name]
         for name in _VALUE_RANGE_FIELDS
@@ -273,26 +258,49 @@ def _resumes_online_stage(agent: Any, args: Off2OnCommonArgs) -> bool:
     return args.load_checkpoint is not None and agent._online_start_step is not None
 
 
-def _reconcile_with_saved_stage(agent: Any, args: Off2OnCommonArgs) -> None:
+def _replay_mode_of_saving_run(
+    checkpoint: Mapping[str, Any],
+) -> tuple[str, float | str] | None:
+    """The online replay mode and offline data ratio of the run that wrote
+    ``checkpoint``, from its run configuration. ``None`` when it has none, or
+    when that run loaded a checkpoint itself: it may have continued in another
+    mode than the one it was given."""
+    run_config = checkpoint["metadata"].get("run_config") or {}
+    inputs = run_config.get("inputs", {})
+    if inputs.get("online_replay_mode") is None or inputs.get("load_checkpoint") is not None:
+        return None
+    mode = inputs["online_replay_mode"]
+    return mode, (inputs["offline_data_ratio"] if mode == "mixed" else 0.0)
+
+
+def _reconcile_with_saved_stage(
+    agent: Any, args: Off2OnCommonArgs, checkpoint: Mapping[str, Any]
+) -> None:
     """Make an agent loaded in its online stage usable with ``args``, whose
     stage settings the checkpoint overrides: one the user set to something
-    else is an error, a default is reported."""
+    else is an error, a default is reported. A checkpoint that does not record
+    its stage continues in the mode of the run that wrote it, else in the one
+    ``args`` states explicitly."""
     if args.num_offline_steps > 0:
         raise SystemExit(
             f"{args.load_checkpoint} is a checkpoint of the online stage and cannot train "
             "offline any more; pass --num-offline-steps 0."
         )
     if agent.online_replay_mode is None:
-        needed = ["online_replay_mode"]
-        if args.online_replay_mode == "mixed":
-            needed.append("offline_data_ratio")
-        if not all(_is_explicit(args, name) for name in needed):
-            raise SystemExit(
-                f"{args.load_checkpoint} is an online-stage checkpoint that does not record its "
-                "replay mode; pass --online-replay-mode (and, for mixed, --offline-data-ratio) as "
-                "the run that wrote it used."
-            )
-        agent.declare_online_replay_mode(args.online_replay_mode, args.offline_data_ratio)
+        saving_run_mode = _replay_mode_of_saving_run(checkpoint)
+        if saving_run_mode is not None:
+            agent.declare_online_replay_mode(*saving_run_mode)
+        else:
+            needed = ["online_replay_mode"]
+            if args.online_replay_mode == "mixed":
+                needed.append("offline_data_ratio")
+            if not all(_is_explicit(args, name) for name in needed):
+                raise SystemExit(
+                    f"{args.load_checkpoint} is an online-stage checkpoint that does not record "
+                    "its replay mode; pass --online-replay-mode (and, for mixed, "
+                    "--offline-data-ratio) as the run that wrote it used."
+                )
+            agent.declare_online_replay_mode(args.online_replay_mode, args.offline_data_ratio)
 
     saved = {"online_replay_mode": agent.online_replay_mode}
     if agent.online_replay_mode == "mixed":
@@ -352,12 +360,8 @@ def _restore_offline_data(agent: Any, args: Off2OnCommonArgs, logger: Logger) ->
             raise SystemExit(
                 f"{args.load_checkpoint} continues the 'mixed' online stage, which needs its "
                 "offline data: pass "
-                + (
-                    "--load-replay-buffer if the run saved offline_buffer_<suffix>.pt, or "
-                    if agent.saves_offline_buffer
-                    else ""
-                )
-                + "--offline-dataset."
+                "--load-replay-buffer if the run saved offline_buffer_<suffix>.pt, or "
+                "--offline-dataset."
             )
         if agent.online_replay_mode == "append":
             _logger.warning(
@@ -464,7 +468,7 @@ def _run_off2on(
         eval_episode_horizon=args.eval_episode_horizon,
     )
 
-    # getattr: a handful of off2on algorithms (AWAC, SPOT, SO2) are Box-only
+    # getattr: a handful of off2on algorithms (AWAC, SPOT) are Box-only
     # and never mix in ObservationArgs at all, so args has no .obs/.encoder.
     obs = getattr(args, "obs", None)
     is_visual = obs.is_visual if obs is not None else False
@@ -521,9 +525,10 @@ def _run_off2on(
     agent = build_agent(args, env, eval_env, logger, checkpoint_dir)
     resumes_online_stage = _resumes_online_stage(agent, args)
     if args.load_checkpoint is not None:
-        _report_changed_value_range(args)
-    if resumes_online_stage:
-        _reconcile_with_saved_stage(agent, args)
+        checkpoint = checkpoint_to_restore(args)
+        _report_changed_value_range(args, checkpoint)
+        if resumes_online_stage:
+            _reconcile_with_saved_stage(agent, args, checkpoint)
     materialized_derived = {"run_name": run_name, "checkpoint_dir": checkpoint_dir}
     if dry_run:
         materialized_derived["dry_run_resource_overrides"] = {

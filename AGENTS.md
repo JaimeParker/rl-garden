@@ -1,7 +1,6 @@
 # AGENTS.md
 
-Operating guide for coding agents working on `rl-garden`. Read [README.md](README.md)
-for user-facing installation, features, and quick-start documentation.
+Operating guide for coding agents working on `rl-garden`.
 
 ## Required Context
 
@@ -15,8 +14,6 @@ for user-facing installation, features, and quick-start documentation.
 - Before changing algorithm registration, the in-tree builders, checkpoint
   evaluation, or any protected method a subclass overrides, read the extension
   contract, [`docs/guides/extending.md`](docs/guides/extending.md).
-- Before running or adding tests (lanes, markers, `scripts/test.sh`), read
-  [`.agents/runbooks/testing.md`](.agents/runbooks/testing.md).
 - Before launching training or evaluation, read
   [`.agents/runbooks/training.md`](.agents/runbooks/training.md).
 - Before saving, loading, or resuming checkpoints, read
@@ -27,14 +24,10 @@ for user-facing installation, features, and quick-start documentation.
   [`.agents/rules/mutagen-sync-sop.md`](.agents/rules/mutagen-sync-sop.md).
 - Before navigating an unfamiliar area of the codebase, read
   [`.agents/rules/repository-map.md`](.agents/rules/repository-map.md).
-- Before installing or running an official JAX baseline (Cal-QL, wsrl,
-  IQL-jax) for numeric comparison against rl-garden, read
-  [`.agents/runbooks/baseline-install.md`](.agents/runbooks/baseline-install.md).
 
 Machine-specific server, Docker, path, Python environment, and Mutagen bindings
 belong in ignored `.agents/local/personal_config.md`. Before any remote command,
-read that file. If it is missing, stop and ask the user to create it from
-`.agents/local/personal_config.md.example`.
+read that file.
 
 ## Project Constraints
 
@@ -48,9 +41,7 @@ entrypoints to a specific simulator.
 - Avoid NumPy handoffs in rollout, replay, and update hot paths.
 - Replay buffers use torch tensors with `(T, N, ...)` layout. Keep storage and
   sample devices explicit.
-- Keep device transfers explicit for every environment backend. CPU-backed
-  environments are supported, but must not introduce implicit CPU copies into a
-  GPU training path.
+- Keep device transfers explicit for every environment backend.
 - Keep optional environment and hardware dependencies lazy so core package imports,
   registry discovery, and configuration inspection work without every backend
   installed.

@@ -61,11 +61,6 @@ Algorithm registry
      - ``rl_garden.algorithms.gail.GAIL``
      - :doc:`/algorithms/imitation-and-generative`
      - Ho & Ermon 2016, `arXiv:1606.03476 <https://arxiv.org/abs/1606.03476>`_
-   * - ``jsrl``
-     - online
-     - ``rl_garden.algorithms.jsrl.JSRL``
-     - :doc:`/algorithms/offline-to-online`
-     - Uchendu et al. 2022, `arXiv:2204.02372 <https://arxiv.org/abs/2204.02372>`_
    * - ``ncrl``
      - online
      - ``rl_garden.algorithms.ncrl.NCRL``
@@ -346,11 +341,6 @@ Algorithm registry
      - ``rl_garden.algorithms.off2on_iql.Off2OnIQL``
      - :doc:`/algorithms/offline-to-online`
      - Kostrikov et al. 2021, `arXiv:2110.06169 <https://arxiv.org/abs/2110.06169>`_
-   * - ``so2``
-     - off2on
-     - ``rl_garden.algorithms.off2on_so2.Off2OnSO2``
-     - :doc:`/algorithms/offline-to-online`
-     - Zhang et al. 2024, `arXiv:2312.07685 <https://arxiv.org/abs/2312.07685>`_, "A Perspective of Q-value Estimation on Offline-to-Online RL"
    * - ``spot``
      - off2on
      - ``rl_garden.algorithms.off2on_spot.Off2OnSPOT``

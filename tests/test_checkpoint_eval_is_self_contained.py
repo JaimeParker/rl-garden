@@ -125,7 +125,7 @@ MMAP_REPLAY = {
     ("online", name) for name in ("sac", "rlpd", "rlpd_hybrid", "explore", "supe", "td3", "drqv2")
 }
 
-FAST_LANE = {("online", name) for name in ("rlpd", "dppo", "supe", "jsrl")}
+FAST_LANE = {("online", name) for name in ("rlpd", "dppo", "supe")}
 
 # (phase, algorithm) -> why it cannot train here; a built, untrained agent's
 # checkpoint is evaluated instead.
@@ -374,28 +374,6 @@ def test_evaluation_needs_only_the_checkpoint(phase, name, tmp_path, shared_inpu
     assert not input_dir.exists()
 
 
-@pytest.mark.parametrize("horizon_step", [0, -1], ids=["max-horizon", "horizon-0"])
-def test_jsrl_acts_alike_at_both_ends_of_its_curriculum(
-    horizon_step, tmp_path, shared_inputs, monkeypatch
-):
-    _, input_dir, trained = _train("online", "jsrl", shared_inputs, tmp_path, monkeypatch)
-    shutil.rmtree(input_dir)
-    trained._horizon_step = range(len(trained._horizons))[horizon_step]
-    checkpoint = trained.save(tmp_path / "lone" / "checkpoint_dir" / "jsrl.pt")
-
-    _, evaluated = _evaluate(checkpoint, "online", "jsrl", monkeypatch)
-
-    assert evaluated.horizon == trained.horizon == (10 if horizon_step == 0 else 0)
-    _assert_acts_alike(evaluated, trained)
-    observation = {"state": torch.randn(1, 3)}
-    evaluated._eval_start_hook()
-    evaluated._eval_episode_step += 1
-    actor = evaluated.guide_policy if horizon_step == 0 else evaluated.policy
-    assert torch.allclose(
-        evaluated._eval_action(observation), actor.predict(observation, deterministic=True)
-    )
-
-
 def _edit_checkpoint(checkpoint: Path, edit) -> None:
     contents = torch.load(checkpoint)
     edit(contents)
@@ -575,7 +553,7 @@ CUDA_IS_AVAILABLE = torch.cuda.is_available
 CUDA_AVAILABLE = CUDA_IS_AVAILABLE()
 DEVICE_CASES = [
     ("online", "ppo"), ("online", "recurrent_ppo"), ("online", "transformer_ppo"),
-    ("online", "sac"), ("online", "recurrent_sac"), ("online", "supe"), ("online", "jsrl"),
+    ("online", "sac"), ("online", "recurrent_sac"), ("online", "supe"),
     ("online", "dppo"), ("online", "tdmpc2"), ("online", "dreamer_v3"),
     ("offline", "iql"), ("off2on", "iql"), ("off2on", "wsrl"),
 ]
@@ -611,7 +589,7 @@ def test_agent_runs_on_the_evaluation_device(phase, name, tmp_path, shared_input
 
 @pytest.mark.parametrize(
     "name,extra_key,argument",
-    [("jsrl", "guide", "guide_checkpoint"), ("supe", "opal_vae", "opal_checkpoint")],
+    [("supe", "opal_vae", "opal_checkpoint")],
 )
 def test_a_checkpoint_without_the_embedded_network_reads_the_original_file(
     name, extra_key, argument, tmp_path, shared_inputs, monkeypatch
@@ -632,7 +610,7 @@ def test_a_checkpoint_without_the_embedded_network_reads_the_original_file(
     _assert_acts_alike(agents[-1], trained)
 
 
-@pytest.mark.parametrize("name,argument", [("jsrl", "guide_checkpoint"), ("supe", "opal_checkpoint")])
+@pytest.mark.parametrize("name,argument", [("supe", "opal_checkpoint")])
 def test_resume_restores_the_embedded_network(
     name, argument, tmp_path, shared_inputs, monkeypatch, caplog
 ):
@@ -653,8 +631,8 @@ def test_resume_restores_the_embedded_network(
     result = builds.run_entry("train_online", resume)
     assert result.returncode == 0, result.stderr[-1500:]
     (resumed_checkpoint,) = (tmp_path / "resumed").glob("*/checkpoints/*.pt")
-    extra_key = {"jsrl": "guide", "supe": "opal_vae"}[name]
-    weights_key = {"jsrl": "policy", "supe": "state_dict"}[name]
+    extra_key = "opal_vae"
+    weights_key = "state_dict"
     before = torch.load(checkpoint)["state"]["extra"][extra_key][weights_key]
     after = torch.load(resumed_checkpoint)["state"]["extra"][extra_key][weights_key]
     assert before.keys() == after.keys()

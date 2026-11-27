@@ -41,7 +41,7 @@ MODES = {
     "mixed-auto": {"online_replay_mode": "mixed", "offline_data_ratio": "auto"},
 }
 FAST = {
-    ("wsrl", "empty"), ("calql", "mixed-auto"), ("so2", "mixed"), ("iql", "append"),
+    ("wsrl", "empty"), ("calql", "mixed-auto"), ("iql", "append"),
     ("fac", "mixed"), ("value_flows", "empty"), ("spot", "mixed"),
 }
 CASES = [
@@ -102,14 +102,12 @@ def _trained(name, mode, shared, tmp_path, monkeypatch, **values):
 
 def _stage(agent) -> dict:
     offline = agent.offline_replay_buffer
-    mirror = getattr(agent.replay_buffer, "_mirror_into", None)
     return {
         "online_start_step": agent._online_start_step,
         "online_replay_mode": agent.online_replay_mode,
         "offline_data_ratio": agent.offline_data_ratio,
         "online_buffer": (type(agent.replay_buffer), len(agent.replay_buffer)),
         "offline_buffer": None if offline is None else (type(offline), len(offline)),
-        "mirrors_into_offline": mirror is not None and mirror is offline,
         "initial_phase": (agent.initial_training_phase, agent._initial_phase_start_step),
         "eval_freq": agent.eval_freq,
         "gamma": agent.gamma,
@@ -132,15 +130,12 @@ def test_online_stage_survives_a_resume(name, mode, tmp_path, shared_inputs, mon
     )
     saved = _stage(agent)
     assert saved["online_replay_mode"] == MODES[mode]["online_replay_mode"]
-    rebuilds_pool = name == "so2" and mode.startswith("mixed")
-    if rebuilds_pool:
-        saved["offline_buffer"] = (saved["offline_buffer"][0], 48)
 
     resumed, result = _run(
         name,
         tmp_path / "second",
         _inputs(
-            name, shared_inputs, tmp_path, with_dataset=rebuilds_pool,
+            name, shared_inputs, tmp_path, with_dataset=False,
             **MODES[mode], **CONTINUE_ONLY, warmup_steps="6",
         ),
         monkeypatch,
@@ -152,9 +147,7 @@ def test_online_stage_survives_a_resume(name, mode, tmp_path, shared_inputs, mon
         (agent.replay_buffer, resumed.replay_buffer),
         (agent.offline_replay_buffer, resumed.offline_replay_buffer),
     ):
-        if buffer is not None and not (
-            rebuilds_pool and buffer is agent.offline_replay_buffer
-        ):
+        if buffer is not None:
             assert_tree_equal(buffer.state_dict(), restored.state_dict())
 
     # It keeps training, and what it saves is resumable again.
@@ -164,8 +157,6 @@ def test_online_stage_survives_a_resume(name, mode, tmp_path, shared_inputs, mon
     second = _rebuild(name, tmp_path, shared_inputs, monkeypatch, mode)
     second.load(path)
     expected = _stage(resumed)
-    if rebuilds_pool:
-        expected.update(offline_buffer=None, mirrors_into_offline=False)
     assert _stage(second) == expected
 
 
@@ -389,7 +380,7 @@ def test_eval_cadence_is_restored_and_an_explicit_one_wins(
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("name", ["wsrl", "calql", "so2", "iql"])
+@pytest.mark.parametrize("name", ["wsrl", "calql", "iql"])
 @pytest.mark.parametrize("more_offline_steps", ["0", "2"])
 def test_offline_stage_checkpoints_start_a_new_online_stage(
     name, mode, more_offline_steps, tmp_path, shared_inputs, monkeypatch  # noqa: F811
@@ -410,7 +401,7 @@ def test_offline_stage_checkpoints_start_a_new_online_stage(
     expected = {"append": 48 + 16}.get(mode, 16)
     assert len(resumed.replay_buffer) == expected
     if mode.startswith("mixed"):
-        assert len(resumed.offline_replay_buffer) == 48 + (16 if name == "so2" else 0)
+        assert len(resumed.offline_replay_buffer) == 48
 
 
 def _rows(buffer) -> list[tuple]:
@@ -421,7 +412,7 @@ def _rows(buffer) -> list[tuple]:
 
 @pytest.mark.parametrize("more_offline_steps", ["0", "2"])
 @pytest.mark.parametrize("mode", ["empty", "append", "mixed"])
-@pytest.mark.parametrize("name", ["iql", "calql", "spot", "acfql", "so2"])
+@pytest.mark.parametrize("name", ["iql", "calql", "spot", "acfql"])
 def test_offline_stage_restored_buffer_holds_each_row_once(
     name, mode, more_offline_steps, tmp_path, shared_inputs, monkeypatch, caplog  # noqa: F811
 ):
@@ -452,7 +443,7 @@ def test_offline_stage_restored_buffer_holds_each_row_once(
     assert sorted(seen["rows"]) == sorted(_rows(trained.replay_buffer)[:48])
     assert seen["probe"] is not None
     assert seen.get("mc", 48) == 48
-    assert ("--offline-dataset is not loaded" in caplog.text) == (name != "so2")
+    assert "--offline-dataset is not loaded" in caplog.text
     kept = {
         "empty": resumed.replay_buffer, "append": resumed.replay_buffer,
         "mixed": resumed.offline_replay_buffer,
@@ -493,27 +484,6 @@ def test_offline_stage_warning_says_what_the_restored_buffer_holds(
     assert result.returncode == 0, result.stderr[-1500:]
     assert len(resumed.replay_buffer) == 48
     assert "48 transitions" in caplog.text and "without --load-replay-buffer" in caplog.text
-
-
-def test_so2_offline_stage_pool_is_rebuilt_from_the_dataset(
-    tmp_path, shared_inputs, monkeypatch  # noqa: F811
-):
-    _, checkpoint = _trained("so2", "mixed", shared_inputs, tmp_path, monkeypatch)
-    checkpoint = checkpoint.with_name("offline_final.pt")
-    other = tmp_path / "other.h5"
-    with h5py.File(shared_inputs.h5) as source, h5py.File(other, "w") as target:
-        source.copy("traj_0", target)
-    flags = ["--load-checkpoint", str(checkpoint), "--load-replay-buffer"]
-    inputs = _inputs("so2", shared_inputs, tmp_path, **MODES["mixed"], **CONTINUE_ONLY)
-    resumed, result = _run(
-        "so2", tmp_path / "second", {**inputs, "offline_dataset": str(other)}, monkeypatch, *flags
-    )
-    assert result.returncode == 0, result.stderr[-1500:]
-    assert len(resumed.offline_replay_buffer) == 24
-    del inputs["offline_dataset"]
-    _, result = _run("so2", tmp_path / "third", inputs, monkeypatch, *flags)
-    assert result.returncode == 1
-    assert "pass --offline-dataset" in result.stderr
 
 
 # --- checkpoints that do not record the stage --------------------------------
@@ -560,23 +530,21 @@ def test_unrecorded_stage_needs_the_flag(tmp_path, shared_inputs, monkeypatch): 
 def test_unrecorded_mixed_stage_needs_the_ratio_too(
     tmp_path, shared_inputs, monkeypatch  # noqa: F811
 ):
-    agent, checkpoint = _trained("so2", "mixed", shared_inputs, tmp_path, monkeypatch)
+    agent, checkpoint = _trained("iql", "mixed", shared_inputs, tmp_path, monkeypatch)
     _forget_stage(checkpoint, run_config=True)
     _, result = _resume(
-        "so2", checkpoint, tmp_path, shared_inputs, monkeypatch, "--load-replay-buffer",
+        "iql", checkpoint, tmp_path, shared_inputs, monkeypatch, "--load-replay-buffer",
         dataset=True, online_replay_mode="mixed",
     )
     assert result.returncode == 1
     assert "--offline-data-ratio" in result.stderr
 
     resumed, result = _resume(
-        "so2", checkpoint, tmp_path, shared_inputs, monkeypatch, "--load-replay-buffer",
+        "iql", checkpoint, tmp_path, shared_inputs, monkeypatch, "--load-replay-buffer",
         dataset=True, **MODES["mixed"],
     )
     assert result.returncode == 0, result.stderr[-1500:]
     saved = _stage(agent)
-    # The pool is rebuilt from the dataset.
-    saved["offline_buffer"] = (saved["offline_buffer"][0], 48)
     assert _stage(resumed) == saved
 
 
@@ -710,6 +678,114 @@ def test_mixed_at_ratio_zero_needs_no_offline_data(
         resumed.train(1)
 
 
+def test_a_replay_file_of_another_save_is_not_restored(
+    tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    agent, checkpoint = _trained("iql", "append", shared_inputs, tmp_path, monkeypatch)
+    agent.save(checkpoint)
+    assert checkpoint.with_name("replay_buffer_final.pt").exists()
+    loaded = _rebuild("iql", tmp_path, shared_inputs, monkeypatch, "append")
+    loaded.load(checkpoint)
+    assert not loaded.replay_buffer_restored
+    assert len(loaded.replay_buffer) == 0
+
+
+def test_api_load_of_a_stageless_checkpoint_waits_for_the_declared_mode(
+    tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    """The run configuration is the off2on runner's to read; the Python API
+    leaves the mode to the caller."""
+    agent, checkpoint = _trained("iql", "append", shared_inputs, tmp_path, monkeypatch)
+    _forget_stage(checkpoint, run_config=False)
+    loaded = _rebuild("iql", tmp_path, shared_inputs, monkeypatch, "append")
+    loaded.load(checkpoint)
+    assert loaded.online_replay_mode is None and loaded.replay_buffer_restored
+    loaded.declare_online_replay_mode("append")
+    assert loaded.online_replay_mode == "append"
+    assert len(loaded.replay_buffer) == len(agent.replay_buffer) > 0
+
+
+def test_only_cal_ql_records_its_replay_buffer_class(
+    tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    for name, records in (("iql", False), ("wsrl", True)):
+        _, checkpoint = _trained(name, "append", shared_inputs, tmp_path / name, monkeypatch)
+        stage = torch.load(checkpoint)["state"]["extra"]["online_stage"]
+        assert ("replay_buffer_class" in stage) == records, name
+
+
+def test_a_configured_empty_stage_keeps_its_restored_plain_buffer(
+    tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    """A checkpoint with its run configuration and no stage: the runner states
+    the mode after the plain replay file was read into a plain buffer."""
+    agent, checkpoint = _trained("wsrl", "empty", shared_inputs, tmp_path, monkeypatch)
+    _forget_stage(checkpoint, run_config=False)
+    resumed, result = _resume(
+        "wsrl", checkpoint, tmp_path, shared_inputs, monkeypatch, "--load-replay-buffer"
+    )
+    assert result.returncode == 0, result.stderr[-1500:]
+    assert type(resumed.replay_buffer) is ReplayBuffer
+    assert resumed.online_replay_mode == "empty"
+    assert_tree_equal(agent.replay_buffer.state_dict(), resumed.replay_buffer.state_dict())
+
+
+def _stageless_checkpoint_and_agent_with_another_buffer(
+    file_mode, agent_mode, tmp_path, shared, monkeypatch
+):
+    """A Cal-QL checkpoint of ``file_mode`` without its stage and run
+    configuration, and a trained agent of ``agent_mode`` whose filled replay
+    buffer is of the other class."""
+    source, checkpoint = _trained("wsrl", file_mode, shared, tmp_path / "source", monkeypatch)
+    _forget_stage(checkpoint, run_config=True)
+    agent, _ = _trained("wsrl", agent_mode, shared, tmp_path / "agent", monkeypatch)
+    assert type(agent.replay_buffer) is not type(source.replay_buffer)
+    assert len(agent.replay_buffer) > 0
+    return source, checkpoint, agent
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_a_stageless_mc_replay_file_is_read_into_an_mc_buffer(
+    strict, tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    source, checkpoint, agent = _stageless_checkpoint_and_agent_with_another_buffer(
+        "append", "empty", tmp_path, shared_inputs, monkeypatch
+    )
+    agent.load(checkpoint, strict=strict)
+    assert type(agent.replay_buffer) is MCReplayBuffer
+    assert_tree_equal(source.replay_buffer.state_dict(), agent.replay_buffer.state_dict())
+    assert agent.online_replay_mode is None and agent.replay_buffer_restored
+    restored = agent.replay_buffer
+    agent.declare_online_replay_mode("append")
+    assert agent.replay_buffer is restored
+
+
+def test_a_stageless_plain_replay_file_is_read_into_a_plain_buffer(
+    tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    source, checkpoint, agent = _stageless_checkpoint_and_agent_with_another_buffer(
+        "empty", "append", tmp_path, shared_inputs, monkeypatch
+    )
+    agent.load(checkpoint)
+    assert type(agent.replay_buffer) is ReplayBuffer
+    assert_tree_equal(source.replay_buffer.state_dict(), agent.replay_buffer.state_dict())
+    # Only the empty mode leaves the plain buffer behind.
+    assert agent.online_replay_mode == "empty"
+
+
+def test_a_stageless_checkpoint_without_its_replay_file_takes_the_declared_modes_buffer(
+    tmp_path, shared_inputs, monkeypatch  # noqa: F811
+):
+    _, checkpoint, agent = _stageless_checkpoint_and_agent_with_another_buffer(
+        "append", "empty", tmp_path, shared_inputs, monkeypatch
+    )
+    agent.load(checkpoint, load_replay_buffer=False)
+    assert agent.online_replay_mode is None and not agent.replay_buffer_restored
+    agent.declare_online_replay_mode("append")
+    assert type(agent.replay_buffer) is MCReplayBuffer
+    assert len(agent.replay_buffer) == 0
+
+
 def test_unrecorded_stage_is_inferred_from_the_replay_file_the_checkpoint_names(
     tmp_path, shared_inputs, monkeypatch  # noqa: F811
 ):
@@ -728,54 +804,6 @@ def test_unrecorded_stage_is_inferred_from_the_replay_file_the_checkpoint_names(
 
 
 # --- algorithm state ----------------------------------------------------------
-
-
-def test_so2_load_into_an_online_agent_drops_its_old_pool(
-    tmp_path, shared_inputs, monkeypatch  # noqa: F811
-):
-    agent, checkpoint = _trained("so2", "mixed", shared_inputs, tmp_path, monkeypatch)
-    agent.load(checkpoint)
-    assert agent.offline_replay_buffer is None
-    assert agent.replay_buffer._mirror_into is None
-    pool = agent.restore_offline_replay_buffer()
-    assert agent.replay_buffer._mirror_into is pool is agent.offline_replay_buffer
-
-
-@pytest.mark.parametrize("restore_replay", [False, True])
-def test_so2_pool_is_rebuilt_from_the_dataset(
-    restore_replay, tmp_path, shared_inputs, monkeypatch  # noqa: F811
-):
-    agent, checkpoint = _trained("so2", "mixed", shared_inputs, tmp_path, monkeypatch)
-    assert len(agent.offline_replay_buffer) == 48 + 16
-    offline_path = offline_buffer_path_for_checkpoint(checkpoint)
-    assert not offline_path.exists()
-    # Neither a file beside the checkpoint nor one it names is read.
-    save_replay_buffer_file(offline_path, agent.offline_replay_buffer)
-    contents = torch.load(checkpoint)
-    contents["state"]["extra"]["online_stage"]["offline_buffer_path"] = offline_path.name
-    torch.save(contents, checkpoint)
-
-    flags = ["--load-replay-buffer"] if restore_replay else []
-    _, result = _resume(
-        "so2", checkpoint, tmp_path, shared_inputs, monkeypatch, *flags, **MODES["mixed"]
-    )
-    assert result.returncode == 1
-    assert "pass --offline-dataset" in result.stderr
-
-    resumed, result = _resume(
-        "so2", checkpoint, tmp_path, shared_inputs, monkeypatch, *flags, dataset=True,
-        **{**MODES["mixed"], "num_online_steps": "8"},
-    )
-    assert result.returncode == 0, result.stderr[-1500:]
-    assert len(resumed.replay_buffer) == (16 if restore_replay else 0) + 8
-    assert len(resumed.offline_replay_buffer) == 48 + 8
-    assert resumed.replay_buffer._mirror_into is resumed.offline_replay_buffer
-    newest = resumed.replay_buffer.pos - 1, resumed.offline_replay_buffer.pos - 1
-    assert torch.equal(
-        resumed.replay_buffer.actions[newest[0]], resumed.offline_replay_buffer.actions[newest[1]]
-    )
-    dataset_rows = agent.offline_replay_buffer.actions[:24]
-    assert torch.equal(resumed.offline_replay_buffer.actions[:24], dataset_rows)
 
 
 def test_spot_continues_its_cooling_and_discount(
@@ -861,7 +889,7 @@ def test_default_replay_modes():
     }
     assert {name for name, mode in modes.items() if mode == "append"} == set(APPENDS)
     assert {name for name, mode in modes.items() if mode == "empty"} == {"spot", "wsrl"}
-    assert {name for name, mode in modes.items() if mode == "mixed"} == {"awac", "calql", "iql", "so2"}
+    assert {name for name, mode in modes.items() if mode == "mixed"} == {"awac", "calql", "iql"}
 
 
 def _default_mode_inputs(name, shared, tmp_path, with_dataset=True, **values):
@@ -1012,8 +1040,7 @@ def test_a_run_without_offline_steps_keeps_its_dataset(
     if mode == "append":
         assert len(agent.replay_buffer) == 48 + 16
     else:
-        mirrored = 16 if name == "so2" else 0
-        assert (len(agent.replay_buffer), len(agent.offline_replay_buffer)) == (16, 48 + mirrored)
+        assert (len(agent.replay_buffer), len(agent.offline_replay_buffer)) == (16, 48)
     # The setup the offline stage does on its dataset.
     if hasattr(agent, "fit_obs_normalizer"):
         means = [v for k, v in agent.policy.state_dict().items() if "obs_mean" in k]
@@ -1054,7 +1081,7 @@ def test_the_empty_mode_without_offline_steps_ignores_a_dataset(
     assert len(agent.replay_buffer) == 0
 
 
-@pytest.mark.parametrize("name", ["iql", "so2"])
+@pytest.mark.parametrize("name", ["iql"])
 def test_offline_steps_on_a_restored_buffer_need_no_dataset(
     name, tmp_path, shared_inputs, monkeypatch  # noqa: F811
 ):
@@ -1066,11 +1093,8 @@ def test_offline_steps_on_a_restored_buffer_need_no_dataset(
     )
     resumed, result = _run(name, tmp_path / "resumed", inputs, monkeypatch, *flags,
                            "--load-replay-buffer")
-    if name == "so2":  # its pool always comes from the dataset
-        assert result.returncode == 1 and "--offline_dataset is required" in result.stderr
-    else:
-        assert result.returncode == 0, result.stderr[-1500:]
-        assert len(resumed.replay_buffer) == 48 and resumed._online_start_step == 4
+    assert result.returncode == 0, result.stderr[-1500:]
+    assert len(resumed.replay_buffer) == 48 and resumed._online_start_step == 4
     _, result = _run(name, tmp_path / "unrestored", inputs, monkeypatch, *flags)
     assert result.returncode == 1 and "--offline_dataset is required" in result.stderr
 
@@ -1087,25 +1111,6 @@ def test_offline_steps_on_a_restored_empty_buffer_need_a_dataset(
         monkeypatch, "--load-checkpoint", str(path), "--load-replay-buffer",
     )
     assert result.returncode == 1 and "--offline_dataset is required" in result.stderr
-
-
-@pytest.mark.parametrize("problem", ["buffer_size", "missing_file"])
-def test_so2_offline_stage_replay_file_is_not_read_when_the_pool_is_rebuilt(
-    problem, tmp_path, shared_inputs, monkeypatch  # noqa: F811
-):
-    _, checkpoint = _trained("so2", "mixed", shared_inputs, tmp_path, monkeypatch)
-    checkpoint = checkpoint.with_name("offline_final.pt")
-    inputs = _inputs("so2", shared_inputs, tmp_path, **MODES["mixed"], **CONTINUE_ONLY)
-    if problem == "buffer_size":
-        inputs["buffer_size"] = "96"
-    else:
-        checkpoint.with_name("replay_buffer_offline_final.pt").unlink()
-    resumed, result = _run(
-        "so2", tmp_path / "resumed", inputs, monkeypatch,
-        "--load-checkpoint", str(checkpoint), "--load-replay-buffer",
-    )
-    assert result.returncode == 0, result.stderr[-1500:]
-    assert len(resumed.offline_replay_buffer) == 48
 
 
 @pytest.mark.parametrize("stage", ["offline_final.pt", "final.pt"])

@@ -468,6 +468,5 @@ class PolicyDistillation(OnPolicyAlgorithm):
                     )
             self._maybe_save_periodic_checkpoint(previous_step)
 
-        if self.checkpoint_dir is not None and self.save_final_checkpoint:
-            self._save_checkpoint("final.pt")
+        self._maybe_save_final_checkpoint()
         return self

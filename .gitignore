@@ -62,3 +62,6 @@ temp/
 tests/fixtures/tdmpc2_parity.json
 
 docs/_build/
+
+# reference
+3rd_party/

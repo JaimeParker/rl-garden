@@ -62,7 +62,6 @@ import torch.nn.functional as F
 
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
 from rl_garden.buffers.replay_buffer import ReplayBuffer
-from rl_garden.common.checkpoint import load_checkpoint_file
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
@@ -545,20 +544,11 @@ class FQLCore:
             distill_noise=torch.randn(batch, action_dim, device=device, dtype=dtype),
         )
 
-    def load(
-        self,
-        path,
-        strict: bool = True,
-        load_replay_buffer: bool = True,
-        load_optimizers: bool = True,
-    ):
-        """Reject incompatible reference-mode checkpoints before any state mutation.
-
-        ``BaseAlgorithm.load`` deliberately exposes no metadata-validation hook.
-        This mode changes the policy layout and update semantics, so it must
-        remain incompatible even when callers select ``strict=False``.
-        """
-        checkpoint = load_checkpoint_file(path, map_location=self.device)
+    def _on_checkpoint_read(self, checkpoint, *, replay_path) -> None:
+        """Reference mode changes the policy layout and the update, so a
+        checkpoint of the other mode is rejected whatever ``strict`` is, before
+        any state is restored."""
+        super()._on_checkpoint_read(checkpoint, replay_path=replay_path)
         stored = bool(
             checkpoint.get("metadata", {})
             .get("hyperparameters", {})
@@ -569,12 +559,6 @@ class FQLCore:
                 "Incompatible checkpoint: reference_compatible mismatch "
                 f"(checkpoint={stored}, current={self.reference_compatible})."
             )
-        return super().load(
-            path,
-            strict=strict,
-            load_replay_buffer=load_replay_buffer,
-            load_optimizers=load_optimizers,
-        )
 
     def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
         """Run ``gradient_steps`` FQL updates.

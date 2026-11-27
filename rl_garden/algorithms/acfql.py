@@ -46,21 +46,21 @@ Everything else (``_optimizer_names``, checkpoint metadata shape, network
 construction via ``ACFQLPolicy``, ``EnsembleQCritic``, Polyak update,
 gradient clipping) reuses ``FQLCore``'s existing methods directly, extended
 only where the chunked action space requires it.
+
+Action-space tiling, chunked replay construction, training-batch flattening,
+evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 """
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Sequence
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.fql import FQLCore
 from rl_garden.algorithms.off2on import Off2OnReplayMixin
 from rl_garden.algorithms.off_policy import OffPolicyAlgorithm
-from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import make_lr_scheduler, make_optimizer
 from rl_garden.common.training_phase import InitialTrainingPhase
@@ -79,31 +79,9 @@ class ACFQLCore(FQLCore):
     def _init_acfql_params(
         self, *, horizon_length: int, actor_type: ActorType, actor_num_samples: int
     ) -> None:
-        if horizon_length < 1:
-            raise ValueError(f"horizon_length must be >= 1, got {horizon_length}")
-        self.horizon_length = horizon_length
+        self._init_action_chunking(horizon_length)
         self.actor_type = actor_type
         self.actor_num_samples = actor_num_samples
-
-    def _policy_action_space(self) -> spaces.Box:
-        action_space = self.env.single_action_space
-        assert isinstance(action_space, spaces.Box), "ACFQL requires a flat Box action space."
-        low = np.tile(np.asarray(action_space.low, dtype=np.float32).reshape(-1), self.horizon_length)
-        high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
-        return spaces.Box(low=low, high=high, dtype=np.float32)
-
-    def _build_replay_buffer(self):
-        # obs_space is always Dict (boundary normalization is unconditional).
-        return ChunkedReplayBuffer(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            num_envs=self.num_envs,
-            buffer_size=self.buffer_size,
-            horizon_length=self.horizon_length,
-            gamma=self.gamma,
-            storage_device=self.buffer_device,
-            sample_device=self.device,
-        )
 
     def _setup_model(self) -> None:
         observation_space = self.env.single_observation_space
@@ -166,7 +144,6 @@ class ACFQLCore(FQLCore):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_length": self.horizon_length,
             "actor_type": self.actor_type,
             "actor_num_samples": self.actor_num_samples,
         }
@@ -181,7 +158,7 @@ class ACFQLCore(FQLCore):
             self._global_update += 1
             data = self._sample_train_batch(self.batch_size)
             batch_size = data.actions.shape[0]
-            flat_actions = data.actions.reshape(batch_size, -1)
+            flat_actions = data.actions
             full_action_dim = flat_actions.shape[-1]
             action_dim = full_action_dim // self.horizon_length
 
@@ -420,15 +397,4 @@ class ACFQL(ChunkedRolloutMixin, _ACFQLRolloutTrainingShell):
     _compatible_checkpoint_algorithms = ("ACFQL",)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self._init_chunked_rollout()
         super().__init__(*args, **kwargs)
-
-    def _sample_action_chunk(self, obs) -> torch.Tensor:
-        # Defined on this leaf class, not the shell: ChunkedRolloutMixin's
-        # own NotImplementedError stub sits ahead of the shell in ACFQL's
-        # MRO (bases are (ChunkedRolloutMixin, _ACFQLRolloutTrainingShell)),
-        # so a shell-level override would be shadowed. Same reasoning
-        # ACRLPD already follows.
-        flat_action = self.policy.predict(obs, deterministic=False)
-        act_dim = int(np.prod(self.env.single_action_space.shape))
-        return flat_action.reshape(flat_action.shape[0], self.horizon_length, act_dim)

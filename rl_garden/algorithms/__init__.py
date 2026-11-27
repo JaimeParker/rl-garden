@@ -30,7 +30,6 @@ from rl_garden.algorithms.gail import GAIL
 from rl_garden.algorithms.hilp import HILP
 from rl_garden.algorithms.idql import IDQL
 from rl_garden.algorithms.iql import IQL
-from rl_garden.algorithms.jsrl import JSRL
 from rl_garden.algorithms.mean_flow_bc import MeanFlowBC
 from rl_garden.algorithms.ncrl import NCRL
 from rl_garden.algorithms.offline import (
@@ -66,8 +65,6 @@ from rl_garden.algorithms.sac import SAC
 from rl_garden.algorithms.sac_flow import SACFlow
 from rl_garden.algorithms.sequence_ppo import SequencePPO
 from rl_garden.algorithms.sequence_sac import SequenceSAC
-from rl_garden.algorithms.so2 import SO2
-from rl_garden.algorithms.off2on_so2 import Off2OnSO2
 from rl_garden.algorithms.spot import SPOT
 from rl_garden.algorithms.supe import SUPE
 from rl_garden.algorithms.supermimic import SuperMimic, SuperMimicPolicy
@@ -114,7 +111,6 @@ __all__ = [
     "HILP",
     "IDQL",
     "IQL",
-    "JSRL",
     "MeanFlowBC",
     "NCRL",
     "OfflineEnvSpec",
@@ -150,8 +146,6 @@ __all__ = [
     "SACFlow",
     "SequencePPO",
     "SequenceSAC",
-    "SO2",
-    "Off2OnSO2",
     "SPOT",
     "SUPE",
     "SuperMimic",

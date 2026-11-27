@@ -17,7 +17,6 @@ import torch
 import yaml
 from gymnasium import spaces
 
-from rl_garden.algorithms import Off2OnIQL
 from rl_garden.common.checkpoint import (
     REMOVED_PATH,
     checkpoint_dict,
@@ -31,6 +30,7 @@ from rl_garden.encoders.resnet import ResNetEncoder
 from rl_garden.envs import backend_registry
 from rl_garden.training import evaluation
 from rl_garden.training.evaluation import EvalCheckpointArgs, evaluate_checkpoint
+from rl_garden.training.off2on import runner as off2on_runner
 
 shared_inputs = builds.shared_inputs
 cpu_only_and_restored_rng = builds.cpu_only_and_restored_rng
@@ -184,7 +184,7 @@ def _weights_file(directory: Path) -> str:
 
 
 SCANNED = [
-    ("online", "sac"), ("online", "ppo"), ("online", "rlpd"), ("online", "jsrl"),
+    ("online", "sac"), ("online", "ppo"), ("online", "rlpd"),
     ("online", "supe"), ("offline", "iql"), ("off2on", "wsrl"),
 ]
 SCANNED_SLOW = [
@@ -252,22 +252,30 @@ def test_checkpoints_of_real_runs(phase, name, tmp_path, tmp_path_factory, share
     assert run_config["inputs"]["seed"] == 3
 
 
-def test_embedded_records_hold_no_paths(tmp_path, shared_inputs):
-    """A guide whose own checkpoint was saved with paths."""
-    guide = tmp_path / "guide.pt"
-    contents = torch.load(shared_inputs.iql_guide_checkpoint)
-    contents["metadata"]["hyperparameters"]["encoder_config"] = {"pretrained_weights": "/data/w"}
-    torch.save(contents, guide)
-    checkpoint = _train("online", "jsrl", shared_inputs, tmp_path, guide_checkpoint=str(guide))
+def test_embedded_records_hold_no_paths(tmp_path, shared_inputs, monkeypatch):
+    """Nested paths in an embedded network record are sanitized before saving."""
+    from rl_garden.algorithms import supe
+
+    opal = tmp_path / "opal.pt"
+    shutil.copy(shared_inputs.opal_checkpoint, opal)
+    make_record = supe.opal_vae_record
+
+    def record_with_paths(vae):
+        record = make_record(vae)
+        record["source"] = str(opal)
+        record["hyperparameters"]["encoder_config"] = {"pretrained_weights": "/data/w"}
+        return record
+
+    monkeypatch.setattr(supe, "opal_vae_record", record_with_paths)
+    checkpoint = _train("online", "supe", shared_inputs, tmp_path, opal_checkpoint=str(opal))
     assert_holds_no_paths(checkpoint, tmp_path)
-    record = torch.load(checkpoint)["state"]["extra"]["guide"]
+    record = torch.load(checkpoint)["state"]["extra"]["opal_vae"]
     assert record["source"] == REMOVED_PATH
     assert record["hyperparameters"]["encoder_config"] == {"pretrained_weights": REMOVED_PATH}
-    # Resumed without the guide file, and saved again.
-    guide.unlink()
+    opal.unlink()
     again = _train(
-        "online", "jsrl", shared_inputs, tmp_path / "again", "--load-checkpoint", str(checkpoint),
-        guide_checkpoint=str(guide), total_timesteps="48",
+        "online", "supe", shared_inputs, tmp_path / "again", "--load-checkpoint", str(checkpoint),
+        opal_checkpoint=str(opal), total_timesteps="48",
     )
     assert_holds_no_paths(again, tmp_path)
     inputs = torch.load(again)["metadata"]["run_config"]["inputs"]
@@ -393,7 +401,7 @@ def test_environment_kwargs_containing_a_path(tmp_path, shared_inputs):
 
 @pytest.mark.parametrize(
     "name,extra_key,argument",
-    [("jsrl", "guide", "guide_checkpoint"), ("supe", "opal_vae", "opal_checkpoint")],
+    [("supe", "opal_vae", "opal_checkpoint")],
 )
 def test_a_network_file_is_asked_for_only_when_it_is_needed(
     name, extra_key, argument, tmp_path, shared_inputs, caplog
@@ -486,9 +494,9 @@ def test_off2on_stage_is_not_inferred_from_a_run_that_loaded_a_checkpoint():
             "load_checkpoint": load_checkpoint,
         }
         checkpoint = without_local_paths({"metadata": {"run_config": {"inputs": inputs}}})
-        return Off2OnIQL._infer_online_stage(None, checkpoint, None)
+        return off2on_runner._replay_mode_of_saving_run(checkpoint)
 
-    assert inferred(None) == {"replay_mode": "mixed", "offline_data_ratio": 0.5}
+    assert inferred(None) == ("mixed", 0.5)
     assert inferred("/data/final.pt") is None
     assert inferred("runs/final.pt") is None
 
@@ -518,7 +526,7 @@ def test_policy_graphs_are_compared_without_their_paths():
 # --- checkpoints saved with their paths ---------------------------------------
 
 
-@pytest.mark.parametrize("name", ["jsrl", "rlpd"])
+@pytest.mark.parametrize("name", ["supe", "rlpd"])
 def test_a_checkpoint_saved_with_paths_still_evaluates_and_resumes(name, tmp_path, shared_inputs):
     checkpoint = _train("online", name, shared_inputs, tmp_path)
     config = json.loads((checkpoint.parent.parent / "config.json").read_text())
@@ -528,17 +536,16 @@ def test_a_checkpoint_saved_with_paths_still_evaluates_and_resumes(name, tmp_pat
         metadata = contents["metadata"]
         metadata["run_config"] = config
         del metadata["run_config_digest"]
-        if name == "jsrl":
-            metadata["hyperparameters"]["guide_checkpoint"] = inputs["guide_checkpoint"]
-            contents["state"]["extra"]["guide"]["source"] = inputs["guide_checkpoint"]
+        if name == "supe":
+            metadata["hyperparameters"]["opal_checkpoint"] = inputs["opal_checkpoint"]
 
     old = _lone(checkpoint, tmp_path / "old")
     self_contained._edit_checkpoint(old, with_paths)
     _evaluate(old)
-    if name == "jsrl":
-        # Its recorded path is read when it embeds no guide.
+    if name == "supe":
+        # Its recorded path is read when it embeds no VAE.
         bare = _lone(old, tmp_path / "bare")
-        self_contained._edit_checkpoint(bare, lambda c: c["state"]["extra"].pop("guide"))
+        self_contained._edit_checkpoint(bare, lambda c: c["state"]["extra"].pop("opal_vae"))
         _evaluate(bare)
     again = _train(
         "online", name, shared_inputs, tmp_path / "again", "--load-checkpoint", str(old),

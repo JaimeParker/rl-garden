@@ -142,7 +142,13 @@ Order of operations (step 1 happens when the agent is constructed, the rest at t
 
 A resumed run (`--load_checkpoint`) skips steps 2 and 4 and repeats step 3. It reloads the
 checkpointed episode ids and BC weights, then refills the prior buffer from
-`--prior_dataset_dir`, so the dataset must still be mounted.
+`--prior_dataset_dir`, so the dataset must still be mounted. The unsaved online
+buffer is refilled for `learning_starts` new environment transitions (summed
+across environments, after action repeat). During refill the restored actor
+supplies actions, without random exploration or BC guidance; global steps
+advance but no updates run. Updates start on the first rollout iteration
+reaching the threshold, without catching up skipped updates. A checkpoint
+loaded midway through refill starts a full refill again.
 
 Memory: every stored step holds a uint8 frame (12 KiB) and the float32 RSSM carry
 (`ncrl_m`: `(4096 + 32*48) * 4 B` = 22 KiB), about 34 KiB in total. The online buffer

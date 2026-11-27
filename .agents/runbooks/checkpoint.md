@@ -30,7 +30,10 @@ output is disabled.
 4. Save with `--save_replay_buffer` when the checkpoint is intended for exact
    off-policy continuation. Replay snapshots are separate
    `replay_buffer_<suffix>.pt` files (`replay_buffer_final.pt` for `final.pt`)
-   and can be large.
+   and can be large. The off2on `mixed` offline buffer and the demo buffer of
+   `dagger` / `rlpd_hybrid` go beside it as `offline_buffer_<suffix>.pt` and
+   `demo_buffer_<suffix>.pt`. A checkpoint saved without them records `None`,
+   and stale files of an earlier save under the same name are not read.
 5. Pass `--load_checkpoint <path>` for loading. Add
    `--load_replay_buffer` only when a matching replay snapshot should be restored.
 6. Validate the resolved arguments with `--print-config` before a long resumed run.

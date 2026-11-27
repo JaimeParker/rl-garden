@@ -219,6 +219,36 @@ def test_checkpoint_saved_without_buffers_loads_silently(tmp_path):
         _make_agent().load(path, load_replay_buffer=True)
 
 
+def test_demo_buffer_of_an_earlier_save_is_not_loaded(tmp_path):
+    earlier = _make_agent()
+    earlier.collect_round(num_steps=4, beta=1.0)
+    path = earlier.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    _make_agent().save(path)
+    assert (tmp_path / "demo_buffer_1.pt").exists()
+
+    loaded = _make_agent()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        loaded.load(path, load_replay_buffer=True)
+    assert len(loaded.offline_replay_buffer) == 0
+
+
+def test_demo_buffer_recorded_as_absent_is_not_loaded(tmp_path):
+    """The shape a save with replay by an agent without a demo buffer writes."""
+    agent = _make_agent()
+    agent.collect_round(num_steps=4, beta=1.0)
+    path = agent.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+    contents = torch.load(path)
+    contents["state"]["extra"]["demo_buffer_path"] = None
+    torch.save(contents, path)
+
+    loaded = _make_agent()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        loaded.load(path, load_replay_buffer=True)
+    assert len(loaded.offline_replay_buffer) == 0
+
+
 def test_renamed_checkpoint_loads_the_demo_buffer_it_references(tmp_path):
     agent = _make_agent()
     agent.collect_round(num_steps=4, beta=1.0)

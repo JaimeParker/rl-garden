@@ -325,14 +325,6 @@ class SharedInputs:
         return self._train("offline", "opal", {"dataset_path": str(self.h5), "num_offline_steps": "2"})
 
     @functools.cached_property
-    def iql_guide_checkpoint(self) -> Path:
-        return self._train(
-            "offline", "iql",
-            {"offline_dataset": str(self.h5), "action_low": "-2", "action_high": "2",
-             "num_offline_steps": "2", "actor_use_layer_norm": False},
-        )
-
-    @functools.cached_property
     def diffusion_bc_checkpoint(self) -> Path:
         return self._train("offline", "diffusion_bc",
                            {"dataset_path": str(self.h5), "num_offline_steps": "2"})
@@ -367,8 +359,6 @@ def shared_inputs(tmp_path_factory):
 # (phase, algorithm) -> the dataset/checkpoint flags it cannot build without.
 INPUTS: dict[tuple[str, str], Callable[[SharedInputs, Path], dict[str, str | bool]]] = {
     ("online", "supe"): lambda s, t: {"opal_checkpoint": str(s.opal_checkpoint)},
-    ("online", "jsrl"): lambda s, t: {"guide_checkpoint": str(s.iql_guide_checkpoint),
-                                      "max_horizon": "10"},
     ("online", "policy_distillation"): lambda s, t: {
         "teacher_checkpoint": str(s.ppo_teacher_checkpoint)},
     ("online", "ncrl"): lambda s, t: {"pretrained_world_model": str(s.rssm_checkpoint)},
@@ -408,7 +398,7 @@ def test_registry_and_tables_agree():
     assert EXEMPTIONS.keys() <= REGISTERED, "exemption for an unregistered algorithm"
     assert (INPUTS.keys() | OVERRIDES.keys() | EVAL_ONLY) <= REGISTERED
     assert {(phase, name) for phase, name, _ in CASES} == REGISTERED - EXEMPTIONS.keys()
-    assert len(REGISTERED) >= 70
+    assert len(REGISTERED) >= 69
 
 
 @pytest.mark.parametrize(

@@ -10,9 +10,9 @@ import copy
 import dataclasses
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 import torch
 import yaml
@@ -352,15 +352,94 @@ def load_filtered_state_dict(
 
 
 def replay_buffer_path_for_checkpoint(path: str | Path) -> Path:
+    return sidecar_path_for_checkpoint(path, "replay_buffer")
+
+
+def sidecar_path_for_checkpoint(path: str | Path, prefix: str) -> Path:
+    """``<prefix>_<suffix>.pt`` beside the checkpoint: the suffix of
+    ``checkpoint_<suffix>.pt``, else the checkpoint's stem."""
     ckpt_path = Path(path)
     stem = ckpt_path.stem
-    if stem.startswith("checkpoint_"):
-        suffix = stem.removeprefix("checkpoint_")
-    elif stem == "final":
-        suffix = "final"
-    else:
-        suffix = stem
-    return ckpt_path.with_name(f"replay_buffer_{suffix}.pt")
+    suffix = stem.removeprefix("checkpoint_") if stem.startswith("checkpoint_") else stem
+    return ckpt_path.with_name(f"{prefix}_{suffix}.pt")
+
+
+class _Unrecorded:
+    def __repr__(self) -> str:
+        return "UNRECORDED"
+
+
+#: What ``recorded_file`` returns for a checkpoint without the slot: it
+#: predates the slot. ``None`` in the slot means that no file was written.
+UNRECORDED: Final = _Unrecorded()
+
+
+def recorded_file(container: Mapping[str, Any], key_path: tuple[str, ...]) -> Any:
+    """The file name at ``key_path`` in ``container``: a name, ``None`` (no
+    file) or ``UNRECORDED`` (no such slot)."""
+    value: Any = container
+    for key in key_path:
+        if not isinstance(value, Mapping) or key not in value:
+            return UNRECORDED
+        value = value[key]
+    return value
+
+
+def record_file(container: dict[str, Any], key_path: tuple[str, ...], name: str) -> None:
+    """Name ``name`` at ``key_path``; every mapping above the leaf must exist."""
+    parent: Any = container
+    for depth, key in enumerate(key_path[:-1]):
+        parent = parent.get(key) if isinstance(parent, Mapping) else None
+        if not isinstance(parent, dict):
+            raise KeyError(
+                f"Cannot record {name} at {'.'.join(key_path)}: the checkpoint state has no "
+                f"mapping at {'.'.join(key_path[: depth + 1])}."
+            )
+    parent[key_path[-1]] = name
+
+
+def referenced_file(
+    checkpoint_path: str | Path,
+    reference: Any,
+    *,
+    unrecorded: Optional[Path],
+    description: str,
+) -> Optional[Path]:
+    """The file a checkpoint's ``reference`` (``recorded_file``) points at, or
+    ``None`` when there is none to read. A name is relative to the checkpoint
+    and must exist; ``None`` means no file; ``UNRECORDED`` falls back to
+    ``unrecorded`` when that file exists."""
+    if reference is UNRECORDED:
+        return unrecorded if unrecorded is not None and unrecorded.exists() else None
+    if reference is None:
+        return None
+    path = Path(checkpoint_path).parent / reference
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Checkpoint references {description} {path}, but it does not exist."
+        )
+    return path
+
+
+@dataclasses.dataclass(frozen=True)
+class SidecarBuffer:
+    """A buffer ``BaseAlgorithm.save(include_replay_buffer=True)`` writes beside
+    the checkpoint, as ``<prefix>_<suffix>.pt``, and
+    ``load(load_replay_buffer=True)`` restores."""
+
+    #: The file name's prefix; with underscores as spaces, also the buffer's
+    #: name in messages.
+    prefix: str
+    #: The slot under ``state["extra"]`` that names the file (``None`` there:
+    #: no file was written).
+    reference_key: tuple[str, ...]
+    #: What ``save`` writes; ``None``: nothing.
+    buffer: Optional[BaseReplayBuffer]
+    #: Called by ``load`` with the file and ``strict``.
+    restore: Callable[[Path, bool], None]
+    #: Without the slot, read the ``<prefix>_...`` file named like the
+    #: checkpoint's replay file, when there is one.
+    unrecorded_beside_replay: bool = False
 
 
 def _tensor_tree_to_device(tree: Any, device: torch.device) -> Any:

@@ -76,6 +76,7 @@ def build_sac_flow(args, env, eval_env, logger, checkpoint_dir):
         n_critics=args.n_critics,
         critic_subsample_size=args.critic_subsample_size,
         critic_use_layer_norm=args.critic_use_layer_norm,
+        critic_backbone_type=args.critic_backbone_type,
         target_policy_noise=args.target_policy_noise,
         target_noise_clip=args.target_noise_clip,
         actor_q_agg=args.actor_q_agg,

@@ -24,7 +24,6 @@ import torch
 from _decision_fakes import _FixedHoldVecEnv
 from test_cql_calql import _offline_env, _offline_kwargs
 from test_graph_losses import _learn, _make_agent
-from test_jsrl import _make_calql_checkpoint
 from test_optimizer_ownership import COMMON_KWARGS, TinyVecEnv
 from test_ppo_actor_factory import assert_first_ratio_is_one, record_policy_ratios
 from test_sac_optimizer_snapshot import fill_random_transitions
@@ -174,35 +173,11 @@ def test_acrlpd_rejects_an_initial_training_phase():
         ACRLPD(env=TinyVecEnv(), initial_training_phase=phase, **COMMON_KWARGS)
 
 
-def test_jsrl_rebuilds_a_guide_trained_with_an_actor_factory(byo, tmp_path, caplog):
-    import logging
-
-    from rl_garden.algorithms import jsrl
-
-    path, agent = _make_calql_checkpoint(tmp_path, actor_factory=byo.make_squashed_sac_actor)
-    with caplog.at_level(logging.INFO, logger=jsrl.__name__):
-        guide = jsrl._load_guide_policy(
-            path,
-            "calql",
-            agent.env.single_observation_space,
-            agent.env.single_action_space,
-            device=torch.device("cpu"),
-        )
-    assert f"importing actor_factory {SAC_FACTORY} from checkpoint metadata" in caplog.text
-
-    assert isinstance(guide.actor, byo.SquashedSACActor)
-    obs = {"state": torch.randn(4, *agent.env.single_observation_space["state"].shape)}
-    assert torch.allclose(
-        guide.predict(obs, deterministic=True), agent.policy.predict(obs, deterministic=True)
-    )
-
-
 # --- CLI wiring --------------------------------------------------------------------------------
 
 
 def _args_classes():
     from rl_garden.training.off2on.entrypoints.calql import CalQLOff2OnArgs
-    from rl_garden.training.off2on.entrypoints.so2 import SO2Off2OnArgs
     from rl_garden.training.off2on.entrypoints.wsrl import WSRLOff2OnArgs
     from rl_garden.training.offline.entrypoints.calql import CalQLArgs
     from rl_garden.training.offline.entrypoints.cql import CQLArgs
@@ -210,7 +185,6 @@ def _args_classes():
     from rl_garden.training.offline.entrypoints.wsrl import WSRLOfflineArgs
     from rl_garden.training.online.entrypoints.acrlpd import ACRLPDArgs
     from rl_garden.training.online.entrypoints.gail import GAILArgs
-    from rl_garden.training.online.entrypoints.jsrl import JSRLArgs
     from rl_garden.training.online.entrypoints.ppo import PPOArgs
     from rl_garden.training.online.entrypoints.recurrent_ppo import RecurrentPPOArgs
     from rl_garden.training.online.entrypoints.recurrent_sac import RecurrentSACArgs
@@ -223,9 +197,9 @@ def _args_classes():
 
     accepting = [
         PPOArgs, RecurrentPPOArgs, TransformerPPOArgs, GAILArgs,
-        SACArgs, RLPDArgs, RLPDHybridArgs, ACRLPDArgs, JSRLArgs,
+        SACArgs, RLPDArgs, RLPDHybridArgs, ACRLPDArgs,
         CQLArgs, CalQLArgs, WSRLOfflineArgs, EDACArgs,
-        CalQLOff2OnArgs, WSRLOff2OnArgs, SO2Off2OnArgs,
+        CalQLOff2OnArgs, WSRLOff2OnArgs,
     ]
     # Their algorithms reject an actor factory (SACFlowPolicy, SequenceSAC).
     rejecting = [SACFlowArgs, RecurrentSACArgs, TransformerSACArgs]
@@ -455,19 +429,3 @@ def test_the_evaluation_rebuild_logs_a_restored_import_path(tmp_path, caplog):
         restored_args = evaluation._load_training_args("online", "sac", eval_args, checkpoint)
     assert restored_args.actor_factory == SAC_FACTORY
     assert f"importing actor_factory {SAC_FACTORY} from checkpoint metadata" in caplog.text
-
-
-def test_jsrl_refuses_a_guide_whose_factory_had_no_import_path(tmp_path):
-    from rl_garden.algorithms import jsrl
-    from rl_garden.common.effective_config import ConfigError
-
-    with pytest.warns(UserWarning, match="actor_factory has no import path"):
-        path, agent = _make_calql_checkpoint(tmp_path, actor_factory=_unnamed_sac_factory())
-    with pytest.raises(ConfigError, match=UNREBUILDABLE):
-        jsrl._load_guide_policy(
-            path,
-            "calql",
-            agent.env.single_observation_space,
-            agent.env.single_action_space,
-            device=torch.device("cpu"),
-        )

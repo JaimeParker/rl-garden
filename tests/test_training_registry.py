@@ -10,6 +10,37 @@ import pytest
 from rl_garden.training.algorithm_registry import BaseAlgorithmRegistry
 
 
+def test_acrlpd_builder_rejects_nstep_before_construction(monkeypatch):
+    from rl_garden.training.online.entrypoints.acrlpd import ACRLPDArgs, build_acrlpd
+
+    def unexpected_construction(*args, **kwargs):
+        raise AssertionError("nstep must be validated before constructing ACRLPD")
+
+    monkeypatch.setattr("rl_garden.training.inspection.construct_agent", unexpected_construction)
+    with pytest.raises(ValueError, match=r"ACRLPD.*nstep=2.*--nstep"):
+        build_acrlpd(ACRLPDArgs(nstep=2), None, None, None, None)
+
+
+def test_drift_fixes_neutralize_training_only_inputs_for_evaluation():
+    from rl_garden.training.online.registry import registry
+
+    registry.discover()
+    assert registry.entries()["acrlpd"].training_only_inputs["nstep"] == 1
+    for name in ("acrlpd", "rlpd", "explore", "recurrent_sac", "transformer_sac", "rlpd_hybrid", "supe"):
+        assert registry.entries()[name].training_only_inputs["load_actor_checkpoint"] is None
+
+
+@pytest.mark.parametrize("name", ["fql", "acfql", "fac", "fino", "floq", "value_flows"])
+def test_off2on_flow_defaults_do_not_request_warmup(name):
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
+    from rl_garden.training.off2on.registry import registry
+
+    registry.discover()
+    args = registry.entries()[name].args_cls()
+    assert args.warmup_steps == 0
+    assert initial_training_phase_from_args(args) is None
+
+
 class _RegistryA(BaseAlgorithmRegistry):
     package_name = "unused.a"
     phase_name = "a"
@@ -101,7 +132,6 @@ def test_phase_registries_discover_expected_algorithms():
         "rlpd_hybrid",
         "explore",
         "supe",
-        "jsrl",
         "acrlpd",
         "tdmpc2",
         "dreamer_v3",
@@ -158,7 +188,6 @@ def test_phase_registries_discover_expected_algorithms():
         "fql",
         "fac",
         "spot",
-        "so2",
     }
 
 
@@ -965,3 +994,46 @@ def test_console_scripts_dispatch_to_the_phase_registries_and_evaluation(monkeyp
         getattr(cli, function_name)()
 
     assert calls == ["online", "offline", "off2on", "eval"]
+
+
+@pytest.mark.parametrize(
+    "name,label", [("recurrent_sac", "RecurrentSAC"), ("transformer_sac", "TransformerSAC"),
+                   ("rlpd_hybrid", "RLPDHybrid"), ("acrlpd", "ACRLPD")],
+)
+def test_builder_rejects_incompatible_actor_checkpoint_before_construction(monkeypatch, name, label):
+    from rl_garden.training.online.registry import registry
+
+    registry.discover()
+    entry = registry.entries()[name]
+    args = entry.args_cls(load_actor_checkpoint="bc.pt")
+    if name == "acrlpd":
+        args.horizon_length = 2
+
+    def unexpected_construction(*args, **kwargs):
+        raise AssertionError("actor checkpoint must be rejected before construction")
+
+    monkeypatch.setattr("rl_garden.training.inspection.construct_agent", unexpected_construction)
+    with pytest.raises(ValueError, match=rf"{label}.*--load-actor-checkpoint"):
+        entry.build_agent(args, None, None, None, None)
+
+
+@pytest.mark.parametrize("name", ["rlpd", "acrlpd"])
+def test_builder_loads_actor_checkpoint_after_construction(monkeypatch, name):
+    from types import SimpleNamespace
+    from rl_garden.training.online.registry import registry
+
+    registry.discover()
+    entry = registry.entries()[name]
+    args = entry.args_cls(load_actor_checkpoint="bc.pt")
+    if name == "acrlpd":
+        args.horizon_length = 1
+    events = []
+    agent = SimpleNamespace(load_actor_checkpoint=lambda path: events.append(("load_actor", path)))
+
+    def construct(target, **kwargs):
+        events.append(("construct", target))
+        return agent
+
+    monkeypatch.setattr("rl_garden.training.inspection.construct_agent", construct)
+    assert entry.build_agent(args, None, None, None, None) is agent
+    assert events == [("construct", entry.algorithm_cls()), ("load_actor", "bc.pt")]

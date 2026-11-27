@@ -26,6 +26,7 @@ def test_off2on_floq_print_config_matches_defaults(tmp_path):
     config = json.loads(result.stdout)
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "floq"}
     inputs = config["inputs"]
+    assert inputs["warmup_steps"] == 0
     assert inputs["r_min"] == -1.0
     assert inputs["flow_num_ensembles"] == 2
     assert inputs["critic_flow_steps"] == 8

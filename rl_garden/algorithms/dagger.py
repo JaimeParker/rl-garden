@@ -93,7 +93,6 @@ class DAgger(DemoInterventionMixin, BC):
         self.gradient_steps_per_round = gradient_steps_per_round
         self._round_num = 0
         self._rollout_obs = None
-        self._last_checkpoint_step = -1
         self.init_demo_buffer(demo_buffer_size, demo_data_ratio=1.0)
 
     # --- growing buffer sizing (see module docstring) ---
@@ -218,8 +217,7 @@ class DAgger(DemoInterventionMixin, BC):
                 total_timesteps, beta, losses, episode_metrics, rollout_time
             )
             self._maybe_save_periodic_checkpoint(previous_step)
-        if self.checkpoint_dir is not None and self.save_final_checkpoint:
-            self._save_checkpoint("final.pt")
+        self._maybe_save_final_checkpoint()
         return self
 
     def _log_round(

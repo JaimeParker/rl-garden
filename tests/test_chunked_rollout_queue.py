@@ -21,6 +21,10 @@ class _BaseHarness:
             single_action_space=spaces.Box(-1.0, 1.0, (action_dim,), np.float32)
         )
         self.explore_calls = 0
+        self.initial_phase = None
+
+    def _active_initial_training_phase(self):
+        return self.initial_phase
 
     def _explore_action(self, obs):
         self.explore_calls += 1
@@ -45,7 +49,6 @@ class _BaseHarness:
 class _Harness(ChunkedRolloutMixin, _BaseHarness):
     def __init__(self, num_envs: int, horizon_length: int, action_dim: int):
         super().__init__(num_envs, horizon_length, action_dim)
-        self._init_chunked_rollout()
         self.sample_calls = 0
 
     def _sample_action_chunk(self, obs) -> torch.Tensor:
@@ -119,3 +122,17 @@ def test_staggered_reset_forces_immediate_per_env_replan():
     assert h.sample_calls == 3
     assert torch.allclose(a4[0], torch.tensor([201.0]))  # env 0: chunk[1] of call #2
     assert torch.allclose(a4[1], torch.tensor([300.0]))  # env 1: chunk[0] of call #3
+
+
+def test_active_initial_phase_executes_single_actions_from_one_chunk_before_learning():
+    h = _Harness(num_envs=2, horizon_length=3, action_dim=2)
+    h.initial_phase = SimpleNamespace(duration_steps=7)
+    h._on_env_reset(obs=None)
+    for offset in range(3):
+        actions, env_actions, context = h._rollout_action(None, learning_has_started=False)
+        assert env_actions.shape == (h.num_envs, *h.env.single_action_space.shape)
+        assert torch.equal(actions, env_actions)
+        assert torch.equal(env_actions, torch.full((2, 2), 100.0 + offset))
+        assert context is None
+    assert h.sample_calls == 1
+    assert h.explore_calls == 0

@@ -168,17 +168,8 @@ The :doc:`_generated/algorithms` table separately lists registered phase names.
    * - ``ExPLORe``
      - RLPD extension for exploration with prior data.
      - :doc:`/algorithms/offline-to-online`
-   * - ``JSRL``
-     - SAC exploration jump-started by a frozen guide.
-     - :doc:`/algorithms/offline-to-online`
    * - ``SUPE``
      - Skill-based extension of ExPLORe.
-     - :doc:`/algorithms/offline-to-online`
-   * - ``SO2``
-     - Offline multi-critic SAC with target-action smoothing.
-     - :doc:`/algorithms/offline-to-online`
-   * - ``Off2OnSO2``
-     - SO2 continuation with offline-data mixing.
      - :doc:`/algorithms/offline-to-online`
    * - ``Off2OnAWAC``
      - AWAC offline-to-online host.

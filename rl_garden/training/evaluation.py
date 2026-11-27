@@ -150,9 +150,6 @@ class EvalCheckpointArgs(EnvBackendArgs):
     # extensions instead of growing this dataclass indefinitely.
     guidance_weight: float | None = None
 
-    # JSRL-only: the guide file of a checkpoint that embeds no guide. None uses
-    # the path in the run's configuration.
-    guide_checkpoint: str | None = None
     # SUPE-only: the OPAL file of a checkpoint that embeds no VAE. None uses the
     # path in the run's configuration.
     opal_checkpoint: str | None = None
@@ -554,7 +551,7 @@ def _evaluation_overrides(eval_args: EvalCheckpointArgs) -> dict[str, Any]:
         "save_replay_buffer": False,
         "save_final_checkpoint": False,
     }
-    for name in ("guidance_weight", "guide_checkpoint", "opal_checkpoint"):
+    for name in ("guidance_weight", "opal_checkpoint"):
         value = getattr(eval_args, name)
         if value is not None:
             overrides[name] = value

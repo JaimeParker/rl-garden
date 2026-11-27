@@ -18,10 +18,13 @@ chunking, so the FloQ-only flow-critic fields (``r_min``/``r_max``/
 ``dcfm_lambda``/``bcfm_lambda``/``clip_flow_returns``/``num_samples``/
 ``policy_extraction``) are added instead.
 
-As with ``FloQOff2OnArgs``, a few inherited ``Off2OnCommonArgs`` fields have
-no effect on Value Flows and are not read by ``build_value_flows``:
-``critic_subsample_size``, ``actor_use_group_norm``, ``critic_use_group_norm``,
-``num_groups``, ``std_parameterization``, ``warmup_steps``.
+Group-norm options reach the constructor; the flow actor does not consume
+``actor_use_group_norm``. The replacement flow critic does not consume
+``critic_use_group_norm`` or ``num_groups`` either.
+``warmup_steps`` maps to ``initial_training_phase`` (default 0 means no
+warmup). Inherited ``critic_subsample_size``, ``actor_dropout_rate`` and
+``std_parameterization`` have no corresponding FQL constructor options and
+remain unused.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnValueFlows
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
 
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
@@ -69,6 +73,10 @@ def build_value_flows(args, env, eval_env, logger, checkpoint_dir):
         net_arch=[args.hidden_dim] * args.hidden_layers,
         n_critics=args.n_critics,
         actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        initial_training_phase=initial_training_phase_from_args(args),
         critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate,
         kernel_init=args.kernel_init,
@@ -130,6 +138,9 @@ class ValueFlowsOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
 
     # One buffer holds the dataset and the online transitions (main.py:45,86-88,176).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
+    # Pause updates while the loaded policy collects online steps; 0 means no pause.
+    warmup_steps: int = 0
 
     # 10.0: the reference's own get_config alpha, matching FQL's actor-side
     # BC coefficient unchanged.

@@ -74,6 +74,11 @@ class ReBRACReplayBuffer(ReplayBuffer):
         rows = self._sampleable_rows()
         if rows.shape[0] == self.size * self.num_envs:
             return super().sample(batch_size)
+        if rows.shape[0] == 0:
+            raise ValueError(
+                "ReBRAC replay buffer has no transition with a stored next action "
+                "to sample from (every stored row ends a cut episode stretch)."
+            )
         choice = torch.randint(0, rows.shape[0], (batch_size,), device=self.storage_device)
         return self._index_batch(rows[choice, 0], rows[choice, 1])
 
@@ -89,8 +94,12 @@ class ReBRACReplayBuffer(ReplayBuffer):
         self._perm_full_at_build = self.full
 
     @property
-    def epoch_size(self) -> int:
+    def sampleable_size(self) -> int:
         return int(self._sampleable_rows().shape[0])
+
+    @property
+    def epoch_size(self) -> int:
+        return self.sampleable_size
 
     def _index_batch(
         self, batch_inds: torch.Tensor, env_inds: torch.Tensor

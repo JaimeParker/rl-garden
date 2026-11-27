@@ -138,6 +138,8 @@ them; extend only through these hooks:
 | `_extra_checkpoint_state()` / `_load_extra_checkpoint_state()` | `{}` / no-op | LR scheduler state, EMA weights, etc. |
 | `_training_state_dict()` / `_load_training_state_dict()` | `{}` / no-op | loop-level counters |
 | `_checkpoint_includes_replay_buffer()` | `False` | `True` if a real replay buffer should persist |
+| `_sidecar_buffers()` | `()` | another buffer saved beside the replay file and restored with it (`SidecarBuffer`; the off2on offline buffer, the demo buffer); extend with `(*super()._sidecar_buffers(), ...)` and write its slot as `None` in `_extra_checkpoint_state()` |
+| `_on_checkpoint_read(checkpoint, *, replay_path)` | no-op | rejecting a checkpoint before any state is restored, whatever `strict` is (`FQLCore`), or filling in what an older checkpoint does not record; call `super()` first |
 | `_ddp_extra_broadcast_modules()` | `[]` | state outside `self.policy` DDP must broadcast (e.g. `SAC`'s `alpha_tuner`) |
 | class attr `_compatible_checkpoint_algorithms` | `()` | other class names a checkpoint may carry besides your own (e.g. `OfflineSAC` from `SAC`); `load()` always accepts `type(self).__name__`, so a bare subclass needs no entry |
 
@@ -687,20 +689,24 @@ algorithms fit this shape with no algorithm-specific overrides:
 
 `Off2OnReplayMixin` (`rl_garden/algorithms/off2on.py`) already provides every
 offline→online transition mechanic that isn't algorithm-specific
-(mixed/empty/append replay, adaptive ratio, checkpoint/probe/logging). Leave its
-two hooks (`_apply_online_regularizer_override`, `_offline_probe_metrics`) at
-their no-op defaults unless your algorithm genuinely needs to change something
-at the online switch.
+(mixed/empty/append replay, adaptive ratio, the update-free warmup,
+checkpoint/probe/logging). Leave its switch hooks
+(`_apply_online_regularizer_override`, `_offline_probe_metrics`) at their no-op
+defaults unless your algorithm genuinely needs to change something at the
+online switch. Checkpoint behaviour goes through the base hooks of section 4
+(`_extra_checkpoint_state` / `_load_extra_checkpoint_state`,
+`_sidecar_buffers`, `_on_checkpoint_read`), never a `save`/`load` override;
+state that depends on the online stage is also set in
+`declare_online_replay_mode`, which states the stage of a checkpoint that does
+not record it (Cal-QL does both for its replay buffer's class).
 
 Reach for a non-canonical base only with a real literature-level subtyping
-relationship to another algorithm — three known exceptions: Cal-QL's shell
+relationship to another algorithm — two known exceptions: Cal-QL's shell
 builds on `_CQLRolloutTrainingShell`
 (`_CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore,
-_CQLRolloutTrainingShell)`) rather than `OffPolicyAlgorithm` directly; SO2's
-shell builds on the concrete `SAC` class
-(`_SO2RolloutTrainingShell(Off2OnReplayMixin, SO2Core, SAC)`, offline class
-`SO2(SO2Core, OfflineSAC)`); `WSRL(_CalQLRolloutTrainingShell)` has no
-`WSRLCore` — it builds directly on Cal-QL's shell.
+_CQLRolloutTrainingShell)`) rather than `OffPolicyAlgorithm` directly;
+`WSRL(_CalQLRolloutTrainingShell)` has no `WSRLCore` — it builds directly on
+Cal-QL's shell.
 
 Sanity-check the resulting MRO once — cooperative `super()` calls make
 reordering base classes a silent behavior change, not an error:

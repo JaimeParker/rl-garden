@@ -155,6 +155,10 @@ in :doc:`/REFERENCES`; an em dash means no matching module row exists there.
      - Flow actor trained using adjoint Q-gradient targets; with
        ``--horizon-length`` above 1, evaluation executes each chunk one
        action per environment step.
+       The CLI defaults to gradient clipping at 1.0, matching the class
+       and reference setting; resuming an older QAM checkpoint clips from
+       then on unless ``--grad-clip-norm None`` is passed, because resume
+       takes training arguments from the command line.
      - QAM
    * - ``qgf`` (offline)
      - BC flow actor with Q-gradient guidance at inference; chunks are

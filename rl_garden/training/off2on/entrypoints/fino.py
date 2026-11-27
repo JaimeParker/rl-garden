@@ -13,12 +13,13 @@ machinery, so FloQ's flow-critic fields (``r_min``, ``r_max``,
 ``flow_num_ensembles``, etc.) are dropped and FINO's three new fields
 (``noise_scale``, ``beta``, ``num_samples``) are added instead.
 
-As with ``FloQOff2OnArgs``, a few inherited ``Off2OnCommonArgs`` fields have
-no effect on FINO and are not read by ``build_fino``: ``critic_subsample_size``,
-``actor_use_group_norm``, ``critic_use_group_norm``, ``num_groups``,
-``std_parameterization``, ``warmup_steps`` -- these exist on
-``Off2OnCommonArgs`` for the CQL/IQL SAC-style actor-critic families sharing
-it, not because FQL/FINO's flow-matching actor needs them.
+Group-norm options reach the constructor; the flow actor does not consume
+``actor_use_group_norm``. ``critic_use_group_norm`` and ``num_groups``
+configure the critic.
+``warmup_steps`` maps to ``initial_training_phase`` (default 0 means no
+warmup). Inherited ``critic_subsample_size``, ``actor_dropout_rate`` and
+``std_parameterization`` have no corresponding FQL constructor options and
+remain unused.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ def build_fino(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFINO
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
 
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
@@ -66,6 +68,10 @@ def build_fino(args, env, eval_env, logger, checkpoint_dir):
         net_arch=[args.hidden_dim] * args.hidden_layers,
         n_critics=args.n_critics,
         actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        initial_training_phase=initial_training_phase_from_args(args),
         critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate,
         kernel_init=args.kernel_init,
@@ -121,6 +127,9 @@ class FINOOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
 
     # One buffer holds the dataset and the online transitions (main.py:46,89-92,179).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
+    # Pause updates while the loaded policy collects online steps; 0 means no pause.
+    warmup_steps: int = 0
 
     alpha: float = 10.0
     flow_steps: int = 10

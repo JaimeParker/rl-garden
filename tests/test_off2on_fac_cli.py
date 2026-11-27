@@ -26,6 +26,7 @@ def test_off2on_fac_print_config_matches_defaults(tmp_path):
     config = json.loads(result.stdout)
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "fac"}
     inputs = config["inputs"]
+    assert inputs["warmup_steps"] == 0
     assert inputs["gamma"] == 0.995
     assert inputs["q_agg"] == "min"
     assert inputs["normalize_q_loss"] is True

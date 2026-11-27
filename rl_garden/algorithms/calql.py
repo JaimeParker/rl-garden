@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import warnings
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
@@ -213,8 +212,13 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
     mixed-batch sampling, checkpoint/probe/logging plumbing) are inherited
     from ``Off2OnReplayMixin``. This class adds only what's Cal-QL-specific:
     the online CQL-alpha override (``online_cql_alpha``/``online_use_cql_loss``,
-    via ``_apply_online_regularizer_override``) and the Q-value offline probe
-    (``_offline_probe_metrics``, which needs ``_critic_forward``/``_target_q``).
+    via ``_apply_online_regularizer_override``), the Q-value offline probe
+    (``_offline_probe_metrics``, which needs ``_critic_forward``/``_target_q``)
+    and the replay buffer's class in the online stage: the plain buffer the
+    ``empty`` mode switches to without CQL, else the MC buffer. A checkpoint
+    records that class with the stage (``replay_buffer_class``); for one that
+    records no stage, the replay file being restored decides it
+    (``_on_checkpoint_read``), otherwise ``declare_online_replay_mode`` does.
 
     .. warning::
        **Do not instantiate this class directly.** It exists only to back
@@ -290,33 +294,60 @@ class _CalQLRolloutTrainingShell(Off2OnReplayMixin, CalQLCore, _CQLRolloutTraini
         ):
             self.replay_buffer = self._build_plain_replay_buffer()
 
-    def _restore_online_stage(self, stage: Mapping[str, Any]) -> None:
-        super()._restore_online_stage(stage)
-        recorded = stage.get("replay_buffer_class")
-        if recorded is not None:
-            plain = recorded == ReplayBuffer.__name__
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        state = super()._extra_checkpoint_state()
+        if "online_stage" in state:
+            state["online_stage"]["replay_buffer_class"] = type(self.replay_buffer).__name__
+        return state
+
+    def _on_checkpoint_read(
+        self, checkpoint: dict[str, Any], *, replay_path: Optional[Path]
+    ) -> None:
+        """An online stage that does not record itself has a replay buffer of
+        the class its replay file holds."""
+        super()._on_checkpoint_read(checkpoint, replay_path=replay_path)
+        extra = checkpoint["state"].get("extra", {})
+        if replay_path is None or extra.get("online_start_step") is None or "online_stage" in extra:
+            return
+        saved_class = torch.load(replay_path, map_location="cpu", mmap=True)["buffer_class"]
+        plain = saved_class == ReplayBuffer.__name__
+        self._match_replay_buffer_class(plain=plain)
+        if plain:
+            # Only the empty mode leaves the plain buffer behind.
+            extra["online_stage"] = {
+                "replay_mode": "empty",
+                "offline_data_ratio": 0.0,
+                "replay_buffer_class": saved_class,
+            }
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        if self.online_replay_mode is not None:
+            self._match_replay_buffer_to_stage(state["online_stage"].get("replay_buffer_class"))
+
+    def declare_online_replay_mode(
+        self,
+        online_replay_mode: Literal["empty", "append", "mixed"],
+        offline_data_ratio: float | Literal["auto"] = 0.0,
+    ) -> None:
+        super().declare_online_replay_mode(online_replay_mode, offline_data_ratio)
+        self._match_replay_buffer_to_stage(None)
+
+    def _match_replay_buffer_to_stage(self, recorded_class: Optional[str]) -> None:
+        if recorded_class is not None:
+            plain = recorded_class == ReplayBuffer.__name__
+        elif self.replay_buffer_restored:
+            # Its replay file decided the class before it was read.
+            return
         else:
-            plain = (
-                self.online_replay_mode == "empty"
-                and not self.use_cql_loss
-                and len(self.replay_buffer) == 0
-            )
+            plain = self.online_replay_mode == "empty" and not self.use_cql_loss
+        self._match_replay_buffer_class(plain=plain)
+
+    def _match_replay_buffer_class(self, *, plain: bool) -> None:
         if plain and type(self.replay_buffer) is not ReplayBuffer:
             self.replay_buffer = self._build_plain_replay_buffer()
         elif not plain and type(self.replay_buffer) is ReplayBuffer:
             self.replay_buffer = self._build_replay_buffer()
-
-    def _infer_online_stage(
-        self, checkpoint: Mapping[str, Any], replay_path: Optional[Path]
-    ) -> Optional[dict[str, Any]]:
-        stage = super()._infer_online_stage(checkpoint, replay_path)
-        if replay_path is None:
-            return stage
-        saved = torch.load(replay_path, map_location="cpu", mmap=True)["buffer_class"]
-        # Only the empty mode leaves the MC buffer behind.
-        if stage is None and saved == ReplayBuffer.__name__:
-            stage = {"replay_mode": "empty", "offline_data_ratio": 0.0}
-        return None if stage is None else {**stage, "replay_buffer_class": saved}
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {

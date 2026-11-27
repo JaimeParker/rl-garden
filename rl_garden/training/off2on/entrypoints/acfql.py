@@ -8,7 +8,7 @@ offline data into ``agent.replay_buffer``, run offline gradient steps,
 
 State-only observations by default; pass ``--obs.rgb <camera>`` for
 CNN-based Dict/RGBD observations (``ChunkedReplayBuffer``, via
-``ACFQLCore._build_replay_buffer``). ``run_off2on``'s shared runner reads
+``ActionChunkingMixin._build_replay_buffer``). ``run_off2on``'s shared runner reads
 ``args.obs`` unconditionally to build the ``EnvRequest`` (unlike
 ``run_online``, it has no per-algorithm ``make_env_request`` callback).
 
@@ -16,12 +16,13 @@ CNN-based Dict/RGBD observations (``ChunkedReplayBuffer``, via
 ``run_off2on`` reads directly (``num_offline_steps``, ``online_replay_mode``,
 ``offline_data_ratio``, ``dataset_backend``, etc.) and the FQL-recipe
 defaults it overrides (``n_critics=2``, ``actor_use_layer_norm=False``,
-matching plain FQL rather than CQL/IQL's SAC-style recipe). A few inherited
-fields have no effect on ACFQL and are not read by ``build_acfql``:
-``critic_subsample_size``, ``actor_use_group_norm``, ``critic_use_group_norm``,
-``num_groups``, ``std_parameterization``, ``warmup_steps`` -- these exist on
-``Off2OnCommonArgs`` for the CQL/IQL SAC-style actor-critic families sharing
-it, not because FQL's flow-matching actor needs them.
+matching plain FQL rather than CQL/IQL's SAC-style recipe).
+Group-norm options reach the constructor: ``critic_use_group_norm`` and
+``num_groups`` configure the critic, while the flow actor does not consume
+``actor_use_group_norm``. ``warmup_steps`` maps to ``initial_training_phase``
+(default 0 means no warmup). Inherited ``critic_subsample_size``,
+``actor_dropout_rate`` and ``std_parameterization`` have no corresponding
+FQL constructor options and remain unused.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ def build_acfql(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import ACFQL
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
 
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
@@ -72,6 +74,10 @@ def build_acfql(args, env, eval_env, logger, checkpoint_dir):
         net_arch=[args.hidden_dim] * args.hidden_layers,
         n_critics=args.n_critics,
         actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        initial_training_phase=initial_training_phase_from_args(args),
         critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate,
         kernel_init=args.kernel_init,
@@ -125,6 +131,9 @@ class ACFQLArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
 
     # One buffer holds the dataset and the online transitions (main.py:205,284).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
+    # Pause updates while the loaded policy collects online steps; 0 means no pause.
+    warmup_steps: int = 0
 
     horizon_length: int = 5
     actor_type: ActorType = "distill-ddpg"

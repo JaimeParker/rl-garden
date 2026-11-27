@@ -1,7 +1,7 @@
 """ACRLPD (Q-chunking's action-chunked RLPD) run function.
 
-``ACRLPDCore._build_replay_buffer``/``_state_only_obs_space`` raise
-``TypeError`` if the resolved observation space carries any image key --
+``ACRLPDCore._setup_model`` raises ``ObservationContractError`` before
+anything is built if the resolved observation space carries any image key --
 ACRLPD is state-only for v1 -- so ``--obs.rgb``/``--obs.depth`` are exposed
 (for CLI/config uniformity with every other algorithm) but any non-default
 value is rejected by the algorithm itself, not silently ignored.
@@ -19,6 +19,19 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
     )
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
+
+    if args.nstep != 1:
+        raise ValueError(
+            f"ACRLPD does not take nstep={args.nstep!r} (--nstep): "
+            "its replay window is horizon_length (--horizon-length); use --nstep 1."
+        )
+
+    if args.load_actor_checkpoint is not None and args.horizon_length > 1:
+        raise ValueError(
+            "ACRLPD does not take load_actor_checkpoint (--load-actor-checkpoint) "
+            "with horizon_length > 1: BC actor loading requires --horizon-length 1; "
+            "leave the checkpoint unset for action chunks."
+        )
 
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
@@ -74,6 +87,11 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
         alpha_lr=args.alpha_lr,
         initial_training_phase=sac_initial_training_phase_from_args(args),
         critic_impl=args.critic_impl,
+        critic_backbone_type=args.critic_backbone_type,
+        q_landscape_diagnostics=args.q_landscape_diagnostics,
+        q_landscape_num_actions=args.q_landscape_num_actions,
+        q_landscape_batch_size=args.q_landscape_batch_size,
+        q_mc_diagnostics=args.q_mc_diagnostics,
         actor_use_layer_norm=args.actor_use_layer_norm,
         actor_log_std_min=args.actor_log_std_min,
         actor_log_std_mode=args.actor_log_std_mode,
@@ -96,6 +114,8 @@ def build_acrlpd(args, env, eval_env, logger, checkpoint_dir):
     )
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+    if args.load_actor_checkpoint is not None:
+        agent.load_actor_checkpoint(args.load_actor_checkpoint)
     if args.offline_dataset is not None:
         if args.offline_buffer_size is None:
             raise ValueError(
@@ -210,5 +230,10 @@ registry.register(
     run_acrlpd,
     algorithm_cls=_acrlpd_algorithm_cls,
     build_agent=build_acrlpd,
-    training_only_inputs={"offline_dataset": None, "critic_only_steps": 0},
+    training_only_inputs={
+        "offline_dataset": None,
+        "critic_only_steps": 0,
+        "nstep": 1,
+        "load_actor_checkpoint": None,
+    },
 )

@@ -24,7 +24,7 @@ Built directly on ``OfflineRLAlgorithm`` (no rollout shell at all, following
 with ``horizon_length > 1`` -- action chunking here only changes what a
 "macro-action" means to the offline dataset/critic, not how training data is
 collected. Evaluation executes each chunk one action per env step
-(``ChunkedEvalMixin``, as ``utils/evaluation.py:234-264``).
+(``ActionChunkingMixin``, as ``utils/evaluation.py:234-264``).
 
 Formulas verified against ``3rd_party/qgf/agents/qgf.py`` directly:
 
@@ -65,21 +65,21 @@ than extracting a shared mixin -- see this module's design note in the
 project plan: the two losses are not actually the same formula (IQL has no
 H-step/valid-masking/configurable-aggregation), so extracting one would mean
 generalizing shipped, tested ``IQL`` to support features it doesn't need.
+
+Action-space tiling, chunked replay construction, training-batch flattening,
+evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Any, Literal, Optional, Sequence
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-from gymnasium import spaces
 
-from rl_garden.algorithms.chunked_rollout import ChunkedEvalMixin
+from rl_garden.algorithms.chunked_rollout import ActionChunkingMixin
 from rl_garden.algorithms.observation_encoders import EncoderSharing
 from rl_garden.algorithms.offline import OfflineEnvSpec, OfflineRLAlgorithm
-from rl_garden.buffers.chunked_replay_buffer import ChunkedReplayBuffer
 from rl_garden.common.logger import Logger
 from rl_garden.common.optim import ScheduleType, make_lr_scheduler, make_optimizer
 from rl_garden.common.utils import polyak_update
@@ -133,8 +133,7 @@ class QGFCore:
         backbone_type: BackboneType = "mlp",
         activation_fn: Optional[Activation] = "gelu",
     ) -> None:
-        if horizon_length < 1:
-            raise ValueError(f"horizon_length must be >= 1, got {horizon_length}")
+        self._init_action_chunking(horizon_length)
         if not (0.0 < tau <= 1.0):
             raise ValueError(f"tau must be in (0, 1], got {tau}.")
         if not (0.0 < expectile < 1.0):
@@ -150,7 +149,6 @@ class QGFCore:
                 f"grad_clip_norm must be positive or None, got {grad_clip_norm}."
             )
 
-        self.horizon_length = horizon_length
         self.tau = tau
         self.actor_lr = actor_lr
         self.critic_value_lr = critic_value_lr
@@ -194,7 +192,6 @@ class QGFCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_length": self.horizon_length,
             "tau": self.tau,
             "actor_lr": self.actor_lr,
             "critic_value_lr": self.critic_value_lr,
@@ -251,26 +248,6 @@ class QGFCore:
         ):
             if sched is not None and sched_state is not None:
                 sched.load_state_dict(sched_state)
-
-    def _policy_action_space(self) -> spaces.Box:
-        action_space = self.env.single_action_space
-        assert isinstance(action_space, spaces.Box), "QGF requires a flat Box action space."
-        low = np.tile(np.asarray(action_space.low, dtype=np.float32).reshape(-1), self.horizon_length)
-        high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
-        return spaces.Box(low=low, high=high, dtype=np.float32)
-
-    def _build_replay_buffer(self):
-        # obs_space is always Dict (boundary normalization is unconditional).
-        return ChunkedReplayBuffer(
-            observation_space=self.env.single_observation_space,
-            action_space=self.env.single_action_space,
-            num_envs=self.num_envs,
-            buffer_size=self.buffer_size,
-            horizon_length=self.horizon_length,
-            gamma=self.gamma,
-            storage_device=self.buffer_device,
-            sample_device=self.device,
-        )
 
     def _setup_model(self) -> None:
         obs_space = self.env.single_observation_space
@@ -360,7 +337,7 @@ class QGFCore:
         return t.unsqueeze(-1)
 
     def _compute_losses(self, data) -> tuple[torch.Tensor, dict[str, float]]:
-        flat_actions = data.actions.reshape(data.actions.shape[0], -1)
+        flat_actions = data.actions
         # `critic_features_for` reuses `features`'s own graph when the
         # encoder is shared (this algorithm's default), so the combined
         # critic+value+bc-actor `total_loss.backward()` below trains the one
@@ -421,7 +398,7 @@ class QGFCore:
         own reference never references that knob, it's a QGF-policy-loss-
         only setting; matches IFQL's own convention of always using
         ``jax.random.uniform`` too)."""
-        flat_actions = data.actions.reshape(data.actions.shape[0], -1)
+        flat_actions = data.actions
         critic_features = self.policy.extract_critic_features(data.obs)
         with torch.no_grad():
             target_qs = self.policy.q_values_all(
@@ -489,7 +466,7 @@ class QGFCore:
         return {key: value / gradient_steps for key, value in metrics_sum.items()}
 
 
-class QGF(ChunkedEvalMixin, QGFCore, OfflineRLAlgorithm):
+class QGF(ActionChunkingMixin, QGFCore, OfflineRLAlgorithm):
     """Offline QGF: BC flow-matching actor + IQL critic/value, guided
     denoising at inference. See module docstring."""
 

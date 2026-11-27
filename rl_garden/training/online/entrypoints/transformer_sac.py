@@ -22,6 +22,12 @@ def build_transformer_sac(
     ``extra_kwargs`` go to its constructor next to the SAC and GTrXL kwargs."""
     from rl_garden.training.inspection import construct_agent
 
+    if args.load_actor_checkpoint is not None:
+        raise ValueError(
+            "TransformerSAC does not take load_actor_checkpoint (--load-actor-checkpoint): "
+            "its sequence encoder is not restored by BC actor loading; leave it unset."
+        )
+
     if algorithm_cls is None:
         from rl_garden.algorithms import TransformerSAC
 
@@ -113,4 +119,5 @@ registry.register(
     run_transformer_sac,
     algorithm_cls=_transformer_sac_algorithm_cls,
     build_agent=build_transformer_sac,
+    training_only_inputs=("load_actor_checkpoint",),
 )

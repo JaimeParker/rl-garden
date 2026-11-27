@@ -80,7 +80,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.checkpoint_freq = checkpoint_freq
         self.save_replay_buffer = save_replay_buffer
         self.save_final_checkpoint = save_final_checkpoint
-        self._last_checkpoint_step = -1
         self.initial_training_phase = initial_training_phase
         self._initial_phase_start_step: Optional[int] = None
 
@@ -551,7 +550,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             self._maybe_save_periodic_checkpoint(previous_step)
             previous_iteration_start = previous_step
 
-        if self.checkpoint_dir is not None and self.save_final_checkpoint:
-            self._save_checkpoint("final.pt")
+        self._maybe_save_final_checkpoint()
 
         return self

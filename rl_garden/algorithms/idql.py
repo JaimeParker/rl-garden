@@ -179,6 +179,23 @@ class IDQL(OfflineRLAlgorithm):
 
         self._setup_model()
 
+    def _extra_checkpoint_state(self) -> dict[str, Any]:
+        return {
+            **super()._extra_checkpoint_state(),
+            "lr_scheduler_states": [
+                sched.state_dict() if sched is not None else None
+                for sched in self._lr_schedulers
+            ],
+        }
+
+    def _load_extra_checkpoint_state(self, state: dict[str, Any]) -> None:
+        super()._load_extra_checkpoint_state(state)
+        for sched, sched_state in zip(
+            self._lr_schedulers, state.get("lr_scheduler_states", [])
+        ):
+            if sched is not None and sched_state is not None:
+                sched.load_state_dict(sched_state)
+
     def _build_replay_buffer(self):
         # obs_space is always Dict (boundary normalization is unconditional).
         return ReplayBuffer(

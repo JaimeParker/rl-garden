@@ -5,6 +5,7 @@ thin so GPU-parallel specifics live in ``OffPolicyAlgorithm``.
 """
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from numbers import Real
@@ -16,12 +17,18 @@ from gymnasium import spaces
 
 from rl_garden.algorithms.observation_encoders import ObservationEncoderMixin
 from rl_garden.common.checkpoint import (
+    UNRECORDED,
+    SidecarBuffer,
     checkpoint_dict,
     load_checkpoint_file,
     load_replay_buffer_file,
+    record_file,
+    recorded_file,
+    referenced_file,
     replay_buffer_path_for_checkpoint,
     save_checkpoint_file,
     save_replay_buffer_file,
+    sidecar_path_for_checkpoint,
     validate_checkpoint_metadata,
     without_local_paths,
 )
@@ -54,6 +61,7 @@ def _normalize_env_observation_space(env: Any) -> Any:
 
 class BaseAlgorithm(ObservationEncoderMixin, ABC):
     policy: BasePolicy
+    _last_checkpoint_step: int = -1
 
     # Other algorithm class names whose checkpoints are safe to load, besides
     # the class's own name (``load`` always accepts that one).
@@ -349,6 +357,10 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             include_replay_buffer=self._checkpoint_includes_replay_buffer(),
         )
 
+    def _maybe_save_final_checkpoint(self) -> None:
+        if self.checkpoint_dir is not None and self.save_final_checkpoint:
+            self._save_checkpoint("final.pt")
+
     def _maybe_save_periodic_checkpoint(self, previous_step: int) -> None:
         if self.checkpoint_dir is None or self.checkpoint_freq <= 0:
             return
@@ -359,13 +371,34 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         self._save_checkpoint(f"checkpoint_{self._global_step}.pt")
         self._last_checkpoint_step = self._global_step
 
+    def _sidecar_buffers(self) -> tuple[SidecarBuffer, ...]:
+        """Buffers saved beside the checkpoint together with the replay
+        buffer. ``save(include_replay_buffer=True)`` names each written file at
+        its ``reference_key`` under ``state["extra"]`` (the subclass's
+        ``_extra_checkpoint_state`` writes that slot as ``None``);
+        ``load(load_replay_buffer=True)`` asks again after the state is
+        restored. Extend with ``(*super()._sidecar_buffers(), SidecarBuffer(...))``."""
+        return ()
+
+    def _on_checkpoint_read(
+        self, checkpoint: dict[str, Any], *, replay_path: Optional[Path]
+    ) -> None:
+        """Called by ``load()`` once the file is read and its metadata
+        validated, before any state or buffer is restored. ``replay_path`` is
+        the replay file ``load()`` is about to read, ``None`` when it reads
+        none. An override calls ``super()`` first, raises to reject the
+        checkpoint (whatever ``strict`` is), and may fill in, in ``checkpoint``
+        itself, what an older checkpoint does not record."""
+        del checkpoint, replay_path
+
     def save(self, path: str | Path, include_replay_buffer: bool = False) -> Path:
         """Save model/optimizer/train state to ``path``.
 
         When ``include_replay_buffer`` is true, replay state is written to a
         sibling file (for example ``checkpoint_1000.pt`` +
-        ``replay_buffer_1000.pt``) and referenced from the model checkpoint.
-        The checkpoint file holds no absolute path and no command line
+        ``replay_buffer_1000.pt``), and each buffer of ``_sidecar_buffers`` to
+        its own (``<prefix>_1000.pt``); the checkpoint names them. The
+        checkpoint file holds no absolute path and no command line
         (``without_local_paths``).
         """
         checkpoint_path = Path(path)
@@ -374,6 +407,15 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             if include_replay_buffer and hasattr(self, "replay_buffer")
             else None
         )
+        state = self.state_dict()
+        sidecar_files: list[tuple[Path, Any]] = []
+        if include_replay_buffer:
+            for sidecar in self._sidecar_buffers():
+                if sidecar.buffer is None:
+                    continue
+                sidecar_path = sidecar_path_for_checkpoint(checkpoint_path, sidecar.prefix)
+                record_file(state["extra"], sidecar.reference_key, sidecar_path.name)
+                sidecar_files.append((sidecar_path, sidecar.buffer))
         checkpoint = checkpoint_dict(
             algorithm_class=type(self).__name__,
             global_step=self._global_step,
@@ -381,7 +423,7 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             observation_space=self.env.single_observation_space,
             action_space=self.env.single_action_space,
             hyperparameters=self._checkpoint_metadata(),
-            state=self.state_dict(),
+            state=state,
             replay_buffer_path=replay_path.name if replay_path is not None else None,
         )
         if self.run_config is not None:
@@ -390,6 +432,8 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         save_checkpoint_file(checkpoint_path, without_local_paths(checkpoint))
         if replay_path is not None:
             save_replay_buffer_file(replay_path, self.replay_buffer)
+        for sidecar_path, buffer in sidecar_files:
+            save_replay_buffer_file(sidecar_path, buffer)
         return checkpoint_path
 
     def load(
@@ -399,7 +443,14 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
         load_replay_buffer: bool = True,
         load_optimizers: bool = True,
     ) -> "BaseAlgorithm":
-        """Load a checkpoint in-place into an already constructed agent."""
+        """Load a checkpoint in-place into an already constructed agent.
+
+        With ``load_replay_buffer``, the replay file and the files of
+        ``_sidecar_buffers`` the checkpoint names are read too. A named file
+        must exist; ``None`` recorded means the save wrote none; a checkpoint
+        without the replay reference reads ``replay_buffer_<suffix>.pt`` if it
+        exists.
+        """
         checkpoint_path = Path(path)
         checkpoint = load_checkpoint_file(checkpoint_path, map_location=self.device)
         validate_checkpoint_metadata(
@@ -414,22 +465,65 @@ class BaseAlgorithm(ObservationEncoderMixin, ABC):
             strict=strict,
             policy_graph=self.policy_graph_yaml,
         )
-        self.load_state_dict(checkpoint["state"], strict=strict, load_optimizers=load_optimizers)
-
-        replay_ref = checkpoint.get("metadata", {}).get("replay_buffer_path")
+        replay_reference = recorded_file(checkpoint.get("metadata", {}), ("replay_buffer_path",))
+        conventional_replay_path = replay_buffer_path_for_checkpoint(checkpoint_path)
+        replay_path = None
         if load_replay_buffer and hasattr(self, "replay_buffer"):
-            replay_path = (
-                checkpoint_path.parent / replay_ref
-                if replay_ref is not None
-                else replay_buffer_path_for_checkpoint(checkpoint_path)
+            replay_path = referenced_file(
+                checkpoint_path,
+                replay_reference,
+                unrecorded=conventional_replay_path,
+                description="replay buffer",
             )
-            if replay_path.exists():
-                load_replay_buffer_file(replay_path, self.replay_buffer, strict=strict)
-            elif replay_ref is not None:
-                raise FileNotFoundError(
-                    f"Checkpoint references replay buffer {replay_path}, but it does not exist."
-                )
+        self._on_checkpoint_read(checkpoint, replay_path=replay_path)
+        self.load_state_dict(checkpoint["state"], strict=strict, load_optimizers=load_optimizers)
+        if replay_path is not None:
+            load_replay_buffer_file(replay_path, self.replay_buffer, strict=strict)
+        if load_replay_buffer:
+            if replay_reference is UNRECORDED:
+                named_replay_path: Optional[Path] = conventional_replay_path
+            elif replay_reference is None:
+                named_replay_path = None
+            else:
+                named_replay_path = checkpoint_path.parent / replay_reference
+            self._load_sidecar_buffers(
+                checkpoint_path, checkpoint, named_replay_path, strict=strict
+            )
         return self
+
+    def _load_sidecar_buffers(
+        self,
+        checkpoint_path: Path,
+        checkpoint: dict[str, Any],
+        replay_path: Optional[Path],
+        *,
+        strict: bool,
+    ) -> None:
+        """``replay_path``: the replay file the checkpoint names, whether or
+        not it exists; ``None`` when it names none."""
+        extra = checkpoint["state"].get("extra", {})
+        for sidecar in self._sidecar_buffers():
+            description = sidecar.prefix.replace("_", " ")
+            reference = recorded_file(extra, sidecar.reference_key)
+            beside_replay = None
+            if sidecar.unrecorded_beside_replay and replay_path is not None:
+                beside_replay = replay_path.with_name(
+                    replay_path.name.replace("replay_buffer_", f"{sidecar.prefix}_", 1)
+                )
+                if beside_replay == replay_path:
+                    beside_replay = None
+            sidecar_path = referenced_file(
+                checkpoint_path, reference, unrecorded=beside_replay, description=description
+            )
+            if sidecar_path is not None:
+                sidecar.restore(sidecar_path, strict)
+            elif reference is UNRECORDED and beside_replay is not None and replay_path.exists():
+                warnings.warn(
+                    f"{checkpoint_path} does not record whether it was saved with a "
+                    f"{description} and {beside_replay} does not exist: continuing with an "
+                    f"empty {description}.",
+                    stacklevel=3,
+                )
 
     def save_replay_buffer(self, path: str | Path) -> Path:
         return save_replay_buffer_file(path, self.replay_buffer)

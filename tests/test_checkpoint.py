@@ -161,6 +161,34 @@ def test_sac_checkpoint_roundtrip_with_replay_buffer(tmp_path):
     assert torch.equal(loaded.replay_buffer.actions, agent.replay_buffer.actions)
 
 
+def test_replay_file_of_an_earlier_save_is_not_loaded(tmp_path):
+    """A checkpoint saved without its replay buffer records ``None``: the
+    replay file an earlier save left at the same name is not read."""
+    path = tmp_path / "checkpoint_8.pt"
+    earlier = SAC(env=_state_env(), **_sac_kwargs())
+    _add_state_transitions(earlier)
+    earlier.save(path, include_replay_buffer=True)
+    SAC(env=_state_env(), **_sac_kwargs()).save(path)
+    assert (tmp_path / "replay_buffer_8.pt").exists()
+
+    loaded = SAC(env=_state_env(), **_sac_kwargs())
+    loaded.load(path, load_replay_buffer=True)
+    assert len(loaded.replay_buffer) == 0
+
+
+def test_checkpoint_without_a_replay_reference_reads_the_file_next_to_it(tmp_path):
+    agent = SAC(env=_state_env(), **_sac_kwargs())
+    _add_state_transitions(agent)
+    path = agent.save(tmp_path / "checkpoint_8.pt", include_replay_buffer=True)
+    contents = torch.load(path)
+    del contents["metadata"]["replay_buffer_path"]
+    torch.save(contents, path)
+
+    loaded = SAC(env=_state_env(), **_sac_kwargs())
+    loaded.load(path, load_replay_buffer=True)
+    assert len(loaded.replay_buffer) == len(agent.replay_buffer) > 0
+
+
 def test_sac_checkpoint_restores_initial_phase_progress(tmp_path):
     phase = InitialTrainingPhase(
         duration_steps=100,

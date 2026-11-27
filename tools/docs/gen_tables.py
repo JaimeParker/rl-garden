@@ -29,7 +29,7 @@ FAMILIES = {
         "td3_bc", "awac", "fql", "floq", "fino", "value_flows", "fac", "qgf",
         "qam", "bppo", "unio4", "unio4_ope", "hilp", "opal",
     },
-    "offline-to-online": {"wsrl", "jsrl", "explore", "supe", "so2", "acfql"},
+    "offline-to-online": {"wsrl", "explore", "supe", "acfql"},
     "imitation-and-generative": {
         "bc", "diffusion_bc", "flow_bc", "mean_flow_bc", "consistency_distill_bc",
         "a2a_bc", "diffusion_cm_distill_online", "dagger", "gail", "policy_distillation",
@@ -41,7 +41,7 @@ FAMILIES = {
 }
 OFF2ON_NAMES = {
     "wsrl", "calql", "iql", "awac", "spot", "fql", "floq", "fino",
-    "value_flows", "fac", "so2", "acfql",
+    "value_flows", "fac", "acfql",
 }
 # These builders import these modules, but their registrations have no class thunk.
 # Keep the class cell empty; use only the verified module for reference lookup.

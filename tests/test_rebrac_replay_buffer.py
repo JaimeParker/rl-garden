@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
 from rl_garden.buffers import ReBRACReplayBuffer
+from rl_garden.buffers.dataset_common import add_flat_transitions
 
 OBS_SPACE = spaces.Dict(
     {"state": spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)}
@@ -62,3 +64,25 @@ def test_sample_returns_rebrac_sample_with_next_actions():
     sample = buf.sample(4)
     assert sample.next_actions.shape == (4, 2)
     assert sample.actions.shape == (4, 2)
+
+
+def _load_flat_rows(buf: ReBRACReplayBuffer, num_rows: int) -> None:
+    obs = {"state": torch.randn(num_rows, 4)}
+    add_flat_transitions(
+        buf, obs, obs, torch.randn(num_rows, 2), torch.randn(num_rows), torch.zeros(num_rows)
+    )
+
+
+def test_sampleable_size_and_epoch_size_exclude_the_cut_rows():
+    buf = _make_buffer(num_envs=2)
+    _load_flat_rows(buf, 10)  # one stretch of 5 rows per env, the last row of each is cut
+    assert len(buf) == 10
+    assert buf.sampleable_size == buf.epoch_size == 8
+
+
+def test_sample_with_every_row_cut_raises_a_named_error():
+    buf = _make_buffer(num_envs=2)
+    _load_flat_rows(buf, 2)  # one row per env, both cut
+    assert buf.sampleable_size == buf.epoch_size == 0
+    with pytest.raises(ValueError, match="no transition with a stored next action"):
+        buf.sample(1)

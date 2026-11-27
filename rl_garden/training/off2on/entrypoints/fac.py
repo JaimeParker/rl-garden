@@ -21,14 +21,13 @@ instead, matching ``rl_garden/training/offline/args.py``'s ``OfflineFACArgs``
 defaults (which extend ``OfflineFQLArgs``' with ``q_agg="min"``,
 ``normalize_q_loss=True``).
 
-As with ``FINOOff2OnArgs``, a few inherited ``Off2OnCommonArgs`` fields have
-no effect on FAC and are not read by ``build_fac``: ``critic_subsample_size``,
-``actor_use_group_norm``, ``critic_use_group_norm``, ``num_groups``,
-``std_parameterization``, ``warmup_steps`` -- these exist on
-``Off2OnCommonArgs`` for the CQL/IQL SAC-style actor-critic families sharing
-it, not because FQL/FAC's flow-matching actor needs them (matching
-``build_fino``/``build_floq``/``build_value_flows``, none of which thread
-``initial_training_phase`` through either).
+Group-norm options reach the constructor; the flow actor does not consume
+``actor_use_group_norm``. ``critic_use_group_norm`` and ``num_groups``
+configure the critic.
+``warmup_steps`` maps to ``initial_training_phase`` (default 0 means no
+warmup). Inherited ``critic_subsample_size``, ``actor_dropout_rate`` and
+``std_parameterization`` have no corresponding FQL constructor options and
+remain unused.
 
 The reference's ``balanced_sampling`` (``main.py:212-216``, half offline
 dataset / half replay buffer, every online step) maps to this repo's existing
@@ -45,6 +44,7 @@ def build_fac(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFAC
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
 
     image_kwargs: dict = {
         "encoder_config": args.encoder if args.obs.is_visual else None,
@@ -83,6 +83,10 @@ def build_fac(args, env, eval_env, logger, checkpoint_dir):
         net_arch=[args.hidden_dim] * args.hidden_layers,
         n_critics=args.n_critics,
         actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        initial_training_phase=initial_training_phase_from_args(args),
         critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate,
         kernel_init=args.kernel_init,
@@ -147,6 +151,9 @@ class FACOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
 
     # One buffer holds the dataset and the online transitions (main.py:54,90-93,218).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
+    # Pause updates while the loaded policy collects online steps; 0 means no pause.
+    warmup_steps: int = 0
 
     # FAC's paper default (arXiv 2602.18015, agents/fac.py:517) -- overrides
     # Off2OnCommonArgs's 0.99 default, matching offline/entrypoints/fac.py's FACArgs.

@@ -26,14 +26,12 @@ _ALGORITHM_CLASSES = [
     ("rl_garden.algorithms.off2on_calql", "Off2OnCalQL"),
     ("rl_garden.algorithms.off2on_awac", "Off2OnAWAC"),
     ("rl_garden.algorithms.off2on_spot", "Off2OnSPOT"),
-    ("rl_garden.algorithms.off2on_so2", "Off2OnSO2"),
 ]
 
 _ARGS_CLASSES = [
     ("rl_garden.training.off2on.entrypoints.iql", "IQLOff2OnArgs"),
     ("rl_garden.training.off2on.entrypoints.calql", "CalQLOff2OnArgs"),
     ("rl_garden.training.off2on.entrypoints.wsrl", "WSRLOff2OnArgs"),
-    ("rl_garden.training.off2on.entrypoints.so2", "SO2Off2OnArgs"),
 ]
 
 

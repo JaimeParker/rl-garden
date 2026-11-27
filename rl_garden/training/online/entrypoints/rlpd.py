@@ -111,6 +111,8 @@ def build_rlpd(
     agent = construct_agent(algorithm_cls, **agent_kwargs)
     if args.load_checkpoint is not None:
         agent.load(args.load_checkpoint, load_replay_buffer=args.load_replay_buffer)
+    if args.load_actor_checkpoint is not None:
+        agent.load_actor_checkpoint(args.load_actor_checkpoint)
     if args.offline_dataset is not None:
         if args.offline_buffer_size is None:
             raise ValueError(
@@ -232,5 +234,5 @@ registry.register(
     run_rlpd,
     algorithm_cls=_rlpd_algorithm_cls,
     build_agent=build_rlpd,
-    training_only_inputs=("offline_dataset",),
+    training_only_inputs=("offline_dataset", "load_actor_checkpoint"),
 )

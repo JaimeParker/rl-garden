@@ -28,6 +28,12 @@ def build_rlpd_hybrid(
     from rl_garden.training.inspection import construct_agent
     from rl_garden.training.online.args import sac_initial_training_phase_from_args
 
+    if args.load_actor_checkpoint is not None:
+        raise ValueError(
+            "RLPDHybrid does not take load_actor_checkpoint (--load-actor-checkpoint): "
+            "its hybrid actor and discrete head are incompatible with BC actor loading; leave it unset."
+        )
+
     net_arch = {
         "pi": [args.hidden_dim] * args.actor_hidden_layers,
         "qf": [args.hidden_dim] * args.critic_hidden_layers,
@@ -234,5 +240,5 @@ registry.register(
     run_rlpd_hybrid,
     algorithm_cls=_rlpd_hybrid_algorithm_cls,
     build_agent=build_rlpd_hybrid,
-    training_only_inputs=("offline_dataset",),
+    training_only_inputs=("offline_dataset", "load_actor_checkpoint"),
 )

@@ -27,6 +27,9 @@ Minimal command and construction
 
 RLPD mixes its prior data with online replay from the start.
 ACRLPD adds action chunks and uses a different critic action space.
+Its critic loss averages squared TD errors over all critics and the whole
+batch, weighting incomplete windows by zero without renormalizing over
+complete windows, as the Q-chunking reference implementation does.
 It executes each chunk one action per environment step, in rollout and in evaluation.
 With ``--q-mc-diagnostics`` its Q-values are scored on the steps where a chunk was chosen.
 It rejects ``--critic-only-steps`` above 0: Q-chunking has no critic-only phase.

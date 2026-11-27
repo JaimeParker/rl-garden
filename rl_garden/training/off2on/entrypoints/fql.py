@@ -13,7 +13,9 @@ from rl_garden.training.off2on.registry import registry
 
 @dataclass
 class FQLOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
-    """Standard FQL with an uninterrupted offline-to-online continuation."""
+    """Standard FQL continues offline-to-online without interruption by default.
+
+    Positive ``warmup_steps`` pauses updates during initial online collection."""
 
     alpha: float = 10.0
     flow_steps: int = 10
@@ -34,6 +36,8 @@ class FQLOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
     training_freq: int = 1
     utd: float = 1.0
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
+    # Pause updates while the loaded policy collects online steps; 0 means no pause.
     warmup_steps: int = 0
 
 
@@ -43,6 +47,7 @@ def build_fql(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFQL
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
     from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
 
     if args.reference_compatible:
         torch.set_float32_matmul_precision("highest")
@@ -69,6 +74,10 @@ def build_fql(args, env, eval_env, logger, checkpoint_dir):
         q_agg=args.q_agg, normalize_q_loss=args.normalize_q_loss,
         net_arch=[args.hidden_dim] * args.hidden_layers, n_critics=args.n_critics,
         actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        initial_training_phase=initial_training_phase_from_args(args),
         critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate, kernel_init=args.kernel_init,
         backbone_type=args.backbone_type, activation_fn=args.activation_fn,

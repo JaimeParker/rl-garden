@@ -26,6 +26,7 @@ def test_off2on_value_flows_print_config_matches_defaults(tmp_path):
     config = json.loads(result.stdout)
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "value_flows"}
     inputs = config["inputs"]
+    assert inputs["warmup_steps"] == 0
     assert inputs["min_reward"] == -1.0
     assert inputs["max_reward"] == 0.0
     assert inputs["ret_agg"] == "mean"

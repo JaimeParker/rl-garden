@@ -22,7 +22,7 @@ Reused from ``RLPD``/``SAC``/``SACPolicy`` verbatim (verified against
     reference exactly, unlike ``Off2OnReplayMixin``'s phase-switch shape
     used for ``ACFQL``).
 
-Three numerically load-bearing divergences from plain ``RLPD``/``SAC``,
+Verified critic and actor choices relative to plain ``RLPD``/``SAC``,
 each verified against ``acrlpd.py`` source directly:
   1. **No entropy correction in the critic's Bellman target by default**
      (``backup_entropy=False``) -- ``acrlpd.py:40-58``'s ``target_q`` has no
@@ -47,28 +47,33 @@ each verified against ``acrlpd.py`` source directly:
      ``rlpd_networks/ensemble.py`` but is never called in ``acrlpd.py``;
      the reference uses its full 10-critic ensemble every update, unlike
      plain rl-garden ``RLPD``'s default (``critic_subsample_size=2``).
+  4. **Mean over critics and the whole batch**, with incomplete windows
+     weighted zero, without renormalizing by the number of complete windows
+     (``3rd_party/qc/agents/acrlpd.py:61-62``). Every online critic is updated;
+     target subsampling does not change the loss reduction.
 
 ``target_entropy`` is computed explicitly as
 ``-target_entropy_multiplier * horizon_length * action_dim``
 (``target_entropy_multiplier=0.5`` default, ``acrlpd.py:191-199``) and passed
 as a literal float to ``SAC.__init__`` -- NOT ``"auto"``, which would compute
-``-prod(action_space.shape)`` from the (chunked) policy action space, giving
-a different multiplier (1.0) than QC's own default (0.5).
+``-prod(env.single_action_space.shape)`` from the raw environment action
+space (minus the per-step action dimension), without a horizon multiplier.
 
 Rollout: no env wrapper. ``ChunkedRolloutMixin`` handles the
 receding-horizon action queue (see ``chunked_rollout.py``); the raw env's
 ``env.step()`` stays exactly 1:1 with ``OffPolicyAlgorithm.learn()``'s
 existing per-step loop, matching QC's own single-env-step rollout
 (``main_online.py:179-190``) rather than an atomic multi-step wrapper.
+
+Action-space tiling, chunked replay construction, training-batch flattening,
+evaluation queues and horizon metadata live in ``ActionChunkingMixin``.
 """
 from __future__ import annotations
 
-import dataclasses
 from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
-from gymnasium import spaces
 
 from rl_garden.algorithms.chunked_rollout import ChunkedRolloutMixin
 from rl_garden.algorithms.rlpd import RLPD
@@ -94,11 +99,9 @@ class ACRLPDCore:
         q_agg: Literal["mean", "min"],
         bc_alpha: float,
     ) -> None:
-        if horizon_length < 1:
-            raise ValueError(f"horizon_length must be >= 1, got {horizon_length}")
+        self._init_action_chunking(horizon_length)
         if bc_alpha < 0:
             raise ValueError(f"bc_alpha must be >= 0, got {bc_alpha}")
-        self.horizon_length = horizon_length
         self.q_agg = q_agg
         self.bc_alpha = bc_alpha
         # SAC.__init__ only appends "discounts" here when self.nstep > 1 (a
@@ -118,70 +121,28 @@ class ACRLPDCore:
 
     # --- action-space / buffer plumbing ---
 
-    def _policy_action_space(self) -> spaces.Box:
-        action_space = self.env.single_action_space
-        assert isinstance(action_space, spaces.Box), "ACRLPD requires a flat Box action space."
-        low = np.tile(np.asarray(action_space.low, dtype=np.float32).reshape(-1), self.horizon_length)
-        high = np.tile(np.asarray(action_space.high, dtype=np.float32).reshape(-1), self.horizon_length)
-        return spaces.Box(low=low, high=high, dtype=np.float32)
-
-    def _state_only_obs_space(self) -> spaces.Dict:
-        """ACRLPD is state-only; kept Dict (not unwrapped to a bare Box) so
-        data.obs stays consistent with what SAC/RLPD's schema-driven
-        ``_actor_features``/``_critic_features`` expect (see
-        ``ObservationEncoderMixin``, inherited verbatim here)."""
+    def _setup_model(self) -> None:
+        """Reject images before constructing networks, optimizers or buffers."""
         obs_space = normalize_observation_space(self.env.single_observation_space)
         if ObservationSchema.from_space(obs_space).has_images:
             raise ObservationContractError(
                 "ACRLPD is state-only; vision is out of scope."
             )
-        return obs_space
-
-    def _build_replay_buffer(self) -> ChunkedReplayBuffer:
-        obs_space = self._state_only_obs_space()
-        return ChunkedReplayBuffer(
-            observation_space=obs_space,
-            action_space=self.env.single_action_space,
-            num_envs=self.num_envs,
-            buffer_size=self.buffer_size,
-            horizon_length=self.horizon_length,
-            gamma=self.gamma,
-            storage_device=self.buffer_device,
-            sample_device=self.device,
-        )
+        super()._setup_model()
 
     def _build_prior_data_buffer(self, buffer_size: int) -> ChunkedReplayBuffer:
-        obs_space = self._state_only_obs_space()
-        return ChunkedReplayBuffer(
-            observation_space=obs_space,
-            action_space=self.env.single_action_space,
-            num_envs=1,
-            buffer_size=buffer_size,
-            horizon_length=self.horizon_length,
-            gamma=self.gamma,
-            storage_device=self.buffer_device,
-            sample_device=self.device,
-        )
-
-    def _sample_train_batch(self, batch_size: int):
-        # Flatten the (B, horizon_length, action_dim) window gathered by
-        # ChunkedReplayBuffer into the (B, horizon_length*action_dim)
-        # macro-action the (chunked-action-space) critic/actor expect --
-        # matches QC's own `batch_actions = reshape(actions, (B, -1))`
-        # (acrlpd.py:44), done once here so every downstream loss sees an
-        # already-flat `data.actions`.
-        data = super()._sample_train_batch(batch_size)
-        flat_actions = data.actions.reshape(data.actions.shape[0], -1)
-        return dataclasses.replace(data, actions=flat_actions)
+        return self._chunked_replay_buffer(num_envs=1, buffer_size=buffer_size)
 
     # --- chunked losses ---
 
     def _td_loss(self, data, q_pred: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """``SAC._td_loss`` in which a window that runs past its episode's end
-        has zero weight, the mean still over the whole batch (``acrlpd.py:62``)."""
+        """Mean over critics and batch, with incomplete windows weighted zero
+        (``3rd_party/qc/agents/acrlpd.py:62``)."""
         target_q = self._target_q(data)
         complete_window = data.valid[:, -1].to(target_q.dtype).reshape(-1, 1)
-        q_loss = sum(((q - target_q).square() * complete_window).mean() for q in q_pred)
+        q_loss = torch.stack([
+            ((q - target_q).square() * complete_window).mean() for q in q_pred
+        ]).mean()
         return q_loss, {
             "td_loss": q_loss.detach(),
             "target_q": target_q.mean().detach(),
@@ -196,9 +157,12 @@ class ACRLPDCore:
     def _target_q(self, data) -> torch.Tensor:
         alpha = self._current_alpha().detach()
         with torch.no_grad():
-            next_action, next_log_prob, next_features = self._target_action_log_prob(data)
+            next_action, next_log_prob, next_actor_features = self._target_action_log_prob(data)
+            next_critic_features = self.policy.critic_features_for(
+                data.next_obs, next_actor_features, stop_gradient=True
+            )
             next_qs = self.policy.q_values_subsampled(
-                next_features,
+                next_critic_features,
                 next_action,
                 subsample_size=self._target_critic_subsample_size(),
                 target=True,
@@ -213,8 +177,11 @@ class ACRLPDCore:
         alpha = self._current_alpha().detach()
         # No explicit stop_gradient: SACPolicy.actor_action_log_prob applies
         # BasePolicy.extract_actor_features's encoder_sharing rule by default.
-        action, log_prob, features = self._actor_action_log_prob(obs)
-        qs = self.policy.q_values_subsampled(features, action, subsample_size=None, target=False)
+        action, log_prob, actor_features = self._actor_action_log_prob(obs)
+        critic_features = self.policy.critic_features_for(obs, actor_features, stop_gradient=True)
+        qs = self.policy.q_values_subsampled(
+            critic_features, action, subsample_size=None, target=False
+        )
         # acrlpd.py:84's actor_loss hardcodes `q = jnp.mean(qs, axis=0)` --
         # unlike the critic target, q_agg ("min" vs "mean") only applies to
         # the critic's bootstrap, never to the actor's own policy-improvement
@@ -250,7 +217,6 @@ class ACRLPDCore:
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             **super()._checkpoint_metadata(),
-            "horizon_length": self.horizon_length,
             "q_agg": self.q_agg,
             "bc_alpha": self.bc_alpha,
         }
@@ -292,7 +258,6 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
                 "starts (3rd_party/qc/main_online.py:179-188)."
             )
         self._init_acrlpd_params(horizon_length=horizon_length, q_agg=q_agg, bc_alpha=bc_alpha)
-        self._init_chunked_rollout()
 
         if target_entropy == "auto":
             action_dim = int(np.prod(env.single_action_space.shape))
@@ -309,8 +274,3 @@ class ACRLPD(ChunkedRolloutMixin, ACRLPDCore, RLPD):
             actor_q_agg=actor_q_agg,
             **rlpd_kwargs,
         )
-
-    def _sample_action_chunk(self, obs) -> torch.Tensor:
-        flat_action = self.policy.predict(obs, deterministic=False)
-        act_dim = int(np.prod(self.env.single_action_space.shape))
-        return flat_action.reshape(flat_action.shape[0], self.horizon_length, act_dim)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from rl_garden.training.offline.args import (
     OfflineCommonArgs,
@@ -27,6 +27,9 @@ class QAMArgs(
 ):
     """QAM (Q-learning with Adjoint Matching) offline pretraining. Box or
     Dict (vision) observations."""
+
+    # Reference QAM: clip_grad=True, clip_by_global_norm(max_norm=1.0).
+    grad_clip_norm: Optional[float] = 1.0
 
 
 def _qam_kwargs(

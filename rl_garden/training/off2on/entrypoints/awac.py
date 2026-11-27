@@ -85,6 +85,7 @@ def build_awac(args: AWACOff2OnArgs, env, eval_env, logger, checkpoint_dir):
         critic_dropout_rate=args.critic_dropout_rate,
         kernel_init=args.kernel_init,
         backbone_type=args.backbone_type,
+        std_parameterization=args.std_parameterization,
         initial_training_phase=initial_training_phase_from_args(args),
         seed=args.seed,
         logger=logger,

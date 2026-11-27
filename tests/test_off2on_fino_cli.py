@@ -26,6 +26,7 @@ def test_off2on_fino_print_config_matches_defaults(tmp_path):
     config = json.loads(result.stdout)
     assert config["selection"] == {"training_phase": "off2on", "algorithm": "fino"}
     inputs = config["inputs"]
+    assert inputs["warmup_steps"] == 0
     assert inputs["noise_scale"] == 0.1
     assert inputs["beta"] == 10.0
     assert inputs["num_samples"] is None

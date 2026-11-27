@@ -73,7 +73,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_freq = checkpoint_freq
         self.save_final_checkpoint = save_final_checkpoint
-        self._last_checkpoint_step = -1
         self.num_envs = env.num_envs
         self.batch_size = self.num_steps * self.num_envs
 
@@ -417,6 +416,5 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self._update_and_log(rollout_stats, cumulative, total_timesteps)
             self._maybe_save_periodic_checkpoint(previous_step)
 
-        if self.checkpoint_dir is not None and self.save_final_checkpoint:
-            self._save_checkpoint("final.pt")
+        self._maybe_save_final_checkpoint()
         return self

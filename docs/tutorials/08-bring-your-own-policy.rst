@@ -55,8 +55,8 @@ Images use NHWC tensors under modality keys; the example converts uint8 RGB to f
 Extractor kwargs exist in Python but are not CLI fields or checkpoint metadata; use constructor defaults.
 
 The flags come from ``PolicyModuleArgs`` and builders resolve them with ``policy_module_kwargs(args)``.
-Online users include PPO, recurrent/transformer PPO, GAIL, SAC, RLPD, RLPDHybrid, ACRLPD and JSRL.
-Offline users include CQL, Cal-QL, WSRL and EDAC; off2on users include Cal-QL, WSRL and SO2.
+Online users include PPO, recurrent/transformer PPO, GAIL, SAC, RLPD, RLPDHybrid and ACRLPD.
+Offline users include CQL, Cal-QL, WSRL and EDAC; off2on users include Cal-QL and WSRL.
 
 Keep the module importable for training and evaluation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

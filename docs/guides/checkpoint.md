@@ -18,8 +18,8 @@
   selected phase and algorithm, active environment. An agent saved outside a
   training runner has none
 - Every network the policy acts with, including those that came from another
-  file: a SUPE checkpoint embeds its OPAL VAE and a JSRL checkpoint its guide
-  policy, with the options that rebuild them
+  file: a SUPE checkpoint embeds its OPAL VAE with the options that rebuild
+  it
 
 (checkpoint-no-absolute-paths)=
 
@@ -100,12 +100,35 @@ python examples/train_online.py sac \
 
 `--load-replay-buffer` opts in to loading the buffer. On the CLI it is off by
 default; in the Python API, `load(path, load_replay_buffer=True)` is the default.
-It is a no-op when the checkpoint was saved without a buffer; when the checkpoint
-references a buffer file that is missing, loading raises `FileNotFoundError`.
-The same holds for the growing demo buffer of `dagger` and `rlpd_hybrid`
-(`demo_buffer_<suffix>.pt`). A checkpoint with a replay buffer that does not record
-whether a demo buffer was saved with it resumes with an empty one and a warning
-naming the file.
+It is a no-op when the checkpoint was saved without a buffer: the checkpoint
+records `None` for it, and a `replay_buffer_<suffix>.pt` that an earlier save left
+under the same name is not read. When the checkpoint references a buffer file that
+is missing, loading raises `FileNotFoundError`. Only a checkpoint without the
+`replay_buffer_path` entry reads the `replay_buffer_<suffix>.pt` beside it when
+that file exists. The same holds for the growing demo buffer of `dagger` and
+`rlpd_hybrid` (`demo_buffer_<suffix>.pt`) and for the offline buffer of the off2on
+`mixed` mode (below): `None` recorded means no file. A checkpoint with a replay
+buffer that does not record whether a demo buffer was saved with it reads the demo
+file named like its replay file, or resumes with an empty one and a warning naming
+that file. A restored demo buffer ends its unfinished episode, as `learn()` does
+for the replay buffer: the demo rows added after the resume start another episode.
+
+NCRL does not save its online replay. Each load starts a new refill:
+it collects `learning_starts` additional environment transitions, counted
+across all environments after action repeat, before the first update. Updates
+begin on the first rollout iteration reaching that threshold. Global steps
+continue from the checkpoint; update counters stay fixed during refill, with
+no catch-up updates. Refill actions come from the restored actor, without
+random exploration or BC guidance. Loading a checkpoint saved during refill
+starts the full refill again. Retrieved prior episodes and the BC guide still
+restore as described in [NCRL](ncrl.md).
+
+EDAC (through OfflineSAC), IDQL, and the DDPG/TD3 family save learning-rate
+scheduler state under `state.extra.lr_scheduler_states`. With the same schedule
+configuration, a resumed scheduler continues from its saved position and the
+optimizer restores its current learning rate. Older checkpoints without this
+entry load without error, with fresh scheduler state and the saved optimizer
+state, under both strict and non-strict loading.
 
 Resuming takes the training arguments from the command line, never from the
 embedded run configuration. The exception is the online stage of an off2on run
@@ -132,7 +155,9 @@ switch and weight, the warmup phase and how far it got, and the evaluation
 cadence are recorded in it. `--online-eval-freq` or `--eval-freq` changes the
 cadence. Any other of these settings passed with another value is an error, as
 is `--num-offline-steps` above 0; a default that differs is reported and the
-saved value used.
+saved value used. During the warmup (`--warmup-steps`) no algorithm updates
+anything, as in WSRL (`finetune.py:337-342`); the agent collects with its policy,
+and a run resumed inside the warmup continues it.
 
 `--save-replay-buffer` also writes the offline buffer of the `mixed` mode, as
 `offline_buffer_<suffix>.pt`. The checkpoint names the file, and a named file that is
@@ -149,18 +174,15 @@ on the saved mode:
 
 A dataset that is given and not loaded is reported with a warning.
 
-`so2` never writes or reads its offline pool: as in the original
-(`serial_entry_offline2online.py:78-86`, branch `origin/code`), every start,
-resume included, builds it from the dataset, and online transitions are pushed
-into it as they are collected. A `mixed` run of `so2` resumed from either stage
-therefore needs `--offline-dataset` (in the offline stage it replaces a restored
-replay buffer); the replay buffer of the online stage is restored as above.
-
 An online-stage checkpoint that does not record its replay mode takes it from
-its embedded run configuration when that run did not itself load a checkpoint,
-or from a Cal-QL or WSRL replay file only the `empty` mode writes; otherwise
-pass `--online-replay-mode` (and `--offline-data-ratio`). Its warmup phase is
-the one its hyperparameters record, when they record one.
+a Cal-QL or WSRL replay file only the `empty` mode writes, or, in the off2on
+runner, from its embedded run configuration when that run did not itself load a
+checkpoint; otherwise pass `--online-replay-mode` (and `--offline-data-ratio`).
+Its warmup phase is the one its hyperparameters record, when they record one. A
+Cal-QL or WSRL replay buffer restored from such a checkpoint has the class of its
+file. In Python, `load(path)` of such a checkpoint leaves `online_replay_mode`
+`None` (except for that `empty` case) until
+`agent.declare_online_replay_mode(mode, offline_data_ratio)` states it.
 
 A resume whose return range differs from the checkpoint's (`--min-reward` /
 `--max-reward` of `value_flows`, `--r-min` / `--r-max` of `floq`) is reported
@@ -172,18 +194,11 @@ Otherwise (`agent.lacks_offline_data`) fill
 `agent.restore_offline_replay_buffer()` before training a `mixed` checkpoint;
 training without it raises.
 
-A network the policy needs comes from the checkpoint first: resuming SUPE or
-JSRL restores the VAE or guide it embeds, without `--opal-checkpoint` /
-`--guide-checkpoint`, and warns when the flag names a file that holds another one.
+A network the policy needs comes from the checkpoint first: resuming SUPE
+restores the VAE it embeds, without `--opal-checkpoint`, and warns when the flag
+names a file that holds another one.
 A checkpoint that embeds none reads that file, and raises `FileNotFoundError`
 naming it when it is gone.
-
-A JSRL guide is rebuilt from the options its own checkpoint records. For a guide
-checkpoint that does not record the actor's options, its weights decide the std
-parameterization (`--guide-std-parameterization` is the fallback) and whether
-the actor has normalization layers, taken as LayerNorm with a warning because
-GroupNorm has the same weights. Any other mismatch raises, naming the missing
-and unexpected keys.
 
 (checkpoint-evaluating-a-checkpoint)=
 
@@ -231,8 +246,8 @@ rl-garden-eval --checkpoint-path runs/<run>/checkpoints/final.pt \
   then warns that every setting the checkpoint does not record takes its
   default.
 - `--env-backend`, `--env-id` and `--control-mode` replace the run's values only
-  when passed (`--guide-checkpoint` / `--opal-checkpoint` likewise say where the
-  file of a checkpoint that embeds no guide or VAE is); `--obs.*` replaces the run's observation config only when it
+  when passed (`--opal-checkpoint` likewise says where the
+  file of a checkpoint that embeds no VAE is); `--obs.*` replaces the run's observation config only when it
   differs from the default one. Left out, the run's environment is used, so
   evaluating a `gymnasium`-backend run needs no backend flags. A backend
   sub-config field (e.g. `--gymnasium.device cuda:1`) replaces the run's value

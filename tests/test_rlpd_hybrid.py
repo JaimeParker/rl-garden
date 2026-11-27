@@ -580,3 +580,41 @@ def test_nstep_learns():
     agent = _agent(nstep=3, learning_starts=8)
     agent.learn(total_timesteps=24)
     assert agent._global_update > 0
+
+
+def test_restored_demo_episode_does_not_run_into_the_rows_added_after_it(tmp_path):
+    """The demo buffer is saved in the middle of an episode; the episode the
+    loaded agent adds next is another one. ``gamma = 0.5``, ``nstep = 3``."""
+
+    def demo_agent() -> RLPDHybrid:
+        agent = _agent(nstep=3, gamma=0.5)
+        agent.init_demo_buffer(buffer_size=32, demo_data_ratio=0.5)
+        return agent
+
+    def add_demo_row(agent: RLPDHybrid, value: float, reward: float) -> None:
+        agent.add_demo_transition(
+            {"state": torch.full((1, 4), value)},
+            {"state": torch.full((1, 4), value + 0.5)},
+            torch.zeros(1, 3),
+            torch.tensor([reward]),
+            torch.tensor([False]),
+            episode_end=torch.tensor([False]),
+        )
+
+    writer = demo_agent()
+    for step in range(3):
+        add_demo_row(writer, float(step), 1.0)
+    path = writer.save(tmp_path / "checkpoint_1.pt", include_replay_buffer=True)
+
+    resumed = demo_agent()
+    resumed.load(path)
+    for step in range(3):
+        add_demo_row(resumed, 100.0 + step, 100.0)
+
+    torch.manual_seed(0)
+    batch = resumed.offline_replay_buffer.sample(512)
+    before_restore = batch.obs["state"][:, 0] < 100.0
+    assert before_restore.any()
+    # At most the three rewards of the restored episode, 1 + 0.5 + 0.25.
+    assert batch.rewards[before_restore].max().item() <= 1.75
+    assert (batch.next_obs["state"][before_restore, 0] < 100.0).all()

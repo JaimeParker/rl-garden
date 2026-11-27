@@ -3,11 +3,21 @@
 ``Off2OnReplayMixin`` owns every offline->online transition mechanic that is
 generic across off2on algorithm families (Cal-QL, IQL, ...): offline/online
 replay bookkeeping (``switch_to_online_mode``, mixed-batch sampling with a
-fixed or adaptive ``offline_data_ratio``), checkpoint state for the
-transition, offline-probe diagnostics scaffolding, and phase logging.
+fixed or adaptive ``offline_data_ratio``), the update-free warmup (``train``),
+checkpoint state for the transition, offline-probe diagnostics scaffolding, and
+phase logging.
+
+Checkpoints go through ``BaseAlgorithm``'s hooks: the online stage is recorded in
+``_extra_checkpoint_state`` and restored in ``_load_extra_checkpoint_state``; the
+offline buffer of ``mixed`` is a sidecar buffer (``_sidecar_buffers``,
+``offline_buffer_<suffix>.pt``); ``_on_checkpoint_read`` sets
+``replay_buffer_restored``. A loaded online-stage checkpoint that does not record
+its stage leaves ``online_replay_mode`` ``None`` until
+``declare_online_replay_mode`` states it (the off2on runner does, from the run
+configuration of the run that wrote it or from the command line).
 
 Algorithm-family-specific "what changes at the online switch" behavior is
-expressed via two hooks, both no-ops by default:
+expressed via two switch hooks, both no-ops by default:
 
 - ``_apply_online_regularizer_override(online_replay_mode)``: mutate any
   algorithm-specific regularizer state at the switch (e.g. CQL/Cal-QL's
@@ -32,16 +42,15 @@ import numpy as np
 import torch
 
 from rl_garden.common.checkpoint import (
+    SidecarBuffer,
     load_replay_buffer_file,
-    replay_buffer_path_for_checkpoint,
-    save_replay_buffer_file,
+    sidecar_path_for_checkpoint,
 )
 from rl_garden.common.training_phase import InitialTrainingPhase
 
 
 def offline_buffer_path_for_checkpoint(path: str | Path) -> Path:
-    replay_path = replay_buffer_path_for_checkpoint(path)
-    return replay_path.with_name(replay_path.name.replace("replay_buffer_", "offline_buffer_", 1))
+    return sidecar_path_for_checkpoint(path, "offline_buffer")
 
 
 def _validate_offline_data_ratio(offline_data_ratio: float | str) -> None:
@@ -63,10 +72,6 @@ def _validate_online_replay_mode(online_replay_mode: str) -> None:
 class Off2OnReplayMixin:
     """Shared off2on replay/transition machinery. See module docstring."""
 
-    #: Whether a checkpoint with replay holds the offline buffer of ``mixed``;
-    #: without it a resumed run rebuilds that buffer from its dataset.
-    saves_offline_buffer: bool = True
-
     def _init_off2on_params(
         self,
         *,
@@ -82,9 +87,6 @@ class Off2OnReplayMixin:
         self.online_replay_mode: Optional[Literal["empty", "append", "mixed"]] = None
         # Size of the offline buffer a loaded "mixed" checkpoint was saved with.
         self._saved_offline_transitions = 0
-        self._inferred_online_stage: Optional[dict[str, Any]] = None
-        # The file the offline buffer goes to in the save in progress.
-        self._offline_buffer_file: Optional[str] = None
         # Whether the last load() filled the replay buffer from a file.
         self.replay_buffer_restored = False
         # What the constructor was given, when a loaded checkpoint replaced it.
@@ -117,8 +119,8 @@ class Off2OnReplayMixin:
                 if self.offline_replay_buffer is not None
                 else self._saved_offline_transitions
             ),
-            "offline_buffer_path": self._offline_buffer_file,
-            "replay_buffer_class": type(self.replay_buffer).__name__,
+            # save() names the file here when it writes one.
+            "offline_buffer_path": None,
             "initial_training_phase": None if phase is None else phase.to_dict(),
             "eval_freq": self.eval_freq,
         }
@@ -133,7 +135,7 @@ class Off2OnReplayMixin:
         self._saved_offline_transitions = 0
         if start is None:
             return
-        stage = state.get("online_stage", self._inferred_online_stage)
+        stage = state.get("online_stage")
         if stage is not None:
             self._restore_online_stage(stage)
 
@@ -194,95 +196,51 @@ class Off2OnReplayMixin:
             and self._saved_offline_transitions > 0
         )
 
-    def _infer_online_stage(
-        self, checkpoint: Mapping[str, Any], replay_path: Optional[Path]
-    ) -> Optional[dict[str, Any]]:
-        """The stage of an online checkpoint that does not record it, when its
-        contents determine it. A run that loaded a checkpoint itself may have
-        continued in another mode than the one it was given."""
-        del replay_path
-        run_config = checkpoint["metadata"].get("run_config") or {}
-        inputs = run_config.get("inputs", {})
-        if inputs.get("online_replay_mode") is None or inputs.get("load_checkpoint") is not None:
-            return None
-        mode = inputs["online_replay_mode"]
-        return {
-            "replay_mode": mode,
-            "offline_data_ratio": inputs["offline_data_ratio"] if mode == "mixed" else 0.0,
-        }
+    def _sidecar_buffers(self) -> tuple[SidecarBuffer, ...]:
+        sidecars = super()._sidecar_buffers()
+        if self.online_replay_mode != "mixed":
+            return sidecars
+        offline_buffer = SidecarBuffer(
+            prefix="offline_buffer",
+            reference_key=("online_stage", "offline_buffer_path"),
+            buffer=self.offline_replay_buffer,
+            restore=self._load_offline_buffer_file,
+        )
+        return (*sidecars, offline_buffer)
 
-    def save(self, path: str | Path, include_replay_buffer: bool = False) -> Path:
-        offline_path = offline_buffer_path_for_checkpoint(path)
-        if (
-            include_replay_buffer
-            and self.saves_offline_buffer
-            and self.offline_replay_buffer is not None
-        ):
-            self._offline_buffer_file = offline_path.name
-        try:
-            checkpoint_path = super().save(path, include_replay_buffer=include_replay_buffer)
-            if self._offline_buffer_file is not None:
-                save_replay_buffer_file(offline_path, self.offline_replay_buffer)
-        finally:
-            self._offline_buffer_file = None
-        return checkpoint_path
-
-    def _load_offline_buffer_file(
-        self, path: Path, transitions: int, *, strict: bool
-    ) -> None:
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Checkpoint references offline buffer {path}, but it does not exist."
-            )
+    def _load_offline_buffer_file(self, path: Path, strict: bool) -> None:
         buffer = self.restore_offline_replay_buffer()
         load_replay_buffer_file(path, buffer, strict=strict)
-        if strict and len(buffer) != transitions:
+        if strict and len(buffer) != self._saved_offline_transitions:
             raise ValueError(
                 f"{path} holds {len(buffer)} transitions, but the checkpoint was saved with "
-                f"{transitions}."
+                f"{self._saved_offline_transitions}."
             )
 
-    def load(
-        self,
-        path: str | Path,
-        strict: bool = True,
-        load_replay_buffer: bool = True,
-        load_optimizers: bool = True,
-    ):
-        checkpoint = torch.load(Path(path), map_location="cpu", mmap=True)
+    def _on_checkpoint_read(
+        self, checkpoint: dict[str, Any], *, replay_path: Optional[Path]
+    ) -> None:
+        super()._on_checkpoint_read(checkpoint, replay_path=replay_path)
+        self.replay_buffer_restored = replay_path is not None
         extra = checkpoint["state"].get("extra", {})
-        replay_ref = checkpoint["metadata"].get("replay_buffer_path")
-        replay_path = (
-            replay_buffer_path_for_checkpoint(path)
-            if replay_ref is None
-            else Path(path).parent / replay_ref
-        )
-        restores_replay = load_replay_buffer and replay_path.exists()
-        self._inferred_online_stage = None
-        unrecorded_stage = (
-            extra.get("online_start_step") is not None and "online_stage" not in extra
-        )
-        if unrecorded_stage:
-            self._inferred_online_stage = self._infer_online_stage(
-                checkpoint, replay_path if restores_replay else None
-            )
-        super().load(
-            path,
-            strict=strict,
-            load_replay_buffer=load_replay_buffer,
-            load_optimizers=load_optimizers,
-        )
-        self._inferred_online_stage = None
-        self.replay_buffer_restored = restores_replay
         hyperparameters = checkpoint["metadata"].get("hyperparameters", {})
-        if unrecorded_stage and "initial_training_phase" in hyperparameters:
+        # An online stage saved before the stage was recorded runs the warmup
+        # its metadata records.
+        if (
+            extra.get("online_start_step") is not None
+            and "online_stage" not in extra
+            and "initial_training_phase" in hyperparameters
+        ):
             self._restore_initial_training_phase(hyperparameters["initial_training_phase"])
-        offline_ref = extra.get("online_stage", {}).get("offline_buffer_path")
-        if load_replay_buffer and self.saves_offline_buffer and offline_ref is not None:
-            self._load_offline_buffer_file(
-                Path(path).parent / offline_ref, self._saved_offline_transitions, strict=strict
-            )
-        return self
+
+    def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
+        """No update while the warmup allows neither actor nor critic updates,
+        for every off2on algorithm, as WSRL's loop pauses every agent's
+        updates during its warmup (``3rd_party/wsrl/finetune.py:337-342``)."""
+        update_mask = self._training_update_mask()
+        if not update_mask.update_actor and not update_mask.update_critic:
+            return {}
+        return super().train(gradient_steps, compute_info=compute_info)
 
     def _should_start_initial_training_phase_on_learn(self) -> bool:
         # Off2on algorithms start any configured initial phase at the

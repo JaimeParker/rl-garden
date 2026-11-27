@@ -12,12 +12,13 @@ action chunking, so the chunking-only fields on ``ACFQLArgs``
 (``horizon_length``, ``actor_type``, ``actor_num_samples``) are dropped and
 the 13 floq fields are added instead.
 
-As with ``ACFQLArgs``, a few inherited ``Off2OnCommonArgs`` fields have no
-effect on FloQ and are not read by ``build_floq``: ``critic_subsample_size``,
-``actor_use_group_norm``, ``critic_use_group_norm``, ``num_groups``,
-``std_parameterization``, ``warmup_steps`` -- these exist on
-``Off2OnCommonArgs`` for the CQL/IQL SAC-style actor-critic families sharing
-it, not because FQL/FloQ's flow-matching actor needs them.
+Group-norm options reach the constructor; the flow actor does not consume
+``actor_use_group_norm``. The replacement flow critic does not consume
+``critic_use_group_norm`` or ``num_groups`` either.
+``warmup_steps`` maps to ``initial_training_phase`` (default 0 means no
+warmup). Inherited ``critic_subsample_size``, ``actor_dropout_rate`` and
+``std_parameterization`` have no corresponding FQL constructor options and
+remain unused.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from __future__ import annotations
 def build_floq(args, env, eval_env, logger, checkpoint_dir):
     from rl_garden.algorithms import Off2OnFloQ
     from rl_garden.training.inspection import construct_agent
+    from rl_garden.training.off2on.args import initial_training_phase_from_args
 
     from rl_garden.common.cli_args import resolve_critic_encoder_config, resolve_obs_groups_config
 
@@ -66,6 +68,10 @@ def build_floq(args, env, eval_env, logger, checkpoint_dir):
         net_arch=[args.hidden_dim] * args.hidden_layers,
         n_critics=args.n_critics,
         actor_use_layer_norm=args.actor_use_layer_norm,
+        actor_use_group_norm=args.actor_use_group_norm,
+        critic_use_group_norm=args.critic_use_group_norm,
+        num_groups=args.num_groups,
+        initial_training_phase=initial_training_phase_from_args(args),
         critic_use_layer_norm=args.critic_use_layer_norm,
         critic_dropout_rate=args.critic_dropout_rate,
         kernel_init=args.kernel_init,
@@ -131,6 +137,9 @@ class FloQOff2OnArgs(Off2OnCommonArgs, ObservationArgs, EnvBackendArgs):
 
     # One buffer holds the dataset and the online transitions (main.py:54,93-96,193).
     online_replay_mode: Literal["empty", "append", "mixed"] = "append"
+
+    # Pause updates while the loaded policy collects online steps; 0 means no pause.
+    warmup_steps: int = 0
 
     # 10.0, not ACFQL's 100.0: floq's own reference config
     # (3rd_party/floq/agents/floq.py get_config, alpha=10.0) inherits FQL's

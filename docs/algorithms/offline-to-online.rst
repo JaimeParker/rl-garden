@@ -7,7 +7,7 @@ When to use
 Use this family when a learned policy or prior dataset must transfer into live interaction.
 WSRL warms up a Cal-QL checkpoint before continuing as online SAC.
 Cal-QL's own continuation retains mixed offline data instead.
-JSRL, ExPLORe and SUPE supply guidance or prior-data mechanisms through the online registry.
+ExPLORe and SUPE supply guidance or prior-data mechanisms through the online registry.
 
 What the policy must provide
 ----------------------------
@@ -110,9 +110,6 @@ in :doc:`/REFERENCES`; an em dash means no matching module row exists there.
      - RLPD with optimistic relabeling of unlabeled prior data; relabeling
        and RND label single transitions, so they reject ``--nstep`` above 1.
      - ExPLORe
-   * - ``jsrl`` (online)
-     - Frozen guide policy acts before the online SAC policy.
-     - JSRL
    * - ``supe`` (online)
      - ExPLORe over OPAL skills with a frozen low-level decoder.
      - SUPE
@@ -145,9 +142,6 @@ in :doc:`/REFERENCES`; an em dash means no matching module row exists there.
    * - ``iql`` (off2on)
      - Online continuation: expectile value regression and advantage-weighted actor fitting.
      - Off2OnIQL
-   * - ``so2`` (off2on)
-     - Ensemble SAC with Bellman-target action smoothing.
-     - Off2OnSO2
    * - ``spot`` (off2on)
      - Online continuation: VAE support constraint in place of the TD3-BC cloning term.
      - Off2OnSPOT

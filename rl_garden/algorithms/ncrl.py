@@ -518,6 +518,7 @@ class NCRL(DreamerV3):
             )
 
         # Set before super().__init__(), which calls _setup_model().
+        self._resume_start_step: Optional[int] = None
         self.pretrained_world_model = str(pretrained_world_model)
         self.backbone = backbone
         self.retrieval_db = retrieval_db
@@ -813,6 +814,11 @@ class NCRL(DreamerV3):
 
     def _action_source(self) -> torch.Tensor:
         n = self.num_envs
+        if self._resume_start_step is not None:
+            iteration_steps = self.steps_per_env * self.num_envs
+            refill_steps = math.ceil(self.learning_starts / iteration_steps) * iteration_steps
+            if self._global_step - self._resume_start_step <= refill_steps:
+                return torch.full((n,), _ACTION_FROM_ACTOR, dtype=torch.long, device=self.device)
         if self._global_step <= self.warmup_steps:
             source = _ACTION_FROM_BC if self.guidance_enabled else _ACTION_FROM_RANDOM
             return torch.full((n,), source, dtype=torch.long, device=self.device)
@@ -860,6 +866,13 @@ class NCRL(DreamerV3):
     # ------------------------------------------------------------------
     # Gradient step
     # ------------------------------------------------------------------
+
+    def train(self, gradient_steps: int, compute_info: bool = False) -> dict[str, float]:
+        # Online replay is not checkpointed; collect a fresh warmup before sampling.
+        if (self._resume_start_step is not None
+                and self._global_step - self._resume_start_step < self.learning_starts):
+            return {}
+        return super().train(gradient_steps, compute_info=compute_info)
 
     def _update_model(self, batch) -> tuple[dict[str, float], Any]:
         world_model = self.world_model
@@ -990,6 +1003,8 @@ class NCRL(DreamerV3):
             self._bc_trained = True
         self._retrieved_episode_keys = [(str(emb), int(ep)) for emb, ep in state.get("retrieved_episodes", [])]
         self._num_guided_steps.fill_(int(state.get("guided_steps", 0)))
+        # Every load needs a full refill, including a checkpoint saved mid-refill.
+        self._resume_start_step = self._global_step
 
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
